@@ -1,0 +1,54 @@
+# Build outputs
+build/
+!buildSrc/src/**/build/
+out/
+bin/
+target/
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / env — only .env.example is committed (CLAUDE.md)
+.env
+*.env
+!.env.example
+!**/.env.example
+secrets/
+*.pem
+*.key
+
+# Node (apps/ops-web)
+node_modules/
+dist/
+.vite/
+*.local
+
+# Logs / temp
+*.log
+logs/
+tmp/
+*.hprof
+*.jfr
+
+# Test / coverage reports
+**/reports/
+**/test-results/
+.jacoco/

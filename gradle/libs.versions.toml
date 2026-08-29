@@ -1,0 +1,82 @@
+# =============================================================================
+# Dawnline 버전 카탈로그 — 라이브러리 버전은 여기서만 고정한다 (CLAUDE.md, DESIGN.md §11).
+# 인프라 이미지 버전은 deploy/compose/.env 에서만 고정한다.
+#
+# 원칙: Spring Boot BOM 이 관리하는 것은 여기에 버전을 쓰지 않는다.
+#       BOM 이 관리하는 주요 버전(Boot 4.1.1 기준, 2026-08-29 확인):
+#         Spring Framework 7.0.9 · Spring Kafka 4.1.1 · Spring Security 7.1.1
+#         Hibernate ORM 7.4.5.Final · Flyway 12.4.0 · Testcontainers 2.0.5
+#         JUnit Jupiter 6.0.3 · Jackson 3.1.5 (+ jackson-2-bom 2.21.5)
+#         Micrometer 1.17.1 · Micrometer Tracing 1.7.1 · OpenTelemetry 1.62.0
+#         JSpecify 1.0.1 · Lettuce 7.5.2 · PostgreSQL JDBC 42.7.13
+# =============================================================================
+
+[versions]
+java = "25"
+spring-boot = "4.1.1"
+
+# --- BOM 이 관리하지 않는 것만 고정 ---
+archunit = "1.5.0"
+json-schema-validator = "3.0.7"   # 계약 테스트 (contracts/events/*.schema.json)
+springdoc = "3.1.0"               # Spring Boot 4 라인 (parent: spring-boot-starter-parent 4.1.0)
+resilience4j = "2.4.0"            # Boot 4 전용 모듈: resilience4j-spring-boot4
+jacoco = "0.8.15"
+
+[libraries]
+# --- 플랫폼 (BOM) ---
+spring-boot-bom = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
+
+# --- 빌드 플러그인 아티팩트 (buildSrc 컨벤션 플러그인 클래스패스용) ---
+spring-boot-gradle-plugin = { module = "org.springframework.boot:spring-boot-gradle-plugin", version.ref = "spring-boot" }
+
+# --- Spring Boot 스타터 ---
+spring-boot-starter                 = { module = "org.springframework.boot:spring-boot-starter" }
+spring-boot-starter-web             = { module = "org.springframework.boot:spring-boot-starter-web" }
+spring-boot-starter-validation      = { module = "org.springframework.boot:spring-boot-starter-validation" }
+spring-boot-starter-data-jpa        = { module = "org.springframework.boot:spring-boot-starter-data-jpa" }
+spring-boot-starter-data-redis      = { module = "org.springframework.boot:spring-boot-starter-data-redis" }
+spring-boot-starter-actuator        = { module = "org.springframework.boot:spring-boot-starter-actuator" }
+spring-boot-starter-security        = { module = "org.springframework.boot:spring-boot-starter-security" }
+spring-boot-starter-test            = { module = "org.springframework.boot:spring-boot-starter-test" }
+spring-boot-testcontainers          = { module = "org.springframework.boot:spring-boot-testcontainers" }
+spring-boot-docker-compose          = { module = "org.springframework.boot:spring-boot-docker-compose" }
+
+# --- 메시징 / 영속성 ---
+spring-kafka        = { module = "org.springframework.kafka:spring-kafka" }
+spring-kafka-test   = { module = "org.springframework.kafka:spring-kafka-test" }
+flyway-core         = { module = "org.flywaydb:flyway-core" }
+flyway-postgresql   = { module = "org.flywaydb:flyway-database-postgresql" }
+postgresql          = { module = "org.postgresql:postgresql" }
+
+# --- 관측성 ---
+micrometer-core             = { module = "io.micrometer:micrometer-core" }
+micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
+micrometer-tracing-bridge-otel = { module = "io.micrometer:micrometer-tracing-bridge-otel" }
+opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporter-otlp" }
+logback-classic             = { module = "ch.qos.logback:logback-classic" }
+
+# --- API 문서 ---
+springdoc-openapi-webmvc = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
+
+# --- 회복탄력성 (Boot 4 전용 모듈) ---
+resilience4j-spring-boot4 = { module = "io.github.resilience4j:resilience4j-spring-boot4", version.ref = "resilience4j" }
+
+# --- 널 가능성 ---
+jspecify = { module = "org.jspecify:jspecify" }
+
+# --- 테스트 ---
+junit-jupiter        = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj-core         = { module = "org.assertj:assertj-core" }
+awaitility           = { module = "org.awaitility:awaitility" }
+archunit-junit5      = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
+json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "json-schema-validator" }
+
+# --- Testcontainers (Boot BOM 이 2.0.5 관리) ---
+testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter" }
+testcontainers-postgresql    = { module = "org.testcontainers:postgresql" }
+testcontainers-kafka         = { module = "org.testcontainers:kafka" }
+testcontainers-redis         = { module = "org.testcontainers:redis" }
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
