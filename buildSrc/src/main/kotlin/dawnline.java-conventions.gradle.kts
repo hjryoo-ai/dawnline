@@ -50,7 +50,11 @@ dependencies {
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     // record/생성자 파라미터 이름 보존 (Spring 바인딩, Jackson)
-    options.compilerArgs.addAll(listOf("-parameters", "-Xlint:all,-serial,-processing", "-Werror"))
+    // -Werror 로 경고를 차단하되, 프레임워크 코드(JPA 엔티티·Spring 설정)에서
+    // 구조적으로 발생하는 this-escape 는 제외한다.
+    options.compilerArgs.addAll(
+        listOf("-parameters", "-Xlint:all,-serial,-processing,-this-escape", "-Werror"),
+    )
 }
 
 tasks.withType<Test>().configureEach {

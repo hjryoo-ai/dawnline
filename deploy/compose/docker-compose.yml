@@ -1,0 +1,397 @@
+# =============================================================================
+# Dawnline 로컬 전체 스택 (DESIGN.md §3.1 · §7.1 · §7.3 · §9 · §14)
+#
+# 프로파일
+#   (없음)  인프라: postgres · kafka · kafka-init · redis   → `make up-infra`
+#   obs     관측성: prometheus · grafana · tempo · otel-collector
+#   app     서비스 5개 (Buildpacks 이미지, `make images` 로 먼저 빌드)
+#   전체    `make up` = --profile app --profile obs
+#
+# 이미지 태그·포트·비밀번호는 전부 .env 에서 온다 (.env.example 참고).
+# 컨테이너 안에서 서비스는 전부 8080 을 쓰고, 호스트 포트만 서로 다르다.
+#
+# 리소스: 이 파일은 컨테이너마다 메모리 상한을 명시한다. Docker Desktop 에
+#         6GB 만 주면 전체 스택이 빠듯하다. README.md 의 권장 리소스를 볼 것.
+# =============================================================================
+
+name: ${COMPOSE_PROJECT_NAME:-dawnline}
+
+# --- 공통 조각 (YAML 앵커) ---------------------------------------------------
+x-service-env: &service-env
+  TZ: UTC
+  SERVER_PORT: "8080"
+  SPRING_PROFILES_ACTIVE: compose
+  # 코어 서비스는 kafka 내부 리스너를 쓴다. 호스트 도구만 localhost:29092 를 쓴다.
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  # Spring Boot 4.1 은 management.opentelemetry.map-environment-variables=true 가 기본이라
+  # 아래 표준 OTEL_* 변수를 그대로 인식한다(spring-boot-opentelemetry 4.1.1 메타데이터 확인).
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL}
+  OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER}
+  JAVA_TOOL_OPTIONS: ${SERVICE_JAVA_TOOL_OPTIONS}
+  # Paketo 메모리 계산기의 스택 예약량 입력 (스레드수 × -Xss).
+  BPL_JVM_THREAD_COUNT: ${SERVICE_JVM_THREAD_COUNT}
+
+x-service-base: &service-base
+  profiles: ["app"]
+  restart: unless-stopped
+  # 그레이스풀 셧다운 30초 + 여유 (DESIGN.md §8.6)
+  stop_grace_period: 40s
+  # 주의: Paketo Buildpacks 의 tiny 런 이미지(paketobuildpacks/run-noble-*-tiny)에는
+  #       셸도 curl 도 없어서 컨테이너 내부 exec healthcheck 를 걸 수 없다.
+  #       레디니스(/actuator/health/readiness)는 호스트에서 `make wait` 가 폴링한다.
+  #       (README.md "레디니스 확인" 절 참고)
+  depends_on:
+    postgres:
+      condition: service_healthy
+    kafka-init:
+      condition: service_completed_successfully
+  deploy:
+    resources:
+      limits:
+        cpus: "${SERVICE_CPU_LIMIT}"
+        memory: ${SERVICE_MEM_LIMIT}
+
+services:
+  # ===========================================================================
+  # 인프라
+  # ===========================================================================
+
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    container_name: dawnline-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # initdb 스크립트가 \getenv 로 읽는다 (initdb/01-roles-and-databases.sql)
+      DAWNLINE_ORDER_DB_PASSWORD: ${DAWNLINE_ORDER_DB_PASSWORD}
+      DAWNLINE_FULFILLMENT_DB_PASSWORD: ${DAWNLINE_FULFILLMENT_DB_PASSWORD}
+      DAWNLINE_DISPATCH_DB_PASSWORD: ${DAWNLINE_DISPATCH_DB_PASSWORD}
+      DAWNLINE_TRACKING_DB_PASSWORD: ${DAWNLINE_TRACKING_DB_PASSWORD}
+      DAWNLINE_OPS_DB_PASSWORD: ${DAWNLINE_OPS_DB_PASSWORD}
+      TZ: UTC
+    # initdb 스크립트는 **볼륨이 비어 있는 첫 기동에만** 실행된다.
+    # 스크립트를 고쳤다면 `make clean-volumes` 로 볼륨을 지워야 반영된다.
+    volumes:
+      # PostgreSQL 18 공식 이미지는 데이터를 /var/lib/postgresql/<major> 아래에 둔다.
+      # 17 이하처럼 /var/lib/postgresql/data 에 볼륨을 걸면 기동이 실패한다
+      # (docker-library/postgres#1259). 반드시 /var/lib/postgresql 에 건다.
+      - postgres-data:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=192MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 640m
+
+  kafka:
+    image: ${KAFKA_IMAGE}
+    container_name: dawnline-kafka
+    restart: unless-stopped
+    environment:
+      # --- KRaft 단일 노드 (브로커 + 컨트롤러 겸용, ZooKeeper 없음) -----------
+      # 아래 변수 이름은 apache/kafka:4.3.1 의 /etc/kafka/docker/configure 와
+      # KafkaDockerWrapper 가 실제로 server.properties 로 옮기는 것을 확인했다.
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # 내부(컨테이너 → kafka:9092) / 외부(호스트 → localhost:29092) 리스너 분리
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # --- 로컬 단일 노드 기본값 (DESIGN.md §7.3) ---------------------------
+      KAFKA_NUM_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS}
+      KAFKA_DEFAULT_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION}
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_MS: ${KAFKA_TOPIC_RETENTION_MS}
+      # KAFKA_HEAP_OPTS 는 server.properties 로 번역되지 않고 JVM 에 그대로 전달된다(확인함).
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS}
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - "${KAFKA_EXTERNAL_PORT}:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 20s
+      retries: 12
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1024m
+
+  # 토픽 생성 init 컨테이너 (DESIGN.md §4.1 전체 토픽 + 각 토픽의 .dlq)
+  # --if-not-exists 라서 몇 번을 돌려도 안전하다(멱등).
+  kafka-init:
+    image: ${KAFKA_IMAGE}
+    container_name: dawnline-kafka-init
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP: kafka:9092
+      PARTITIONS: ${KAFKA_TOPIC_PARTITIONS}
+      REPLICATION: ${KAFKA_TOPIC_REPLICATION}
+      RETENTION_MS: ${KAFKA_TOPIC_RETENTION_MS}
+      DLQ_RETENTION_MS: ${KAFKA_DLQ_RETENTION_MS}
+      KAFKA_HEAP_OPTS: -Xms64m -Xmx256m
+    entrypoint: ["/bin/bash", "-c"]
+    # $$ 는 compose 변수 치환을 피해 셸에 그대로 넘기기 위한 이스케이프다.
+    command:
+      - |
+        set -euo pipefail
+        TOPICS="
+        dawnline.order.placed.v1
+        dawnline.order.cancelled.v1
+        dawnline.fulfillment.planned.v1
+        dawnline.wave.closed.v1
+        dawnline.route.assigned.v1
+        dawnline.order.dispatched.v1
+        dawnline.plan.failed.v1
+        dawnline.delivery.status.v1
+        dawnline.delivery.at-risk.v1
+        "
+        create() {
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$$BOOTSTRAP" \
+            --create --if-not-exists --topic "$$1" \
+            --partitions "$$PARTITIONS" --replication-factor "$$REPLICATION" \
+            --config retention.ms="$$2" --config min.insync.replicas=1
+        }
+        for t in $$TOPICS; do
+          create "$$t" "$$RETENTION_MS"
+          create "$$t.dlq" "$$DLQ_RETENTION_MS"
+        done
+        echo "--- dawnline topics ---"
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$$BOOTSTRAP" --list | grep '^dawnline\.' | sort
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  redis:
+    image: ${REDIS_IMAGE}
+    container_name: dawnline-redis
+    restart: unless-stopped
+    # Redis 는 진실 저장소가 아니다(CLAUDE.md 불변 규칙 7). appendonly 는
+    # 재기동 편의를 위한 것이고, 키가 전부 사라져도 DB 로 정확성이 회복돼야 한다.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 192m
+
+  # ===========================================================================
+  # 관측성 (profile: obs) — DESIGN.md §9
+  # ===========================================================================
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE}
+    container_name: dawnline-prometheus
+    profiles: ["obs"]
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=3d
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  tempo:
+    image: ${TEMPO_IMAGE}
+    container_name: dawnline-tempo
+    profiles: ["obs"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      # 이미지 안의 /var/tempo 는 uid 10001 소유라, 명명 볼륨이 그 소유권을 이어받는다.
+      - tempo-data:/var/tempo
+    ports:
+      - "${TEMPO_HTTP_PORT}:3200"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  otel-collector:
+    image: ${OTEL_COLLECTOR_IMAGE}
+    container_name: dawnline-otel-collector
+    profiles: ["obs"]
+    restart: unless-stopped
+    command: ["--config=/etc/otel/otel-collector.yml"]
+    volumes:
+      - ./otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+    depends_on:
+      - tempo
+    ports:
+      - "${OTEL_GRPC_PORT}:4317"
+      - "${OTEL_HTTP_PORT}:4318"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  grafana:
+    image: ${GRAFANA_IMAGE}
+    container_name: dawnline-grafana
+    profiles: ["obs"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Tempo 트레이스 → 로그/메트릭 상관관계 패널에 필요
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # 대시보드 JSON 은 Phase 7 산출물이다. 지금은 빈 디렉터리를 마운트한다.
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - tempo
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  # ===========================================================================
+  # 코어 서비스 (profile: app) — DESIGN.md §3.2
+  # 이미지는 `./gradlew bootBuildImage` (Buildpacks) 로 먼저 만들어야 한다.
+  # ===========================================================================
+
+  order-service:
+    <<: *service-base
+    image: dawnline/order-service:${DAWNLINE_VERSION}
+    container_name: dawnline-order-service
+    environment:
+      <<: *service-env
+      OTEL_SERVICE_NAME: order-service
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dawnline_order
+      SPRING_DATASOURCE_USERNAME: dawnline_order
+      SPRING_DATASOURCE_PASSWORD: ${DAWNLINE_ORDER_DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+    ports:
+      - "${ORDER_SERVICE_PORT}:8080"
+
+  fulfillment-service:
+    <<: *service-base
+    image: dawnline/fulfillment-service:${DAWNLINE_VERSION}
+    container_name: dawnline-fulfillment-service
+    environment:
+      <<: *service-env
+      OTEL_SERVICE_NAME: fulfillment-service
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dawnline_fulfillment
+      SPRING_DATASOURCE_USERNAME: dawnline_fulfillment
+      SPRING_DATASOURCE_PASSWORD: ${DAWNLINE_FULFILLMENT_DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+    ports:
+      - "${FULFILLMENT_SERVICE_PORT}:8080"
+
+  dispatch-service:
+    <<: *service-base
+    image: dawnline/dispatch-service:${DAWNLINE_VERSION}
+    container_name: dawnline-dispatch-service
+    environment:
+      <<: *service-env
+      OTEL_SERVICE_NAME: dispatch-service
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dawnline_dispatch
+      SPRING_DATASOURCE_USERNAME: dawnline_dispatch
+      SPRING_DATASOURCE_PASSWORD: ${DAWNLINE_DISPATCH_DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+    ports:
+      - "${DISPATCH_SERVICE_PORT}:8080"
+
+  tracking-service:
+    <<: *service-base
+    image: dawnline/tracking-service:${DAWNLINE_VERSION}
+    container_name: dawnline-tracking-service
+    environment:
+      <<: *service-env
+      OTEL_SERVICE_NAME: tracking-service
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dawnline_tracking
+      SPRING_DATASOURCE_USERNAME: dawnline_tracking
+      SPRING_DATASOURCE_PASSWORD: ${DAWNLINE_TRACKING_DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+    ports:
+      - "${TRACKING_SERVICE_PORT}:8080"
+
+  # ops-api 는 Redis 를 쓰지 않는다(읽기 모델은 PostgreSQL 프로젝션, DESIGN.md §5.5).
+  ops-api:
+    <<: *service-base
+    image: dawnline/ops-api:${DAWNLINE_VERSION}
+    container_name: dawnline-ops-api
+    environment:
+      <<: *service-env
+      OTEL_SERVICE_NAME: ops-api
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dawnline_ops
+      SPRING_DATASOURCE_USERNAME: dawnline_ops
+      SPRING_DATASOURCE_PASSWORD: ${DAWNLINE_OPS_DB_PASSWORD}
+      # 동기 REST 는 ops-api → 코어 방향만 허용 (CLAUDE.md 불변 규칙 4)
+      DAWNLINE_CORE_ORDER_URL: http://order-service:8080
+      DAWNLINE_CORE_FULFILLMENT_URL: http://fulfillment-service:8080
+      DAWNLINE_CORE_DISPATCH_URL: http://dispatch-service:8080
+      DAWNLINE_CORE_TRACKING_URL: http://tracking-service:8080
+    ports:
+      - "${OPS_API_PORT}:8080"
+
+volumes:
+  postgres-data:
+  kafka-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  tempo-data:

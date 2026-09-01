@@ -1,9 +1,12 @@
 # Build outputs
 build/
 !buildSrc/src/**/build/
-out/
-bin/
-target/
+# 주의: out/ 처럼 앵커 없이 쓰면 헥사고날 소스 패키지
+# (adapter/out/**, application/port/out/**) 까지 전부 무시된다.
+# IDE 산출물은 프로젝트 루트에만 생기므로 반드시 / 로 앵커한다.
+/out/
+/bin/
+/target/
 
 # Gradle
 .gradle/

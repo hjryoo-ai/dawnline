@@ -1,0 +1,131 @@
+# =============================================================================
+# tracking-service — 배송 추적·ETA·지연 위험 감지 (DESIGN.md §5.4)
+#
+# 규칙
+#  - 여기 적힌 값은 **로컬 개발 기본값**이고, 전부 표준 Spring 환경 변수로 덮어쓸 수 있다.
+#    Compose 는 SERVER_PORT / SPRING_DATASOURCE_* / SPRING_KAFKA_BOOTSTRAP_SERVERS 같은
+#    표준 이름을 주입한다(deploy/compose/docker-compose.yml 의 x-service-env 앵커).
+#  - **비밀번호는 저장소에 두지 않는다**(CLAUDE.md). 로컬 실행 시에는
+#    `set -a; . deploy/compose/.env; set +a` 로 내보낸 뒤 실행한다.
+#  - 라이브러리 버전은 gradle/libs.versions.toml, 인프라 이미지 태그·포트는
+#    deploy/compose/.env 에서만 고정한다.
+# =============================================================================
+
+spring:
+  application:
+    name: tracking-service
+
+  config:
+    import:
+      # libs/observability 의 공통 관측성 기본값 (DESIGN.md §9).
+      # 엔드포인트 노출, probes, 트레이싱 샘플링·전파, OTLP 엔드포인트, 메트릭 태그,
+      # 구조화 JSON 로그(logstash), Kafka observation 을 한꺼번에 가져온다.
+      # 경로·파일명은 libs/observability/src/main/resources 에서 확인한 실제 값이다.
+      # import 된 문서는 이 파일보다 우선순위가 낮아 필요하면 아래에서 덮어쓸 수 있다.
+      - "optional:classpath:/com/dawnline/observability/observability-defaults.yml"
+
+  # --- 데이터소스: DB-per-service + 전용 계정 (DESIGN.md §7.1) --------------
+  # 계정은 자기 DB 에만 CONNECT 권한이 있다(deploy/compose/initdb/01-*.sql).
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/dawnline_tracking}
+    username: ${SPRING_DATASOURCE_USERNAME:dawnline_tracking}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    hikari:
+      pool-name: tracking-service-pool
+      maximum-pool-size: 10   # 인스턴스당 10 (DESIGN.md §8.2)
+      minimum-idle: 2
+
+  # --- JPA: 스키마 변경은 Flyway 만 한다 (DESIGN.md §7.1) ------------------
+  jpa:
+    hibernate:
+      ddl-auto: validate      # validate 외의 값은 쓰지 않는다
+    open-in-view: false
+
+  # --- Flyway ---------------------------------------------------------------
+  # 서비스 고유 스크립트(src/main/resources/db/migration/**)와 libs/messaging 이
+  # 클래스패스로 제공하는 공통 스크립트(outbox_events, processed_events)를 함께 읽는다.
+  # location 을 **하나만** 적는 이유:
+  #   * Flyway 는 location 을 재귀 스캔하고, 같은 location 문자열에 대해 클래스패스의
+  #     모든 루트(이 서비스 + libs/messaging jar)를 훑는다 → 하나로 둘 다 잡힌다.
+  #   * 부모(classpath:db/migration)와 자식(classpath:db/migration/common)을 함께 적으면
+  #     같은 스크립트가 두 번 수집된다. flyway-core 12.4.0 의 Scanner.resources 가
+  #     ArrayList 라 중복 제거가 없어서 "Found more than one migration with version" 으로
+  #     기동이 깨진다(jar 를 열어 확인).
+  flyway:
+    enabled: true
+    locations: ${SPRING_FLYWAY_LOCATIONS:classpath:db/migration}
+
+  # --- Redis (DESIGN.md §7.2) ----------------------------------------------
+  # Redis 는 성능·조정용이고 진실 저장소가 아니다(CLAUDE.md 불변규칙 7).
+  # 어떤 키가 사라져도 DB 만으로 정확성이 회복되는 폴백 경로를 어댑터에 둔다.
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+
+  # --- Kafka (DESIGN.md §4, §7.3, §8.3) ------------------------------------
+  # 컨테이너끼리는 kafka:9092, 호스트 도구는 localhost:29092 를 쓴다(.env.example).
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    consumer:
+      group-id: tracking-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false     # 오프셋 커밋은 리스너 컨테이너가 한다
+      max-poll-records: 100         # 백프레셔 (DESIGN.md §8.3)
+    producer:
+      acks: all                     # (DESIGN.md §7.3)
+      properties:
+        # 맵 키에 점이 있으므로 대괄호 형태로 적는다(Spring Boot 바인딩 규칙).
+        "[enable.idempotence]": "true"
+    listener:
+      concurrency: 3                # 파티션 수(12) 이하 (DESIGN.md §8.3)
+      # 토픽은 compose 의 kafka-init 컨테이너가 만든다. 아직 없더라도 기동을 막지 않는다.
+      missing-topics-fatal: false
+
+  # --- 그레이스풀 셧다운: HTTP 드레인 30초 (DESIGN.md §8.6) ----------------
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+server:
+  # 로컬 기본 포트. Compose 는 SERVER_PORT=8080 을 주입하고 호스트 포트만 다르게 매핑한다.
+  port: ${SERVER_PORT:8084}
+  shutdown: graceful
+
+# =============================================================================
+# Actuator — 레디니스 그룹 (DESIGN.md §8.6)
+#
+# 엔드포인트 노출(health,info,prometheus), health probes, show-details, 트레이싱·메트릭·
+# 구조화 로그 기본값은 위에서 import 한 observability-defaults.yml 이 준다.
+# 여기에는 그 파일이 정하지 않는 **레디니스 그룹**만 둔다.
+# /actuator/prometheus 는 Prometheus 가 10초 간격으로 긁는다
+# (deploy/compose/prometheus/prometheus.yml).
+# =============================================================================
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          # readinessState + DB(Flyway 마이그레이션이 끝난 뒤에야 커넥션이 산다).
+          #
+          # Kafka 는 아직 넣지 않는다. Spring Boot 4.1.1 에는 Kafka 헬스 컨트리뷰터가
+          # 없다(spring-boot-kafka-4.1.1.jar 안에 health 클래스가 없음을 직접 확인).
+          # 없는 이름을 적으면 management.endpoint.health.validate-group-membership
+          # (기본 true)에 걸려 기동이 실패한다. §8.6 의 "Kafka 프로듀서 초기화" 조건은
+          # libs/messaging 이 'kafka' 컨트리뷰터를 제공하는 시점에 이 목록에 추가한다.
+          include: readinessState,db
+  health:
+    # 그룹이 참조하는 컨트리뷰터는 실제로 등록돼 있어야 한다(위 validate-group-membership).
+    # observability-defaults.yml 도 이 둘을 켜지만, 그 import 는 optional 이라
+    # 파일이 없더라도 레디니스 그룹이 깨지지 않도록 여기서도 명시한다.
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+# =============================================================================
+# 로깅 (DESIGN.md §9.3)
+# 전체 주소·고객 식별 정보는 로그에 남기지 않는다(우편번호·geohash 까지만).
+# =============================================================================
+logging:
+  level:
+    com.dawnline: INFO

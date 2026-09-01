@@ -1,0 +1,17 @@
+{
+  "eventId": "01a04e08-ee04-70ab-8398-3727f51db2f7",
+  "eventType": "wave.closed",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:00:03.204Z",
+  "producer": "fulfillment-service",
+  "partitionKey": "01a04dad-80da-704e-b002-b9fbfbfdbe93",
+  "traceId": "e57b243f302badb9a32e5b85691c0ecb",
+  "payload": {
+    "waveId": "01a04dad-80da-7521-9af9-6d6c3fd38228",
+    "campId": "01a04dad-80da-704e-b002-b9fbfbfdbe93",
+    "serviceTier": "DAWN",
+    "cutoffAt": "2026-08-29T15:00:00Z",
+    "orderCount": 4820,
+    "closedAt": "2026-08-29T15:00:03.204Z"
+  }
+}

@@ -1,0 +1,55 @@
+# =============================================================================
+# Dawnline OpenTelemetry Collector 설정 (DESIGN.md §9.2)
+#
+# 서비스(Spring Boot 4.1, OTLP/HTTP) → 이 콜렉터 → Tempo(OTLP/gRPC).
+# 서비스를 직접 Tempo 로 보내지 않고 콜렉터를 두는 이유:
+#   - 배치·재시도·메모리 제한을 한 곳에서 관리
+#   - 나중에 백엔드를 바꿔도 서비스 설정을 건드리지 않는다
+# =============================================================================
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # 컨테이너 메모리 상한(256m)보다 먼저 스스로 백프레셔를 건다.
+  memory_limiter:
+    check_interval: 2s
+    limit_mib: 160
+    spike_limit_mib: 48
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+exporters:
+  # 콜렉터 0.159 에서 OTLP gRPC 익스포터 컴포넌트 이름이 otlp → otlp_grpc 로 바뀌었다.
+  # 예전 이름을 쓰면 "alias is deprecated" 경고가 뜬다.
+  otlp_grpc/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 60s
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+
+service:
+  # 파이프라인은 트레이스만 둔다. 메트릭은 Prometheus 가 서비스에서 직접 긁고,
+  # 로그는 stdout(JSON) → `docker compose logs` 로 본다 (DESIGN.md §9.3).
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_grpc/tempo]
+  telemetry:
+    logs:
+      level: warn

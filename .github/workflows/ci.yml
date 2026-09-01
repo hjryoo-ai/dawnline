@@ -1,0 +1,282 @@
+# =============================================================================
+# Dawnline CI — DESIGN.md §14(CI/CD 파이프라인), §13(테스트 전략)
+#
+# §14 가 정의한 전체 단계:
+#   checkout → JDK 25 → Gradle 캐시 → ./gradlew build → 통합 테스트(Testcontainers)
+#   → benchmark small 회귀 체크 → 이미지 빌드 → Compose 스모크 → 결과 아티팩트
+#
+# 지금(Phase 0) 실제로 도는 것: 앞의 4단계 + 리포트 아티팩트.
+# 나머지는 산출물이 아직 없으므로 `if: false` 로 꺼 둔 자리(job 이름에 Phase 표기)다.
+# 활성화 방법은 각 job 의 `if: false` 줄 주석에 적어 두었다.
+#   - 벤치마크 회귀   : Phase 3 (`tools:benchmark` 모듈이 settings.gradle.kts 에 추가된 뒤)
+#   - 이미지 빌드     : Phase 7 (서비스에 main 클래스·release.yml 이 생긴 뒤)
+#   - Compose 스모크  : Phase 3 (order → dispatch E2E 가 동작한 뒤)
+#   - OpenAPI 아티팩트: Phase 1 (파일이 생기면 hashFiles 조건으로 자동 활성화)
+# 없는 것을 실행해 CI 를 빨갛게 만들지 않는다 — 이 워크플로는 지금 상태에서 녹색이어야 한다.
+#
+# 참고: actionlint 는 `if: false` 를 "constant expression" 으로 지적한다(if-cond). 의도한
+#       비활성화 표시이므로 무시한다 — 활성화가 코드 한 줄 삭제로 끝나고, 저장소 설정
+#       (repository variable)에 숨은 상태를 만들지 않는 편을 택했다.
+#
+# 액션 버전(2026-08-29 GitHub API 로 최신 릴리스 확인, major 태그로 고정):
+#   actions/checkout v7.0.1 · actions/setup-java v6.0.0
+#   gradle/actions v6.3.0   · actions/upload-artifact v7.0.1
+# =============================================================================
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 같은 PR 의 이전 실행은 취소한다. main 은 커밋별 결과를 남겨야 하므로 취소하지 않는다.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# 최소 권한. 아티팩트 업로드는 contents: read 로 충분하다.
+permissions:
+  contents: read
+
+env:
+  # gradle/libs.versions.toml 의 java = "25" 와 반드시 같아야 한다 (DESIGN.md §11).
+  JAVA_VERSION: "25"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 빌드 + 단위/ArchUnit/계약 테스트 + JaCoCo 게이트
+  #    ./gradlew build = assemble + check (컨벤션 플러그인이 check 에
+  #    jacocoTestReport·jacocoTestCoverageVerification 을 묶어 둔다)
+  # ---------------------------------------------------------------------------
+  build:
+    name: 빌드 · 단위/ArchUnit/계약 테스트 · 커버리지 게이트
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+
+      # settings.gradle.kts 의 foojay resolver 가 JDK 25 를 자동 프로비저닝하므로
+      # setup-java 없이도 빌드는 된다. 그래도 미리 설치하는 이유:
+      #   (1) 잡마다 Temurin 25 를 새로 내려받는 시간(~200MB)을 아낀다
+      #   (2) java-conventions 의 toolchain vendor = ADOPTIUM 을 그대로 만족시킨다
+      - name: JDK ${{ env.JAVA_VERSION }} 설치 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          # 캐시는 아래 setup-gradle 이 더 정교하게 처리하므로 여기서는 켜지 않는다.
+
+      # Gradle User Home 캐시 + Wrapper 체크섬 검증(validate-wrappers 기본값 true).
+      # cache-provider: basic — MIT 라이선스 오픈소스 구현(actions/cache 래퍼)만 쓴다.
+      #   기본값 'enhanced' 는 프로프라이어터리 컴포넌트라 포트폴리오 저장소에서는 피한다.
+      # 캐시 쓰기는 기본 정책대로 main(기본 브랜치)에서만 일어나고 PR 은 읽기 전용이다.
+      - name: Gradle 설정 · 캐시
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          # gradle.properties 는 설정 캐시(configuration-cache)를 켜 두었다. 설정 캐시
+          # 데이터는 암호화 키가 있어야 잡 사이에 보존된다. 시크릿이 없으면 빈 값이 되고
+          # 설정 캐시만 매번 새로 계산될 뿐 빌드는 정상 동작한다.
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: 빌드 + 검증
+        run: ./gradlew build
+
+      - name: 테스트·커버리지 리포트 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-reports
+          path: |
+            **/build/reports/tests/**
+            **/build/reports/jacoco/**
+            **/build/test-results/**/*.xml
+          retention-days: 7
+          # Phase 0 에는 테스트가 아직 적어 리포트가 없을 수 있다. 없다고 실패시키지 않는다.
+          if-no-files-found: ignore
+
+      # Phase 1 에서 order-service 가 contracts/openapi/*.yaml 을 생성하면
+      # 별도 수정 없이 이 스텝이 자동으로 켜진다 (DESIGN.md §14 "결과 아티팩트: OpenAPI").
+      - name: OpenAPI 계약 아티팩트
+        if: always() && hashFiles('contracts/openapi/*.yaml') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: openapi-contracts
+          path: contracts/openapi/*.yaml
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 2) 통합 테스트 (Testcontainers — PostgreSQL 18 / Kafka 4.3 / Redis 8)
+  #
+  # 블로킹 여부 결정: **블로킹(필수)** 으로 둔다.
+  #   - Phase 0 DoD 자체가 "outbox INSERT → 릴레이 → Kafka 수신 → 멱등 소비" 통합
+  #     테스트의 통과다. continue-on-error 로 두면 이 회귀를 그대로 머지하게 된다.
+  #   - CLAUDE.md "테스트를 약화시키지 마라" 와도 어긋난다.
+  #   - 다만 컴파일조차 안 되는 변경으로 러너 시간을 낭비하지 않도록 build 성공 후에만
+  #     돌린다(needs: build). 이미지 pull 이 있어 build 잡보다 느리므로 잡을 분리했다.
+  #   - 플레이키가 생기면 continue-on-error 가 아니라 원인(대기 조건·타임아웃)을 고친다.
+  # ---------------------------------------------------------------------------
+  integration-test:
+    name: 통합 테스트 (Testcontainers)
+    needs: build
+    runs-on: ubuntu-latest  # 러너에 Docker 가 기본 설치되어 있다
+    timeout-minutes: 30
+    env:
+      # buildSrc 의 integrationTest 태스크는 로컬 실행 시간 단축을 위해
+      # testcontainers.reuse.enable=true 를 켠다(DESIGN.md §13). CI 러너는 잡마다
+      # 새로 뜨므로 재사용할 컨테이너가 없고, 재사용 모드는 Ryuk 정리만 막는다.
+      # 따라서 환경변수로 명시적으로 끈다.
+      TESTCONTAINERS_REUSE_ENABLE: "false"
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+
+      - name: JDK ${{ env.JAVA_VERSION }} 설치 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle 설정 · 캐시
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          # build 잡이 이미 캐시를 채웠다. 같은 워크플로 안에서 중복으로 쓰지 않는다.
+          cache-read-only: true
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: 통합 테스트
+        run: ./gradlew integrationTest
+
+      - name: 통합 테스트 리포트 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-reports
+          path: |
+            **/build/reports/tests/integrationTest/**
+            **/build/test-results/integrationTest/**/*.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # 3) 벤치마크 small 회귀 체크 — DESIGN.md §14, IMPLEMENTATION_PLAN Phase 3-8
+  #    tools:benchmark 모듈이 없으므로 지금은 꺼져 있다.
+  # ---------------------------------------------------------------------------
+  benchmark:
+    name: 벤치마크 small 회귀 (Phase 3)
+    # 활성화: tools:benchmark 를 settings.gradle.kts 에 추가한 뒤 이 줄을 삭제한다.
+    if: false
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+
+      - name: JDK ${{ env.JAVA_VERSION }} 설치 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle 설정 · 캐시
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
+      # seed 고정으로 결정론이 보장된다(CLAUDE.md 불변규칙 12).
+      # 회귀 임계값 옵션은 Phase 3/4 에서 benchmark 도구를 만들 때 정의한다.
+      - name: small 데이터셋 전략 비교
+        run: ./gradlew :tools:benchmark:run --args='--dataset small --strategies baseline-nn,sweep-greedy-nn+ls'
+
+      - name: 벤치마크 리포트 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-small
+          # 출력 경로는 Phase 3 에서 benchmark 도구를 만들 때 실제 위치로 맞춘다.
+          path: tools/benchmark/build/reports/benchmark/**
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # 4) 컨테이너 이미지 빌드 — DESIGN.md §14
+  #    빌더 선택은 §14 에서 아직 [결정 필요](Jib vs Buildpacks)이고,
+  #    buildSrc/dawnline.spring-service 는 Buildpacks(bootBuildImage)를 전제로 배선되어 있다.
+  #    GHCR 푸시는 release.yml(Phase 7) 담당이고 여기서는 빌드만 검증한다.
+  # ---------------------------------------------------------------------------
+  image:
+    name: 컨테이너 이미지 빌드 (Phase 7)
+    # 활성화: 서비스에 Spring Boot main 클래스가 생겨 bootJar 가 만들어진 뒤 이 줄을 삭제한다.
+    if: false
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+
+      - name: JDK ${{ env.JAVA_VERSION }} 설치 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle 설정 · 캐시
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
+      - name: 서비스 이미지 빌드 (Buildpacks)
+        run: ./gradlew bootBuildImage
+
+  # ---------------------------------------------------------------------------
+  # 5) Compose 스모크 (주문 20건 E2E) — DESIGN.md §13 "시스템" 계층, §14
+  #    sim-runner 의 smoke 시나리오가 Phase 3 에서 완성된다.
+  # ---------------------------------------------------------------------------
+  compose-smoke:
+    name: Compose 스모크 (Phase 3)
+    # 활성화: order → wave → dispatch E2E 가 동작하면 이 줄을 삭제한다.
+    if: false
+    needs: [build, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+
+      - name: 환경 파일 준비
+        run: cp deploy/compose/.env.example deploy/compose/.env
+
+      - name: 스택 기동
+        run: make up
+
+      - name: 스모크 시나리오 (주문 20건 E2E)
+        run: make demo
+
+      - name: 컨테이너 로그 수집
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color > compose-logs.txt
+
+      - name: 스모크 로그 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-smoke-logs
+          path: compose-logs.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # 데이터 볼륨까지 지우는 `down -v` 는 쓰지 않는다 (CLAUDE.md "하지 말 것").
+      - name: 스택 종료
+        if: always()
+        run: make down

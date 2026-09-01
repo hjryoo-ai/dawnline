@@ -1,0 +1,49 @@
+-- =============================================================================
+-- Dawnline — 서비스별 역할·데이터베이스 생성 (DESIGN.md §7.1 DB-per-service)
+--
+-- PostgreSQL 공식 이미지의 엔트리포인트가 첫 기동 시 슈퍼유저 세션으로 실행한다
+-- (psql -v ON_ERROR_STOP=1). 파일명 알파벳 순서대로 실행되므로 01 → 02 순이다.
+--
+-- 목표: 한 인스턴스 안에서 서비스마다 DB 와 계정을 분리하고,
+--       CONNECT 권한을 소유자에게만 남겨 **교차 접근을 물리적으로 차단**한다.
+--       (CLAUDE.md 불변 규칙 3 — 서비스 간 DB 접근 금지)
+--
+-- 비밀번호는 compose 가 컨테이너에 주입한 환경 변수에서 읽는다(psql \getenv, PG14+).
+-- 환경 변수가 없으면 치환이 실패하고 ON_ERROR_STOP 으로 기동이 중단된다(조용한 실패 없음).
+-- =============================================================================
+
+\getenv order_pw        DAWNLINE_ORDER_DB_PASSWORD
+\getenv fulfillment_pw  DAWNLINE_FULFILLMENT_DB_PASSWORD
+\getenv dispatch_pw     DAWNLINE_DISPATCH_DB_PASSWORD
+\getenv tracking_pw     DAWNLINE_TRACKING_DB_PASSWORD
+\getenv ops_pw          DAWNLINE_OPS_DB_PASSWORD
+
+-- --- 역할 -------------------------------------------------------------------
+CREATE ROLE dawnline_order       WITH LOGIN PASSWORD :'order_pw';
+CREATE ROLE dawnline_fulfillment WITH LOGIN PASSWORD :'fulfillment_pw';
+CREATE ROLE dawnline_dispatch    WITH LOGIN PASSWORD :'dispatch_pw';
+CREATE ROLE dawnline_tracking    WITH LOGIN PASSWORD :'tracking_pw';
+CREATE ROLE dawnline_ops         WITH LOGIN PASSWORD :'ops_pw';
+
+-- --- 데이터베이스 (소유자 = 동명 서비스 계정) --------------------------------
+CREATE DATABASE dawnline_order       OWNER dawnline_order;
+CREATE DATABASE dawnline_fulfillment OWNER dawnline_fulfillment;
+CREATE DATABASE dawnline_dispatch    OWNER dawnline_dispatch;
+CREATE DATABASE dawnline_tracking    OWNER dawnline_tracking;
+CREATE DATABASE dawnline_ops         OWNER dawnline_ops;
+
+-- --- 교차 접근 차단 ---------------------------------------------------------
+-- PUBLIC 의 기본 CONNECT 를 회수하면 소유자(와 슈퍼유저)만 접속할 수 있다.
+-- 예: dawnline_dispatch 계정으로 dawnline_order DB 에 접속하면 즉시 거부된다.
+REVOKE CONNECT ON DATABASE dawnline_order       FROM PUBLIC;
+REVOKE CONNECT ON DATABASE dawnline_fulfillment FROM PUBLIC;
+REVOKE CONNECT ON DATABASE dawnline_dispatch    FROM PUBLIC;
+REVOKE CONNECT ON DATABASE dawnline_tracking    FROM PUBLIC;
+REVOKE CONNECT ON DATABASE dawnline_ops         FROM PUBLIC;
+
+-- --- 시간대: TIMESTAMPTZ / Instant 일관성 (CLAUDE.md 불변 규칙 9) -----------
+ALTER DATABASE dawnline_order       SET timezone TO 'UTC';
+ALTER DATABASE dawnline_fulfillment SET timezone TO 'UTC';
+ALTER DATABASE dawnline_dispatch    SET timezone TO 'UTC';
+ALTER DATABASE dawnline_tracking    SET timezone TO 'UTC';
+ALTER DATABASE dawnline_ops         SET timezone TO 'UTC';

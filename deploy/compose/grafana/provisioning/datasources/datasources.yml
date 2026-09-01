@@ -1,0 +1,41 @@
+# =============================================================================
+# Grafana 데이터소스 자동 등록 (DESIGN.md §9)
+# 컨테이너 기동 시 Grafana 가 이 파일을 읽어 Prometheus 와 Tempo 를 등록한다.
+# =============================================================================
+apiVersion: 1
+
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Tempo
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    uid: dawnline-prometheus
+    type: prometheus
+    access: proxy
+    orgId: 1
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 10s
+      # 트레이스 exemplar → Tempo 로 점프 (한 주문의 traceId 로 4개 서비스를
+      # 한 줄로 보는 것이 데모의 핵심이다 — DESIGN.md §9.2)
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: dawnline-tempo
+
+  - name: Tempo
+    uid: dawnline-tempo
+    type: tempo
+    access: proxy
+    orgId: 1
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      # 서비스 그래프는 Tempo metrics-generator 가 필요하다. Phase 7 에서 켠다.
+      tracesToMetrics:
+        datasourceUid: dawnline-prometheus

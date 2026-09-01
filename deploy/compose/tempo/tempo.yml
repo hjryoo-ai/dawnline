@@ -1,0 +1,46 @@
+# =============================================================================
+# Dawnline Tempo 설정 (DESIGN.md §9.2)
+#
+# 단일 바이너리(all-in-one) 모드 · 로컬 파일 스토리지.
+# 트레이스는 otel-collector 가 OTLP/gRPC 로 밀어 넣는다.
+#
+# 데모 목적: 주문 1건의 traceId 로 order → fulfillment → dispatch → tracking
+#            span 이 Grafana 에서 한 줄로 보여야 한다.
+# =============================================================================
+
+# Grafana 의 TraceQL 결과 스트리밍(gRPC over HTTP)을 허용한다.
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # 로컬 데모는 즉시 조회가 중요하므로 블록을 짧게 끊는다.
+  max_block_duration: 1m
+
+compactor:
+  compaction:
+    # 로컬 디스크 보호: 24시간 지난 블록은 삭제한다.
+    block_retention: 24h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+# metrics_generator(서비스 그래프·span 메트릭)는 Prometheus remote-write 가 필요하다.
+# Phase 7 에서 켠다.

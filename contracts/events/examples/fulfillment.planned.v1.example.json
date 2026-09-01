@@ -1,0 +1,42 @@
+{
+  "eventId": "01a04dad-8355-7fd3-aa08-9881f075b092",
+  "eventType": "fulfillment.planned",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T13:20:12.117Z",
+  "producer": "fulfillment-service",
+  "partitionKey": "01a04dad-80da-7f6e-a63a-e91c103516b0",
+  "traceId": "c4474d0fc15e10af509d95cbda4b78b0",
+  "payload": {
+    "outcome": "PLANNED",
+    "orderId": "01a04dad-80da-7f6e-a63a-e91c103516b0",
+    "customerId": "01a04dad-80da-70aa-8a07-1444e02c719c",
+    "serviceTier": "DAWN",
+    "address": {
+      "line": "서울특별시 강남구 강남대로 396, 101동 1203호",
+      "postalCode": "06236",
+      "lat": 37.4979,
+      "lng": 127.0276,
+      "geohash7": "wydm6d6"
+    },
+    "promisedWindow": {
+      "start": "2026-08-30T00:00:00+09:00",
+      "end": "2026-08-30T07:00:00+09:00"
+    },
+    "parcel": {
+      "weightG": 1200,
+      "volumeCm3": 8000,
+      "requiresCold": false,
+      "hazmat": false
+    },
+    "items": [
+      { "sku": "SKU-1001", "qty": 2 },
+      { "sku": "SKU-2043", "qty": 1 }
+    ],
+    "placedAt": "2026-08-29T13:20:11.482Z",
+    "fcId": "01a04dad-80da-716f-ad3a-1651bfdd78bc",
+    "campId": "01a04dad-80da-704e-b002-b9fbfbfdbe93",
+    "zoneId": "01a04dad-80da-7510-9ee0-056343c70735",
+    "waveId": "01a04dad-80da-7521-9af9-6d6c3fd38228",
+    "waveCutoffAt": "2026-08-29T15:00:00Z"
+  }
+}

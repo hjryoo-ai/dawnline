@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dawnline.internal/contracts/events/wave.closed.v1.schema.json",
+  "title": "wave.closed v1 페이로드",
+  "description": "컷오프 도달로 웨이브가 닫혔다는 계획 시작 신호 (DESIGN.md §4.3, §5.2). 토픽 dawnline.wave.closed.v1, 키 campId, 발행 fulfillment-service, 소비 dispatch-service·ops-api. 키가 waveId 가 아니라 campId 인 이유는 같은 캠프의 웨이브 계획을 직렬화하기 위해서다 (§4.5).",
+  "type": "object",
+  "required": ["waveId", "campId", "serviceTier", "cutoffAt", "orderCount", "closedAt"],
+  "additionalProperties": true,
+  "properties": {
+    "waveId": {
+      "$ref": "#/$defs/uuid",
+      "description": "닫힌 웨이브. dispatch-service 의 route_plans.wave_id 는 UNIQUE 이므로 이 이벤트가 중복 도착해도 계획은 한 번만 생성된다 (§5.3)."
+    },
+    "campId": {
+      "$ref": "#/$defs/uuid",
+      "description": "웨이브가 속한 캠프. 이 이벤트의 partitionKey 와 같아야 한다."
+    },
+    "serviceTier": {
+      "type": "string",
+      "enum": ["DAWN", "SAME_DAY", "NEXT_DAY"],
+      "description": "웨이브의 서비스 티어 (§2.2). 웨이브는 (campId, serviceTier, cutoffAt) 당 1개다."
+    },
+    "cutoffAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "웨이브의 컷오프 시각. 이 시각 이후 도착한 같은 티어 주문은 다음 웨이브로 간다 (§5.2)."
+    },
+    "orderCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "마감 시점에 웨이브에 편입되어 있던 주문 수. 0 도 유효하다 — 주문이 없는 캠프의 웨이브도 마감되어야 계획 파이프라인이 정상 종료된다."
+    },
+    "closedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "CLOSING -> CLOSED 전이가 커밋된 시각. 컷오프 스케줄러 주기(30초) 때문에 cutoffAt 보다 늦다."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
+  }
+}

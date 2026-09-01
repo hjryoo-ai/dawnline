@@ -1,0 +1,54 @@
+{
+  "eventId": "01a04e09-854a-724f-af94-f2becdf47833",
+  "eventType": "route.assigned",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:00:41.930Z",
+  "producer": "dispatch-service",
+  "partitionKey": "01a04e09-854a-770c-b7b7-03325dccc708",
+  "traceId": "e57b243f302badb9a32e5b85691c0ecb",
+  "payload": {
+    "routeId": "01a04e09-854a-770c-b7b7-03325dccc708",
+    "planId": "01a04e09-854a-72a5-af19-e08ff0ac563d",
+    "waveId": "01a04dad-80da-7521-9af9-6d6c3fd38228",
+    "campId": "01a04dad-80da-704e-b002-b9fbfbfdbe93",
+    "vehicleId": "01a04e09-854a-799e-a74c-ec015b0225b9",
+    "driverId": "01a04e09-854a-79ac-a093-a822b6db1ae6",
+    "strategy": "sweep-greedy-nn+ls",
+    "revision": 1,
+    "summary": {
+      "stopCount": 3,
+      "distanceM": 8420,
+      "durationS": 2340,
+      "costKrw": 21500
+    },
+    "stops": [
+      {
+        "seq": 1,
+        "orderIds": ["01a04dad-80da-7f6e-a63a-e91c103516b0"],
+        "lat": 37.4979,
+        "lng": 127.0276,
+        "plannedArrival": "2026-08-29T15:41:00Z",
+        "serviceSeconds": 90
+      },
+      {
+        "seq": 2,
+        "orderIds": ["01a04dad-80da-7fa7-ad00-3d1829eed7c6"],
+        "lat": 37.5038,
+        "lng": 127.0249,
+        "plannedArrival": "2026-08-29T15:47:30Z",
+        "serviceSeconds": 90
+      },
+      {
+        "seq": 3,
+        "orderIds": [
+          "01a04dad-80da-7707-a397-e3662354beef",
+          "01a04dad-80da-7411-a096-70abfdde82ff"
+        ],
+        "lat": 37.4921,
+        "lng": 127.0365,
+        "plannedArrival": "2026-08-29T15:55:10Z",
+        "serviceSeconds": 180
+      }
+    ]
+  }
+}

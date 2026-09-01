@@ -1,0 +1,59 @@
+# =============================================================================
+# Dawnline 의존성 자동 갱신 — DESIGN.md §10(의존성 취약점: GitHub Dependabot),
+# §11("마이너/패치 갱신은 Dependabot PR 로 받는다").
+#
+# 지금 관리하는 생태계는 gradle 과 github-actions 두 개다.
+# npm(apps/ops-web)은 Phase 6 에서 디렉터리가 생긴 뒤 추가한다 — 없는 경로를 가리키면
+# Dependabot 이 경고를 낸다.
+# =============================================================================
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # Gradle — 버전은 gradle/libs.versions.toml 한 곳에만 있다(CLAUDE.md).
+  # 루트 디렉터리 하나로 버전 카탈로그와 buildSrc 를 함께 훑는다.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - gradle
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      # 패치/마이너는 한 PR 로 묶어 노이즈를 줄인다.
+      gradle-minor-patch:
+        update-types:
+          - minor
+          - patch
+    # major 는 묶지 않고 하나씩 받는다. Spring Boot 4 계열은 호환 여부를 반드시
+    # 빌드로 확인해야 하기 때문이다(CLAUDE.md "호환된다고 가정하지 않는다").
+
+  # ---------------------------------------------------------------------------
+  # GitHub Actions — .github/workflows/*.yml 의 액션 태그
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      github-actions-minor-patch:
+        update-types:
+          - minor
+          - patch

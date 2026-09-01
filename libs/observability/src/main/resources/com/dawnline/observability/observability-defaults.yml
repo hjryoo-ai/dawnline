@@ -1,0 +1,105 @@
+# =============================================================================
+# Dawnline 공통 관측성 기본값 (DESIGN.md §9.1~§9.4)
+#
+# 서비스가 자기 application.yml 에서 다음 한 줄로 가져다 쓴다:
+#
+#   spring:
+#     config:
+#       import: "optional:classpath:/com/dawnline/observability/observability-defaults.yml"
+#
+# 가져온 문서는 서비스 자기 application.yml 보다 낮은 우선순위이므로,
+# 아래 값은 서비스가 언제든 덮어쓸 수 있다.
+#
+# 여기 적힌 프로퍼티 이름은 전부 Spring Boot 4.1.1 의
+# spring-configuration-metadata.json 에서 실제로 확인한 것이다(추측 아님).
+# Boot 3 에서 쓰던 management.otlp.tracing.* 계열은 4.1 에서 deprecation level=error 라
+# 절대 쓰지 않는다.
+# =============================================================================
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # health: 컴포즈 헬스체크 / readiness 게이트(§8.6)
+        # prometheus: Prometheus 스크랩 대상(§9.4)
+        include: "health,info,prometheus"
+  endpoint:
+    health:
+      # /actuator/health/liveness, /actuator/health/readiness 를 만든다(§8.6, Phase 0 DoD)
+      probes:
+        enabled: true
+      # 헬스 상세는 노출하지 않는다 — 내부 호스트명·DB URL 이 새어 나간다(§10)
+      show-details: "never"
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+  metrics:
+    tags:
+      # §9.1 의 service 라벨. 모든 미터에 공통으로 붙는다.
+      service: "${spring.application.name:unknown}"
+    distribution:
+      # dawnline_plan_duration_seconds 는 §9.1 에서 histogram 이다.
+      # 이름 접두사 매칭이므로 계획 타이머에만 히스토그램 버킷이 생긴다.
+      percentiles-histogram:
+        dawnline_plan_duration_seconds: true
+      # p95 는 §8.1 SLO 판정에 직접 쓰인다. (타입: Map<String, Double[]>)
+      percentiles:
+        dawnline_plan_duration_seconds:
+          - 0.5
+          - 0.95
+          - 0.99
+
+  tracing:
+    sampling:
+      # 데모·포트폴리오 환경이라 전량 샘플링이 기본이다.
+      # 하나의 주문 traceId 를 order → fulfillment → dispatch → tracking 으로
+      # 끊김 없이 보여주는 것이 §9.2 의 목적이기 때문이다.
+      # 피크 시나리오(§8.2)에서는 DAWNLINE_TRACE_SAMPLE_RATE 로 낮춘다.
+      probability: "${DAWNLINE_TRACE_SAMPLE_RATE:1.0}"
+    propagation:
+      # 발신은 W3C traceparent 만. Kafka 헤더로도 이 포맷이 실린다(§9.2).
+      produce: "W3C"
+      # 수신은 W3C 우선, 외부 도구가 B3 로 보내는 경우까지 받아 준다.
+      consume: "W3C,B3"
+
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # OTel Collector(HTTP/protobuf). deploy/compose 의 컬렉터가 Tempo 로 넘긴다.
+          endpoint: "${DAWNLINE_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}"
+    resource-attributes:
+      service.name: "${spring.application.name:unknown}"
+      deployment.environment.name: "${DAWNLINE_ENV:local}"
+
+  # 로그는 stdout JSON 으로만 내보낸다(§9.3). OTLP 로그 내보내기는 쓰지 않는다.
+  logging:
+    export:
+      otlp:
+        enabled: false
+
+spring:
+  kafka:
+    # 둘 다 Boot 4.1 기본값이 false 다. 켜야 Kafka 프로듀서/컨슈머 스팬이 생기고
+    # traceparent 헤더가 실려 하나의 traceId 로 이어진다(§9.2 데모 핵심).
+    template:
+      observation-enabled: true
+    listener:
+      observation-enabled: true
+
+logging:
+  structured:
+    format:
+      # Boot 4.1 내장 구조화 로깅. MDC 전체가 JSON 최상위 필드로 나간다(§9.3).
+      # 커스텀 인코더를 만들지 않는 이유는 config/ObservabilityAutoConfiguration 주석 참고.
+      #
+      # ecs 로 바꾸지 말 것: ECS 포맷은 JSON 에 "service" 객체를 직접 쓰는데,
+      # §9.3 이 요구하는 MDC 의 service 키와 이름이 충돌해
+      # "IllegalStateException: The name 'service' has already been written" 이 나고
+      # 해당 로그 줄이 조용히 유실된다(실측 확인).
+      console: "logstash"
+    # (참고) 필드 추가/제외가 필요하면 logging.structured.json.add / .exclude 를 쓴다.
+    # 지금은 기본 필드 + MDC 만으로 §9.3 요구사항을 충족한다.

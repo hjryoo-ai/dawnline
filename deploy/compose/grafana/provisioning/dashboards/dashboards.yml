@@ -1,0 +1,21 @@
+# =============================================================================
+# Grafana 대시보드 프로바이더 (DESIGN.md §9.4)
+#
+# 대시보드 JSON 4종(Order Intake / Waves & Plans / Delivery / Platform)은
+# **Phase 7 산출물**이다. 지금은 프로바이더만 등록해 두고, JSON 을
+# deploy/compose/grafana/dashboards/ 에 넣으면 재기동 없이 30초 안에 잡힌다.
+# =============================================================================
+apiVersion: 1
+
+providers:
+  - name: dawnline
+    orgId: 1
+    folder: Dawnline
+    folderUid: dawnline
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

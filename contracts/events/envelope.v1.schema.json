@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dawnline.internal/contracts/events/envelope.v1.schema.json",
+  "title": "Dawnline 이벤트 봉투 v1",
+  "description": "모든 Kafka 레코드 value 의 최상위 구조 (DESIGN.md §4.2). payload 는 eventType 별 스키마로 따로 검증한다. 이 파일은 payload 내부를 $ref 로 묶지 않는다 — 봉투는 payload 를 열어보지 않고도 라우팅·필터링이 가능해야 하고(§4.2 헤더 중복 기록), 봉투 스키마 하나로 모든 토픽을 검증할 수 있어야 하기 때문이다.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "schemaVersion",
+    "occurredAt",
+    "producer",
+    "partitionKey",
+    "payload"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "eventId": {
+      "$ref": "#/$defs/uuidV7",
+      "description": "이벤트 고유 식별자. UUIDv7 (시간순 정렬 가능). processed_events 의 멱등 키로 그대로 쓰인다 (§4.4). libs/common 의 Ids.newId() 로만 생성한다 (불변규칙 10)."
+    },
+    "eventType": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+      "description": "점으로 구분한 이벤트 타입. 토픽 dawnline.<eventType>.v<major> 와 일치해야 한다. 예: order.placed, wave.closed, delivery.at-risk. Kafka 헤더에도 중복 기록한다.",
+      "examples": ["order.placed", "fulfillment.planned", "wave.closed", "route.assigned", "delivery.at-risk"]
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "페이로드 스키마의 major 버전. 토픽 접미사 v<major> 와 같은 값이다. 같은 major 안에서는 필드·enum 값 추가만 허용된다 (§4.7)."
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "도메인 사건이 발생한 시각 (RFC 3339). 발행 시각이 아니라 사건 시각이다. Outbox 릴레이 지연과 무관하게 고정된다."
+    },
+    "producer": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "발행 서비스 이름. enum 대신 pattern 을 쓴 이유는 README '왜 enum 을 아끼는가' 참고.",
+      "examples": ["order-service", "fulfillment-service", "dispatch-service", "tracking-service"]
+    },
+    "partitionKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Kafka 파티션 키. §4.1 의 토픽별 키(orderId / campId / routeId / waveId)와 같아야 순서 보장이 성립한다 (§4.5). outbox_events.partition_key 가 VARCHAR(64) 이므로 상한도 64."
+    },
+    "traceId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "W3C Trace Context 의 trace-id (소문자 hex 32자). Kafka 헤더 traceparent 와 중복 기록한다. 필수가 아닌 이유는 README '왜 traceId 는 required 가 아닌가' 참고."
+    },
+    "payload": {
+      "type": "object",
+      "description": "eventType 별 페이로드. 이 봉투 스키마는 객체라는 것까지만 강제하고, 내부 구조는 <eventType>.v<major>.schema.json 이 검증한다."
+    }
+  },
+  "$defs": {
+    "uuidV7": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "소문자 UUIDv7. 세 번째 그룹 첫 자리가 버전(7), 네 번째 그룹 첫 자리가 variant(10xx)."
+    }
+  }
+}

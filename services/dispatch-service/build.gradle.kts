@@ -11,8 +11,10 @@ dependencies {
     implementation(libs.spring.boot.starter.validation)
     implementation(libs.spring.boot.starter.data.jpa)
     implementation(libs.spring.boot.starter.data.redis)
-    implementation(libs.flyway.core)
-    implementation(libs.flyway.postgresql)
+    // Boot 4 모듈화: FlywayAutoConfiguration 은 spring-boot-flyway 모듈에만 있다.
+    // 이 스타터가 없으면 spring.flyway.* 가 죽은 설정이 되어 마이그레이션이 실행되지 않는다.
+    implementation(libs.spring.boot.starter.flyway)
+    runtimeOnly(libs.flyway.postgresql)
     implementation(libs.springdoc.openapi.webmvc)
     runtimeOnly(libs.postgresql)
 

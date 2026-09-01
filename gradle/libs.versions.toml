@@ -38,6 +38,12 @@ spring-boot-starter-data-redis      = { module = "org.springframework.boot:sprin
 spring-boot-starter-actuator        = { module = "org.springframework.boot:spring-boot-starter-actuator" }
 spring-boot-starter-security        = { module = "org.springframework.boot:spring-boot-starter-security" }
 spring-boot-starter-test            = { module = "org.springframework.boot:spring-boot-starter-test" }
+# 주의(Boot 4 모듈화): spring-boot-autoconfigure 에는 자동설정이 12개뿐이다.
+#   Flyway·Kafka·OpenTelemetry 자동설정은 아래 전용 스타터에만 들어 있다.
+#   이걸 빼면 spring.flyway.* / spring.kafka.* 가 조용히 무시된다(빈이 아예 안 생김).
+spring-boot-starter-flyway          = { module = "org.springframework.boot:spring-boot-starter-flyway" }
+spring-boot-starter-kafka           = { module = "org.springframework.boot:spring-boot-starter-kafka" }
+spring-boot-starter-opentelemetry   = { module = "org.springframework.boot:spring-boot-starter-opentelemetry" }
 spring-boot-testcontainers          = { module = "org.springframework.boot:spring-boot-testcontainers" }
 spring-boot-docker-compose          = { module = "org.springframework.boot:spring-boot-docker-compose" }
 
@@ -51,8 +57,6 @@ postgresql          = { module = "org.postgresql:postgresql" }
 # --- 관측성 ---
 micrometer-core             = { module = "io.micrometer:micrometer-core" }
 micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
-micrometer-tracing-bridge-otel = { module = "io.micrometer:micrometer-tracing-bridge-otel" }
-opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporter-otlp" }
 logback-classic             = { module = "ch.qos.logback:logback-classic" }
 
 # --- API 문서 ---
@@ -60,6 +64,9 @@ springdoc-openapi-webmvc = { module = "org.springdoc:springdoc-openapi-starter-w
 
 # --- 회복탄력성 (Boot 4 전용 모듈) ---
 resilience4j-spring-boot4 = { module = "io.github.resilience4j:resilience4j-spring-boot4", version.ref = "resilience4j" }
+
+# --- 직렬화: Boot 4 기본 Jackson 은 3.x 이고 패키지가 tools.jackson.* 다 ---
+jackson-databind = { module = "tools.jackson.core:jackson-databind" }
 
 # --- 널 가능성 ---
 jspecify = { module = "org.jspecify:jspecify" }
@@ -72,11 +79,15 @@ awaitility           = { module = "org.awaitility:awaitility" }
 archunit-junit5      = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 json-schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "json-schema-validator" }
 
-# --- Testcontainers (Boot BOM 이 2.0.5 관리) ---
-testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter" }
-testcontainers-postgresql    = { module = "org.testcontainers:postgresql" }
-testcontainers-kafka         = { module = "org.testcontainers:kafka" }
-testcontainers-redis         = { module = "org.testcontainers:redis" }
+# --- Testcontainers (Boot BOM 이 testcontainers-bom 2.0.5 를 import 하므로 버전 불필요) ---
+# 주의: Testcontainers 2.0 에서 모듈 좌표가 전부 `testcontainers-` 접두어로 바뀌었다.
+#       1.x 의 org.testcontainers:kafka / :postgresql / :junit-jupiter 는 2.x 에 존재하지 않는다(404).
+#       또한 2.x 에는 공식 redis 모듈이 없다 — Boot BOM 이 관리하는 com.redis:testcontainers-redis 를 쓴다.
+testcontainers-core          = { module = "org.testcontainers:testcontainers" }
+testcontainers-junit-jupiter = { module = "org.testcontainers:testcontainers-junit-jupiter" }
+testcontainers-postgresql    = { module = "org.testcontainers:testcontainers-postgresql" }
+testcontainers-kafka         = { module = "org.testcontainers:testcontainers-kafka" }
+testcontainers-redis         = { module = "com.redis:testcontainers-redis" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }

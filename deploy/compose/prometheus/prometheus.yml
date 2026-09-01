@@ -1,0 +1,40 @@
+# =============================================================================
+# Dawnline Prometheus 스크레이프 설정 (DESIGN.md §9.1)
+#
+# 코어 서비스 5개의 Micrometer Prometheus 엔드포인트를 긁는다.
+# 컨테이너 안에서는 모든 서비스가 8080 을 쓴다(호스트 포트만 서로 다르다).
+#
+# 알림 규칙(§9.4: outbox 지연 > 30s, DLQ 신규 > 0, consumer lag > 1000 …)은
+# Phase 7 산출물이라 여기서는 rule_files 를 비워 둔다.
+# =============================================================================
+
+global:
+  scrape_interval: 10s
+  scrape_timeout: 5s
+  evaluation_interval: 15s
+  external_labels:
+    env: local
+    stack: dawnline
+
+# Phase 7 에서 ./prometheus/rules/*.yml 을 추가하고 여기에 연결한다.
+rule_files: []
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # 코어 서비스. 아직 이미지가 뜨지 않았다면 타깃이 DOWN 으로 보이는 게 정상이다.
+  - job_name: dawnline-services
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["order-service:8080"]
+        labels: { service: order-service }
+      - targets: ["fulfillment-service:8080"]
+        labels: { service: fulfillment-service }
+      - targets: ["dispatch-service:8080"]
+        labels: { service: dispatch-service }
+      - targets: ["tracking-service:8080"]
+        labels: { service: tracking-service }
+      - targets: ["ops-api:8080"]
+        labels: { service: ops-api }

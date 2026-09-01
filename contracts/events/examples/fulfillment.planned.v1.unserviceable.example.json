@@ -1,0 +1,37 @@
+{
+  "eventId": "01a04dad-8355-7a73-8479-f2aef540e550",
+  "eventType": "fulfillment.planned",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T13:20:12.904Z",
+  "producer": "fulfillment-service",
+  "partitionKey": "01a04dad-80da-72a5-a445-96d0077d1c67",
+  "traceId": "1139f8576ce1e041030ec55631371b1b",
+  "payload": {
+    "outcome": "UNSERVICEABLE",
+    "orderId": "01a04dad-80da-72a5-a445-96d0077d1c67",
+    "customerId": "01a04dad-80da-7e9f-ad68-eb7cf42fcaaf",
+    "serviceTier": "DAWN",
+    "address": {
+      "line": "서울특별시 은평구 진관2로 22, 3동 501호",
+      "postalCode": "03371",
+      "lat": 37.6412,
+      "lng": 126.8725,
+      "geohash7": "wydnph3"
+    },
+    "promisedWindow": {
+      "start": "2026-08-30T00:00:00+09:00",
+      "end": "2026-08-30T07:00:00+09:00"
+    },
+    "parcel": {
+      "weightG": 3400,
+      "volumeCm3": 21000,
+      "requiresCold": true,
+      "hazmat": false
+    },
+    "items": [
+      { "sku": "SKU-9110", "qty": 1 }
+    ],
+    "placedAt": "2026-08-29T13:20:12.310Z",
+    "reason": "NO_COLD_FC"
+  }
+}
