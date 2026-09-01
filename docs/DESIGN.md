@@ -176,7 +176,7 @@ com.dawnline.<service>
 └── config/
 ```
 
-의존 규칙: `adapter → application → domain`. `domain`은 어떤 상위 패키지도 참조하지 않는다. JPA 어노테이션은 `adapter/out/persistence`의 엔티티에만 두고, 도메인 모델과 분리한다 `[결정 필요: 서비스 규모가 작으므로 도메인=JPA 엔티티 통합 허용 여부. 기본값은 분리]`.
+의존 규칙: `adapter → application → domain`. `domain`은 어떤 상위 패키지도 참조하지 않는다. JPA 어노테이션은 `adapter/out/persistence`의 엔티티에만 두고, 도메인 모델과 분리한다(ADR-007로 확정).
 
 ---
 
@@ -224,7 +224,7 @@ com.dawnline.<service>
 ```json
 {
   "orderId": "…", "customerId": "…", "serviceTier": "DAWN",
-  "address": { "line": "…", "postalCode": "06236", "lat": 37.4979, "lng": 127.0276, "geohash7": "wydm9qx" },
+  "address": { "line": "…", "postalCode": "06236", "lat": 37.4979, "lng": 127.0276, "geohash7": "wydm6d6" },
   "promisedWindow": { "start": "2026-08-30T00:00:00+09:00", "end": "2026-08-30T07:00:00+09:00" },
   "parcel": { "weightG": 1200, "volumeCm3": 8000, "requiresCold": false, "hazmat": false },
   "items": [ { "sku": "SKU-1001", "qty": 2 } ],
@@ -271,6 +271,25 @@ com.dawnline.<service>
 | 역직렬화 실패/스키마 불일치 | 즉시 DLQ + 알림 |
 | 비즈니스 규칙 위반 (예: 취소 불가 상태) | DLQ 아님. 무시하고 `warn` 로그 + 메트릭 (`dawnline_event_rejected_total{reason}`) |
 | DLQ 재처리 | ops-api `POST /admin/dlq/{topic}/replay` (운영자 확인 후) |
+
+위 표는 **소비 측**이다. 발행 측에는 DLQ가 없다 — 아직 브로커에 나가지 못한 이벤트이므로 보낼 곳이 없다.
+
+**발행 측 실패 (Outbox 릴레이)**
+
+릴레이는 실패를 두 종류로 구분한다.
+
+| 종류 | 예 | 처리 |
+|---|---|---|
+| 결정적(deterministic) | 봉투 조립·eventType 검증·직렬화 실패 | 해당 행을 즉시 격리(`failed_at` 기록, `publish_attempts` 증가), `error` 로그 + `dawnline_outbox_failed` 증가, **다음 행 계속 진행** |
+| 일시적(transient) | 브로커 연결 불가, 타임아웃, `KafkaException` | 격리하지 않는다. 그때까지의 진행분을 커밋하고 백오프 후 다음 폴링에서 재시도 (`publish_attempts` 증가) |
+
+구분 기준은 예외 타입이다: Kafka `send()` 이전 단계의 예외와 직렬화 예외는 결정적, 전송·네트워크 예외는 일시적. 판단이 애매한 예외는 일시적으로 취급한다(격리는 사람의 개입을 요구하므로 보수적으로).
+
+이 구분이 필요한 이유는 두 실패의 성질이 정반대이기 때문이다. 결정적 실패는 **몇 번을 재시도해도 같은 결과**라서, 재시도를 유지하면 그 행이 `created_at` 순서상 맨 앞에 서서 뒤의 모든 이벤트를 영구히 막는다(head-of-line blocking). 일시적 실패는 반대로 **기다리면 풀린다** — 여기서 행을 격리하면 브로커가 잠깐 흔들렸다는 이유로 멀쩡한 이벤트가 사람 손을 기다리게 된다.
+
+격리는 §4.5의 순서 보장을 **그 파티션 키에 한해** 깨뜨린다. 격리된 행 뒤에 같은 키의 이벤트가 있으면 그것이 먼저 발행된다. 이는 의도된 것이다 — 대안은 서비스 전체의 이벤트 발행이 멈추는 것이고, 격리는 알림(§9.4)과 함께 사람에게 넘어간다.
+
+격리된 행의 복구는 수동이다: 원인 수정 → `UPDATE outbox_events SET failed_at = NULL, publish_attempts = 0 WHERE id = …` (RB-05). ops-api 격리 조회·재큐 엔드포인트는 Phase 6 범위(§5.5 커맨드 목록에 추가).
 
 ### 4.7 스키마 진화 규칙
 
@@ -365,10 +384,12 @@ CREATE TABLE outbox_events (
   partition_key  VARCHAR(64) NOT NULL,
   headers        JSONB NOT NULL,
   payload        JSONB NOT NULL,
-  created_at     TIMESTAMPTZ NOT NULL,
-  published_at   TIMESTAMPTZ
+  created_at       TIMESTAMPTZ NOT NULL,
+  published_at     TIMESTAMPTZ,
+  publish_attempts SMALLINT NOT NULL DEFAULT 0,
+  failed_at        TIMESTAMPTZ
 );
-CREATE INDEX ix_outbox_unpublished ON outbox_events (created_at) WHERE published_at IS NULL;
+CREATE INDEX ix_outbox_unpublished ON outbox_events (created_at) WHERE published_at IS NULL AND failed_at IS NULL;
 
 CREATE TABLE processed_events (
   event_id     UUID NOT NULL,
@@ -506,7 +527,7 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
 
 **ops-api**
 - 모든 토픽을 구독해 **읽기 모델**을 갱신 (CQRS 프로젝션). 코어 서비스 DB는 절대 직접 읽지 않는다.
-- 커맨드는 코어 서비스 REST로 위임: 웨이브 조기 마감, 계획 재실행, stop 재배정, 주문 홀드/취소, DLQ 재처리.
+- 커맨드는 코어 서비스 REST로 위임: 웨이브 조기 마감, 계획 재실행, stop 재배정, 주문 홀드/취소, DLQ 재처리, **outbox 격리 행 조회·재큐**(§4.6 발행 측 실패).
 - 인증: JWT(HS256, 로컬 시크릿), 역할 `OPS_VIEWER`, `OPS_OPERATOR`, `ADMIN`. 커맨드는 `OPS_OPERATOR` 이상. 모든 커맨드는 `audit_logs`에 기록.
 
 ```sql
@@ -766,7 +787,8 @@ public interface DispatchStrategy {
 | PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패 | 트래픽 차단(프로브), 소비자 재시도 후 pause | RB-02 |
 | Redis 다운 | 성능 저하, 락 폴백 | 폴백 경로(§7.2) | RB-03: 복구 후 geo 재적재 확인 |
 | dispatch 계획 중 크래시 | plan `PLANNING` 정체 | 10분 후 자동 재실행 | RB-04: 강제 재실행 |
-| 독약 메시지 | 소비자 반복 실패 | 3회 후 DLQ | RB-05: 원인 수정 후 replay |
+| 독약 메시지 (소비 측) | 소비자 반복 실패 | 3회 후 DLQ | RB-05: 원인 수정 후 replay |
+| 독약 행 (발행 측) | 릴레이가 봉투 조립 실패 반복 | 결정적 실패로 분류해 격리(`failed_at`), 뒤 행은 계속 발행 (§4.6, ADR-015) | RB-05: 원인 수정 후 `failed_at = NULL` 로 재큐 |
 | 컷오프 스케줄러 이중 실행 | 없음 | Redis 락 + 낙관적 락 | — |
 | 시뮬레이터 폭주 | 429 증가 | 레이트 리밋 | — |
 
@@ -784,7 +806,7 @@ public interface DispatchStrategy {
 
 ### 8.6 기동·종료
 
-- 레디니스: DB 마이그레이션 완료 + Kafka 프로듀서 초기화 + (fulfillment) GEO 적재 완료.
+- 레디니스: DB 마이그레이션 완료 + (fulfillment) GEO 적재 완료. Kafka 브로커 연결은 레디니스 조건에 넣지 않는다 — 브로커 장애 시에도 쓰기 경로는 outbox로 정상 동작해야 하기 때문이다(§8.4, ADR-016). 브로커 상태는 레디니스가 아니라 outbox 지연·랙 알림으로 감시한다.
 - 그레이스풀 셧다운: HTTP 드레인 30초, Kafka 소비자 커밋 후 종료, 진행 중 계획은 `PLANNING` 유지(재실행 경로가 회수).
 
 ---
@@ -798,6 +820,7 @@ public interface DispatchStrategy {
 | `dawnline_orders_placed_total` | counter | tier, camp |
 | `dawnline_outbox_lag_seconds` | gauge | service |
 | `dawnline_outbox_unpublished` | gauge | service |
+| `dawnline_outbox_failed` | gauge | service — 격리된(미해결) outbox 행 수 (§4.6) |
 | `dawnline_event_processed_total` | counter | consumer, eventType, outcome(ok/dup/rejected/dlq) |
 | `dawnline_wave_orders` | gauge | camp, tier |
 | `dawnline_plan_duration_seconds` | histogram | strategy, mode |
@@ -823,7 +846,7 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
@@ -926,7 +949,7 @@ dawnline/
 
 ## 14. CI/CD와 배포
 
-**ci.yml (PR·main)**: checkout → JDK 25 → Gradle 캐시 → `./gradlew check`(단위+ArchUnit+계약+JaCoCo 게이트) → 통합 테스트(Testcontainers, Docker 서비스) → `benchmark small` 회귀 체크 → 이미지 빌드(Jib 또는 Buildpacks, `[결정 필요]`) → Compose 스모크(주문 20건 E2E) → 결과 아티팩트(리포트, OpenAPI).
+**ci.yml (PR·main)**: checkout → JDK 25 → Gradle 캐시 → `./gradlew check`(단위+ArchUnit+계약+JaCoCo 게이트) → 통합 테스트(Testcontainers, Docker 서비스) → `benchmark small` 회귀 체크 → 이미지 빌드(Buildpacks, ADR-013) → Compose 스모크(주문 20건 E2E) → 결과 아티팩트(리포트, OpenAPI).
 
 **release.yml (태그 `v*`)**: 이미지 GHCR 푸시(태그·`latest`), SBOM 생성, GitHub Release 노트.
 
@@ -953,22 +976,32 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 
 ---
 
-## 16. ADR 목록 (docs/adr/, 상태: Phase 0에서 초안 작성)
+## 16. ADR 목록 (docs/adr/)
 
-| ADR | 결정 | 대안 |
-|---|---|---|
-| 001 | Gradle 멀티모듈 모노레포 | 서비스별 저장소 (포트폴리오 가독성 저하) |
-| 002 | DB-per-service + 폴링 Outbox 릴레이 | Debezium CDC(운영 복잡도), 2PC(불가) |
-| 003 | JSON + JSON Schema 이벤트 계약 | Avro/Protobuf + Schema Registry(로컬 복잡도, 확장 경로만 기술) |
-| 004 | 자체 휴리스틱(sweep-greedy-nn+ls) 기본 + Timefold 비교 | OR-Tools(JNI·배포 부담), Timefold 단독(블랙박스로는 알고리즘 역량 증명 약함) |
-| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | PostgreSQL advisory lock(서비스별 DB 분리 시 범위 한계), Redisson |
-| 006 | at-least-once + 멱등 소비자 | Kafka 트랜잭션/EOS(DB 쓰기와 원자성 불가) |
-| 007 | 헥사고날 + ArchUnit 강제 | 계층형(경계 침식) |
-| 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | 전부 플랫폼 스레드 |
-| 009 | URL 경로 API 버저닝(v1) | 헤더 버저닝 |
-| 010 | 하버사인 × 도로계수 기본, OSRM 어댑터 선택 | 상용 지도 API(비용·키 관리) |
-| 011 | 롤링 배포 시 소비자 static membership | 기본 리밸런스 |
-| 012 | CQRS 읽기 모델을 ops-api에 집중 | 각 서비스에 조회 API 노출(서비스 간 동기 호출 증가) |
+이 표는 `docs/adr/` 의 **파일과 1:1로 대응**한다. 문서 열이 `—` 인 항목은 결정 방향만 정해 두고
+아직 ADR을 쓰지 않은 것이며, 해당 Phase에서 파일을 만들면서 이 표를 갱신한다.
+(같은 표가 `docs/adr/README.md` 에도 있다. 둘은 함께 고친다.)
+
+| ADR | 결정 | 대안 | 문서 |
+|---|---|---|---|
+| 001 | Gradle 멀티모듈 모노레포 | 서비스별 저장소 (포트폴리오 가독성 저하) | [ADR-001](adr/ADR-001-gradle-multi-module-monorepo.md) |
+| 002 | DB-per-service + 폴링 Outbox 릴레이 | Debezium CDC(운영 복잡도), 2PC(불가) | [ADR-002](adr/ADR-002-db-per-service-polling-outbox.md) |
+| 003 | JSON + JSON Schema 이벤트 계약 | Avro/Protobuf + Schema Registry(로컬 복잡도, 확장 경로만 기술) | [ADR-003](adr/ADR-003-json-schema-event-contracts.md) |
+| 004 | 자체 휴리스틱(sweep-greedy-nn+ls) 기본 + Timefold 비교 | OR-Tools(JNI·배포 부담), Timefold 단독(블랙박스로는 알고리즘 역량 증명 약함) | — (Phase 4 예정) |
+| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | PostgreSQL advisory lock(서비스별 DB 분리 시 범위 한계), Redisson | — (Phase 2 예정) |
+| 006 | at-least-once + 멱등 소비자 | Kafka 트랜잭션/EOS(DB 쓰기와 원자성 불가) | [ADR-006](adr/ADR-006-at-least-once-idempotent-consumer.md) |
+| 007 | 헥사고날 + ArchUnit 강제 | 계층형(경계 침식) | [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) |
+| 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | 전부 플랫폼 스레드 | — (Phase 4 예정) |
+| 009 | URL 경로 API 버저닝(v1) | 헤더 버저닝 | — (Phase 1 예정) |
+| 010 | 하버사인 × 도로계수 기본, OSRM 어댑터 선택 | 상용 지도 API(비용·키 관리) | — (Phase 3 예정) |
+| 011 | 롤링 배포 시 소비자 static membership | 기본 리밸런스 | — (Phase 7 예정) |
+| 012 | CQRS 읽기 모델을 ops-api에 집중 | 각 서비스에 조회 API 노출(서비스 간 동기 호출 증가) | — (Phase 6 예정) |
+| 013 | 컨테이너 이미지 = Spring Boot Buildpacks(`bootBuildImage`) | Jib(플러그인 추가·Boot 4 검증 부담), 수동 Dockerfile(5배 유지보수) | [ADR-013](adr/ADR-013-container-image-buildpacks.md) |
+| 014 | JDK 25 툴체인 자동 프로비저닝(foojay-resolver) | 로컬 JDK 수동 설치 전제(환경별 재현성 저하) | [ADR-014](adr/ADR-014-jdk25-toolchain-auto-provisioning.md) |
+| 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | 무한 재시도 유지(진행 보장 없음), DLQ 토픽 우회 발행(실패 원인과 순환), N회 후 자동 폐기(이벤트 소실) | [ADR-015](adr/ADR-015-outbox-publish-side-quarantine.md) |
+| 016 | 레디니스에서 Kafka 브로커 연결 제외 | 코드에 Kafka 프로브 추가(§8.2 완충 설계 붕괴), 기동 시 1회 검사(기동 순서 의존성) | [ADR-016](adr/ADR-016-readiness-excludes-kafka.md) |
+
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에 확정되어 추가됐다.
 
 ---
 
@@ -982,7 +1015,18 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | Spring Boot 4 호환 라이브러리 미성숙(springdoc, Resilience4j 등) | 빌드 실패 | Phase 0에서 호환 버전 확정, 불가 시 대체(Boot 내장 HTTP 클라이언트 재시도 등) |
 | 노트북 자원으로 목표치 미달 | SLO 미충족 | 목표는 "측정·문서화"가 우선, 미달 시 원인 분석을 문서로 |
 
-**[결정 필요] 목록**: (1) 도메인 모델과 JPA 엔티티 분리 여부 (2) 고객 API 키 적용 여부 (3) 이미지 빌드 Jib vs Buildpacks (4) Redis vs Valkey (5) ops-web 지도 타일 (6) Timefold 실험 포함 여부.
+**[결정 필요] 목록 (미해소)**
+
+| # | 항목 | 결정 시점 |
+|---|---|---|
+| 2 | 고객 주문 API 키(`X-Api-Key`) 적용 여부 | Phase 1 |
+| 4 | Redis vs Valkey | Redis 8로 진행, 라이선스 이슈 발생 시 재검토(명령 호환) |
+| 5 | ops-web 지도 타일 서버 정책 | Phase 6 |
+| 6 | Timefold 실험 포함 여부 | Phase 4 stretch (ADR-004와 함께) |
+
+**해소된 항목**: (1) 도메인 모델과 JPA 엔티티 분리 → **분리한다**, ADR-007로 확정. (3) 이미지 빌드 Jib vs Buildpacks → **Buildpacks**, ADR-013으로 확정.
+
+Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원래 `[결정 필요]` 목록에는 없던 항목이다): outbox 발행 측 독약 행 처리 → ADR-015, 레디니스의 Kafka 조건 → ADR-016.
 
 ---
 

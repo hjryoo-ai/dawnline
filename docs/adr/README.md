@@ -27,10 +27,13 @@
 | 012 | CQRS 읽기 모델을 ops-api에 집중 | ⏳ Phase 6 예정 | — |
 | 013 | 컨테이너 이미지 = Spring Boot Buildpacks(`bootBuildImage`) | ✅ Accepted (2026-08-29) | [ADR-013](ADR-013-container-image-buildpacks.md) |
 | 014 | JDK 25 툴체인 자동 프로비저닝 (foojay-resolver) | ✅ Accepted (2026-08-29) | [ADR-014](ADR-014-jdk25-toolchain-auto-provisioning.md) |
+| 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | ✅ Accepted (2026-09-01) | [ADR-015](ADR-015-outbox-publish-side-quarantine.md) |
+| 016 | 레디니스에서 Kafka 브로커 연결 제외 | ✅ Accepted (2026-09-01) | [ADR-016](ADR-016-readiness-excludes-kafka.md) |
 
-- 001–012는 `docs/DESIGN.md` §16의 목록과 번호가 일치한다.
+- 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
-  둘 다 `docs/DESIGN.md` §17의 `[결정 필요]` 또는 §14의 미결 항목을 해소한다.
+- **015·016은 Phase 0 마감 감사에서** 드러난 결함·설계서 내부 모순을 확정한 것이다.
+  015는 릴레이의 head-of-line blocking(실제 도달 가능한 결함), 016은 §8.6과 §8.4의 모순을 해소한다.
 
 ## `[결정 필요]` 해소 현황 (`docs/DESIGN.md` §17)
 
@@ -38,15 +41,24 @@
 |---|---|---|
 | 1 | 도메인 모델과 JPA 엔티티 분리 여부 | ✅ **분리한다** — [ADR-007](ADR-007-hexagonal-architecture-archunit.md) |
 | 2 | 고객 API 키 적용 여부 | ⏳ 미결 (Phase 1에서 결정) |
-| 3 | 이미지 빌드 Jib vs Buildpacks | ✅ **Buildpacks** — [ADR-013](ADR-013-container-image-buildpacks.md) |
+| 3 | 이미지 빌드 Jib vs Buildpacks | ✅ **Buildpacks** — [ADR-013](ADR-013-container-image-buildpacks.md) (§14 본문도 갱신됨) |
 | 4 | Redis vs Valkey | ⏳ 미결 (Redis 8로 진행, 라이선스 이슈 발생 시 재검토 — 명령 호환) |
 | 5 | ops-web 지도 타일 | ⏳ 미결 (Phase 6에서 결정) |
 | 6 | Timefold 실험 포함 여부 | ⏳ 미결 (Phase 4 stretch, ADR-004와 함께 결정) |
 
+`[결정 필요]` 목록 밖에서 확정된 결정도 있다 — 설계서 내부 모순을 해소한 경우다.
+
+| 출처 | 모순 | 확정 |
+|---|---|---|
+| §8.6 vs §8.4 | §8.6은 레디니스에 Kafka 프로듀서 초기화를 요구했으나 §8.4는 "브로커 다운 시 주문 API 정상"을 요구 | [ADR-016](ADR-016-readiness-excludes-kafka.md) — 레디니스에서 제외 |
+| §4.6 | 소비 측 DLQ만 규정하고 발행 측 실패 정책이 없어, 독약 행이 릴레이를 영구히 막을 수 있었다 | [ADR-015](ADR-015-outbox-publish-side-quarantine.md) — 결정적 실패만 격리 |
+
 ## 새 ADR을 추가할 때
 
 - 파일명: `ADR-<번호>-<영문-kebab-슬러그>.md`. 번호는 재사용하지 않는다.
-- 상태는 `Accepted` / `Superseded by ADR-xxx` / `Deprecated` 중 하나로 유지한다.
+- 파일이 있는 ADR의 상태는 `Accepted` / `Superseded by ADR-xxx` / `Deprecated` 중 하나로 유지한다.
+  위 목록의 `⏳ Phase N 예정` 은 상태가 아니라 **아직 파일이 없다는 표시**다 — 파일을 만들 때
+  `Accepted` 로 바뀐다.
   결정을 뒤집을 때는 기존 ADR을 **수정하지 말고** 새 ADR을 쓰고, 기존 문서의 상태만 `Superseded` 로 바꾼다.
 - `docs/DESIGN.md` §16 표와 이 목록을 함께 갱신한다.
 - 커밋 메시지는 `docs(adr): …` (Conventional Commits, `CLAUDE.md`).
