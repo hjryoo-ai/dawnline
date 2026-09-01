@@ -51,7 +51,11 @@ make down
 
 작업을 "완료"라고 말하기 전에 반드시 `./gradlew build`가 통과해야 하고, 해당 Phase의 DoD 검증 명령을 실제로 실행해 결과를 보고한다.
 
-## 아키텍처 불변 규칙 (ArchUnit으로도 강제됨)
+## 아키텍처 불변 규칙
+
+아래 12개 중 ArchUnit이 강제하는 것은 1(규칙 6), 3·4(규칙 3), 5(규칙 1)뿐이다. 나머지는
+라이브러리 API 설계(1의 `OutboxAppender`), 컴파일러(9), DB 권한(3), PR 체크리스트로 지켜진다.
+어느 규칙이 무엇으로 강제되는지는 `docs/DESIGN.md` §13 참고.
 
 1. **Outbox 필수**: 도메인 상태 변경과 이벤트 발행은 같은 DB 트랜잭션에서 `outbox_events`에 기록한다. `KafkaTemplate`을 유스케이스에서 직접 호출하지 않는다.
 2. **멱등 소비자 필수**: 모든 Kafka 리스너는 `processed_events(event_id, consumer)` 체크를 트랜잭션 안에서 먼저 한다. `libs/messaging`의 `IdempotentConsumer`를 사용한다.

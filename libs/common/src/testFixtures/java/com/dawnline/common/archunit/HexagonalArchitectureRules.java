@@ -42,6 +42,7 @@ public final class HexagonalArchitectureRules {
 
     private static final String SPRING_PACKAGE = "org.springframework..";
     private static final String JPA_PACKAGE = "jakarta.persistence..";
+    private static final String SPRING_KAFKA_PACKAGE = "org.springframework.kafka..";
 
     private static final String KAFKA_LISTENER = "org.springframework.kafka.annotation.KafkaListener";
     private static final String SPRING_TRANSACTIONAL = "org.springframework.transaction.annotation.Transactional";
@@ -76,6 +77,32 @@ public final class HexagonalArchitectureRules {
                     .dependOnClassesThat()
                     .resideInAPackage("..adapter..")
                     .because("의존 방향은 adapter → application → domain 뿐이다 (DESIGN.md §3.4)")
+                    .allowEmptyShould(true);
+
+    /**
+     * 규칙 6 — {@code ..domain..} · {@code ..application..} 은 Spring Kafka 에 의존하지 않는다.
+     *
+     * <p>CLAUDE.md 불변규칙 1(Outbox 필수). 유스케이스가 {@code KafkaTemplate} 을 직접 부르면
+     * 도메인 변경과 이벤트 발행이 <strong>서로 다른 트랜잭션</strong>이 되어, 둘 중 하나만 성공하는
+     * 상태가 만들어진다. 발행 경로는 {@code OutboxAppender} 하나뿐이어야 한다.
+     *
+     * <p>이 규칙이 필요한 이유는 구조적이다. {@code libs/messaging} 이
+     * {@code api(spring-boot-starter-kafka)} 로 의존을 노출하므로 {@code KafkaTemplate} 은
+     * <em>5개 서비스 전부의 컴파일 클래스패스에 있다</em>. 즉 "이벤트 하나만 빨리 쏘자" 는 코드가
+     * 컴파일도 되고 테스트도 통과한다. 규칙 5({@code @Transactional} 위치)는 이것을 잡지 못한다 —
+     * 어노테이션의 위치만 보기 때문이다.
+     *
+     * <p>{@code adapter.out.messaging} 은 제외된다. 그곳이 Kafka 를 아는 것이 어댑터의 책임이다.
+     */
+    public static final ArchRule PUBLISHING_GOES_THROUGH_OUTBOX_ONLY =
+            ArchRuleDefinition.noClasses()
+                    .that()
+                    .resideInAnyPackage("..domain..", "..application..")
+                    .should()
+                    .dependOnClassesThat()
+                    .resideInAPackage(SPRING_KAFKA_PACKAGE)
+                    .because("이벤트 발행은 Outbox 를 거친다 — 유스케이스는 KafkaTemplate 을 직접 부르지 않는다 "
+                            + "(CLAUDE.md 불변규칙 1, DESIGN.md §4.4)")
                     .allowEmptyShould(true);
 
     private HexagonalArchitectureRules() {
@@ -150,12 +177,13 @@ public final class HexagonalArchitectureRules {
                 .allowEmptyShould(true);
     }
 
-    /** 한 서비스에 적용할 5개 규칙 전부. */
+    /** 한 서비스에 적용할 6개 규칙 전부. */
     public static List<ArchRule> allRulesFor(String service) {
         String owner = requireKnownService(service);
         List<ArchRule> rules = new ArrayList<>();
         rules.add(DOMAIN_IS_FRAMEWORK_FREE);
         rules.add(APPLICATION_DOES_NOT_DEPEND_ON_ADAPTER);
+        rules.add(PUBLISHING_GOES_THROUGH_OUTBOX_ONLY);
         rules.add(noCrossServiceDependency(owner));
         rules.add(kafkaListenersOnlyInInboundMessagingAdapter(owner));
         rules.add(transactionalOnlyInApplicationLayer(owner));

@@ -41,6 +41,15 @@ REVOKE CONNECT ON DATABASE dawnline_dispatch    FROM PUBLIC;
 REVOKE CONNECT ON DATABASE dawnline_tracking    FROM PUBLIC;
 REVOKE CONNECT ON DATABASE dawnline_ops         FROM PUBLIC;
 
+-- 부트스트랩 DB 도 막는다. 위 다섯 줄만으로는 서비스 계정이 dawnline_admin·postgres·template1 에
+-- 붙을 수 있다(PostgreSQL 은 CONNECT 를 PUBLIC 에 기본 부여한다). 거기서 남의 데이터를 읽지는
+-- 못하지만 — public 스키마에 CREATE 권한이 없고, pg_authid 도 못 읽고, dblink/postgres_fdw 도
+-- 설치할 수 없다 — 시스템 카탈로그는 보인다. "교차 접근을 물리적으로 차단" 이라고 적어 둔 이상
+-- 예외를 남기지 않는다.
+REVOKE CONNECT ON DATABASE dawnline_admin FROM PUBLIC;
+REVOKE CONNECT ON DATABASE postgres       FROM PUBLIC;
+REVOKE CONNECT ON DATABASE template1      FROM PUBLIC;
+
 -- --- 시간대: TIMESTAMPTZ / Instant 일관성 (CLAUDE.md 불변 규칙 9) -----------
 ALTER DATABASE dawnline_order       SET timezone TO 'UTC';
 ALTER DATABASE dawnline_fulfillment SET timezone TO 'UTC';

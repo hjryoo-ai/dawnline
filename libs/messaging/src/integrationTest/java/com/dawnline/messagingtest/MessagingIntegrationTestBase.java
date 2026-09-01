@@ -37,11 +37,17 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 public abstract class MessagingIntegrationTestBase {
 
-    /** deploy/compose/.env.example 의 POSTGRES_IMAGE 와 같은 태그. */
-    private static final String POSTGRES_IMAGE = "postgres:18.2";
+    /**
+     * deploy/compose/.env.example 의 {@code POSTGRES_IMAGE} 와 같은 태그.
+     *
+     * <p>상수로 두고 {@code ImageTagsMatchComposeIT} 가 실제 파일과 일치하는지 검사한다.
+     * 파일을 런타임에 읽지 않는 이유: 그러면 이미지 태그가 파일 위치·인코딩에 묶여
+     * 컨테이너 기동이 그 파싱에 의존하게 된다. 어긋남을 <em>테스트가</em> 잡는 편이 낫다.
+     */
+    static final String POSTGRES_IMAGE = "postgres:18.2";
 
-    /** deploy/compose/.env.example 의 KAFKA_IMAGE 와 같은 태그. */
-    private static final String KAFKA_IMAGE = "apache/kafka:4.3.1";
+    /** deploy/compose/.env.example 의 {@code KAFKA_IMAGE} 와 같은 태그. */
+    static final String KAFKA_IMAGE = "apache/kafka:4.3.1";
 
     /** 공통 Flyway 스크립트 위치. 서비스도 이 값을 spring.flyway.locations 에 넣어야 한다. */
     private static final String COMMON_MIGRATIONS = "classpath:db/migration/common";

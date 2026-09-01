@@ -99,6 +99,15 @@ coverage.excludes.convention(
     ),
 )
 
+
+// 카탈로그의 jacoco 버전을 실제로 쓴다.
+// 이 블록이 없으면 카탈로그 값은 읽히지 않고 Gradle 배포판에 박힌 기본 에이전트가 쓰인다
+// (선언 0.8.15 / 실제 0.8.14). 그러면 Gradle 래퍼를 올릴 때 커버리지 게이트를 돌리는
+// 에이전트가 조용히 바뀌고, CLAUDE.md 의 "버전은 libs.versions.toml 에서만 고정" 도 깨진다.
+jacoco {
+    toolVersion = libs.findVersion("jacoco").get().requiredVersion
+}
+
 tasks.named<JacocoReport>("jacocoTestReport") {
     dependsOn(tasks.named("test"))
     reports {

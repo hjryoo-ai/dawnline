@@ -28,7 +28,7 @@
 1. **DB-per-service**: 서비스마다 별도 DB와 별도 DB 사용자. 다른 서비스 테이블에 대한 JOIN·FK를 금지한다.
    필요한 데이터는 이벤트 페이로드 스냅샷 또는 자기 DB 프로젝션으로 가진다.
 2. **Transactional Outbox**: 도메인 상태 변경과 `outbox_events` INSERT를 **같은 DB 트랜잭션**에서 수행한다.
-   유스케이스에서 `KafkaTemplate` 을 직접 호출하지 않는다(ArchUnit 강제).
+   유스케이스에서 `KafkaTemplate` 을 직접 호출하지 않는다(ArchUnit 규칙 6, ADR-015 이후 추가됨 — DESIGN.md §13).
 3. **폴링 릴레이**: 별도 컴포넌트 `OutboxRelay`(`libs/messaging`)가 미발행 행을 폴링(100ms)해 배치(500건)로 Kafka에
    발행하고 `published_at` 을 기록한다. 다중 인스턴스 안전성은 `SELECT … FOR UPDATE SKIP LOCKED` 로 확보한다.
 4. **관측**: `dawnline_outbox_lag_seconds`(가장 오래된 미발행 행의 나이)와 미발행 건수를 핵심 메트릭으로 노출한다.

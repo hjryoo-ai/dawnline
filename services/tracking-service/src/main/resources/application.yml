@@ -51,6 +51,15 @@ spring:
   #     같은 스크립트가 두 번 수집된다. flyway-core 12.4.0 의 Scanner.resources 가
   #     ArrayList 라 중복 제거가 없어서 "Found more than one migration with version" 으로
   #     기동이 깨진다(jar 를 열어 확인).
+
+  # OutboxRelay 가 폴링(100ms)·메트릭(5s)·정리(1h) 세 @Scheduled 작업을 이 풀에서 돌린다.
+  # Boot 기본값 1이면 Kafka 장애로 폴링이 막히는 동안 메트릭 갱신이 함께 멈춰,
+  # 그 장애를 알려 줄 유일한 지표(outbox 지연·격리 게이지)가 바로 그때 낡는다.
+  task:
+    scheduling:
+      pool:
+        size: 2
+
   flyway:
     enabled: true
     locations: ${SPRING_FLYWAY_LOCATIONS:classpath:db/migration}

@@ -93,8 +93,10 @@ make down                # 컨테이너만 정지·삭제 (데이터 볼륨은 �
 ## PostgreSQL — DB-per-service (§7.1)
 
 `initdb/01-roles-and-databases.sql`, `initdb/02-schema-privileges.sql` 이 첫 기동 시 실행돼
-DB 5개와 동명의 전용 계정을 만들고, 각 DB 의 `CONNECT` 를 `PUBLIC` 에서 회수한다.
+DB 5개와 동명의 전용 계정을 만들고, 서비스 DB 5개 **그리고 부트스트랩 DB
+(`dawnline_admin`·`postgres`·`template1`)** 의 `CONNECT` 를 `PUBLIC` 에서 회수한다.
 그래서 **다른 서비스 계정으로는 접속 자체가 거부된다**(CLAUDE.md 불변 규칙 3의 물리적 강제).
+슈퍼유저는 ACL 을 우회하므로 `make psql` 은 그대로 동작한다.
 
 ```
 $ psql -U dawnline_dispatch -d dawnline_order

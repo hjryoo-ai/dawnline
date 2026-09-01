@@ -1,0 +1,5 @@
+# 이 디렉터리는 docker-compose.yml 이 Grafana 로 bind mount 한다(:295).
+# 비어 있으면 git 이 추적하지 않아 fresh clone 에 존재하지 않고, 그때 Docker 데몬이
+# 대신 만들어 준다 — Linux 에서는 root 소유로 체크아웃 안에 생겨서 이후 대시보드 JSON 을
+# 넣으려면 sudo 가 필요해진다. 그래서 이 파일로 디렉터리를 붙잡아 둔다.
+# 대시보드 JSON 이 들어오면(§9.4, Phase 3) 이 파일은 지워도 된다.
