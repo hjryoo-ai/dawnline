@@ -110,7 +110,14 @@ public abstract class MessagingIntegrationTestBase {
     }
 
     /**
-     * 이 테스트 클래스만 쓰는 데이터베이스를 만들어 붙인다.
+     * 이 테스트 클래스만 쓰는 데이터베이스를 만들어 붙인다(공통 마이그레이션 적용 포함).
+     *
+     * <p>outbox 릴레이는 100ms 마다 <em>모든</em> 미발행 행을 집는다. 그래서 테스트 클래스들이 DB 를
+     * 공유하면 한쪽이 넣은 행을 다른 쪽 컨텍스트의 릴레이가 발행해 버리고, {@code countUnpublished()}
+     * 같은 전역 집계도 서로 오염된다. 스프링은 컨텍스트를 캐시하므로 먼저 뜬 컨텍스트의 릴레이는
+     * 뒤 클래스가 도는 동안에도 계속 살아 있다.
+     *
+     * <p>DB 를 나누면 그 간섭이 구조적으로 사라진다. 컨테이너는 그대로 공유하므로 비용은 거의 없다.
      *
      * @param registry 동적 속성 레지스트리
      * @param name     데이터베이스 이름
@@ -126,19 +133,15 @@ public abstract class MessagingIntegrationTestBase {
     }
 
     /**
-     * 이 테스트 클래스만 쓰는 데이터베이스를 만들고 공통 마이그레이션을 적용한다.
+     * 마이그레이션을 적용하지 <em>않은</em> 빈 데이터베이스를 만든다.
      *
-     * <p>outbox 릴레이는 100ms 마다 <em>모든</em> 미발행 행을 집는다. 그래서 테스트 클래스들이 DB 를
-     * 공유하면 한쪽이 넣은 행을 다른 쪽 컨텍스트의 릴레이가 발행해 버리고, {@code countUnpublished()}
-     * 같은 전역 집계도 서로 오염된다. 스프링은 컨텍스트를 캐시하므로 먼저 뜬 컨텍스트의 릴레이는
-     * 뒤 클래스가 도는 동안에도 계속 살아 있다.
-     *
-     * <p>DB 를 나누면 그 간섭이 구조적으로 사라진다. 컨테이너는 그대로 공유하므로 비용은 거의 없다.
+     * <p>마이그레이션 자체를 검증하는 테스트({@code OutboxMigrationIT})가 쓴다 — 그 테스트는
+     * 어디까지 적용할지를 스스로 정해야 한다.
      *
      * @param name 데이터베이스 이름
      * @return 그 데이터베이스의 JDBC URL
      */
-    private static String createIsolatedDatabase(String name) {
+    protected static String createDatabaseWithoutMigrations(String name) {
         try (var connection = java.sql.DriverManager.getConnection(
                         POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
                 var statement = connection.createStatement()) {
@@ -146,7 +149,22 @@ public abstract class MessagingIntegrationTestBase {
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("테스트 전용 데이터베이스를 만들 수 없습니다: " + name, e);
         }
-        String url = POSTGRES.getJdbcUrl().replaceFirst("/[^/?]+(\\?|$)", "/" + name + "$1");
+        return POSTGRES.getJdbcUrl().replaceFirst("/[^/?]+(\\?|$)", "/" + name + "$1");
+    }
+
+    /** 컨테이너 계정. */
+    protected static String username() {
+        return POSTGRES.getUsername();
+    }
+
+    /** 컨테이너 비밀번호. */
+    protected static String password() {
+        return POSTGRES.getPassword();
+    }
+
+    /** 빈 DB 를 만들고 공통 마이그레이션을 적용한다. */
+    private static String createIsolatedDatabase(String name) {
+        String url = createDatabaseWithoutMigrations(name);
         Flyway.configure()
                 .dataSource(url, POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations(COMMON_MIGRATIONS)
