@@ -51,7 +51,13 @@ public abstract class MessagingIntegrationTestBase {
             .withUsername("dawnline")
             .withPassword("dawnline");
 
-    private static final KafkaContainer KAFKA = new KafkaContainer(KAFKA_IMAGE);
+    /**
+     * 자동 토픽 생성을 끈다 — {@code deploy/compose} 의 브로커와 같은 설정이다
+     * ({@code KAFKA_AUTO_CREATE_TOPICS_ENABLE=false}). 켜 두면 토픽 이름 오타나 누락이
+     * 테스트에서는 조용히 통과하고 운영에서만 터진다. 테스트는 토픽을 명시적으로 만든다.
+     */
+    private static final KafkaContainer KAFKA = new KafkaContainer(KAFKA_IMAGE)
+            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false");
 
     static {
         POSTGRES.start();
@@ -68,15 +74,18 @@ public abstract class MessagingIntegrationTestBase {
     }
 
     /**
-     * 컨테이너 주소와 공통 설정을 컨텍스트에 넣는다.
+     * 브로커 주소와 공통 설정을 컨텍스트에 넣는다.
+     *
+     * <p><strong>데이터소스는 여기서 등록하지 않는다.</strong> 하위 클래스가
+     * {@link #useSharedDatabase} 또는 {@link #useIsolatedDatabase} 중 하나를 자기
+     * {@code @DynamicPropertySource} 에서 고른다. 부모와 자식이 같은 키를 등록하면 어느 쪽이
+     * 이기는지가 메서드 수집 순서에 달리는데, 그 순서는 보장되지 않는다 — 조용히 공유 DB 를 쓰게 되고
+     * 그 사실은 다른 테스트 클래스가 깨질 때에야 드러난다.
      *
      * @param registry 동적 속성 레지스트리
      */
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-        registry.add("spring.datasource.username", POSTGRES::getUsername);
-        registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
         // Flyway 로 만든 스키마와 JPA 엔티티가 정확히 일치하는지 기동 시 검증한다 (§7.1).
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
@@ -89,6 +98,61 @@ public abstract class MessagingIntegrationTestBase {
     /** 테스트 브로커 주소. */
     protected static String bootstrapServers() {
         return KAFKA.getBootstrapServers();
+    }
+
+    /**
+     * 컨테이너의 기본 데이터베이스를 쓴다.
+     *
+     * @param registry 동적 속성 레지스트리
+     */
+    protected static void useSharedDatabase(DynamicPropertyRegistry registry) {
+        registerDataSource(registry, POSTGRES.getJdbcUrl());
+    }
+
+    /**
+     * 이 테스트 클래스만 쓰는 데이터베이스를 만들어 붙인다.
+     *
+     * @param registry 동적 속성 레지스트리
+     * @param name     데이터베이스 이름
+     */
+    protected static void useIsolatedDatabase(DynamicPropertyRegistry registry, String name) {
+        registerDataSource(registry, createIsolatedDatabase(name));
+    }
+
+    private static void registerDataSource(DynamicPropertyRegistry registry, String url) {
+        registry.add("spring.datasource.url", () -> url);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
+    }
+
+    /**
+     * 이 테스트 클래스만 쓰는 데이터베이스를 만들고 공통 마이그레이션을 적용한다.
+     *
+     * <p>outbox 릴레이는 100ms 마다 <em>모든</em> 미발행 행을 집는다. 그래서 테스트 클래스들이 DB 를
+     * 공유하면 한쪽이 넣은 행을 다른 쪽 컨텍스트의 릴레이가 발행해 버리고, {@code countUnpublished()}
+     * 같은 전역 집계도 서로 오염된다. 스프링은 컨텍스트를 캐시하므로 먼저 뜬 컨텍스트의 릴레이는
+     * 뒤 클래스가 도는 동안에도 계속 살아 있다.
+     *
+     * <p>DB 를 나누면 그 간섭이 구조적으로 사라진다. 컨테이너는 그대로 공유하므로 비용은 거의 없다.
+     *
+     * @param name 데이터베이스 이름
+     * @return 그 데이터베이스의 JDBC URL
+     */
+    private static String createIsolatedDatabase(String name) {
+        try (var connection = java.sql.DriverManager.getConnection(
+                        POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+                var statement = connection.createStatement()) {
+            statement.execute("CREATE DATABASE " + name);
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("테스트 전용 데이터베이스를 만들 수 없습니다: " + name, e);
+        }
+        String url = POSTGRES.getJdbcUrl().replaceFirst("/[^/?]+(\\?|$)", "/" + name + "$1");
+        Flyway.configure()
+                .dataSource(url, POSTGRES.getUsername(), POSTGRES.getPassword())
+                .locations(COMMON_MIGRATIONS)
+                .load()
+                .migrate();
+        return url;
     }
 
     /**

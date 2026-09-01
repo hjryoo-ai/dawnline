@@ -8,14 +8,18 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * outbox 게이지 두 개 (DESIGN.md §9.1).
+ * outbox 게이지 세 개 (DESIGN.md §9.1).
  *
  * <ul>
  *   <li>{@code dawnline_outbox_lag_seconds{service}} — 가장 오래된 미발행 행의 나이</li>
- *   <li>{@code dawnline_outbox_unpublished{service}} — 미발행 행 수</li>
+ *   <li>{@code dawnline_outbox_unpublished{service}} — 미발행 행 수 (격리 행 제외)</li>
+ *   <li>{@code dawnline_outbox_failed{service}} — 격리된 행 수 (§4.6, ADR-015)</li>
  * </ul>
  *
- * <p>게이지 값은 {@link OutboxRelay} 가 주기적으로 {@link #refresh(long, double)} 로 갱신한다.
+ * <p>미발행과 격리는 <strong>서로 배타적</strong>이다. 같은 행이 두 게이지에 동시에 잡히면
+ * "미발행 0건인데 지연은 계속 올라간다" 같은 모순된 대시보드가 나온다.
+ *
+ * <p>게이지 값은 {@link OutboxRelay} 가 주기적으로 {@link #refresh(long, double, long)} 로 갱신한다.
  * Micrometer 의 콜백형 게이지(스크레이프 시점에 DB 조회)를 쓰지 않은 이유: Prometheus 스크레이프가
  * DB 쿼리를 유발하면 스크레이프 간격이 곧 DB 부하가 되고, 스크레이프 타임아웃이 DB 지연에 연동된다.
  * 값을 미리 계산해 두면 스크레이프는 메모리 읽기다.
@@ -27,6 +31,7 @@ public class OutboxMetrics {
 
     private final AtomicLong unpublished = new AtomicLong();
     private final AtomicLong lagMillis = new AtomicLong();
+    private final AtomicLong failed = new AtomicLong();
 
     /**
      * @param registry Micrometer 레지스트리
@@ -45,17 +50,24 @@ public class OutboxMetrics {
                 .description("가장 오래된 미발행 outbox 행이 만들어진 뒤 흐른 시간(초)")
                 .tags(tags)
                 .register(registry);
+
+        Gauge.builder(MessagingMetrics.OUTBOX_FAILED, failed, AtomicLong::doubleValue)
+                .description("결정적 실패로 격리된 outbox 행 수. 0 이 아니면 사람이 봐야 한다(RB-05).")
+                .tags(tags)
+                .register(registry);
     }
 
     /**
      * 게이지 값을 갱신한다.
      *
-     * @param unpublishedCount 미발행 행 수
+     * @param unpublishedCount 미발행 행 수 (격리 행 제외)
      * @param lagSeconds       가장 오래된 미발행 행의 나이(초). 미발행이 없으면 0.
+     * @param failedCount      격리된 행 수
      */
-    public void refresh(long unpublishedCount, double lagSeconds) {
+    public void refresh(long unpublishedCount, double lagSeconds, long failedCount) {
         unpublished.set(unpublishedCount);
         lagMillis.set(Math.round(lagSeconds * 1000.0));
+        failed.set(failedCount);
     }
 
     /** 현재 게이지가 들고 있는 미발행 행 수. 테스트용. */
@@ -66,5 +78,10 @@ public class OutboxMetrics {
     /** 현재 게이지가 들고 있는 지연(초). 테스트용. */
     public double lagSeconds() {
         return lagMillis.get() / 1000.0;
+    }
+
+    /** 현재 게이지가 들고 있는 격리 행 수. 테스트용. */
+    public long failedCount() {
+        return failed.get();
     }
 }

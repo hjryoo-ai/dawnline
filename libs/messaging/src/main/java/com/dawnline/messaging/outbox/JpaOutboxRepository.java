@@ -22,18 +22,27 @@ import java.util.Objects;
  */
 public class JpaOutboxRepository implements OutboxRepository {
 
+    /**
+     * {@code failed_at IS NULL} 이 격리 행을 조회에서 뺀다 (§4.6, ADR-015). 이 조건이 없으면
+     * 결정적 실패 행이 {@code created_at} 순서 맨 앞에 계속 서서 뒤의 모든 이벤트를 막는다.
+     * 부분 인덱스 {@code ix_outbox_unpublished} 의 조건과 정확히 같아야 인덱스를 탄다.
+     */
     private static final String LOCK_BATCH_SQL = """
             SELECT id, aggregate_type, aggregate_id, event_type, topic, partition_key,
-                   headers, payload, created_at, published_at
+                   headers, payload, created_at, published_at, publish_attempts, failed_at
               FROM outbox_events
-             WHERE published_at IS NULL
+             WHERE published_at IS NULL AND failed_at IS NULL
              ORDER BY created_at, id
              LIMIT :batchSize
                FOR UPDATE SKIP LOCKED
             """;
 
+    /** 격리 행은 세지 않는다 — 그건 {@link #countFailed()} 의 몫이다(§9.1 게이지 두 개가 겹치면 안 된다). */
     private static final String COUNT_UNPUBLISHED_SQL =
-            "SELECT count(*) FROM outbox_events WHERE published_at IS NULL";
+            "SELECT count(*) FROM outbox_events WHERE published_at IS NULL AND failed_at IS NULL";
+
+    private static final String COUNT_FAILED_SQL =
+            "SELECT count(*) FROM outbox_events WHERE failed_at IS NOT NULL";
 
     /**
      * 미발행이 없으면 {@code min()} 이 NULL 이고 {@code EXTRACT} 도 NULL 이므로 0 으로 바꾼다.
@@ -43,7 +52,7 @@ public class JpaOutboxRepository implements OutboxRepository {
     private static final String LAG_SECONDS_SQL = """
             SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(created_at))), 0)
               FROM outbox_events
-             WHERE published_at IS NULL
+             WHERE published_at IS NULL AND failed_at IS NULL
             """;
 
     private static final String DELETE_PUBLISHED_SQL =
@@ -75,6 +84,11 @@ public class JpaOutboxRepository implements OutboxRepository {
     @Override
     public long countUnpublished() {
         return ((Number) entityManager.createNativeQuery(COUNT_UNPUBLISHED_SQL).getSingleResult()).longValue();
+    }
+
+    @Override
+    public long countFailed() {
+        return ((Number) entityManager.createNativeQuery(COUNT_FAILED_SQL).getSingleResult()).longValue();
     }
 
     @Override

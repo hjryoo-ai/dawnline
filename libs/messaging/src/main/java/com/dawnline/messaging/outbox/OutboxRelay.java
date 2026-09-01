@@ -86,14 +86,19 @@ public class OutboxRelay {
         }
     }
 
-    /** 게이지 갱신 (§9.1). 폴링보다 훨씬 느린 주기로 돌려 DB 부하를 만들지 않는다. */
+    /**
+     * 게이지 갱신 (§9.1). 폴링보다 훨씬 느린 주기로 돌려 DB 부하를 만들지 않는다.
+     *
+     * <p>세 값을 같은 트랜잭션에서 읽는다. 격리 행이 미발행 집계에서 빠지므로(§4.6),
+     * 따로 읽으면 "미발행 0건인데 격리도 0건" 같은 순간이 스냅샷에 잡힐 수 있다.
+     */
     @Scheduled(
             fixedDelayString = "${dawnline.messaging.outbox.metrics-interval-ms:5000}",
             initialDelayString = "${dawnline.messaging.outbox.initial-delay-ms:1000}")
     public void refreshMetrics() {
         try {
-            readOnlyTransactions.executeWithoutResult(status ->
-                    metrics.refresh(repository.countUnpublished(), repository.unpublishedLagSeconds()));
+            readOnlyTransactions.executeWithoutResult(status -> metrics.refresh(
+                    repository.countUnpublished(), repository.unpublishedLagSeconds(), repository.countFailed()));
         } catch (RuntimeException e) {
             log.warn("outbox 메트릭 갱신 실패", e);
         }

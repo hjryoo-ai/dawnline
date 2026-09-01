@@ -26,7 +26,13 @@ import org.jspecify.annotations.Nullable;
  * 여기서 다시 객체로 바꾸지 않는 이유: 릴레이는 페이로드의 <em>내용</em>에 관심이 없고,
  * 저장 시점의 바이트가 그대로 발행되어야 계약이 흔들리지 않기 때문이다.
  *
- * <p>상태 전이는 {@link #markPublished(Instant)} 하나뿐이다(불변규칙 6). 세터는 두지 않는다.
+ * <p>상태 전이는 {@link #markPublished(Instant)} · {@link #markFailed(Instant)} ·
+ * {@link #recordFailedAttempt()} 세 개뿐이다(불변규칙 6). 세터는 두지 않는다.
+ *
+ * <p>행은 세 상태 중 하나다 — <em>미발행</em>({@code published_at} · {@code failed_at} 모두 NULL),
+ * <em>발행 완료</em>({@code published_at} NOT NULL), <em>격리</em>({@code failed_at} NOT NULL).
+ * 격리 행은 릴레이의 조회 대상에서 빠지며, 원인을 고친 사람이 {@code failed_at} 을 NULL 로
+ * 되돌려야 다시 흐른다 (DESIGN.md §4.6, ADR-015, RB-05).
  */
 @Entity
 @Table(name = "outbox_events")
@@ -64,6 +70,14 @@ public class OutboxEvent {
 
     @Column(name = "published_at")
     private @Nullable Instant publishedAt;
+
+    /** 발행 <em>실패</em> 횟수. 자동 폐기 트리거로 쓰지 않는다(ADR-015: 이벤트 소실 금지). */
+    @Column(name = "publish_attempts", nullable = false)
+    private short publishAttempts;
+
+    /** 격리 시각. NOT NULL 이면 릴레이가 집지 않는다 (§4.6 결정적 실패). */
+    @Column(name = "failed_at")
+    private @Nullable Instant failedAt;
 
     /** JPA 전용. */
     protected OutboxEvent() {
@@ -109,6 +123,46 @@ public class OutboxEvent {
             throw new IllegalStateException("이미 발행된 outbox 행입니다: id=" + id);
         }
         this.publishedAt = publishedAt;
+    }
+
+    /**
+     * 결정적 실패로 격리한다 (§4.6, ADR-015).
+     *
+     * <p>격리된 행은 릴레이의 조회 대상에서 빠지므로 <strong>뒤의 행이 계속 발행된다</strong>.
+     * 이벤트는 지워지지 않는다 — 원인을 고친 뒤 {@code failed_at} 을 NULL 로 되돌리면 재발행된다.
+     *
+     * @param failedAt 격리 시각
+     * @throws IllegalStateException 이미 발행됐거나 이미 격리된 행일 때
+     */
+    public void markFailed(Instant failedAt) {
+        Objects.requireNonNull(failedAt, "failedAt");
+        if (this.publishedAt != null) {
+            throw new IllegalStateException("이미 발행된 outbox 행은 격리할 수 없습니다: id=" + id);
+        }
+        if (this.failedAt != null) {
+            throw new IllegalStateException("이미 격리된 outbox 행입니다: id=" + id);
+        }
+        this.failedAt = failedAt;
+        incrementAttempts();
+    }
+
+    /**
+     * 일시적 실패를 기록한다 — 횟수만 올리고 격리하지 않는다 (§4.6).
+     *
+     * <p>브로커 장애처럼 기다리면 풀리는 실패다. 다음 폴링에서 그대로 다시 시도된다.
+     */
+    public void recordFailedAttempt() {
+        if (this.publishedAt != null) {
+            throw new IllegalStateException("이미 발행된 outbox 행입니다: id=" + id);
+        }
+        incrementAttempts();
+    }
+
+    /** {@code SMALLINT} 상한에서 멈춘다. 횟수는 진단용이고, 넘쳐서 음수가 되면 오히려 해석이 어렵다. */
+    private void incrementAttempts() {
+        if (publishAttempts < Short.MAX_VALUE) {
+            publishAttempts++;
+        }
     }
 
     public UUID id() {
@@ -158,10 +212,25 @@ public class OutboxEvent {
         return publishedAt != null;
     }
 
+    /** 격리되지 않았으면 비어 있다. */
+    public Optional<Instant> failedAt() {
+        return Optional.ofNullable(failedAt);
+    }
+
+    /** 결정적 실패로 격리된 행인가 (§4.6). */
+    public boolean isQuarantined() {
+        return failedAt != null;
+    }
+
+    /** 발행 실패 횟수. */
+    public short publishAttempts() {
+        return publishAttempts;
+    }
+
     @Override
     public String toString() {
         // 페이로드는 개인정보를 담을 수 있다(§9.3). 로그에 나가지 않도록 절대 넣지 않는다.
-        return "OutboxEvent[id=%s, eventType=%s, topic=%s, published=%s]"
-                .formatted(id, eventType, topic, publishedAt != null);
+        return "OutboxEvent[id=%s, eventType=%s, topic=%s, published=%s, quarantined=%s, attempts=%d]"
+                .formatted(id, eventType, topic, publishedAt != null, failedAt != null, publishAttempts);
     }
 }

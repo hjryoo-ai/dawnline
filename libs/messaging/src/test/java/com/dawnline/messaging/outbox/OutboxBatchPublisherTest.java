@@ -141,10 +141,8 @@ class OutboxBatchPublisherTest {
     }
 
     @Test
-    void publishBatch_봉투로_만들_수_없는_행이_있어도_그_앞까지는_발행하고_커밋한다() {
-        // 독약 행: eventType 이 봉투 형식을 어겨 send() 가 *동기적으로* 터진다.
-        // 예외가 밖으로 나가면 트랜잭션이 롤백돼 앞 두 건의 published_at 까지 날아가고,
-        // 다음 폴링이 같은 배치를 또 집어 영원히 제자리걸음을 한다.
+    void publishBatch_봉투로_만들_수_없는_행은_격리하고_뒤의_행을_계속_발행한다() {
+        // ADR-015. 예전에는 여기서 멈췄고, 그 결과 독약 행 하나가 뒤의 모든 이벤트를 영구히 막았다.
         OutboxAppender appender = appender(TraceparentSupplier.NONE);
         appender.append(message(0));
         clock.advance(Duration.ofSeconds(1));
@@ -157,21 +155,22 @@ class OutboxBatchPublisherTest {
 
         int published = publisher(publisher, 500).publishBatch();
 
-        assertThat(published).isEqualTo(2);
-        assertThat(publisher.sent()).hasSize(2);
+        assertThat(published).isEqualTo(3);
+        assertThat(publisher.sent()).hasSize(3);
         assertThat(transactionManager.commits()).isEqualTo(1);
         assertThat(transactionManager.rollbacks()).isZero();
         List<OutboxEvent> rows = ordered();
         assertThat(rows.get(0).isPublished()).isTrue();
         assertThat(rows.get(1).isPublished()).isTrue();
+        assertThat(rows.get(2).isQuarantined()).isTrue();
         assertThat(rows.get(2).isPublished()).isFalse();
-        // 독약 행 뒤는 손대지 않는다 — 순서 보장(§4.5)상 건너뛸 수 없다.
-        assertThat(rows.get(3).isPublished()).isFalse();
+        // 핵심: 독약 행 뒤가 흐른다.
+        assertThat(rows.get(3).isPublished()).isTrue();
     }
 
     @Test
-    void publishBatch_맨_앞이_봉투로_만들_수_없는_행이면_예외를_밖으로_던지지_않는다() {
-        // 진행은 0이지만(사람이 그 행을 고쳐야 한다) 릴레이 스레드로 예외가 새지는 않는다.
+    void publishBatch_맨_앞이_봉투로_만들_수_없는_행이어도_뒤의_행이_발행된다() {
+        // head-of-line blocking 이 사라졌는지 보는 테스트다. 예전 정책에서는 published 가 0이었다.
         OutboxAppender appender = appender(TraceparentSupplier.NONE);
         appendPoisonRow("OrderPlaced");
         clock.advance(Duration.ofSeconds(1));
@@ -182,11 +181,47 @@ class OutboxBatchPublisherTest {
 
         int published = publisher(publisher, 500).publishBatch();
 
-        assertThat(published).isZero();
-        assertThat(publisher.sent()).isEmpty();
+        assertThat(published).isEqualTo(2);
         assertThat(transactionManager.commits()).isEqualTo(1);
         assertThat(transactionManager.rollbacks()).isZero();
-        assertThat(repository.rows()).noneMatch(OutboxEvent::isPublished);
+        List<OutboxEvent> rows = ordered();
+        assertThat(rows.getFirst().isQuarantined()).isTrue();
+        assertThat(rows.getFirst().publishAttempts()).isEqualTo((short) 1);
+        assertThat(rows.get(1).isPublished()).isTrue();
+        assertThat(rows.get(2).isPublished()).isTrue();
+    }
+
+    @Test
+    void publishBatch_격리된_행은_다음_배치에서_다시_집지_않는다() {
+        // 격리의 의미가 "조회 대상에서 빠진다" 이므로, 두 번째 호출은 격리 행을 아예 보지 않아야 한다.
+        appendPoisonRow("OrderPlaced");
+        clock.advance(Duration.ofSeconds(1));
+        appender(TraceparentSupplier.NONE).append(message(0));
+        RecordingRecordPublisher publisher = RecordingRecordPublisher.alwaysSucceeding();
+        OutboxBatchPublisher batchPublisher = publisher(publisher, 500);
+        batchPublisher.publishBatch();
+
+        int secondRun = batchPublisher.publishBatch();
+
+        assertThat(secondRun).isZero();
+        assertThat(publisher.sent()).hasSize(1);
+        // 격리 행의 attempts 가 다시 올라갔다면 릴레이가 또 집었다는 뜻이다.
+        assertThat(ordered().getFirst().publishAttempts()).isEqualTo((short) 1);
+    }
+
+    @Test
+    void publishBatch_일시적_실패는_격리하지_않고_배치를_멈춘다() {
+        // 브로커 장애다. 여기서 격리하면 멀쩡한 이벤트가 사람 손을 기다리게 된다 (§4.6).
+        appendOrders(4, TraceparentSupplier.NONE);
+        RecordingRecordPublisher publisher = RecordingRecordPublisher.failingAt(2);
+
+        int published = publisher(publisher, 500).publishBatch();
+
+        assertThat(published).isEqualTo(2);
+        List<OutboxEvent> rows = ordered();
+        assertThat(rows).noneMatch(OutboxEvent::isQuarantined);
+        assertThat(rows.get(2).publishAttempts()).isEqualTo((short) 1);
+        assertThat(rows.get(3).isPublished()).isFalse();
     }
 
     /** 정상 경로로는 만들 수 없는 행이라 저장소에 직접 넣는다 (쓰기 경로가 막는지는 {@code OutboxMessageTest}). */

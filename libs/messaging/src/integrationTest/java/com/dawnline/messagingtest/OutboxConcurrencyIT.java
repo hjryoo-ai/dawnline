@@ -24,6 +24,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -40,6 +42,16 @@ import org.springframework.transaction.support.TransactionTemplate;
         classes = MessagingTestApplication.class,
         properties = "dawnline.messaging.outbox.enabled=false")
 class OutboxConcurrencyIT extends MessagingIntegrationTestBase {
+
+    /**
+     * 컨테이너 기본 DB 를 쓴다 — 베이스는 데이터소스를 등록하지 않으므로 각 테스트가 명시한다.
+     *
+     * @param registry 동적 속성 레지스트리
+     */
+    @DynamicPropertySource
+    static void database(DynamicPropertyRegistry registry) {
+        useSharedDatabase(registry);
+    }
 
     /**
      * 테스트 페이로드.

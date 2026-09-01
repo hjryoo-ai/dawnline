@@ -151,6 +151,11 @@ class OutboxRelayTest {
             }
 
             @Override
+            public long countFailed() {
+                throw new IllegalStateException("DB 연결 실패");
+            }
+
+            @Override
             public double unpublishedLagSeconds() {
                 throw new IllegalStateException("DB 연결 실패");
             }

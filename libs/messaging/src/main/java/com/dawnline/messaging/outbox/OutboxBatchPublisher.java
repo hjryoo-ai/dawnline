@@ -3,6 +3,8 @@ package com.dawnline.messaging.outbox;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.EventHeaders;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.outbox.PublishFailureClassifier.Kind;
+import com.dawnline.messaging.outbox.PublishFailureClassifier.Phase;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -35,12 +37,19 @@ import tools.jackson.databind.JsonNode;
  * 실제로 발행됐더라도 미발행으로 남겨 다음 폴링에 다시 보낸다.
  * <strong>중복은 허용하고 순서는 지킨다</strong> — at-least-once 설계에서 옳은 방향의 트레이드오프다.
  *
- * <h2>봉투를 만들 수 없는 행(독약 행)</h2>
- * 쓰기 경로({@link OutboxMessage} · {@link OutboxAppender})가 봉투와 <em>같은</em> 불변식을 검사하므로
- * 정상 경로로는 이런 행이 생기지 않는다. 그래도 존재한다면(수동 INSERT, 규칙을 조이기 전에 쌓인 과거 행)
- * 그 행 앞까지만 발행하고 멈추며 ERROR 를 남긴다. 재시도로는 풀리지 않는다 —
- * {@code dawnline_outbox_lag_seconds} 알림(§9.4)이 뜨고 사람이 행을 고쳐야 그 뒤가 흐른다.
- * 발행 측 DLQ 는 설계서에 없다(§4.6 의 DLQ 는 <em>소비</em> 측이다).
+ * <h2>결정적 실패와 일시적 실패 (§4.6, ADR-015)</h2>
+ * 위 "첫 실패에서 멈춘다" 는 <strong>일시적</strong> 실패에만 해당한다. 브로커가 죽었을 때 뒤 행을
+ * 건너뛰어 봐야 그것도 실패하고, 기다리면 전부 풀리기 때문이다.
+ *
+ * <p><strong>결정적</strong> 실패는 반대다. 봉투를 만들 수 없는 행은 몇 번을 다시 읽어도 같은 예외를 낸다.
+ * 여기서 멈추면 그 행이 {@code created_at} 순서 맨 앞에 서서 뒤의 <em>모든</em> 이벤트를 영구히 막는다.
+ * 그래서 그 행만 격리({@link OutboxEvent#markFailed})하고 <strong>다음 행을 계속 발행한다</strong>.
+ * 격리는 §4.5 의 순서 보장을 그 파티션 키에 한해 깨뜨리며, 그것이 "서비스 전체 정지" 보다 낫다는
+ * 판단이 ADR-015 다.
+ *
+ * <p>판정은 {@link PublishFailureClassifier} 한 곳에서 한다. 쓰기 경로의 가드
+ * ({@code Topics.requireValidEventType})가 알려진 진입점을 막지만, 가드는 <em>오늘 아는</em> 실패
+ * 모드만 막는다. 진행 보장은 릴레이 자체가 져야 하는 성질이다.
  */
 public class OutboxBatchPublisher {
 
@@ -54,6 +63,7 @@ public class OutboxBatchPublisher {
     private final String producer;
     private final int batchSize;
     private final Duration sendTimeout;
+    private final PublishFailureClassifier classifier = new PublishFailureClassifier();
 
     /**
      * @param repository   outbox 저장소
@@ -96,28 +106,54 @@ public class OutboxBatchPublisher {
             return 0;
         }
 
-        // 보낼 수 있는 데까지 먼저 보낸다(파이프라이닝). send() 가 *동기적으로* 터지는 경우 —
-        // 저장된 행이 봉투 불변식을 어겨 EventEnvelope 를 만들 수 없는 경우 — 는 여기서 잡아 멈춘다.
-        // 예외를 밖으로 흘려보내면 트랜잭션이 통째로 롤백돼서 이미 브로커로 나간 앞 행들의
-        // published_at 까지 날아가고, 다음 폴링이 같은 배치를 다시 집어 영원히 제자리걸음을 한다.
-        // 잡아서 멈추면 최소한 그 행 앞까지는 진행하고, 배치 경계가 독약 행 바로 앞으로 좁혀진다.
+        Instant now = clock.instant();
+        List<OutboxEvent> inFlight = new ArrayList<>(batch.size());
         List<CompletableFuture<Void>> futures = new ArrayList<>(batch.size());
+        dispatch(batch, inFlight, futures, now);
+        return awaitAndMark(inFlight, futures, now);
+    }
+
+    /**
+     * 1단계 — 행을 레코드로 조립해 브로커로 보낸다. 결과는 기다리지 않는다(파이프라이닝).
+     *
+     * <p>조립 실패는 정의상 결정적이라 그 행만 격리하고 <strong>계속 진행</strong>한다.
+     * 전송 시작이 동기적으로 실패하는 경우(프로듀서 버퍼 고갈, 메타데이터 타임아웃)는 대개 일시적이라
+     * 거기서 멈춘다 — 판정은 {@link PublishFailureClassifier} 가 한다.
+     */
+    private void dispatch(List<OutboxEvent> batch, List<OutboxEvent> inFlight,
+            List<CompletableFuture<Void>> futures, Instant now) {
         for (OutboxEvent event : batch) {
+            OutboxRecord record;
             try {
-                futures.add(send(event));
+                record = assemble(event);
             } catch (RuntimeException e) {
-                // 재시도로 풀리지 않는다. 사람이 행을 고치거나 지워야 그 뒤가 흐른다 → warn 이 아니라 error.
-                log.error("outbox 행을 봉투로 만들 수 없습니다. 이 행 앞까지만 발행하고 멈춥니다. "
-                                + "행을 고치기 전까지 이 서비스의 outbox 는 더 진행하지 않습니다. eventId={}, topic={}",
-                        event.id(), event.topic(), e);
+                if (quarantine(Phase.ASSEMBLY, event, e, now)) {
+                    continue;
+                }
+                break;
+            }
+
+            try {
+                futures.add(publisher.publish(record.topic(), record.key(), record.value(), record.headers()));
+                inFlight.add(event);
+            } catch (RuntimeException e) {
+                if (quarantine(Phase.DELIVERY, event, e, now)) {
+                    continue;
+                }
                 break;
             }
         }
+    }
 
-        Instant publishedAt = clock.instant();
+    /**
+     * 2단계 — 전송 결과를 기다리며 성공한 행에 {@code published_at} 을 찍는다.
+     *
+     * @return 이번 배치에서 발행 완료로 표시한 행 수
+     */
+    private int awaitAndMark(List<OutboxEvent> inFlight, List<CompletableFuture<Void>> futures, Instant now) {
         int published = 0;
         for (int i = 0; i < futures.size(); i++) {
-            OutboxEvent event = batch.get(i);
+            OutboxEvent event = inFlight.get(i);
             try {
                 futures.get(i).get(sendTimeout.toMillis(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
@@ -125,24 +161,54 @@ public class OutboxBatchPublisher {
                 log.warn("outbox 발행이 중단됐습니다. 남은 행은 다음 폴링에서 재발행합니다. eventId={}", event.id());
                 break;
             } catch (Exception e) {
-                // 여기서 멈춘다(위 Javadoc 의 순서 보장 근거). 남은 행은 미발행으로 남아 재시도된다.
-                log.warn("outbox 발행 실패. 이 배치의 나머지는 다음 폴링으로 미룹니다. eventId={}, topic={}",
-                        event.id(), event.topic(), e);
+                if (quarantine(Phase.DELIVERY, event, e, now)) {
+                    continue;
+                }
                 break;
             }
-            event.markPublished(publishedAt);
+            event.markPublished(now);
             published++;
         }
         return published;
     }
 
     /**
-     * outbox 행을 봉투로 되살려 보낸다.
+     * 실패를 판정해 기록한다.
+     *
+     * @return 결정적이라 격리했고 <strong>다음 행을 계속 처리해도 되면</strong> {@code true},
+     *         일시적이라 이 배치를 여기서 멈춰야 하면 {@code false}
+     */
+    private boolean quarantine(Phase phase, OutboxEvent event, Throwable failure, Instant now) {
+        if (classifier.classify(phase, failure) == Kind.DETERMINISTIC) {
+            // 재시도로 풀리지 않는다. 사람이 행을 고쳐야 한다 → warn 이 아니라 error (§9.4 알림 대상).
+            event.markFailed(now);
+            log.error("outbox 행을 발행할 수 없어 격리합니다(결정적 실패, {}단계). 뒤의 행은 계속 발행합니다. "
+                            + "원인을 고친 뒤 RB-05 절차로 재큐하십시오. eventId={}, topic={}, attempts={}",
+                    phase, event.id(), event.topic(), event.publishAttempts(), failure);
+            return true;
+        }
+        // 기다리면 풀린다. 격리하지 않고 그대로 둔다 — 다음 폴링에서 같은 행부터 다시 시도한다.
+        event.recordFailedAttempt();
+        log.warn("outbox 발행 실패(일시적, {}단계). 이 배치의 나머지는 다음 폴링으로 미룹니다. "
+                        + "eventId={}, topic={}, attempts={}",
+                phase, event.id(), event.topic(), event.publishAttempts(), failure);
+        return false;
+    }
+
+    /** 브로커로 보낼 레코드 하나. 조립 단계와 전송 단계를 나누기 위한 값이다. */
+    private record OutboxRecord(String topic, String key, String value, Map<String, String> headers) {
+    }
+
+    /**
+     * outbox 행을 봉투로 되살려 레코드를 만든다 (ASSEMBLY 단계).
+     *
+     * <p>이 단계는 네트워크도 브로커도 건드리지 않고 저장된 바이트만 읽는다 — 그래서 여기서 나는 실패는
+     * 정의상 결정적이다(같은 행을 다시 읽으면 같은 예외).
      *
      * <p>페이로드는 저장된 JSON 을 트리로 읽어 그대로 끼운다. 도메인 타입으로 되돌리지 않는 이유:
      * 릴레이는 페이로드의 의미를 몰라야 하고, 저장 시점의 계약이 발행 시점 코드 변경에 흔들리면 안 된다.
      */
-    private CompletableFuture<Void> send(OutboxEvent event) {
+    private OutboxRecord assemble(OutboxEvent event) {
         Map<String, String> headers = readHeaders(event);
         int schemaVersion = schemaVersionOf(headers, event);
         String traceId = EventHeaders.traceIdFrom(headers.get(EventHeaders.TRACEPARENT)).orElse(null);
@@ -152,7 +218,7 @@ public class OutboxBatchPublisher {
                 event.id(), event.eventType(), schemaVersion, event.createdAt(),
                 producer, event.partitionKey(), traceId, payload);
 
-        return publisher.publish(event.topic(), event.partitionKey(), json.write(envelope), headers);
+        return new OutboxRecord(event.topic(), event.partitionKey(), json.write(envelope), headers);
     }
 
     private Map<String, String> readHeaders(OutboxEvent event) {

@@ -30,8 +30,20 @@ public interface OutboxRepository {
      */
     List<OutboxEvent> lockUnpublishedBatch(int batchSize);
 
-    /** 미발행 행 수. {@code dawnline_outbox_unpublished} 게이지의 값 (§9.1). */
+    /**
+     * 미발행 행 수. {@code dawnline_outbox_unpublished} 게이지의 값 (§9.1).
+     *
+     * <p>격리 행({@code failed_at IS NOT NULL})은 세지 않는다 — {@link #countFailed()} 와
+     * 겹치면 같은 행이 두 게이지에 동시에 잡혀 대시보드가 모순된다.
+     */
     long countUnpublished();
+
+    /**
+     * 격리된 행 수. {@code dawnline_outbox_failed} 게이지의 값 (§9.1, §4.6).
+     *
+     * <p>0 이 아니면 사람이 봐야 한다 — 알림 규칙이 걸려 있다(§9.4, RB-05).
+     */
+    long countFailed();
 
     /**
      * 가장 오래된 미발행 행이 만들어진 뒤 흐른 시간(초). 미발행이 없으면 0.

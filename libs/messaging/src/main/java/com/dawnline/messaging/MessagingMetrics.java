@@ -31,6 +31,9 @@ public final class MessagingMetrics {
     /** gauge — 미발행 outbox 행 수. */
     public static final String OUTBOX_UNPUBLISHED = "dawnline.outbox.unpublished";
 
+    /** 격리된(미해결) outbox 행 수 (§9.1, §4.6). 0 이 아니면 알림 대상이다(§9.4, RB-05). */
+    public static final String OUTBOX_FAILED = "dawnline.outbox.failed";
+
     /** counter — 이벤트 소비 결과. 태그: consumer, eventType, outcome. */
     public static final String EVENT_PROCESSED = "dawnline.event.processed";
 

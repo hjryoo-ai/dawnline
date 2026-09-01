@@ -38,8 +38,9 @@ public final class InMemoryOutboxRepository implements OutboxRepository {
     @Override
     public List<OutboxEvent> lockUnpublishedBatch(int batchSize) {
         lockCalls++;
+        // 격리 행은 집지 않는다 — JpaOutboxRepository 의 `failed_at IS NULL` 과 같은 규칙 (§4.6).
         return rows.stream()
-                .filter(row -> !row.isPublished())
+                .filter(row -> !row.isPublished() && !row.isQuarantined())
                 .sorted(Comparator.comparing(OutboxEvent::createdAt).thenComparing(OutboxEvent::id))
                 .limit(batchSize)
                 .toList();
@@ -47,13 +48,18 @@ public final class InMemoryOutboxRepository implements OutboxRepository {
 
     @Override
     public long countUnpublished() {
-        return rows.stream().filter(row -> !row.isPublished()).count();
+        return rows.stream().filter(row -> !row.isPublished() && !row.isQuarantined()).count();
+    }
+
+    @Override
+    public long countFailed() {
+        return rows.stream().filter(OutboxEvent::isQuarantined).count();
     }
 
     @Override
     public double unpublishedLagSeconds() {
         return rows.stream()
-                .filter(row -> !row.isPublished())
+                .filter(row -> !row.isPublished() && !row.isQuarantined())
                 .map(OutboxEvent::createdAt)
                 .min(Comparator.naturalOrder())
                 .map(oldest -> Duration.between(oldest, clock.instant()).toMillis() / 1000.0)
