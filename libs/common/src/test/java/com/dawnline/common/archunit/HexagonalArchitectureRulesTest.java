@@ -30,6 +30,18 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙1_은_domain_이_Spring_에_의존하면_실패한다() {
+        // 금지 대상은 org.springframework.. 과 jakarta.persistence.. 두 패키지이고, 규칙은 그 둘을
+        // 하나의 resideInAnyPackage 술어로 검사한다. 표본은 Spring 쪽을 건드린다 —
+        // libs/common 의 test 클래스패스에 jakarta.persistence 가 없기 때문이다.
+        // JPA 쪽은 같은 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다.
+        assertThatThrownBy(() -> HexagonalArchitectureRules.DOMAIN_IS_FRAMEWORK_FREE.check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("FrameworkBoundOrder")
+                .hasMessageContaining("org.springframework");
+    }
+
+    @Test
     void 규칙2_는_application_이_adapter_를_참조하면_실패한다() {
         assertThatThrownBy(() -> HexagonalArchitectureRules.APPLICATION_DOES_NOT_DEPEND_ON_ADAPTER.check(BAD))
                 .isInstanceOf(AssertionError.class)

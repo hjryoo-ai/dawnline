@@ -94,7 +94,9 @@ make down                # 컨테이너만 정지·삭제 (데이터 볼륨은 �
 
 `initdb/01-roles-and-databases.sql`, `initdb/02-schema-privileges.sql` 이 첫 기동 시 실행돼
 DB 5개와 동명의 전용 계정을 만들고, 서비스 DB 5개 **그리고 부트스트랩 DB
-(`dawnline_admin`·`postgres`·`template1`)** 의 `CONNECT` 를 `PUBLIC` 에서 회수한다.
+(`POSTGRES_DB` 가 정한 관리 DB — 기본 `dawnline_admin` — 그리고 `postgres`·`template1`)** 의
+`CONNECT` 를 `PUBLIC` 에서 회수한다. 관리 DB 는 이름을 받아쓰지 않고 `current_database()` 로
+집어내므로 `.env` 에서 `POSTGRES_DB` 를 바꿔도 초기화가 깨지지 않는다.
 그래서 **다른 서비스 계정으로는 접속 자체가 거부된다**(CLAUDE.md 불변 규칙 3의 물리적 강제).
 슈퍼유저는 ACL 을 우회하므로 `make psql` 은 그대로 동작한다.
 

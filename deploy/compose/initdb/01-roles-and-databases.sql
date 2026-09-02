@@ -46,9 +46,21 @@ REVOKE CONNECT ON DATABASE dawnline_ops         FROM PUBLIC;
 -- 못하지만 — public 스키마에 CREATE 권한이 없고, pg_authid 도 못 읽고, dblink/postgres_fdw 도
 -- 설치할 수 없다 — 시스템 카탈로그는 보인다. "교차 접근을 물리적으로 차단" 이라고 적어 둔 이상
 -- 예외를 남기지 않는다.
-REVOKE CONNECT ON DATABASE dawnline_admin FROM PUBLIC;
-REVOKE CONNECT ON DATABASE postgres       FROM PUBLIC;
-REVOKE CONNECT ON DATABASE template1      FROM PUBLIC;
+--
+-- 부트스트랩 DB 의 이름은 `.env` 의 POSTGRES_DB 가 정한다. 그 이름을 여기에 다시 적으면
+-- 두 곳이 어긋나는 순간 `REVOKE ... ON DATABASE <없는 이름>` 이 되고, 엔트리포인트가
+-- ON_ERROR_STOP 으로 도는 탓에 **컨테이너가 아예 기동하지 못한다**. 이 스크립트는 첫 기동에만
+-- 실행되므로 증상은 "볼륨을 지우기 전까지 되던 것이 안 됨" 으로 나타난다. 이름을 받아쓰지 않고
+-- 지금 붙어 있는 DB 를 그대로 쓴다.
+DO $$
+BEGIN
+    EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', current_database());
+END
+$$;
+
+-- postgres·template1 은 initdb 가 항상 만드는 고정 이름이라 그대로 적는다.
+REVOKE CONNECT ON DATABASE postgres  FROM PUBLIC;
+REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;
 
 -- --- 시간대: TIMESTAMPTZ / Instant 일관성 (CLAUDE.md 불변 규칙 9) -----------
 ALTER DATABASE dawnline_order       SET timezone TO 'UTC';
