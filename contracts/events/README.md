@@ -34,14 +34,28 @@ Phase 0 에서는 §4.3 에 페이로드 구조가 명시된 4종만 만들었�
 | `dawnline.fulfillment.planned.v1` | O | Phase 0 |
 | `dawnline.wave.closed.v1` | O | Phase 0 |
 | `dawnline.route.assigned.v1` | O | Phase 0 |
-| `dawnline.order.cancelled.v1` | X | Phase 1 (order-service) |
-| `dawnline.order.dispatched.v1` | X | Phase 3 (dispatch-service) |
+| `dawnline.order.cancelled.v1` | X | Phase 1 (order-service — 발행자) |
+| `dawnline.order.dispatched.v1` | X | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 3 |
+| `dawnline.delivery.status.v1` | X | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 5 |
 | `dawnline.plan.failed.v1` | X | Phase 3 (dispatch-service) |
-| `dawnline.delivery.status.v1` | X | Phase 4 (tracking-service) |
-| `dawnline.delivery.at-risk.v1` | X | Phase 4 (tracking-service) |
+| `dawnline.delivery.at-risk.v1` | X | Phase 5 (tracking-service) |
 
-없는 스키마를 추측으로 미리 만들지 않았다. §4.3 에 페이로드가 정의되어 있지 않아서, 지금 만들면 서비스 구현 시점에 반드시 틀린다.
-해당 Phase 에서 **스키마를 먼저** 추가하고 이 표를 갱신한다.
+없는 스키마를 추측으로 미리 만들지 않는다. §4.3 에 페이로드가 정의되어 있지 않은 것을 지금 만들면
+서비스 구현 시점에 반드시 틀린다. 해당 Phase 에서 **스키마를 먼저** 추가하고 이 표를 갱신한다.
+
+### 예외: 소비자가 먼저 정의하는 계약 (consumer-driven)
+
+`order.dispatched` 와 `delivery.status` 는 order-service 가 **소비**하는데, 발행자는 각각
+Phase 3·5 에나 생긴다. 그렇다고 리스너를 그때까지 미루면 §5.1 상태 머신의 `PLANNED` 이후 전이가
+Phase 1 에서 검증되지 않는다.
+
+그래서 이 둘은 **소비자가 계약을 먼저 정의한다**. 추측이 아니다 — 요구사항을 가진 쪽이 소비자이기
+때문이다. order-service 는 상태 전이에 필요한 최소 필드만 적고, 그것이 곧 발행자가 지켜야 할 계약이
+된다. Phase 3·5 의 발행자는 이 계약을 만족시키되, 자기에게 필요한 필드는 §4.7 의 규칙대로
+**추가만** 한다(같은 major 안에서 필드 추가는 소비자를 깨지 않는다).
+
+리스너 통합 테스트는 예시 이벤트를 Testcontainers Kafka 에 직접 발행해 돌린다. 발행자 서비스가
+없어도 완결되며, `make demo` 에서 이 리스너들이 실제로 발화하는 것은 Phase 3 이후다.
 
 ---
 
