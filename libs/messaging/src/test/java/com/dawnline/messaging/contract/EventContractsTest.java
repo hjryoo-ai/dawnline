@@ -32,9 +32,14 @@ class EventContractsTest {
     /** §4.1 의 토픽별 파티션 키. 봉투의 partitionKey 가 이 필드와 같아야 순서 보장이 성립한다 (§4.5). */
     private static final Map<String, String> PARTITION_KEY_FIELD = Map.of(
             "order.placed", "orderId",
+            "order.cancelled", "orderId",
+            "order.dispatched", "orderId",
             "fulfillment.planned", "orderId",
             "wave.closed", "campId",
-            "route.assigned", "routeId");
+            "route.assigned", "routeId",
+            "plan.failed", "waveId",
+            "delivery.status", "routeId",
+            "delivery.at-risk", "routeId");
 
     static Stream<Path> examples() {
         return EventContracts.load().examples().stream();
@@ -186,7 +191,9 @@ class EventContractsTest {
 
     @Test
     void 계약검증_스키마가_없으면_명확히_알려준다() {
-        assertThatThrownBy(() -> CONTRACTS.validatePayload("order.dispatched", 1,
+        // delivery.at-risk 는 아직 스키마가 없다(발행자인 tracking-service 가 Phase 5).
+        // order-service 가 소비하지 않으므로 소비자 주도로 먼저 정의할 이유도 없다 — 그 상태를 그대로 쓴다.
+        assertThatThrownBy(() -> CONTRACTS.validatePayload("delivery.at-risk", 1,
                 CONTRACTS.json().readTree("{}")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("불변규칙 8");

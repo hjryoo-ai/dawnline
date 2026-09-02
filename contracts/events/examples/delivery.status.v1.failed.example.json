@@ -1,0 +1,20 @@
+{
+  "eventId": "01a04e0f-3b88-7d66-ac29-de1f5b7f3322",
+  "eventType": "delivery.status",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:52:17.204Z",
+  "producer": "tracking-service",
+  "partitionKey": "01a04e09-854a-770c-b7b7-03325dccc708",
+  "traceId": "b1d9f0a37c4e2856ad0f7c93e5124aa8",
+  "payload": {
+    "routeId": "01a04e09-854a-770c-b7b7-03325dccc708",
+    "stopSeq": 2,
+    "orderIds": [
+      "01a04dad-80da-7c11-b3d2-5a9e1f04a7c3",
+      "01a04dad-80da-7e42-9f10-2c7b48e5d901"
+    ],
+    "status": "FAILED",
+    "occurredAt": "2026-08-29T15:52:17.204Z",
+    "failureReason": "수취인 부재 (2회 시도)"
+  }
+}

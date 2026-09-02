@@ -1,0 +1,16 @@
+{
+  "eventId": "01a04e0f-2a77-7c55-9b18-cd0e4a6f2211",
+  "eventType": "delivery.status",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:44:03.501Z",
+  "producer": "tracking-service",
+  "partitionKey": "01a04e09-854a-770c-b7b7-03325dccc708",
+  "traceId": "b1d9f0a37c4e2856ad0f7c93e5124aa8",
+  "payload": {
+    "routeId": "01a04e09-854a-770c-b7b7-03325dccc708",
+    "stopSeq": 1,
+    "orderIds": ["01a04dad-80da-7f6e-a63a-e91c103516b0"],
+    "status": "COMPLETED",
+    "occurredAt": "2026-08-29T15:44:03.501Z"
+  }
+}

@@ -34,9 +34,9 @@ Phase 0 에서는 §4.3 에 페이로드 구조가 명시된 4종만 만들었�
 | `dawnline.fulfillment.planned.v1` | O | Phase 0 |
 | `dawnline.wave.closed.v1` | O | Phase 0 |
 | `dawnline.route.assigned.v1` | O | Phase 0 |
-| `dawnline.order.cancelled.v1` | X | Phase 1 (order-service — 발행자) |
-| `dawnline.order.dispatched.v1` | X | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 3 |
-| `dawnline.delivery.status.v1` | X | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 5 |
+| `dawnline.order.cancelled.v1` | O | Phase 1 (order-service — 발행자) |
+| `dawnline.order.dispatched.v1` | O | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 3 |
+| `dawnline.delivery.status.v1` | O | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 5 |
 | `dawnline.plan.failed.v1` | X | Phase 3 (dispatch-service) |
 | `dawnline.delivery.at-risk.v1` | X | Phase 5 (tracking-service) |
 
