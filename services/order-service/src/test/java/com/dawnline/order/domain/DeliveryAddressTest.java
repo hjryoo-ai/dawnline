@@ -35,22 +35,61 @@ class DeliveryAddressTest {
         assertThat(address.geohash5()).hasSize(Geohash.ZONE_PRECISION);
     }
 
-    @Test
-    void 좌표와_맞지_않는_geohash7_은_거부한다() {
-        // 저장된 geohash 가 좌표와 어긋나면 파티션 키와 실제 위치가 달라진다.
-        // 그 어긋남은 라우팅이 이상해진 뒤에야 드러난다.
-        assertThatThrownBy(() -> new DeliveryAddress(LINE, "06236", GANGNAM, "wydm000"))
-                .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("geohash7")
-                .hasMessageContaining("wydm6d6");
-    }
-
     @ParameterizedTest
     @ValueSource(strings = {"wydm6d", "wydm6d66", ""})
     void geohash7_의_길이가_다르면_거부한다(String wrong) {
         assertThatThrownBy(() -> new DeliveryAddress(LINE, "06236", GANGNAM, wrong))
                 .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("geohash7");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"wydmail", "WYDM6D6", "wydm6d-"})
+    void geohash_알파벳에_없는_문자는_거부한다(String wrong) {
+        // a·i·l·o 와 대문자는 base32 알파벳에 없다. 길이만 보면 통과하고,
+        // 그 행은 어느 격자에도 속하지 않은 채 stop 통합에서만 조용히 튄다.
+        assertThatThrownBy(() -> new DeliveryAddress(LINE, "06236", GANGNAM, wrong))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("geohash7");
+    }
+
+    @Test
+    void of_는_좌표를_소수점_6자리로_맞춰_저장한다() {
+        // DB 가 NUMERIC(9,6) 이라 읽어 올 때는 어차피 6자리다. 원본 정밀도로 geohash 를
+        // 계산해 두면 셀 경계 근처 주소가 저장·조회 왕복에서 다른 셀이 된다.
+        DeliveryAddress address = DeliveryAddress.of(LINE, "06236", GeoPoint.of(37.49791234567, 127.02761987654));
+
+        assertThat(address.point().lat()).isEqualTo(37.497912);
+        assertThat(address.point().lng()).isEqualTo(127.027620);
+        assertThat(address.isGeohashConsistent()).isTrue();
+    }
+
+    @Test
+    void of_로_만든_주소는_저장_정밀도로_왕복해도_geohash_가_같다() {
+        // 영속화 왕복(NUMERIC(9,6) → double)을 흉내 낸다.
+        DeliveryAddress original = DeliveryAddress.of(LINE, "06236", GeoPoint.of(37.49791234567, 127.02761987654));
+
+        GeoPoint roundTripped = GeoPoint.of(
+                new java.math.BigDecimal(String.valueOf(original.point().lat()))
+                        .setScale(6, java.math.RoundingMode.HALF_UP).doubleValue(),
+                new java.math.BigDecimal(String.valueOf(original.point().lng()))
+                        .setScale(6, java.math.RoundingMode.HALF_UP).doubleValue());
+        DeliveryAddress restored = new DeliveryAddress(
+                original.line(), original.postalCode(), roundTripped, original.geohash7());
+
+        assertThat(restored).isEqualTo(original);
+        assertThat(restored.isGeohashConsistent()).isTrue();
+    }
+
+    @Test
+    void 손으로_만든_불일치는_거부하지_않고_진단으로만_알린다() {
+        // 여기서 예외를 던지면 저장된 주문을 영영 읽지 못하는 경로가 생긴다.
+        // 저장된 geohash7 은 그 주문이 발행한 이벤트에 실린 값이라 재계산값보다 그쪽이 진실이다.
+        DeliveryAddress mismatched = new DeliveryAddress(LINE, "06236", GANGNAM, "wydm000");
+
+        assertThat(mismatched.geohash7()).isEqualTo("wydm000");
+        assertThat(mismatched.isGeohashConsistent()).isFalse();
+        assertThat(DeliveryAddress.of(LINE, "06236", GANGNAM).isGeohashConsistent()).isTrue();
     }
 
     @Test
