@@ -37,7 +37,42 @@ class DawnlineMessagingPropertiesTest {
         assertThat(properties.retry().maxAttempts()).isEqualTo(3);
         assertThat(properties.retry().dlqSuffix()).isEqualTo(".dlq");
 
+        // §4.4: processed_events 보존 14일, 일 1회 배치 삭제
+        assertThat(properties.processedEvents().enabled()).isTrue();
+        assertThat(properties.processedEvents().retentionDays()).isEqualTo(14);
+        assertThat(properties.processedEvents().retention()).isEqualTo(Duration.ofDays(14));
+        assertThat(properties.processedEvents().cleanupIntervalMs()).isEqualTo(Duration.ofDays(1).toMillis());
+
         assertThat(properties.producer()).isNull();
+    }
+
+    @Test
+    void 보존일수는_토픽_보존_7일보다_길어야_의미가_있다() {
+        // §4.4 의 논거 자체를 못박는다. 이 값이 7일 이하로 내려가면 재전달 창을 덮지 못해
+        // 같은 이벤트를 두 번 처리할 수 있다 — 숫자만 바꾸고 근거를 안 읽는 변경을 여기서 막는다.
+        assertThat(bind(Map.of()).processedEvents().retention())
+                .isGreaterThan(Duration.ofDays(7));
+    }
+
+    @Test
+    void 바인딩_보존일수가_0이면_예외() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new DawnlineMessagingProperties.ProcessedEvents(true, 0, 1000, 100, 1L, 1L))
+                .withMessageContaining("retention-days");
+    }
+
+    @Test
+    void 바인딩_정리_배치크기가_0이면_예외() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new DawnlineMessagingProperties.ProcessedEvents(true, 14, 0, 100, 1L, 1L))
+                .withMessageContaining("batch-size");
+    }
+
+    @Test
+    void 바인딩_실행당_배치상한이_0이면_예외() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new DawnlineMessagingProperties.ProcessedEvents(true, 14, 1000, 0, 1L, 1L))
+                .withMessageContaining("max-batches-per-run");
     }
 
     @Test

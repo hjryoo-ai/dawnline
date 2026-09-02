@@ -11,17 +11,19 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * <p>기본값은 전부 설계서에서 온 값이다. 임의로 고른 숫자는 없다.
  *
- * @param producer 봉투의 {@code producer}. 비워 두면 {@code spring.application.name} 을 쓴다.
- * @param outbox   outbox 릴레이 설정
- * @param consumer 소비자 백프레셔 설정
- * @param retry    재시도/DLQ 설정
+ * @param producer        봉투의 {@code producer}. 비워 두면 {@code spring.application.name} 을 쓴다.
+ * @param outbox          outbox 릴레이 설정
+ * @param consumer        소비자 백프레셔 설정
+ * @param retry           재시도/DLQ 설정
+ * @param processedEvents 멱등 기록 보존 설정
  */
 @ConfigurationProperties(prefix = "dawnline.messaging")
 public record DawnlineMessagingProperties(
         @Nullable String producer,
         @DefaultValue Outbox outbox,
         @DefaultValue Consumer consumer,
-        @DefaultValue Retry retry) {
+        @DefaultValue Retry retry,
+        @DefaultValue ProcessedEvents processedEvents) {
 
     /**
      * outbox 릴레이 (§4.4: 폴링 100ms, 배치 500).
@@ -76,6 +78,53 @@ public record DawnlineMessagingProperties(
             if (maxPollRecords < 1) {
                 throw new IllegalArgumentException("dawnline.messaging.consumer.max-poll-records 는 1 이상이어야 합니다");
             }
+        }
+    }
+
+    /**
+     * 멱등 기록 보존 (§4.4: 14일, 일 1회 배치 삭제).
+     *
+     * <p>{@code cleanupIntervalMs}·{@code cleanupInitialDelayMs} 는 코드에서 읽지 않는다.
+     * {@code ProcessedEventCleaner} 의 {@code @Scheduled} 가 속성 플레이스홀더로 직접 읽기 때문이다.
+     * 여기에 선언해 두는 이유는 설정 메타데이터에 나오게 하기 위해서다 —
+     * {@code Outbox} 의 폴링 간격들과 같은 이유이고, 기본값 어긋남은 테스트가 잡는다.
+     *
+     * <p>보존을 {@code Duration} 이 아니라 <em>일 단위 정수</em>로 받는다. 이 값은 §7.3 의 토픽
+     * 보존(7일)에서 유도된 날짜 단위 정책이라, 분·초로 표현할 수 있으면 오히려 오해를 부른다.
+     *
+     * @param enabled               정리 스케줄러 활성화
+     * @param retentionDays         보존 일수 (§4.4 기본 14)
+     * @param batchSize             한 트랜잭션에서 지울 최대 행 수
+     * @param maxBatchesPerRun      한 번의 실행에서 반복할 최대 배치 수
+     * @param cleanupIntervalMs     정리 실행 간격(ms). 기본 24시간 (§4.4 "일 1회")
+     * @param cleanupInitialDelayMs 기동 후 첫 실행까지 지연(ms)
+     */
+    public record ProcessedEvents(
+            @DefaultValue("true") boolean enabled,
+            @DefaultValue("14") int retentionDays,
+            @DefaultValue("1000") int batchSize,
+            @DefaultValue("100") int maxBatchesPerRun,
+            @DefaultValue("86400000") long cleanupIntervalMs,
+            @DefaultValue("300000") long cleanupInitialDelayMs) {
+
+        public ProcessedEvents {
+            if (retentionDays < 1) {
+                throw new IllegalArgumentException(
+                        "dawnline.messaging.processed-events.retention-days 는 1 이상이어야 합니다");
+            }
+            if (batchSize < 1) {
+                throw new IllegalArgumentException(
+                        "dawnline.messaging.processed-events.batch-size 는 1 이상이어야 합니다");
+            }
+            if (maxBatchesPerRun < 1) {
+                throw new IllegalArgumentException(
+                        "dawnline.messaging.processed-events.max-batches-per-run 은 1 이상이어야 합니다");
+            }
+        }
+
+        /** 보존 기간. */
+        public Duration retention() {
+            return Duration.ofDays(retentionDays);
         }
     }
 
