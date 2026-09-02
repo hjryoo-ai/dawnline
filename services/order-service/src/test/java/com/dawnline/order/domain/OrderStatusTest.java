@@ -1,6 +1,7 @@
 package com.dawnline.order.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -24,7 +25,9 @@ class OrderStatusTest {
     /** DESIGN.md §5.1 다이어그램을 그대로 옮긴 표. 이 테스트의 명세다. */
     private static final Map<OrderStatus, Set<OrderStatus>> EXPECTED = new EnumMap<>(Map.of(
             OrderStatus.PLACED, EnumSet.of(OrderStatus.PLANNED, OrderStatus.CANCELLED),
-            OrderStatus.PLANNED, EnumSet.of(OrderStatus.DISPATCHED, OrderStatus.CANCELLED),
+            // PLANNED → DELIVERED·FAILED 는 §4.5 순서 뒤바뀜 흡수용이다 (ADR-017).
+            OrderStatus.PLANNED, EnumSet.of(OrderStatus.DISPATCHED, OrderStatus.DELIVERED,
+                    OrderStatus.FAILED, OrderStatus.CANCELLED),
             OrderStatus.DISPATCHED, EnumSet.of(OrderStatus.DELIVERED, OrderStatus.FAILED),
             OrderStatus.DELIVERED, EnumSet.noneOf(OrderStatus.class),
             OrderStatus.FAILED, EnumSet.noneOf(OrderStatus.class),
@@ -86,5 +89,63 @@ class OrderStatusTest {
         // 호출자가 전이표를 바꿀 수 있으면 그건 더 이상 명세가 아니다.
         assertThat(OrderStatus.PLACED.allowedTransitions())
                 .isUnmodifiable();
+    }
+
+    @Test
+    void 진행_단계는_설계서의_순서와_같다() {
+        // ADR-017: PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3).
+        assertThat(OrderStatus.PLACED.progress()).isZero();
+        assertThat(OrderStatus.PLANNED.progress()).isEqualTo(1);
+        assertThat(OrderStatus.DISPATCHED.progress()).isEqualTo(2);
+        assertThat(OrderStatus.DELIVERED.progress()).isEqualTo(3);
+        assertThat(OrderStatus.FAILED.progress()).isEqualTo(3);
+        // CANCELLED 는 진행 축 밖이다. 취소된 주문의 배송 이벤트는 철 지난 중복이 아니라
+        // 실제로 잘못된 상황이라 조용히 버리면 안 된다.
+        assertThat(OrderStatus.CANCELLED.progress()).isNegative();
+    }
+
+    @Test
+    void 전이표와_진행_단계가_서로_모순되지_않는다() {
+        // 상태가 늘 때 둘 중 하나만 갱신하는 실수를 막는다.
+        // 진행 축 위의 정식 전이는 반드시 앞으로 간다.
+        for (OrderStatus from : OrderStatus.values()) {
+            for (OrderStatus to : from.allowedTransitions()) {
+                if (from.progress() >= 0 && to.progress() >= 0) {
+                    assertThat(to.progress())
+                            .as("%s → %s 는 정식 전이인데 진행이 뒤로 간다", from, to)
+                            .isGreaterThan(from.progress());
+                }
+            }
+        }
+    }
+
+    @Test
+    void 뒤늦게_도착한_배송_시작은_철_지난_것으로_판정된다() {
+        // 주문이 이미 DELIVERED 인데 order.dispatched 가 도착한 경우 (ADR-017).
+        assertThat(OrderStatus.DELIVERED.hasProgressedPast(OrderStatus.DISPATCHED)).isTrue();
+        assertThat(OrderStatus.DISPATCHED.hasProgressedPast(OrderStatus.DISPATCHED)).isTrue();
+        assertThat(OrderStatus.FAILED.hasProgressedPast(OrderStatus.DISPATCHED)).isTrue();
+    }
+
+    @Test
+    void 아직_오지_않은_지점은_철_지난_것이_아니다() {
+        assertThat(OrderStatus.PLANNED.hasProgressedPast(OrderStatus.DISPATCHED)).isFalse();
+        assertThat(OrderStatus.PLANNED.hasProgressedPast(OrderStatus.DELIVERED)).isFalse();
+        assertThat(OrderStatus.PLACED.hasProgressedPast(OrderStatus.PLANNED)).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(OrderStatus.class)
+    void 취소는_어느_쪽이든_진행_비교_대상이_아니다(OrderStatus other) {
+        // 축이 없으므로 "철 지났다" 는 판정이 성립하지 않는다. 그 결과 취소된 주문에 온 배송
+        // 이벤트는 무시가 아니라 rejected 로 올라간다 (§4.6 3행).
+        assertThat(OrderStatus.CANCELLED.hasProgressedPast(other)).isFalse();
+        assertThat(other.hasProgressedPast(OrderStatus.CANCELLED)).isFalse();
+    }
+
+    @Test
+    void hasProgressedPast_는_null_을_받지_않는다() {
+        assertThatThrownBy(() -> OrderStatus.PLACED.hasProgressedPast(null))
+                .isInstanceOf(NullPointerException.class);
     }
 }

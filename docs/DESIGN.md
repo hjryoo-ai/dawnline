@@ -336,9 +336,28 @@ API 버전은 URL 세그먼트 `v1` 기본. Spring Framework 7의 API Versioning
 
 ```
 PLACED ──(fulfillment.planned)──▶ PLANNED ──(order.dispatched)──▶ DISPATCHED ──(delivery COMPLETED)──▶ DELIVERED
-  │                                  │                                 └──(delivery FAILED)──▶ FAILED
+  │                                  │  │                              └──(delivery FAILED)──▶ FAILED
+  │                                  │  └──(delivery COMPLETED/FAILED, order.dispatched 보다 먼저 도착)──┤
   └──────── cancel ──────────────────┴──▶ CANCELLED     (DISPATCHED 이후 취소 불가 → 409)
 ```
+
+**순서 뒤바뀜 흡수 (ADR-017).** `order.dispatched` 는 orderId 키, `delivery.status` 는 routeId 키로
+발행된다(§4.1). 서로 다른 파티션이므로 §4.5에 따라 둘 사이의 순서는 보장되지 않는다. 그래서
+`PLANNED → DELIVERED` 와 `PLANNED → FAILED` 를 정식 전이로 둔다 — "배송이 완료됐다면 배송이
+시작된 것"이 사실이므로 의미적으로도 맞다. 뒤늦게 도착한 `order.dispatched` 는 아래 규칙으로 무시된다.
+
+리스너가 전이를 시도한 결과는 셋 중 하나다.
+
+| 상황 | 판정 | 처리 |
+|---|---|---|
+| 표에 있는 전이 | 적용 | 상태 변경 후 커밋 |
+| 이미 지나온 지점으로의 전이 (진행 단계가 현재보다 앞) | **철 지난 이벤트** | 무시하고 커밋. `debug` 로그. DLQ 아님 |
+| 그 밖의 전이 (예: `CANCELLED` 인데 `order.dispatched` 도착) | **비즈니스 규칙 위반** | 무시하고 커밋. `warn` + `dawnline_event_rejected_total{reason}` (§4.6 3행). DLQ 아님 |
+
+"진행 단계"는 `PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)` 순서다.
+`CANCELLED` 는 이 축에 있지 않다 — 취소된 주문에 배송 이벤트가 오는 것은 철 지난 중복이 아니라
+**실제로 잘못된 상황**(취소된 주문의 소포가 차에 실려 있다)이라, 조용히 삼키지 않고 알림 가능한
+메트릭으로 남긴다.
 
 **테이블**
 
@@ -1045,8 +1064,9 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 014 | JDK 25 툴체인 자동 프로비저닝(foojay-resolver) | 로컬 JDK 수동 설치 전제(환경별 재현성 저하) | [ADR-014](adr/ADR-014-jdk25-toolchain-auto-provisioning.md) |
 | 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | 무한 재시도 유지(진행 보장 없음), DLQ 토픽 우회 발행(실패 원인과 순환), N회 후 자동 폐기(이벤트 소실) | [ADR-015](adr/ADR-015-outbox-publish-side-quarantine.md) |
 | 016 | 레디니스에서 Kafka 브로커 연결 제외 | 코드에 Kafka 프로브 추가(§8.2 완충 설계 붕괴), 기동 시 1회 검사(기동 순서 의존성) | [ADR-016](adr/ADR-016-readiness-excludes-kafka.md) |
+| 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수(`PLANNED → DELIVERED` 추가 + 진행 단계 비교) | 백오프 재시도에 맡김(도착 상한 없음 → 정상 배송이 DLQ), `delivery.status` 키를 orderId 로 변경(다른 소비자의 라우트 단위 순서가 깨짐), 모든 전이 허용(불변규칙 6 포기) | [ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에 확정되어 추가됐다.
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다.
 
 ---
 

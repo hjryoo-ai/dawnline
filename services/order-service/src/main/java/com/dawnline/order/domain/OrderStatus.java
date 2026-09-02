@@ -1,5 +1,6 @@
 package com.dawnline.order.domain;
 
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -40,11 +41,55 @@ public enum OrderStatus {
     public Set<OrderStatus> allowedTransitions() {
         return switch (this) {
             case PLACED -> Set.of(PLANNED, CANCELLED);
-            case PLANNED -> Set.of(DISPATCHED, CANCELLED);
+            // PLANNED → DELIVERED·FAILED 는 정상 흐름에 없는 경로다. order.dispatched(키 orderId)와
+            // delivery.status(키 routeId)가 다른 파티션이라 순서가 보장되지 않아(§4.5), 배송 완료가
+            // 배송 시작보다 먼저 도착할 수 있다. 억지 보정이 아니라 사실을 반영한 것이다 —
+            // 배송이 완료됐다면 배송은 시작된 것이고, DISPATCHED 를 안 거친 것은 그 사건을 알리는
+            // 메시지가 아직 안 왔다는 뜻일 뿐이다 (§5.1, ADR-017).
+            case PLANNED -> Set.of(DISPATCHED, DELIVERED, FAILED, CANCELLED);
             case DISPATCHED -> Set.of(DELIVERED, FAILED);
             // 종료 상태. 배송 실패의 재시도는 새 주문이지 이 주문의 전이가 아니다.
             case DELIVERED, FAILED, CANCELLED -> Set.of();
         };
+    }
+
+    /**
+     * 배송 진행 단계 (ADR-017).
+     *
+     * <p>{@code PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)}.
+     * 리스너가 "이 이벤트가 철 지난 것인가" 를 판단하는 축이다.
+     *
+     * <p>{@code CANCELLED} 는 이 축 위에 없다({@code -1}). 취소된 주문에 배송 이벤트가 오는 것은
+     * 철 지난 중복이 아니라 <strong>실제로 잘못된 상황</strong>이라(취소된 소포가 차에 실려 있다)
+     * 조용히 버리지 않고 알림 가능한 메트릭으로 남겨야 하기 때문이다 (§4.6, §4.5).
+     */
+    public int progress() {
+        return switch (this) {
+            case PLACED -> 0;
+            case PLANNED -> 1;
+            case DISPATCHED -> 2;
+            case DELIVERED, FAILED -> 3;
+            case CANCELLED -> -1;
+        };
+    }
+
+    /**
+     * {@code target} 이 <strong>이미 지나온 지점</strong>인가 (ADR-017).
+     *
+     * <p>참이면 그 이벤트는 순서가 뒤바뀌어 늦게 도착한 것이므로 무시하고 커밋한다. 예: 주문이
+     * 이미 {@code DELIVERED} 인데 {@code order.dispatched} 가 도착하면 {@code DISPATCHED}(2) 는
+     * 현재(3)보다 뒤라 버린다.
+     *
+     * <p>둘 중 하나라도 진행 축 밖({@code CANCELLED})이면 거짓이다 — 비교할 축이 없다.
+     *
+     * @param target 이벤트가 요구하는 상태
+     */
+    public boolean hasProgressedPast(OrderStatus target) {
+        Objects.requireNonNull(target, "target");
+        if (progress() < 0 || target.progress() < 0) {
+            return false;
+        }
+        return target.progress() <= progress();
     }
 
     /**

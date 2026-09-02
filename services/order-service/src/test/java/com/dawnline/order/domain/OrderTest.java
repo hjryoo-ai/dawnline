@@ -81,6 +81,42 @@ class OrderTest {
     }
 
     @Test
+    void 배송_완료가_배송_시작보다_먼저_도착해도_전이된다() {
+        // order.dispatched(키 orderId)와 delivery.status(키 routeId)는 다른 파티션이라
+        // 순서가 보장되지 않는다 (§4.5, ADR-017). 예전 전이표였다면 여기서 409 가 나고
+        // 재시도 3회를 소진한 뒤 정상 배송이 DLQ 로 갔다.
+        Order order = placed();
+        order.markPlanned(PLACED_AT.plusSeconds(60));
+
+        order.markDelivered(PLACED_AT.plusSeconds(3600));
+
+        assertThat(order.status()).isEqualTo(OrderStatus.DELIVERED);
+    }
+
+    @Test
+    void 배송_실패도_배송_시작보다_먼저_도착할_수_있다() {
+        Order order = placed();
+        order.markPlanned(PLACED_AT.plusSeconds(60));
+
+        order.markFailed(PLACED_AT.plusSeconds(3600));
+
+        assertThat(order.status()).isEqualTo(OrderStatus.FAILED);
+    }
+
+    @Test
+    void 뒤늦게_온_배송_시작은_철_지난_것으로_판정된다() {
+        // 위 상황의 짝이다. 리스너는 이 판정을 보고 예외 대신 무시를 고른다.
+        Order order = placed();
+        order.markPlanned(PLACED_AT.plusSeconds(60));
+        order.markDelivered(PLACED_AT.plusSeconds(3600));
+
+        assertThat(order.status().hasProgressedPast(OrderStatus.DISPATCHED)).isTrue();
+        // 그래도 전이 자체는 여전히 거부된다 — 무시할지 말지는 리스너가 정한다.
+        assertThatThrownBy(() -> order.markDispatched(PLACED_AT.plusSeconds(3700)))
+                .isInstanceOf(IllegalStateTransitionException.class);
+    }
+
+    @Test
     void PLACED_에서_취소할_수_있다() {
         Order order = placed();
 
