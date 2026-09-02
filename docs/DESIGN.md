@@ -253,8 +253,9 @@ com.dawnline.<service>
 
 ### 4.4 전달 보장: Outbox + at-least-once + 멱등 소비자 (ADR-006)
 
-- **발행**: 도메인 변경과 `outbox_events` INSERT를 같은 DB 트랜잭션에서 수행. 별도 릴레이(`OutboxRelay`, 폴링 100ms, 배치 500, `FOR UPDATE SKIP LOCKED`)가 Kafka로 발행 후 `published_at` 기록. 릴레이는 다중 인스턴스 안전(SKIP LOCKED).
+- **발행**: 도메인 변경과 `outbox_events` INSERT를 같은 DB 트랜잭션에서 수행. 별도 릴레이(`OutboxRelay`, 폴링 100ms, 배치 500, `FOR UPDATE SKIP LOCKED`)가 Kafka로 발행 후 `published_at` 기록. SKIP LOCKED 는 다중 인스턴스에서의 중복 발행을 막지만, 같은 `partition_key` 의 행이 서로 다른 인스턴스에서 발행되면 §4.5의 키 단위 순서가 깨질 수 있다. 따라서 릴레이는 **서비스당 단일 활성 인스턴스**를 전제로 한다. 현 단계는 인스턴스 1개로 이 전제가 자동 충족되며, 스케일아웃(Phase 3) 전에 리더 락(Redis `SET NX` + 주기 갱신, 락 상실 시 발행 중단)을 도입한다 — 그 시점에 ADR 작성. SKIP LOCKED 는 리더 전환 경합의 안전망으로 유지한다.
 - **소비**: 리스너는 `processed_events(event_id, consumer)`를 먼저 INSERT(같은 트랜잭션)한다. 이미 있으면 처리 생략. 비즈니스 로직 + processed 기록 + 자기 outbox 기록이 하나의 트랜잭션.
+- **`processed_events` 보존: 14일** (일 1회 배치 삭제, outbox 7일 정리와 같은 정리 스케줄러 — §7.1). 근거: 재전달 가능 창의 상한은 본 토픽 보존 7일(오프셋 리셋 포함)이며 14일은 그 2배 여유다. DLQ 보존 30일은 이 창과 무관하다 — DLQ 에 들어간 이벤트는 처리 트랜잭션이 롤백된 것이므로 `processed_events` 에 성공 기록이 없고, replay 의 안전성이 이 테이블에 의존하지 않는다. **경고: 이 논거는 "성공 처리된 이벤트는 DLQ 에 들어가지 않는다" 는 §4.6의 구조에 의존한다. DLQ 적재 경로를 바꾸는 변경은 이 보존 기간을 재검토해야 한다.**
 - Kafka 트랜잭션/EOS는 사용하지 않는다. 이유·대안은 ADR-006.
 - 릴레이 지연(`dawnline_outbox_lag_seconds`)과 미발행 건수는 핵심 메트릭.
 
@@ -294,6 +295,8 @@ com.dawnline.<service>
 이 구분이 필요한 이유는 두 실패의 성질이 정반대이기 때문이다. 결정적 실패는 **몇 번을 재시도해도 같은 결과**라서, 재시도를 유지하면 그 행이 `created_at` 순서상 맨 앞에 서서 뒤의 모든 이벤트를 영구히 막는다(head-of-line blocking). 일시적 실패는 반대로 **기다리면 풀린다** — 여기서 행을 격리하면 브로커가 잠깐 흔들렸다는 이유로 멀쩡한 이벤트가 사람 손을 기다리게 된다.
 
 격리는 §4.5의 순서 보장을 **그 파티션 키에 한해** 깨뜨린다. 격리된 행 뒤에 같은 키의 이벤트가 있으면 그것이 먼저 발행된다. 이는 의도된 것이다 — 대안은 서비스 전체의 이벤트 발행이 멈추는 것이고, 격리는 알림(§9.4)과 함께 사람에게 넘어간다.
+
+`publish_attempts` 는 **그 행에 대해 `send` 가 실제로 시도된 횟수**다. 일시적 실패로 배치가 중단되면 시도되지 않은 뒤 행들은 증가하지 않으며, 이는 의도된 의미다 — 브로커 장애의 관측은 이 컬럼이 아니라 `dawnline_outbox_lag_seconds`·`dawnline_outbox_unpublished` 가 담당한다.
 
 격리된 행의 복구는 수동이다: 원인 수정 → `UPDATE outbox_events SET failed_at = NULL, publish_attempts = 0 WHERE id = …` (RB-05). ops-api 격리 조회·재큐 엔드포인트는 Phase 6 범위(§5.5 커맨드 목록에 추가).
 
@@ -396,6 +399,9 @@ CREATE TABLE outbox_events (
   failed_at        TIMESTAMPTZ
 );
 CREATE INDEX ix_outbox_unpublished ON outbox_events (created_at) WHERE published_at IS NULL AND failed_at IS NULL;
+-- 격리 게이지(dawnline_outbox_failed)는 스크레이프 주기마다 count(*) 를 돌린다. 부분 인덱스가
+-- 없으면 격리 행이 0개여도 매번 풀스캔이다 (§9.1, 불변규칙 11 — EXPLAIN 비교는 PR 참조).
+CREATE INDEX ix_outbox_failed ON outbox_events (failed_at) WHERE failed_at IS NOT NULL;
 
 CREATE TABLE processed_events (
   event_id     UUID NOT NULL,
@@ -403,6 +409,8 @@ CREATE TABLE processed_events (
   processed_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (event_id, consumer)
 );
+-- 보존 14일(§4.4) 정리 배치용. PK 는 (event_id, consumer) 라 processed_at 범위 삭제를 돕지 못한다.
+CREATE INDEX ix_processed_events_cleanup ON processed_events (processed_at);
 ```
 
 **멱등 처리 흐름 (POST /orders)**
@@ -731,7 +739,7 @@ public interface DispatchStrategy {
 - 마이그레이션: Flyway, `V<n>__<desc>.sql` (서비스별). JPA `ddl-auto`는 `validate`만 허용.
 - ID: UUIDv7 (애플리케이션 생성, 시간순 → 인덱스 지역성). PostgreSQL 18의 `uuidv7()`은 사용하지 않는다(ID를 DB 왕복 전에 알아야 outbox·이벤트에 쓸 수 있음).
 - 인덱스는 위 DDL 명시분 외에 추가 금지(추가 시 EXPLAIN 근거를 PR에 첨부).
-- 파티셔닝: `shipment_events`(일 단위), `outbox_events`는 발행 후 7일 지난 행을 배치 삭제(파티션 대신 삭제, 규모가 작음).
+- 파티셔닝: `shipment_events`(일 단위), `outbox_events`는 발행 후 7일 지난 행을 배치 삭제(파티션 대신 삭제, 규모가 작음). `processed_events` 는 14일 보존(§4.4) — 같은 정리 스케줄러가 일 1회 처리한다. 두 삭제 모두 `LIMIT` 배치를 반복해 긴 락을 잡지 않는다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 웨이브 편입의 `waves` 행 `SELECT … FOR UPDATE`(짧은 트랜잭션)에만 허용.
 - N+1 방지: 컬렉션 로딩은 `@EntityGraph` 또는 명시 fetch join. 테스트에서 Hibernate statement 카운터로 쿼리 수 상한 검증.
 

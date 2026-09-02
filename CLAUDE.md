@@ -53,9 +53,10 @@ make down
 
 ## 아키텍처 불변 규칙
 
-아래 12개 중 ArchUnit이 강제하는 것은 1(규칙 6), 3·4(규칙 3), 5(규칙 1)뿐이다. 나머지는
-라이브러리 API 설계(1의 `OutboxAppender`), 컴파일러(9), DB 권한(3), PR 체크리스트로 지켜진다.
-어느 규칙이 무엇으로 강제되는지는 `docs/DESIGN.md` §13 참고.
+불변 규칙 12개 중 일부만 ArchUnit이 강제하며, 규칙별 강제 수단과 음성 검증 현황은
+**`docs/DESIGN.md` §13의 매핑표가 기준**이다. ArchUnit이 닿지 않는 규칙(상태 머신, Redis 폴백,
+인덱스 금지 등)은 코드 리뷰·PR 체크리스트·전용 테스트가 담당하므로, 해당 규칙을 건드리는
+변경은 매핑표의 강제 수단을 함께 갱신한다.
 
 1. **Outbox 필수**: 도메인 상태 변경과 이벤트 발행은 같은 DB 트랜잭션에서 `outbox_events`에 기록한다. `KafkaTemplate`을 유스케이스에서 직접 호출하지 않는다.
 2. **멱등 소비자 필수**: 모든 Kafka 리스너는 `processed_events(event_id, consumer)` 체크를 트랜잭션 안에서 먼저 한다. `libs/messaging`의 `IdempotentConsumer`를 사용한다.

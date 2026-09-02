@@ -31,6 +31,9 @@
    유스케이스에서 `KafkaTemplate` 을 직접 호출하지 않는다(ArchUnit 규칙 6, ADR-015 이후 추가됨 — DESIGN.md §13).
 3. **폴링 릴레이**: 별도 컴포넌트 `OutboxRelay`(`libs/messaging`)가 미발행 행을 폴링(100ms)해 배치(500건)로 Kafka에
    발행하고 `published_at` 을 기록한다. 다중 인스턴스 안전성은 `SELECT … FOR UPDATE SKIP LOCKED` 로 확보한다.
+   **[후속 정정 — Phase 1]** 이 문장은 *중복 발행* 안전성만 맞다. 같은 `partition_key` 의 행이 서로 다른
+   인스턴스에서 발행되면 §4.5의 키 단위 순서가 깨진다. 릴레이는 서비스당 단일 활성 인스턴스를 전제로 하며,
+   스케일아웃(Phase 3) 전에 리더 락을 도입한다 — DESIGN §4.4 참조. 그 결정은 별도 ADR 로 기록한다.
 4. **관측**: `dawnline_outbox_lag_seconds`(가장 오래된 미발행 행의 나이)와 미발행 건수를 핵심 메트릭으로 노출한다.
 
 ## 근거
