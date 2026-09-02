@@ -18,13 +18,19 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 프록시를 우회해 트랜잭션이 걸리지 않는 고전적인 함정이 있고, 그 함정은 주석으로 경고하는 것보다
  * 클래스를 나눠 구조적으로 없애는 편이 낫다.
  *
- * <p>다중 인스턴스에서 안전하다. 조정 장치가 따로 없고 {@code FOR UPDATE SKIP LOCKED} 하나로
- * 서로 다른 행을 집어 간다 (§4.4). 리더 선출도, 분산 락도 필요 없다.
+ * <p><strong>서비스당 단일 활성 인스턴스를 전제로 한다</strong> (§4.4). {@code FOR UPDATE SKIP LOCKED}
+ * 는 두 인스턴스가 같은 행을 발행하는 것은 막지만, 같은 {@code partition_key} 의 행이 서로 다른
+ * 인스턴스에서 나가면 §4.5의 키 단위 순서가 깨진다 — 두 인스턴스의 배치·전송 시점이 다르기 때문이다.
+ * 현 단계는 인스턴스가 1개라서 이 전제가 자동으로 충족되고 있을 뿐이다. 스케일아웃(Phase 3) 전에
+ * 리더 락(Redis {@code SET NX} + 주기 갱신, 락 상실 시 발행 중단)을 넣는다.
+ * {@code SKIP LOCKED} 는 그때 리더 전환 경합의 안전망으로 남는다.
  *
- * <p><strong>스케줄러 풀</strong>: 폴링(100ms)·메트릭(5s)·정리(1h) 세 작업이 애플리케이션의
- * {@code TaskScheduler} 를 공유한다. Boot 기본 풀 크기는 1이므로, 릴레이를 켜는 서비스는
- * {@code spring.task.scheduling.pool.size} 를 2 이상으로 두는 것을 권한다.
- * ({@code fixedDelay} 라 같은 작업이 서로 겹치지는 않는다.)
+ * <p><strong>스케줄러 풀</strong>: 이 클래스의 폴링(100ms)·메트릭(5s)·정리(1h) 와
+ * {@code ProcessedEventCleaner} 의 정리(24h)까지 네 작업이 애플리케이션의 {@code TaskScheduler} 를
+ * 공유한다. Boot 기본 풀 크기는 1이므로, 릴레이를 켜는 서비스는
+ * {@code spring.task.scheduling.pool.size} 를 3 이상으로 두는 것을 권한다 — 두 정리 작업은 배치를
+ * 반복하느라 초 단위로 길어질 수 있어서, 겹치는 순간에도 폴링과 메트릭이 자리를 가져야 한다.
+ * ({@code fixedDelay} 라 같은 작업이 자기 자신과 겹치지는 않는다.)
  */
 public class OutboxRelay {
 

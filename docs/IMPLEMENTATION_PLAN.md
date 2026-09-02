@@ -79,6 +79,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 7. 메트릭: `dawnline_plan_*`.
 8. `tools/benchmark`: 데이터셋 생성기(seed), `small/medium/large` 생성, 전략 실행·비교, Markdown 리포트 출력. CI에 `small` 회귀 체크 연결.
 9. 테스트: 룰 평가기 단위(각 룰 위반/통과), 하드 룰 위반 라우트가 최종 산출에 없음(PlanValidator), seed 고정 결정론, 5,000 주문 통합 계획(시간 측정), wave.closed 중복 도착 멱등.
+10. **릴레이 리더 락 + ADR**: 서비스당 릴레이 단일 활성을 보장한다(Redis `SET NX` + 주기 갱신, 락 상실 시 발행 중단). 스케일아웃으로 인스턴스가 2개 이상이 되기 **전에** 들어가야 한다 — 그 전까지는 인스턴스 1개라는 사실이 §4.4의 전제를 충족시키고 있을 뿐이다.
 
 **DoD**
 - `make demo`: 주문 → 웨이브 마감 → 라우트 생성 → `GET /api/v1/plans/{id}`에서 비용·미배정·설명 조회.

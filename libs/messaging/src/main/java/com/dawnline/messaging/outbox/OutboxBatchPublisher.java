@@ -50,6 +50,13 @@ import tools.jackson.databind.JsonNode;
  * <p>판정은 {@link PublishFailureClassifier} 한 곳에서 한다. 쓰기 경로의 가드
  * ({@code Topics.requireValidEventType})가 알려진 진입점을 막지만, 가드는 <em>오늘 아는</em> 실패
  * 모드만 막는다. 진행 보장은 릴레이 자체가 져야 하는 성질이다.
+ *
+ * <h2>{@code publish_attempts} 의 의미 (§4.6)</h2>
+ * <strong>그 행에 대해 {@code send} 가 실제로 시도된 횟수</strong>다. 일시적 실패로 배치가 중단되면
+ * 시도되지 않은 뒤 행들은 증가하지 않으며, 이는 의도된 의미다 — 이 컬럼은 "이 행에 무슨 일이
+ * 있었는가" 를 말하지 "브로커가 언제부터 죽었는가" 를 말하지 않는다. 후자는
+ * {@code dawnline_outbox_lag_seconds}·{@code dawnline_outbox_unpublished} 게이지의 몫이다(§9.1).
+ * 이 값을 배치 전체에 뿌리면 실제로 브로커에 닿아 본 행과 큐에서 기다리기만 한 행을 구분할 수 없게 된다.
  */
 public class OutboxBatchPublisher {
 

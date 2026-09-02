@@ -25,6 +25,10 @@ public interface OutboxRepository {
      * 두 번 발행하지 않고, 느린 인스턴스가 다른 인스턴스를 막지도 않는다 (§4.4).
      * {@code SKIP LOCKED} 때문에 반환 행 수가 {@code batchSize} 보다 적을 수 있다.
      *
+     * <p>다만 이것은 <em>중복 발행</em> 안전성일 뿐 <em>순서</em> 안전성이 아니다. 같은
+     * {@code partition_key} 의 행이 서로 다른 인스턴스에 나뉘어 잡히면 §4.5의 키 단위 순서가
+     * 깨질 수 있어, 릴레이는 서비스당 단일 활성 인스턴스를 전제로 한다 ({@link OutboxRelay} 참고).
+     *
      * @param batchSize 최대 행 수
      * @return 잠긴 행들. 호출 트랜잭션이 끝날 때까지 잠금이 유지된다.
      */

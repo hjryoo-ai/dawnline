@@ -36,6 +36,26 @@ public class JpaProcessedEventRepository implements ProcessedEventRepository {
     private static final String EXISTS_SQL =
             "SELECT count(*) FROM processed_events WHERE event_id = :eventId AND consumer = :consumer";
 
+    /**
+     * 보존 만료 행 삭제 (§4.4).
+     *
+     * <p>{@code ctid} 로 대상을 먼저 고르고 그 물리 주소로 지운다. PK 가
+     * {@code (event_id, consumer)} 복합키라 {@code DELETE ... LIMIT} 를 흉내 내려면 두 컬럼짜리
+     * {@code IN} 을 써야 하는데, {@code ctid} 는 한 컬럼이고 그 자체가 힙 주소라 두 번째 조회가 없다.
+     *
+     * <p>{@code ORDER BY processed_at} 은 {@code ix_processed_events_cleanup} 을 타면서
+     * 오래된 행부터 집게 한다 — 반복 호출이 매번 앞으로 나아가는 것을 보장한다.
+     */
+    private static final String DELETE_EXPIRED_SQL = """
+            DELETE FROM processed_events
+             WHERE ctid IN (
+                   SELECT ctid
+                     FROM processed_events
+                    WHERE processed_at < :threshold
+                    ORDER BY processed_at
+                    LIMIT :limit)
+            """;
+
     private final EntityManager entityManager;
 
     public JpaProcessedEventRepository(EntityManager entityManager) {
@@ -64,5 +84,17 @@ public class JpaProcessedEventRepository implements ProcessedEventRepository {
                 .setParameter("consumer", consumer)
                 .getSingleResult();
         return count.longValue() > 0;
+    }
+
+    @Override
+    public int deleteProcessedBefore(Instant processedAtBefore, int limit) {
+        Objects.requireNonNull(processedAtBefore, "processedAtBefore");
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit 은 1 이상이어야 합니다: " + limit);
+        }
+        return entityManager.createNativeQuery(DELETE_EXPIRED_SQL)
+                .setParameter("threshold", processedAtBefore)
+                .setParameter("limit", limit)
+                .executeUpdate();
     }
 }

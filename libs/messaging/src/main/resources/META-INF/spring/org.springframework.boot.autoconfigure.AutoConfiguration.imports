@@ -2,3 +2,4 @@ com.dawnline.messaging.config.MessagingAutoConfiguration
 com.dawnline.messaging.config.MessagingJpaAutoConfiguration
 com.dawnline.messaging.config.MessagingKafkaAutoConfiguration
 com.dawnline.messaging.config.OutboxRelayAutoConfiguration
+com.dawnline.messaging.config.ProcessedEventCleanupAutoConfiguration
