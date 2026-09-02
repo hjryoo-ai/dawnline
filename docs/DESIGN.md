@@ -283,7 +283,13 @@ com.dawnline.<service>
 | 결정적(deterministic) | 봉투 조립·eventType 검증·직렬화 실패 | 해당 행을 즉시 격리(`failed_at` 기록, `publish_attempts` 증가), `error` 로그 + `dawnline_outbox_failed` 증가, **다음 행 계속 진행** |
 | 일시적(transient) | 브로커 연결 불가, 타임아웃, `KafkaException` | 격리하지 않는다. 그때까지의 진행분을 커밋하고 백오프 후 다음 폴링에서 재시도 (`publish_attempts` 증가) |
 
-구분 기준은 예외 타입이다: Kafka `send()` 이전 단계의 예외와 직렬화 예외는 결정적, 전송·네트워크 예외는 일시적. 판단이 애매한 예외는 일시적으로 취급한다(격리는 사람의 개입을 요구하므로 보수적으로).
+구분 기준은 **단계**와 **Kafka 자신의 재시도 가능 여부**다.
+
+- **조립 단계**(Kafka `send()` 이전, 저장된 바이트만 읽는 구간)의 실패는 정의상 결정적이다. 같은 행을 다시 읽으면 같은 예외가 난다.
+- **전송 단계**는 Kafka 의 `RetriableException` 마커를 따른다. 재시도 가능이면 일시적, 브로커가 돌려준 오류인데 재시도 가능이 아니면 결정적(`InvalidTopicException`·`TopicAuthorizationException`·`RecordTooLargeException` 등), 직렬화 실패도 결정적.
+- Kafka 가 분류하지 않은 예외(IO, 프로듀서 상태 오류)는 판단 근거가 없으므로 일시적으로 취급한다(격리는 사람의 개입을 요구하므로 보수적으로).
+
+예외 타입을 손으로 나열하지 않는 이유는 그 목록이 반드시 불완전해지기 때문이다. 빠뜨린 비재시도 예외 하나가 곧바로 head-of-line blocking 으로 돌아온다.
 
 이 구분이 필요한 이유는 두 실패의 성질이 정반대이기 때문이다. 결정적 실패는 **몇 번을 재시도해도 같은 결과**라서, 재시도를 유지하면 그 행이 `created_at` 순서상 맨 앞에 서서 뒤의 모든 이벤트를 영구히 막는다(head-of-line blocking). 일시적 실패는 반대로 **기다리면 풀린다** — 여기서 행을 격리하면 브로커가 잠깐 흔들렸다는 이유로 멀쩡한 이벤트가 사람 손을 기다리게 된다.
 
@@ -925,7 +931,7 @@ dawnline/
 └── .github/workflows/ci.yml, release.yml
 ```
 
-각 서비스 모듈은 `libs/*`만 의존한다. 서비스 간 소스 의존은 금지(ArchUnit + Gradle 의존성 규칙).
+각 서비스 모듈은 `libs/*`만 의존한다. 서비스 간 소스 의존은 금지 — 현재 강제 수단은 ArchUnit 규칙 3(다른 서비스 *패키지를 참조*하면 실패)뿐이다. Gradle 수준의 가드(다른 `services:*` 를 의존에 추가하면 설정 시점에 실패)는 아직 없다.
 
 ---
 
@@ -941,7 +947,28 @@ dawnline/
 | 성능 | 주문 API 부하, 계획 시간 | k6, benchmark 도구 | §8.1 목표 대비 리포트 |
 | 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료 | Compose `stop/start` 스크립트 | 데이터 유실·중복 0 (검증 쿼리) |
 
-**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만.
+**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1).
+
+규칙 6이 따로 필요한 이유: `libs/messaging` 이 Kafka 의존을 `api` 로 노출하므로 `KafkaTemplate` 이 5개 서비스 전부의 컴파일 클래스패스에 있다. 유스케이스가 그것을 직접 부르면 도메인 변경과 이벤트 발행이 서로 다른 트랜잭션이 되는데, 규칙 5는 어노테이션의 *위치*만 보므로 이를 잡지 못한다.
+
+**규칙의 검증 상태**(정직하게): 규칙 1·2·6은 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. 규칙 3·4·5는 Phase 0 시점에 검사 대상이 0개라(`@KafkaListener`·`@Transactional` 이 아직 없다) `allowEmptyShould(true)` 로 통과하며, 탐지 능력은 아직 검증되지 않았다. Phase 1에서 첫 리스너·트랜잭션이 생길 때 음성 표본을 함께 추가한다.
+
+**불변 규칙 ↔ 강제 수단 매핑** (CLAUDE.md 「아키텍처 불변 규칙」 12개 기준). ArchUnit이 닿는 것은 12개 중 5개(1·2·3·4·5)이고 그중 온전히 강제되는 것은 5번뿐이다. 나머지는 API 설계·DB 권한·컴파일러·리뷰가 맡는다 — 이 표는 "무엇이 자동으로 막히지 *않는지*"를 보이는 것이 목적이다.
+
+| # | 불변 규칙 | ArchUnit | 그 밖의 강제 수단 | 음성 검증 |
+|---|---|---|---|---|
+| 1 | Outbox 필수 | 규칙 6(직접 발행 차단), 규칙 5(트랜잭션 경계 위치) | `OutboxAppender` 가 유일한 발행 API — `libs/messaging` 은 다른 발행 경로를 제공하지 않는다 | 규칙 6 ✅ / 규칙 5 ✗(대상 0) |
+| 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트 | ✗(대상 0) |
+| 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✗ / DB 권한 ✅(컨테이너에서 거부 확인) |
+| 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | ✗ |
+| 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
+| 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰 | — |
+| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`) | — |
+| 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
+| 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
+| 10 | ID는 UUIDv7 | — | `Ids.newId()`, `IdsTest`(RFC 9562 비트 레이아웃·단조 증가) | ✅(생성기) |
+| 11 | 인덱스 추가 금지(설계서 명시분 외) | — | PR 체크리스트(EXPLAIN 첨부), 마이그레이션 리뷰 | — |
+| 12 | 시간·난수는 주입 | — | 생성자 시그니처(`Clock`, `RandomGenerator`), seed 재현성 테스트 | — |
 
 **결정론**: 최적화 테스트는 seed 고정. 시간은 `Clock` 주입으로 제어. Testcontainers 재사용(`testcontainers.reuse.enable=true`)으로 로컬 실행 시간 단축.
 

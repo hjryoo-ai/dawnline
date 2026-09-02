@@ -34,11 +34,14 @@ Phase 0 감사에서 실제 결함이 하나 나왔다.
 
 | 종류 | 예 | 처리 |
 |---|---|---|
-| 결정적 | 봉투 조립·`eventType` 검증·직렬화 실패 | 행을 격리(`failed_at` 기록, `publish_attempts` 증가), `error` 로그 + `dawnline_outbox_failed` 증가, **다음 행 계속 진행** |
+| 결정적 | 봉투 조립·`eventType` 검증·직렬화 실패, 그리고 Kafka 가 비재시도로 분류한 전송 오류(`InvalidTopicException`·`TopicAuthorizationException` 등) | 행을 격리(`failed_at` 기록, `publish_attempts` 증가), `error` 로그 + `dawnline_outbox_failed` 증가, **다음 행 계속 진행** |
 | 일시적 | 브로커 연결 불가, 타임아웃, `KafkaException` | 격리하지 않는다. 그때까지의 진행분을 커밋하고 다음 폴링에서 재시도 |
 
-- 판단 기준은 **예외 타입**이며, 분류는 `PublishFailureClassifier` **한 곳**에만 둔다.
-- **애매하면 일시적으로 취급한다.** 격리는 사람의 개입을 요구하므로 보수적인 쪽이 기본값이다.
+- 판단 기준은 **단계**와 **Kafka 의 `RetriableException` 마커**이며, 분류는
+  `PublishFailureClassifier` **한 곳**에만 둔다. 비재시도 예외 목록을 손으로 유지하지 않는다 —
+  그 목록은 반드시 불완전해지고, 빠뜨린 것 하나가 곧바로 head-of-line blocking 으로 돌아온다.
+- **Kafka 가 분류하지 않은 예외는 일시적으로 취급한다.** 격리는 사람의 개입을 요구하므로
+  보수적인 쪽이 기본값이다.
 - 격리 행은 릴레이의 조회 대상에서 빠진다(`WHERE published_at IS NULL AND failed_at IS NULL`).
   미발행 게이지도 격리 행을 세지 않는다 — 그건 `dawnline_outbox_failed` 의 몫이다.
 - 복구는 수동이다: 원인 수정 후 `failed_at = NULL, publish_attempts = 0` (RB-05).

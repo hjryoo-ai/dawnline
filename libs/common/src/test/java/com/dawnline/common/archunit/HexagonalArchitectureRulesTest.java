@@ -30,6 +30,18 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙1_은_domain_이_Spring_에_의존하면_실패한다() {
+        // 금지 대상은 org.springframework.. 과 jakarta.persistence.. 두 패키지이고, 규칙은 그 둘을
+        // 하나의 resideInAnyPackage 술어로 검사한다. 표본은 Spring 쪽을 건드린다 —
+        // libs/common 의 test 클래스패스에 jakarta.persistence 가 없기 때문이다.
+        // JPA 쪽은 같은 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다.
+        assertThatThrownBy(() -> HexagonalArchitectureRules.DOMAIN_IS_FRAMEWORK_FREE.check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("FrameworkBoundOrder")
+                .hasMessageContaining("org.springframework");
+    }
+
+    @Test
     void 규칙2_는_application_이_adapter_를_참조하면_실패한다() {
         assertThatThrownBy(() -> HexagonalArchitectureRules.APPLICATION_DOES_NOT_DEPEND_ON_ADAPTER.check(BAD))
                 .isInstanceOf(AssertionError.class)
@@ -38,11 +50,30 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙6_은_application_이_KafkaTemplate_을_직접_쓰면_실패한다() {
+        // 불변규칙 1 의 유일한 자동 강제 수단이다. 이 표본이 컴파일된다는 사실 자체가 규칙의 존재 이유다 —
+        // libs/messaging 이 Kafka 를 api 로 노출하므로 서비스 유스케이스에서도 똑같이 컴파일된다.
+        assertThatThrownBy(() -> HexagonalArchitectureRules.PUBLISHING_GOES_THROUGH_OUTBOX_ONLY.check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("KafkaCallingUseCase")
+                .hasMessageContaining("KafkaTemplate");
+    }
+
+    @Test
+    void 규칙6_은_올바른_표본을_통과시킨다() {
+        HexagonalArchitectureRules.PUBLISHING_GOES_THROUGH_OUTBOX_ONLY.check(GOOD);
+    }
+
+    @Test
     void libs_common_자체가_Spring_과_JPA_에_의존하지_않는다() {
         // CLAUDE.md 불변규칙 5. 규칙 1과 같은 조건을 libs/common 전체에 적용해 본다.
+        // samples 는 규칙이 "잡아야 할 것을 잡는지" 보려고 일부러 위반하는 표본이라 제외한다 —
+        // 여기서 보려는 것은 libs/common 의 실제 코드다.
         ArchRule rule = com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses()
                 .that()
                 .resideInAPackage("com.dawnline.common..")
+                .and()
+                .resideOutsideOfPackage(SAMPLES + "..")
                 .should()
                 .dependOnClassesThat()
                 .resideInAnyPackage("org.springframework..", "jakarta.persistence..");
@@ -55,8 +86,10 @@ class HexagonalArchitectureRulesTest {
     void 서비스별_규칙_5개를_만들_수_있고_대상이_없으면_통과한다(String service) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
-        assertThat(rules).hasSize(5);
+        assertThat(rules).hasSize(6);
         // 표본에는 com.dawnline.<service> 클래스가 없으므로 규칙 3·4·5 는 대상이 0개다.
+        // (규칙 3·4·5 의 "잡아야 할 것을 잡는가" 는 아직 검증되지 않았다 — Phase 1 에서
+        //  첫 @KafkaListener·@Transactional 이 생길 때 음성 표본을 함께 추가한다.)
         // allowEmptyShould(true) 덕분에 "대상 없음"이 실패가 되지 않는다.
         rules.forEach(rule -> rule.check(GOOD));
     }

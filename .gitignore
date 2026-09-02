@@ -29,15 +29,6 @@ gradle-app.setting
 .DS_Store
 Thumbs.db
 
-# Secrets / env — only .env.example is committed (CLAUDE.md)
-.env
-*.env
-!.env.example
-!**/.env.example
-secrets/
-*.pem
-*.key
-
 # Node (apps/ops-web)
 node_modules/
 dist/
@@ -52,6 +43,34 @@ tmp/
 *.jfr
 
 # Test / coverage reports
-**/reports/
-**/test-results/
+# Gradle 의 리포트·테스트 결과는 전부 build/ 안에 생기고 build/ 는 위에서 이미 무시된다.
+# 그래서 **/reports/ · **/test-results/ 를 따로 두면 무시되는 것은 하나도 늘지 않고,
+# docs/benchmarks/reports/ (README·IMPLEMENTATION_PLAN 이 커밋하기로 한 경로) 같은
+# 정상 경로만 조용히 사라진다. 두지 않는다.
 .jacoco/
+
+# -----------------------------------------------------------------------------
+# 산출물 이름과 소스 패키지 이름이 겹치는 사고를 한 번에 막는다.
+#
+# 위의 build/ · dist/ · logs/ · tmp/ · *.log 는 "디렉터리·파일 이름"만 보기 때문에
+# src/ 아래의 정상 경로까지 삼킨다 — `..domain.logs`, `..adapter.in.web.reports`,
+# `src/test/resources/tmp/`, `fixtures/route.log` 가 전부 해당한다.
+# out/ 블로커(헥사고날 adapter/out/**)와 같은 종류이고, 증상도 같다:
+# 로컬 빌드는 작업 트리를 컴파일하니 통과하고, fresh clone 에서만 깨진다.
+#
+# 산출물은 절대 src/ 안에 생기지 않으므로 src/ 아래는 통째로 되살린다.
+# gitignore 는 "마지막에 일치한 규칙"이 이기므로 이 줄은 위 패턴들보다 *뒤*에 있어야 하고,
+# 아래 시크릿 패턴보다는 *앞*에 있어야 한다 (src/ 안의 .env 까지 되살아나면 안 된다).
+# 새 무시 패턴을 추가할 때 이 줄 아래에 넣지 않는다.
+!**/src/**
+# -----------------------------------------------------------------------------
+
+# Secrets / env — only .env.example is committed (CLAUDE.md)
+# 이 블록은 반드시 맨 뒤에 온다 — 위의 !**/src/** 가 src/ 안의 .env 를 되살리면 안 된다.
+.env
+*.env
+!.env.example
+!**/.env.example
+secrets/
+*.pem
+*.key

@@ -58,7 +58,12 @@ public class OutboxRelay {
             throw new IllegalArgumentException("retention 은 양수여야 합니다: " + retention);
         }
 
-        // 게이지 두 값은 같은 스냅샷에서 읽어야 서로 모순되지 않는다(건수는 0인데 지연은 30초 같은 상태 방지).
+        // 읽기 전용 트랜잭션 — Hibernate 플러시를 막고 커넥션을 read-only 로 둔다.
+        // 주의: 이것이 세 값의 *일관된 스냅샷*을 주지는 않는다. PostgreSQL 기본 격리 수준인
+        // READ COMMITTED 에서는 문장마다 새 스냅샷을 잡으므로, 세 SELECT 사이에 폴링 스레드가
+        // 행을 격리하면 한 스크레이프에서 같은 행이 미발행과 격리 양쪽에 잡힐 수 있다.
+        // 5초 뒤 갱신에서 스스로 정정되는 일시적 어긋남이라 격리 수준을 올리지 않았다 —
+        // REPEATABLE READ 는 이 주기적 조회에 직렬화 실패 재시도를 새로 들여온다.
         this.readOnlyTransactions = new TransactionTemplate(transactionManager);
         this.readOnlyTransactions.setReadOnly(true);
         // DELETE 는 DML 이라 트랜잭션이 없으면 TransactionRequiredException 이 난다.
@@ -89,8 +94,8 @@ public class OutboxRelay {
     /**
      * 게이지 갱신 (§9.1). 폴링보다 훨씬 느린 주기로 돌려 DB 부하를 만들지 않는다.
      *
-     * <p>세 값을 같은 트랜잭션에서 읽는다. 격리 행이 미발행 집계에서 빠지므로(§4.6),
-     * 따로 읽으면 "미발행 0건인데 격리도 0건" 같은 순간이 스냅샷에 잡힐 수 있다.
+     * <p>세 값을 한 트랜잭션에서 읽지만 격리 수준은 READ COMMITTED 라 완전히 일관된 스냅샷은
+     * 아니다(생성자 주석 참고). 한 스크레이프가 어긋나도 다음 갱신에서 정정된다.
      */
     @Scheduled(
             fixedDelayString = "${dawnline.messaging.outbox.metrics-interval-ms:5000}",

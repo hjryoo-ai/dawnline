@@ -1,0 +1,24 @@
+# 줄바꿈을 저장소에서 통일한다.
+#
+# 이게 없으면 Windows 기본값(core.autocrlf=true)이 체크아웃에서 LF 를 CRLF 로 바꾼다.
+# 이 저장소에는 그걸로 실제로 깨지는 파일이 둘 있다:
+#   - deploy/compose/docker-compose.yml 의 kafka-init entrypoint (bash -c 인라인 스크립트).
+#     `set -euo pipefail\r` 는 `set: pipefail\r: invalid option name` 이 되고,
+#     kafka-init 이 실패하면 service_completed_successfully 조건 때문에 app 프로파일 전체가 뜨지 않는다.
+#   - Makefile (SHELL := /bin/bash). CRLF 레시피는 GNU make 가 처리하지 못한다.
+* text=auto eol=lf
+
+# Windows 배치 파일은 CRLF 여야 한다. gradlew.bat 은 현재 인덱스에 CRLF 로 들어 있다.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 바이너리 — 변환 금지.
+*.jar   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
