@@ -5,9 +5,14 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.order.adapter.out.geo.AllTiersServiceableZones;
 import com.dawnline.order.adapter.out.geo.PostalPrefixGeocoder;
 import com.dawnline.order.adapter.out.messaging.OutboxOrderEvents;
+import com.dawnline.order.application.CancelOrderService;
 import com.dawnline.order.application.IdempotencyKeyCleaner;
+import com.dawnline.order.application.OrderQueryService;
 import com.dawnline.order.application.PlaceOrderService;
 import com.dawnline.order.application.PlaceOrderTransaction;
+import com.dawnline.order.application.port.in.CancelOrderUseCase;
+import com.dawnline.order.application.port.in.GetOrderUseCase;
+import com.dawnline.order.application.port.in.ListOrdersUseCase;
 import com.dawnline.order.application.port.in.PlaceOrderUseCase;
 import com.dawnline.order.application.port.out.Geocoder;
 import com.dawnline.order.application.port.out.IdempotencyCache;
@@ -111,6 +116,32 @@ public class OrderApplicationConfig {
             Ids ids, Clock clock, OrderProperties properties) {
         return new PlaceOrderService(geocoder, tiers, promises, records, cache, transaction,
                 ids, clock, properties.idempotency().retention());
+    }
+
+    /**
+     * 주문 취소 (§5.1). 트랜잭션 경계가 유스케이스 안에 있다 — 트랜잭션 밖에서 할 일이 없어
+     * {@link PlaceOrderService} 처럼 쪼갤 이유가 없다.
+     *
+     * @param orders 주문 저장소
+     * @param events 이벤트 발행
+     * @param clock  전이 시각 출처
+     */
+    @Bean
+    public CancelOrderUseCase cancelOrderUseCase(OrderRepository orders, OrderEvents events, Clock clock) {
+        return new CancelOrderService(orders, events, clock);
+    }
+
+    /**
+     * 주문 조회 (§5.1). 상세와 목록을 한 클래스가 구현하고 빈도 하나다 — 같은 저장소를 같은 방식으로
+     * 읽는 두 메서드라 나눌 이유가 없다. 반환 타입을 구현 클래스로 두면 Spring 이
+     * {@link GetOrderUseCase}·{@link ListOrdersUseCase} 양쪽 주입 지점에 이 빈을 꽂는다.
+     * 인터페이스별로 빈을 따로 노출하면 같은 인스턴스가 두 이름으로 등록돼 주입이 모호해진다.
+     *
+     * @param orders 주문 저장소
+     */
+    @Bean
+    public OrderQueryService orderQueryService(OrderRepository orders) {
+        return new OrderQueryService(orders);
     }
 
     /**

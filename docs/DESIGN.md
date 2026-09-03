@@ -1157,7 +1157,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 006 | at-least-once + 멱등 소비자 | Kafka 트랜잭션/EOS(DB 쓰기와 원자성 불가) | [ADR-006](adr/ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제 | 계층형(경계 침식) | [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) |
 | 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | 전부 플랫폼 스레드 | — (Phase 4 예정) |
-| 009 | URL 경로 API 버저닝(v1) | 헤더 버저닝 | — (Phase 1 예정) |
+| 009 | URL 경로 API 버저닝(v1), 매핑은 `{version}` 자리표시자 | 헤더 버저닝(URL·로그·데모에서 안 보임), 미디어 타입 파라미터(캐시·프록시 복잡), 리터럴 `v1` + 버저닝 끄기(지원하지 않는 버전이 404 가 됨) | [ADR-009](adr/ADR-009-url-path-api-versioning.md) |
 | 010 | 하버사인 × 도로계수 기본, OSRM 어댑터 선택 | 상용 지도 API(비용·키 관리) | — (Phase 3 예정) |
 | 011 | 롤링 배포 시 소비자 static membership | 기본 리밸런스 | — (Phase 7 예정) |
 | 012 | CQRS 읽기 모델을 ops-api에 집중 | 각 서비스에 조회 API 노출(서비스 간 동기 호출 증가) | — (Phase 6 예정) |

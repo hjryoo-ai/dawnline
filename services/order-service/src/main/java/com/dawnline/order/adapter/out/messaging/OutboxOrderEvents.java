@@ -4,8 +4,10 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.messaging.outbox.OutboxMessage;
 import com.dawnline.order.application.port.out.OrderEvents;
 import com.dawnline.order.domain.Order;
+import com.dawnline.order.domain.OrderStatus;
 import java.time.Instant;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * {@link OrderEvents} 의 outbox 구현 (CLAUDE.md 불변규칙 1, DESIGN.md §4.4).
@@ -39,5 +41,18 @@ public class OutboxOrderEvents implements OrderEvents {
                 OrderPlacedPayload.SCHEMA_VERSION,
                 order.partitionKey(),
                 OrderPlacedPayload.of(order, cutoffAt)));
+    }
+
+    @Override
+    public void cancelled(Order order, OrderStatus previousStatus, @Nullable String reason) {
+        Objects.requireNonNull(order, "order");
+        Objects.requireNonNull(previousStatus, "previousStatus");
+        outbox.append(OutboxMessage.of(
+                OrderCancelledPayload.AGGREGATE_TYPE,
+                order.id(),
+                OrderCancelledPayload.EVENT_TYPE,
+                OrderCancelledPayload.SCHEMA_VERSION,
+                order.partitionKey(),
+                OrderCancelledPayload.of(order, previousStatus, reason)));
     }
 }

@@ -24,6 +24,8 @@ dependencies {
     // libs/messaging 의 이벤트 계약 검증 픽스처 (CLAUDE.md 불변규칙 8)
     testImplementation(testFixtures(project(":libs:messaging")))
 
+    // Boot 4 모듈화: @AutoConfigureMockMvc 는 spring-boot-starter-test 가 아니라 이 모듈에 있다.
+    integrationTestImplementation(libs.spring.boot.webmvc.test)
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.testcontainers.redis)

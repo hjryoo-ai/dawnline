@@ -21,7 +21,7 @@
 | 006 | at-least-once + 멱등 소비자 (Kafka EOS 미사용) | ✅ Accepted (2026-08-29) | [ADR-006](ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제, 도메인/JPA 엔티티 분리 | ✅ Accepted (2026-08-29) | [ADR-007](ADR-007-hexagonal-architecture-archunit.md) |
 | 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | ⏳ Phase 4 예정 | — |
-| 009 | URL 경로 API 버저닝(v1) | ⏳ Phase 1 예정 | — |
+| 009 | URL 경로 API 버저닝(v1) | ✅ Accepted (2026-09-03) | [ADR-009](ADR-009-url-path-api-versioning.md) |
 | 010 | 하버사인 × 도로계수 기본, OSRM 어댑터는 선택 | ⏳ Phase 3 예정 | — |
 | 011 | 롤링 배포 시 소비자 static membership | ⏳ Phase 7 예정 | — |
 | 012 | CQRS 읽기 모델을 ops-api에 집중 | ⏳ Phase 6 예정 | — |
