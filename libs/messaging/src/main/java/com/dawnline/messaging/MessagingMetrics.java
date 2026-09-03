@@ -17,6 +17,7 @@ package com.dawnline.messaging;
  *   <tr><td>dawnline.outbox.unpublished</td><td>dawnline_outbox_unpublished</td></tr>
  *   <tr><td>dawnline.event.processed</td><td>dawnline_event_processed_total</td></tr>
  *   <tr><td>dawnline.event.rejected</td><td>dawnline_event_rejected_total</td></tr>
+ *   <tr><td>dawnline.event.stale</td><td>dawnline_event_stale_total</td></tr>
  * </table>
  *
  * <p>{@code baseUnit} 을 쓰지 않고 이름에 {@code .seconds} 를 직접 넣은 이유는,
@@ -39,6 +40,18 @@ public final class MessagingMetrics {
 
     /** counter — 비즈니스 규칙 위반으로 무시한 이벤트 (§4.6). 태그: reason. */
     public static final String EVENT_REJECTED = "dawnline.event.rejected";
+
+    /**
+     * counter — 이미 지나온 지점으로의 전이라 무시한 이벤트 (§9.1, ADR-017). 태그: consumer, eventType.
+     *
+     * <p>{@link #EVENT_REJECTED} 와 합치지 않는 이유는 알림 때문이다. <strong>stale 은 늘 조금씩
+     * 늘고 rejected 는 0이어야 한다.</strong> 한 카운터에 섞으면 어느 쪽에도 임계값을 걸 수 없다.
+     *
+     * <p>{@link #TAG_OUTCOME} 에 값을 하나 더하지 않은 이유: 그 축은 "멱등 소비의 결과"
+     * (ok/dup/rejected/dlq)이고 stale 은 <em>상태 머신의 판정</em>이다. 이벤트는 정상적으로
+     * 처리(커밋)됐고 다만 상태를 바꾸지 않았을 뿐이다.
+     */
+    public static final String EVENT_STALE = "dawnline.event.stale";
 
     /** 태그: 서비스 이름 (outbox 게이지). */
     public static final String TAG_SERVICE = "service";

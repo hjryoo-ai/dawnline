@@ -5,11 +5,16 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.order.adapter.out.geo.AllTiersServiceableZones;
 import com.dawnline.order.adapter.out.geo.PostalPrefixGeocoder;
 import com.dawnline.order.adapter.out.messaging.OutboxOrderEvents;
+import com.dawnline.messaging.idempotency.IdempotentConsumer;
+import com.dawnline.messaging.json.EventJson;
+import com.dawnline.order.adapter.in.messaging.OrderProgressListener;
+import com.dawnline.order.application.AdvanceOrderService;
 import com.dawnline.order.application.CancelOrderService;
 import com.dawnline.order.application.IdempotencyKeyCleaner;
 import com.dawnline.order.application.OrderQueryService;
 import com.dawnline.order.application.PlaceOrderService;
 import com.dawnline.order.application.PlaceOrderTransaction;
+import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
 import com.dawnline.order.application.port.in.CancelOrderUseCase;
 import com.dawnline.order.application.port.in.GetOrderUseCase;
 import com.dawnline.order.application.port.in.ListOrdersUseCase;
@@ -21,6 +26,7 @@ import com.dawnline.order.application.port.out.OrderEvents;
 import com.dawnline.order.application.port.out.OrderRepository;
 import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.TierEligibility;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -142,6 +148,32 @@ public class OrderApplicationConfig {
     @Bean
     public OrderQueryService orderQueryService(OrderRepository orders) {
         return new OrderQueryService(orders);
+    }
+
+    /**
+     * 배송 진행 이벤트를 상태 머신에 적용 (§5.1, ADR-017).
+     *
+     * @param orders 주문 저장소
+     */
+    @Bean
+    public AdvanceOrderUseCase advanceOrderUseCase(OrderRepository orders) {
+        return new AdvanceOrderService(orders);
+    }
+
+    /**
+     * {@code order.dispatched}·{@code delivery.status} 리스너 (§4.1).
+     *
+     * <p>{@code IdempotentConsumer}·{@code EventJson} 은 {@code libs/messaging} 의 자동설정이 준다.
+     *
+     * @param consumer     멱등 게이트
+     * @param advanceOrder 상태 전이 유스케이스
+     * @param json         이벤트 JSON 코덱
+     * @param meters       Micrometer 레지스트리
+     */
+    @Bean
+    public OrderProgressListener orderProgressListener(IdempotentConsumer consumer,
+            AdvanceOrderUseCase advanceOrder, EventJson json, MeterRegistry meters) {
+        return new OrderProgressListener(consumer, advanceOrder, json, meters);
     }
 
     /**

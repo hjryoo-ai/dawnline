@@ -1140,16 +1140,18 @@ dawnline/
 
 규칙 6이 따로 필요한 이유: `libs/messaging` 이 Kafka 의존을 `api` 로 노출하므로 `KafkaTemplate` 이 5개 서비스 전부의 컴파일 클래스패스에 있다. 유스케이스가 그것을 직접 부르면 도메인 변경과 이벤트 발행이 서로 다른 트랜잭션이 되는데, 규칙 5는 어노테이션의 *위치*만 보므로 이를 잡지 못한다.
 
-**규칙의 검증 상태**(정직하게): 규칙 1·2·6·7은 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. 규칙 7은 반대 방향(주입받은 시계를 읽는 `good` 표본이 통과하는지)도 함께 본다 — 그 방향이 없으면 "시각을 아예 못 읽게 만드는" 규칙이 되어도 테스트가 통과한다. 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. 규칙 5는 Phase 1의 첫 `@Transactional`(`PlaceOrderTransaction`)과 함께 음성 표본(`samples/bad/adapter/out/persistence/TransactionalRepository`)이 추가돼 탐지 능력까지 확인된다. 규칙 3·4는 아직 검사 대상이 0개라(`@KafkaListener` 가 없다) `allowEmptyShould(true)` 로 통과하며, 탐지 능력은 검증되지 않았다 — Phase 1의 첫 리스너와 함께 표본을 추가한다.
+**규칙의 검증 상태**: 일곱 규칙 <strong>전부</strong> 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. Phase 0 마감 시점에는 규칙 3·4·5가 대상 0개라 미검증이었고, Phase 1에서 첫 `@Transactional`(규칙 5)·첫 `@KafkaListener`(규칙 4)·서비스 간 참조 표본(규칙 3)이 생기며 채워졌다.
+
+규칙별 주의점 세 가지. (1) 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. (2) 규칙 3의 표본은 `that` 절이 서비스 패키지로 좁혀져 있어 `com.dawnline.order`·`com.dawnline.fulfillment` 패키지에 두어야 한다. 그 클래스들은 `libs/common` 의 테스트 소스에만 있고 서비스의 테스트 클래스패스에는 없으므로 실제 분석에 섞이지 않는다. (3) 규칙 3·7은 <strong>반대 방향</strong>(통과해야 할 표본이 통과하는지)도 함께 본다 — 그 방향이 없으면 "모든 참조를 막는" 규칙이나 "시각을 아예 못 읽게 만드는" 규칙이 되어도 테스트가 통과한다.
 
 **불변 규칙 ↔ 강제 수단 매핑** (CLAUDE.md 「아키텍처 불변 규칙」 13개 기준). ArchUnit이 닿는 것은 13개 중 6개(1·2·3·4·5·12)이고 그중 온전히 강제되는 것은 5·12번이다. 나머지는 API 설계·DB 권한·컴파일러·CI·리뷰가 맡는다 — 이 표는 "무엇이 자동으로 막히지 *않는지*"를 보이는 것이 목적이다.
 
 | # | 불변 규칙 | ArchUnit | 그 밖의 강제 수단 | 음성 검증 |
 |---|---|---|---|---|
 | 1 | Outbox 필수 | 규칙 6(직접 발행 차단), 규칙 5(트랜잭션 경계 위치) | `OutboxAppender` 가 유일한 발행 API — `libs/messaging` 은 다른 발행 경로를 제공하지 않는다. 어노테이션이 <em>사라지는</em> 것은 ArchUnit이 못 잡으므로 `PlaceOrderTransactionTest` 가 그 존재를 직접 확인한다 | 규칙 6 ✅ / 규칙 5 ✅ |
-| 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트 | ✗(대상 0) |
-| 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✗ / DB 권한 ✅(컨테이너에서 거부 확인) |
-| 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | ✗ |
+| 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트, 리스너 IT 가 같은 이벤트를 두 번 보내 상태가 한 번만 바뀌는지 확인 | 규칙 4 ✅ / 멱등 체크 자체는 ✗ |
+| 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✅(양방향) / DB 권한 ✅(컨테이너에서 거부 확인) |
+| 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰 | — |
 | 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등만) — `PlaceOrderIT` 가 죽은 Redis 주소로 컨텍스트를 띄워 멱등이 DB만으로 성립함을 보인다 |

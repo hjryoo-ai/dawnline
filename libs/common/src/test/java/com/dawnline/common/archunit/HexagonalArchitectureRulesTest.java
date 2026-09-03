@@ -60,6 +60,37 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙3_은_다른_서비스의_타입을_참조하면_실패한다() {
+        // 표본은 com.dawnline.order / com.dawnline.fulfillment 패키지에 있다. 규칙 3 의 that 절이
+        // 서비스 패키지로 좁혀져 있어 그렇게 두어야 검사 대상이 된다. 이 클래스들은 libs/common 의
+        // 테스트 소스에만 있으므로 실제 서비스의 ArchitectureTest 에는 섞이지 않는다.
+        JavaClasses crossService = new ClassFileImporter()
+                .importPackages("com.dawnline.order.archunitsample", "com.dawnline.fulfillment.archunitsample");
+
+        assertThatThrownBy(() -> HexagonalArchitectureRules.noCrossServiceDependency("order").check(crossService))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("CrossServiceUseCase")
+                .hasMessageContaining("ForeignAggregate");
+    }
+
+    @Test
+    void 규칙3_은_자기_서비스_안의_참조는_통과시킨다() {
+        // 반대 방향이 없으면 "모든 참조를 막는" 규칙이 되어도 테스트가 통과한다.
+        JavaClasses ownServiceOnly = new ClassFileImporter().importPackages("com.dawnline.fulfillment.archunitsample");
+
+        HexagonalArchitectureRules.noCrossServiceDependency("fulfillment").check(ownServiceOnly);
+    }
+
+    @Test
+    void 규칙4_는_인바운드_어댑터_밖의_KafkaListener_를_잡는다() {
+        assertThatThrownBy(() ->
+                HexagonalArchitectureRules.kafkaListenersOnlyInInboundMessagingAdapter("order").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("ListeningRepository")
+                .hasMessageContaining("com.dawnline.order.adapter.in.messaging..");
+    }
+
+    @Test
     void 규칙5_는_adapter_에_붙은_Transactional_을_잡는다() {
         // 규칙 5 는 대상 패키지가 com.dawnline.<service>.application.. 이고, 표본은 어느 서비스에도
         // 속하지 않는다. that 절이 "@Transactional 이 붙은 모든 클래스" 라서 표본도 그대로 걸린다 —
@@ -122,10 +153,9 @@ class HexagonalArchitectureRulesTest {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
         assertThat(rules).hasSize(7);
-        // 표본에는 com.dawnline.<service> 클래스가 없으므로 규칙 3·4 는 대상이 0개다.
-        // (규칙 3·4 의 "잡아야 할 것을 잡는가" 는 Phase 1 의 첫 @KafkaListener 와 함께 추가한다.
-        //  규칙 5 는 바로 위 테스트가 음성 표본으로 확인한다.)
-        // allowEmptyShould(true) 덕분에 "대상 없음"이 실패가 되지 않는다.
+        // GOOD 표본에는 위반이 없으므로 전부 통과해야 한다. 규칙 3·4 는 이 표본에 대상이 0개이고,
+        // allowEmptyShould(true) 덕분에 "대상 없음" 이 실패가 되지 않는다.
+        // 그 둘의 탐지 능력은 위의 전용 테스트가 확인한다.
         rules.forEach(rule -> rule.check(GOOD));
     }
 

@@ -76,4 +76,30 @@ public abstract class OrderIntegrationTestBase {
     protected static String bootstrapServers() {
         return KAFKA.getBootstrapServers();
     }
+
+    /**
+     * 토픽을 미리 만든다. 브로커가 자동 생성을 꺼 두었기 때문이다 —
+     * 켜 두면 토픽 이름 오타가 테스트에서는 조용히 통과하고 운영에서만 터진다.
+     *
+     * <p>리스너가 붙기 <em>전에</em> 만들어야 한다. 그래서 호출하는 쪽은 정적 초기화 블록에서
+     * 부른다(스프링 컨텍스트가 만들어지기 전이다).
+     *
+     * @param names 만들 토픽 이름들
+     */
+    protected static void createTopics(String... names) {
+        try (org.apache.kafka.clients.admin.Admin admin = org.apache.kafka.clients.admin.Admin.create(
+                java.util.Map.of(org.apache.kafka.clients.admin.AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
+                        KAFKA.getBootstrapServers()))) {
+            admin.createTopics(java.util.Arrays.stream(names)
+                            .map(name -> new org.apache.kafka.clients.admin.NewTopic(name, 1, (short) 1))
+                            .toList())
+                    .all()
+                    .get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+            throw new IllegalStateException("테스트 토픽을 만들지 못했습니다: " + java.util.Arrays.toString(names), e);
+        }
+    }
 }
