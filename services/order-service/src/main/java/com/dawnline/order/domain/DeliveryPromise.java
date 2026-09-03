@@ -41,7 +41,12 @@ public final class DeliveryPromise {
     /** SAME_DAY 배송창 길이 — "컷오프 + 6시간 이내" (§2.2). */
     private static final int SAME_DAY_WINDOW_HOURS = 6;
 
-    private static final LocalTime DAWN_START = LocalTime.MIDNIGHT;
+    /**
+     * "2차 컷오프도 지났다" 를 나타내는 표식. {@link LocalTime} 으로는 날짜 넘김을 표현할 수 없어
+     * 실제 값이 아닌 자리표시자를 쓴다 — 23:59:59.999999999 는 어떤 컷오프도 아니다.
+     */
+    private static final LocalTime NEXT_DAY_MARKER = LocalTime.MAX;
+
     private static final LocalTime DAWN_END = LocalTime.of(7, 0);
     private static final LocalTime NEXT_DAY_START = LocalTime.of(8, 0);
     private static final LocalTime NEXT_DAY_END = LocalTime.of(22, 0);
@@ -61,12 +66,31 @@ public final class DeliveryPromise {
     }
 
     /**
-     * 이 티어로 이 시각에 접수하면 언제까지 배달하기로 약속하는가 (§2.2).
+     * 접수 시점에 정해지는 두 값 — 이 주문이 실릴 웨이브의 컷오프와 고객에게 한 약속.
+     *
+     * <p>둘을 한 record 로 묶는 이유는 <strong>같은 계산의 두 결과</strong>이기 때문이다. 따로
+     * 계산하는 메서드를 두면 티어가 늘거나 §2.2 표가 바뀔 때 한쪽만 고치는 일이 생기고,
+     * 그러면 약속한 창과 실제로 실릴 웨이브가 어긋난다.
+     *
+     * @param cutoffAt 이 주문이 실릴 웨이브의 컷오프 (§2.2). fulfillment-service 의 웨이브 키
+     *                 {@code (campId, tier, cutoffAt)} 가 이 값을 쓴다 (§5.2)
+     * @param window   고객에게 약속한 배송창
+     */
+    public record Promise(Instant cutoffAt, PromisedWindow window) {
+
+        public Promise {
+            Objects.requireNonNull(cutoffAt, "cutoffAt");
+            Objects.requireNonNull(window, "window");
+        }
+    }
+
+    /**
+     * 이 티어로 이 시각에 접수하면 어느 컷오프에 실리고 언제까지 배달하기로 약속하는가 (§2.2).
      *
      * @param tier     서비스 티어
      * @param placedAt 접수 시각
      */
-    public PromisedWindow promiseFor(ServiceTier tier, Instant placedAt) {
+    public Promise promiseFor(ServiceTier tier, Instant placedAt) {
         Objects.requireNonNull(tier, "tier");
         Objects.requireNonNull(placedAt, "placedAt");
 
@@ -74,41 +98,55 @@ public final class DeliveryPromise {
         LocalDate today = local.toLocalDate();
 
         return switch (tier) {
-            // 컷오프가 전일 24:00 이므로 오늘 접수한 것은 모두 내일 새벽이다.
-            case DAWN -> window(today.plusDays(1), DAWN_START, today.plusDays(1), DAWN_END, tier);
-            case NEXT_DAY -> window(today.plusDays(1), NEXT_DAY_START, today.plusDays(1), NEXT_DAY_END, tier);
-            case SAME_DAY -> sameDay(local.toLocalTime(), today, tier);
+            // DAWN·NEXT_DAY 의 컷오프는 "(전일) 24:00" — 즉 오늘이 끝나는 자정이다.
+            // 오늘 접수한 것은 시각과 무관하게 모두 내일 배송분에 들어간다.
+            case DAWN, NEXT_DAY -> promise(today.plusDays(1), LocalTime.MIDNIGHT, tier);
+            case SAME_DAY -> promise(today, sameDayCutoff(local.toLocalTime(), today), tier);
         };
     }
 
     /**
-     * 컷오프 두 개(10:00·14:00) 중 아직 지나지 않은 첫 번째가 창의 시작이다.
-     * 둘 다 지났으면 다음 날 1차 컷오프로 넘어간다 — 거절이 아니라 다음 웨이브다.
+     * 컷오프 두 개(10:00·14:00) 중 아직 지나지 않은 첫 번째. 둘 다 지났으면 다음 날 1차 컷오프로
+     * 넘어간다 — 거절이 아니라 다음 웨이브다.
+     *
+     * <p>날짜가 넘어가는 경우를 시각만으로는 표현할 수 없어, 넘어갈 때는 {@code 24:00} 에 해당하는
+     * 다음 날 10:00 을 {@link #promise} 에서 더한다.
      */
-    private PromisedWindow sameDay(LocalTime placedLocalTime, LocalDate today, ServiceTier tier) {
-        LocalDate startDate;
-        LocalTime startTime;
+    private LocalTime sameDayCutoff(LocalTime placedLocalTime, LocalDate today) {
         if (placedLocalTime.isBefore(SAME_DAY_FIRST_CUTOFF)) {
-            startDate = today;
-            startTime = SAME_DAY_FIRST_CUTOFF;
-        } else if (placedLocalTime.isBefore(SAME_DAY_SECOND_CUTOFF)) {
-            startDate = today;
-            startTime = SAME_DAY_SECOND_CUTOFF;
-        } else {
-            startDate = today.plusDays(1);
-            startTime = SAME_DAY_FIRST_CUTOFF;
+            return SAME_DAY_FIRST_CUTOFF;
         }
-        LocalTime endTime = startTime.plusHours(SAME_DAY_WINDOW_HOURS);
-        return window(startDate, startTime, startDate, endTime, tier);
+        if (placedLocalTime.isBefore(SAME_DAY_SECOND_CUTOFF)) {
+            return SAME_DAY_SECOND_CUTOFF;
+        }
+        return NEXT_DAY_MARKER;
     }
 
-    private PromisedWindow window(LocalDate startDate, LocalTime startTime,
-            LocalDate endDate, LocalTime endTime, ServiceTier tier) {
-        Instant start = startTime.equals(LocalTime.MIDNIGHT)
+    /**
+     * 컷오프 하나에서 약속창까지 만든다. 티어마다 창이 컷오프와 어떤 관계인지가 다르다 —
+     * SAME_DAY 는 컷오프에서 시작하고, NEXT_DAY 는 컷오프(자정) 뒤 08:00 에 시작한다.
+     */
+    private Promise promise(LocalDate cutoffDate, LocalTime cutoffTime, ServiceTier tier) {
+        LocalDate date = cutoffDate;
+        LocalTime time = cutoffTime;
+        if (time.equals(NEXT_DAY_MARKER)) {
+            // SAME_DAY 2차 컷오프까지 지났다 → 다음 날 1차 컷오프.
+            date = cutoffDate.plusDays(1);
+            time = SAME_DAY_FIRST_CUTOFF;
+        }
+        Instant cutoffAt = at(date, time);
+        PromisedWindow window = switch (tier) {
+            case DAWN -> PromisedWindow.of(cutoffAt, at(date, DAWN_END), tier);
+            case NEXT_DAY -> PromisedWindow.of(at(date, NEXT_DAY_START), at(date, NEXT_DAY_END), tier);
+            case SAME_DAY -> PromisedWindow.of(cutoffAt, at(date, time.plusHours(SAME_DAY_WINDOW_HOURS)), tier);
+        };
+        return new Promise(cutoffAt, window);
+    }
+
+    private Instant at(LocalDate date, LocalTime time) {
+        return time.equals(LocalTime.MIDNIGHT)
                 // 서머타임 시작으로 00:00 이 존재하지 않는 날이 있다. atStartOfDay 가 그 경우를 다룬다.
-                ? startDate.atStartOfDay(zone).toInstant()
-                : startDate.atTime(startTime).atZone(zone).toInstant();
-        Instant end = endDate.atTime(endTime).atZone(zone).toInstant();
-        return PromisedWindow.of(start, end, tier);
+                ? date.atStartOfDay(zone).toInstant()
+                : date.atTime(time).atZone(zone).toInstant();
     }
 }

@@ -4,6 +4,7 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.messaging.outbox.OutboxMessage;
 import com.dawnline.order.application.port.out.OrderEvents;
 import com.dawnline.order.domain.Order;
+import java.time.Instant;
 import java.util.Objects;
 
 /**
@@ -28,14 +29,15 @@ public class OutboxOrderEvents implements OrderEvents {
     }
 
     @Override
-    public void placed(Order order) {
+    public void placed(Order order, Instant cutoffAt) {
         Objects.requireNonNull(order, "order");
+        Objects.requireNonNull(cutoffAt, "cutoffAt");
         outbox.append(OutboxMessage.of(
                 OrderPlacedPayload.AGGREGATE_TYPE,
                 order.id(),
                 OrderPlacedPayload.EVENT_TYPE,
                 OrderPlacedPayload.SCHEMA_VERSION,
                 order.partitionKey(),
-                OrderPlacedPayload.of(order)));
+                OrderPlacedPayload.of(order, cutoffAt)));
     }
 }

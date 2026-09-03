@@ -25,6 +25,8 @@ import java.util.UUID;
  * @param parcel         소포 제원
  * @param items          품목
  * @param placedAt       접수 시각
+ * @param cutoffAt       이 주문이 실릴 웨이브의 컷오프 (§2.2). fulfillment-service 는 이 값을 웨이브 키
+ *                       {@code (campId, tier, cutoffAt)} 로 쓰고 <strong>다시 계산하지 않는다</strong> (§5.2)
  */
 public record OrderPlacedPayload(
         UUID orderId,
@@ -34,7 +36,8 @@ public record OrderPlacedPayload(
         Window promisedWindow,
         Parcel parcel,
         List<Item> items,
-        Instant placedAt) {
+        Instant placedAt,
+        Instant cutoffAt) {
 
     /** {@code eventType} (§4.1). */
     public static final String EVENT_TYPE = "order.placed";
@@ -48,9 +51,10 @@ public record OrderPlacedPayload(
     /**
      * 애그리거트를 계약 모양으로 옮긴다.
      *
-     * @param order 접수된 주문
+     * @param order    접수된 주문
+     * @param cutoffAt 이 주문이 실릴 웨이브의 컷오프
      */
-    public static OrderPlacedPayload of(Order order) {
+    public static OrderPlacedPayload of(Order order, Instant cutoffAt) {
         return new OrderPlacedPayload(
                 order.id(),
                 order.customerId(),
@@ -62,7 +66,8 @@ public record OrderPlacedPayload(
                 new Parcel(order.parcel().weightG(), order.parcel().volumeCm3(),
                         order.parcel().requiresCold(), order.parcel().hazmat()),
                 order.items().stream().map(Item::of).toList(),
-                order.placedAt());
+                order.placedAt(),
+                cutoffAt);
     }
 
     /**

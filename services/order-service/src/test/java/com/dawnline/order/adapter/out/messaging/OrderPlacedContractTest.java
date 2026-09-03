@@ -50,9 +50,12 @@ class OrderPlacedContractTest {
                 PLACED_AT);
     }
 
+    /** §2.2 DAWN: 2026-09-03 09:00 KST 접수 → 컷오프 2026-09-04 00:00 KST. */
+    private static final Instant CUTOFF_AT = Instant.parse("2026-09-03T15:00:00Z");
+
     private static OutboxMessage published(Order order) {
         OutboxAppender appender = mock(OutboxAppender.class);
-        new OutboxOrderEvents(appender).placed(order);
+        new OutboxOrderEvents(appender).placed(order, CUTOFF_AT);
 
         ArgumentCaptor<OutboxMessage> message = ArgumentCaptor.forClass(OutboxMessage.class);
         verify(appender).append(message.capture());
@@ -119,6 +122,17 @@ class OrderPlacedContractTest {
                 .isEqualTo(order.promisedWindow().start().toString());
         assertThat(payload.get("items")).hasSize(2);
         assertThat(payload.get("items").get(1).get("sku").asString()).isEqualTo("SKU-2043");
+        assertThat(payload.get("cutoffAt").asString()).isEqualTo(CUTOFF_AT.toString());
+    }
+
+    @Test
+    void 컷오프를_반드시_싣는다() {
+        // fulfillment 의 웨이브 키가 이 값을 쓴다(§5.2). 빠지면 그쪽이 다시 계산하게 되고,
+        // 그 순간 §2.2 표가 두 서비스에 각각 생긴다.
+        JsonNode payload = CONTRACTS.json().toTree(published(order()).payload());
+
+        assertThat(fieldNames(payload)).contains("cutoffAt");
+        assertThat(payload.get("cutoffAt").isNull()).isFalse();
     }
 
     @Test

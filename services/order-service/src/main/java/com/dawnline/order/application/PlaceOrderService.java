@@ -18,7 +18,6 @@ import com.dawnline.order.application.port.out.IdempotencyRecords;
 import com.dawnline.order.domain.DeliveryAddress;
 import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.Order;
-import com.dawnline.order.domain.PromisedWindow;
 import com.dawnline.order.domain.ServiceTier;
 import com.dawnline.order.domain.TierEligibility;
 import java.time.Clock;
@@ -113,11 +112,12 @@ public class PlaceOrderService implements PlaceOrderUseCase {
                     .orElseThrow(PlaceOrderService::inFlight);
         }
 
-        Order order = build(command);
+        Placement placement = build(command);
+        Order order = placement.order();
         IdempotencyClaim claim = new IdempotencyClaim(key, fingerprint,
                 order.placedAt(), order.placedAt().plus(recordRetention));
         try {
-            OrderAccepted accepted = transaction.commit(order, claim);
+            OrderAccepted accepted = transaction.commit(order, placement.cutoffAt(), claim);
             cache.markDone(key);
             log.info("주문을 접수했습니다. orderId={}, tier={}, items={}",
                     accepted.orderId(), accepted.serviceTier(), order.items().size());
@@ -148,9 +148,18 @@ public class PlaceOrderService implements PlaceOrderUseCase {
     }
 
     /**
+     * 접수 시점에 정해지는 것들. 애그리거트에 담기는 것과 이벤트에만 실리는 것이 함께 나온다.
+     *
+     * @param order    저장될 주문
+     * @param cutoffAt 이 주문이 실릴 웨이브의 컷오프. {@code orders} 에는 저장하지 않는다
+     */
+    private record Placement(Order order, Instant cutoffAt) {
+    }
+
+    /**
      * 주소를 좌표로 바꾸고 티어를 확인한 뒤 애그리거트를 만든다. 전부 순수 계산이라 트랜잭션 밖이다.
      */
-    private Order build(PlaceOrderCommand command) {
+    private Placement build(PlaceOrderCommand command) {
         Instant now = clock.instant();
         ServiceTier tier = command.serviceTier();
 
@@ -169,9 +178,10 @@ public class PlaceOrderService implements PlaceOrderUseCase {
                             "eligibleTiers", eligible.stream().map(Enum::name).collect(Collectors.joining(","))));
         }
 
-        PromisedWindow window = promises.promiseFor(tier, now);
-        return Order.place(ids.newUuid(), command.customerId(), tier, address, window,
+        DeliveryPromise.Promise promise = promises.promiseFor(tier, now);
+        Order order = Order.place(ids.newUuid(), command.customerId(), tier, address, promise.window(),
                 command.parcel(), command.items(), now);
+        return new Placement(order, promise.cutoffAt());
     }
 
     private static ConflictException inFlight() {

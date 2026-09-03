@@ -1,6 +1,7 @@
 package com.dawnline.order.application.port.out;
 
 import com.dawnline.order.domain.Order;
+import java.time.Instant;
 
 /**
  * 주문 이벤트 발행 포트 (DESIGN.md §4.3, CLAUDE.md 불변규칙 1).
@@ -17,7 +18,14 @@ public interface OrderEvents {
     /**
      * {@code order.placed} 를 outbox 에 기록한다. <strong>주문 트랜잭션 안에서</strong> 호출한다.
      *
-     * @param order 접수된 주문
+     * <p>{@code cutoffAt} 이 애그리거트가 아니라 인자로 오는 이유: 이 값은 {@code orders} 에 저장하지
+     * 않는다. §5.1 DDL 에 없는 컬럼이고, 접수 이후 order-service 가 그 값을 쓰는 곳이 없다.
+     * 필요한 쪽은 fulfillment-service 이고(§5.2 웨이브 키), 그쪽으로 가는 통로가 이 이벤트다.
+     * 계산은 {@code DeliveryPromise} 한 곳에서만 한다 — 같은 계산이 두 서비스에 있으면 §2.2 표를
+     * 한쪽만 고치는 날 약속과 웨이브가 말없이 어긋난다.
+     *
+     * @param order    접수된 주문
+     * @param cutoffAt 이 주문이 실릴 웨이브의 컷오프 (§2.2)
      */
-    void placed(Order order);
+    void placed(Order order, Instant cutoffAt);
 }

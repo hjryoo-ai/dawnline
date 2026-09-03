@@ -12,7 +12,8 @@
     "promisedWindow",
     "parcel",
     "items",
-    "placedAt"
+    "placedAt",
+    "cutoffAt"
   ],
   "additionalProperties": true,
   "properties": {
@@ -48,7 +49,12 @@
     "placedAt": {
       "type": "string",
       "format": "date-time",
-      "description": "주문이 접수된 시각. 웨이브 편입 판정(§5.2)의 기준 시각이다."
+      "description": "주문이 접수된 시각."
+    },
+    "cutoffAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "이 주문이 실릴 웨이브의 컷오프 (§2.2). order-service 가 (티어, 접수 시각)으로 계산해 싣는다. fulfillment-service 는 웨이브 키 (campId, tier, cutoffAt)에 이 값을 그대로 쓰고 다시 계산하지 않는다 — 같은 스케줄 표를 두 곳에서 관리하면 표를 한쪽만 고치는 날 약속한 배송창과 실제로 실린 웨이브가 말없이 어긋난다 (§5.2). 소비 시각으로 웨이브를 고르는 것도 금지다: 그 값은 outbox 지연·재처리에 따라 흔들리므로 같은 주문이 재처리 때 다른 웨이브에 들어간다."
     }
   },
   "$defs": {

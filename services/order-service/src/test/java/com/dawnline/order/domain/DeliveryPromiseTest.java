@@ -26,7 +26,7 @@ class DeliveryPromiseTest {
 
     @Test
     void DAWN_은_익일_00시부터_07시까지다() {
-        PromisedWindow window = promises.promiseFor(ServiceTier.DAWN, MORNING);
+        PromisedWindow window = promises.promiseFor(ServiceTier.DAWN, MORNING).window();
 
         assertThat(window.start()).isEqualTo(Instant.parse("2026-09-03T15:00:00Z"));
         assertThat(window.end()).isEqualTo(Instant.parse("2026-09-03T22:00:00Z"));
@@ -34,7 +34,7 @@ class DeliveryPromiseTest {
 
     @Test
     void NEXT_DAY_는_익일_08시부터_22시까지다() {
-        PromisedWindow window = promises.promiseFor(ServiceTier.NEXT_DAY, MORNING);
+        PromisedWindow window = promises.promiseFor(ServiceTier.NEXT_DAY, MORNING).window();
 
         assertThat(window.start()).isEqualTo(Instant.parse("2026-09-03T23:00:00Z"));
         assertThat(window.end()).isEqualTo(Instant.parse("2026-09-04T13:00:00Z"));
@@ -42,7 +42,7 @@ class DeliveryPromiseTest {
 
     @Test
     void SAME_DAY_는_10시_이전이면_당일_10시부터_6시간이다() {
-        PromisedWindow window = promises.promiseFor(ServiceTier.SAME_DAY, MORNING);
+        PromisedWindow window = promises.promiseFor(ServiceTier.SAME_DAY, MORNING).window();
 
         assertThat(window.start()).isEqualTo(Instant.parse("2026-09-03T01:00:00Z"));
         assertThat(window.end()).isEqualTo(Instant.parse("2026-09-03T07:00:00Z"));
@@ -53,7 +53,7 @@ class DeliveryPromiseTest {
         // 컷오프는 "그 시각까지" 다. 10:00:00 에 들어온 주문은 10:00 웨이브에 못 들어간다.
         Instant tenSharp = Instant.parse("2026-09-03T01:00:00Z");
 
-        PromisedWindow window = promises.promiseFor(ServiceTier.SAME_DAY, tenSharp);
+        PromisedWindow window = promises.promiseFor(ServiceTier.SAME_DAY, tenSharp).window();
 
         assertThat(window.start()).isEqualTo(Instant.parse("2026-09-03T05:00:00Z"));  // 14:00 KST
     }
@@ -62,7 +62,7 @@ class DeliveryPromiseTest {
     void SAME_DAY_는_14시_이후면_익일_10시로_넘어간다() {
         Instant afternoon = Instant.parse("2026-09-03T05:00:00Z");   // 14:00 KST
 
-        PromisedWindow window = promises.promiseFor(ServiceTier.SAME_DAY, afternoon);
+        PromisedWindow window = promises.promiseFor(ServiceTier.SAME_DAY, afternoon).window();
 
         assertThat(window.start()).isEqualTo(Instant.parse("2026-09-04T01:00:00Z"));
         assertThat(window.end()).isEqualTo(Instant.parse("2026-09-04T07:00:00Z"));
@@ -74,8 +74,8 @@ class DeliveryPromiseTest {
         Instant justBeforeMidnight = Instant.parse("2026-09-03T14:59:00Z");  // 23:59 KST
         Instant justAfterMidnight = Instant.parse("2026-09-03T15:30:00Z");   // 익일 00:30 KST
 
-        Instant before = promises.promiseFor(ServiceTier.DAWN, justBeforeMidnight).start();
-        Instant after = promises.promiseFor(ServiceTier.DAWN, justAfterMidnight).start();
+        Instant before = promises.promiseFor(ServiceTier.DAWN, justBeforeMidnight).window().start();
+        Instant after = promises.promiseFor(ServiceTier.DAWN, justAfterMidnight).window().start();
 
         assertThat(before).isEqualTo(Instant.parse("2026-09-03T15:00:00Z"));
         assertThat(after).isEqualTo(Instant.parse("2026-09-04T15:00:00Z"));
@@ -86,10 +86,53 @@ class DeliveryPromiseTest {
     void 모든_티어의_창_길이가_티어_상한과_같다() {
         // PromisedWindow.of 가 상한을 검사하므로, 계산이 상한을 넘으면 여기서 예외가 난다.
         for (ServiceTier tier : ServiceTier.values()) {
-            PromisedWindow window = promises.promiseFor(tier, MORNING);
+            PromisedWindow window = promises.promiseFor(tier, MORNING).window();
             assertThat(window.window().duration())
                     .as("%s", tier)
                     .isEqualTo(tier.maxWindowLength());
+        }
+    }
+
+    @Test
+    void DAWN_과_NEXT_DAY_의_컷오프는_오늘이_끝나는_자정이다() {
+        // §2.2: DAWN "전일 24:00", NEXT_DAY "24:00" — 둘 다 같은 순간을 가리킨다.
+        Instant midnight = Instant.parse("2026-09-03T15:00:00Z");   // 2026-09-04 00:00 KST
+
+        assertThat(promises.promiseFor(ServiceTier.DAWN, MORNING).cutoffAt()).isEqualTo(midnight);
+        assertThat(promises.promiseFor(ServiceTier.NEXT_DAY, MORNING).cutoffAt()).isEqualTo(midnight);
+    }
+
+    @Test
+    void DAWN_은_컷오프에서_바로_배송이_시작되고_NEXT_DAY_는_08시부터다() {
+        // 컷오프와 창의 관계가 티어마다 다르다는 것이 cutoffAt 을 따로 싣는 이유다.
+        DeliveryPromise.Promise dawn = promises.promiseFor(ServiceTier.DAWN, MORNING);
+        DeliveryPromise.Promise nextDay = promises.promiseFor(ServiceTier.NEXT_DAY, MORNING);
+
+        assertThat(dawn.window().start()).isEqualTo(dawn.cutoffAt());
+        assertThat(nextDay.window().start()).isEqualTo(nextDay.cutoffAt().plus(Duration.ofHours(8)));
+    }
+
+    @Test
+    void SAME_DAY_의_컷오프는_창의_시작과_같다() {
+        for (Instant placedAt : new Instant[] {
+                MORNING,                                     // 09:00 KST → 10:00 컷오프
+                Instant.parse("2026-09-03T02:00:00Z"),       // 11:00 KST → 14:00 컷오프
+                Instant.parse("2026-09-03T06:00:00Z")}) {    // 15:00 KST → 익일 10:00 컷오프
+            DeliveryPromise.Promise promise = promises.promiseFor(ServiceTier.SAME_DAY, placedAt);
+            assertThat(promise.cutoffAt()).as("%s", placedAt).isEqualTo(promise.window().start());
+        }
+    }
+
+    @Test
+    void 컷오프는_항상_접수_시각보다_뒤다() {
+        // 이미 지난 컷오프를 실어 보내면 fulfillment 가 그 웨이브를 찾지 못하거나 즉시 마감된 웨이브에 넣는다.
+        for (ServiceTier tier : ServiceTier.values()) {
+            for (int hour = 0; hour < 24; hour++) {
+                Instant placedAt = Instant.parse("2026-09-03T00:00:00Z").plus(Duration.ofHours(hour));
+                assertThat(promises.promiseFor(tier, placedAt).cutoffAt())
+                        .as("%s %s", tier, placedAt)
+                        .isAfter(placedAt);
+            }
         }
     }
 
@@ -104,9 +147,9 @@ class DeliveryPromiseTest {
         DeliveryPromise utc = new DeliveryPromise(ZoneId.of("UTC"));
 
         // 같은 순간이라도 지역 날짜가 다르면 "익일" 이 달라진다.
-        assertThat(utc.promiseFor(ServiceTier.DAWN, MORNING).start())
+        assertThat(utc.promiseFor(ServiceTier.DAWN, MORNING).window().start())
                 .isEqualTo(Instant.parse("2026-09-04T00:00:00Z"))
-                .isNotEqualTo(promises.promiseFor(ServiceTier.DAWN, MORNING).start());
+                .isNotEqualTo(promises.promiseFor(ServiceTier.DAWN, MORNING).window().start());
     }
 
     @Test

@@ -139,6 +139,8 @@ class PlaceOrderIT extends OrderIntegrationTestBase {
         // §4.5 — 같은 주문의 이벤트는 같은 파티션으로.
         assertThat(row[4]).isEqualTo(result.order().orderId().toString());
         assertThat((String) row[5]).contains("\"geohash7\"").contains("SKU-2043");
+        // §5.2 웨이브 키가 쓰는 값이다. 빠지면 fulfillment 가 §2.2 표를 다시 들고 계산하게 된다.
+        assertThat((String) row[5]).contains("\"cutoffAt\"");
         assertThat(row[6]).as("릴레이가 아직 보내지 않았어야 한다").isNull();
     }
 

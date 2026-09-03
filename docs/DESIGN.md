@@ -228,9 +228,14 @@ com.dawnline.<service>
   "promisedWindow": { "start": "2026-08-30T00:00:00+09:00", "end": "2026-08-30T07:00:00+09:00" },
   "parcel": { "weightG": 1200, "volumeCm3": 8000, "requiresCold": false, "hazmat": false },
   "items": [ { "sku": "SKU-1001", "qty": 2 } ],
-  "placedAt": "…"
+  "placedAt": "…",
+  "cutoffAt": "2026-08-30T00:00:00+09:00"
 }
 ```
+`cutoffAt` 은 order-service 가 §2.2 표를 `(티어, 접수 시각)` 에 적용해 계산한 값이다.
+fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 **그대로 쓰고 다시 계산하지
+않는다** (§5.2). {@code orders} 테이블에는 저장하지 않는다 — 접수 이후 order-service 가 쓰는 곳이
+없고, 필요한 쪽으로 가는 통로가 이 이벤트다.
 
 **fulfillment.planned.v1** — order.placed 스냅샷 + `fcId, campId, zoneId, waveId, waveCutoffAt`
 
