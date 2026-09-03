@@ -6,8 +6,11 @@ import java.time.Duration;
  * 서비스 티어 (DESIGN.md §2.2).
  *
  * <p>티어는 <strong>컷오프와 약속 배송창</strong>을 결정한다. 그 계산 자체는 여기 두지 않는다 —
- * 컷오프 시각·웨이브 편성은 fulfillment-service 의 책임이고(§5.2), order-service 는 접수 시점에
- * "이 티어로 받을 수 있는가"({@link TierEligibility})와 "약속창이 티어 규칙에 맞는가" 만 본다.
+ * 약속창은 {@link DeliveryPromise} 가 §2.2 표로 만들고({@code PromisedWindow}), 이 티어로 받을 수
+ * 있는지는 {@link TierEligibility} 가 본다.
+ *
+ * <p>어느 웨이브에 실릴지는 여전히 fulfillment-service 의 책임이다(§5.2). order-service 가 정하는
+ * 것은 <em>고객에게 한 약속</em>이고, 그 약속을 지킬 웨이브를 고르는 것은 다른 서비스의 일이다.
  *
  * <p>{@code maxWindowLength} 는 그 검증에 쓰는 상한이다. §2.2 표의 배송창을 길이로 옮긴 값이며,
  * 이보다 긴 약속창은 접수 단계에서 거른다.

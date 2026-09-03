@@ -21,7 +21,21 @@ dependencies {
     // libs/common 의 공유 ArchUnit 규칙 (DESIGN.md §13)
     testImplementation(testFixtures(project(":libs:common")))
 
+    // libs/messaging 의 이벤트 계약 검증 픽스처 (CLAUDE.md 불변규칙 8)
+    testImplementation(testFixtures(project(":libs:messaging")))
+
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.testcontainers.redis)
+}
+
+// -----------------------------------------------------------------------------
+// 계약 파일을 test 태스크의 입력으로 선언한다 (CLAUDE.md 불변규칙 8).
+// 이유는 libs/messaging/build.gradle.kts 의 같은 블록과 같다 — contracts/ 는 이 모듈의 소스도
+// 리소스도 아니라서, 스키마만 고친 빌드는 Gradle 이 보기에 "입력이 안 바뀐" 빌드가 되고
+// OrderPlacedContractTest 가 UP-TO-DATE 로 건너뛴다.
+tasks.named<Test>("test") {
+    inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
+            .withPropertyName("eventContracts")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
