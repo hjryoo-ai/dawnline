@@ -393,15 +393,20 @@ CREATE TABLE order_items (
   PRIMARY KEY (order_id, line_no)
 );
 
+-- 행이 있다는 것은 곧 "그 요청은 끝났고 응답은 이것" 이다. 처리 중 상태는 여기 없다 —
+-- 그 표시는 30초 뒤 스스로 풀리는 Redis 키가 맡는다 (ADR-018). 그래서 status 컬럼이 없고,
+-- 응답 두 컬럼은 NOT NULL 이다.
 CREATE TABLE idempotency_keys (
   idem_key      VARCHAR(64) PRIMARY KEY,
-  request_hash  CHAR(64) NOT NULL,                   -- SHA-256(body)
-  status        VARCHAR(12) NOT NULL,                -- IN_PROGRESS | DONE
-  response_code SMALLINT,
-  response_body JSONB,
+  request_hash  CHAR(64) NOT NULL,                   -- SHA-256(요청 표준형)
+  response_code SMALLINT NOT NULL,
+  response_body JSONB NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL,
-  expires_at    TIMESTAMPTZ NOT NULL
+  expires_at    TIMESTAMPTZ NOT NULL                 -- created_at + 7일 (ADR-019)
 );
+-- 보존 7일 정리 배치용. PK 는 idem_key 라 expires_at 범위 삭제를 돕지 못한다.
+-- (불변규칙 11 — EXPLAIN 비교는 docs/benchmarks/phase1-idempotency-cleanup-index.md)
+CREATE INDEX ix_idempotency_keys_cleanup ON idempotency_keys (expires_at);
 
 -- 모든 서비스 공통 (libs/messaging 가 Flyway 스크립트 제공)
 CREATE TABLE outbox_events (
@@ -457,22 +462,31 @@ order-service 는 고객에게 한 약속만 정한다. 두 값이 어긋나면(
 0. 요청의 **표준형**에서 SHA-256 지문을 만든다. 같은 키에 다른 요청이 왔는지 판정하는 기준이며,
    원문 바이트가 아니라 표준형을 쓰는 이유는 공백·필드 순서만 다른 재전송이 422 가 되면 안 되기 때문이다.
 1. DB `idempotency_keys` 를 PK 로 한 번 읽는다.
-   - 지문이 다르면 **422** (같은 키, 다른 요청)
-   - `DONE` 이면 저장된 응답을 **200** 으로 재생
-   - `IN_PROGRESS` 면 **409**
+   - 행이 있고 지문이 다르면 **422** (같은 키, 다른 요청)
+   - 행이 있고 지문이 같으면 저장된 응답을 **200** 으로 재생
 2. 행이 없으면 Redis `SET idem:order:{key} IN_PROGRESS NX PX 30000`.
    - 획득 → 3
    - 이미 있음 → **409** (다른 요청이 처리 중이고 아직 커밋되지 않았다)
    - Redis 불가 → 잠금 없이 3 으로 간다. 동시성은 `idempotency_keys` PK 가 커밋 시점에 막는다
      (성능 저하, 정확성 유지 — 불변규칙 7)
-3. 트랜잭션 하나: orders + order_items + outbox(`order.placed`) + idempotency_keys(`DONE`) 업서트.
-   업서트가 0행이면 그 사이 다른 요청이 끝냈다는 뜻이므로 롤백하고 **409**.
+3. 트랜잭션 하나: orders + order_items + outbox(`order.placed`) + idempotency_keys
+   `INSERT … ON CONFLICT (idem_key) DO NOTHING`.
+   0행이면 그 사이 다른 요청이 끝냈다는 뜻이므로 롤백하고 **409**.
+   `DO NOTHING` 은 충돌 상대가 아직 커밋되지 않았으면 **그 트랜잭션이 끝날 때까지 기다렸다가**
+   0행을 돌려준다(측정: `docs/benchmarks/phase1-idempotency-cleanup-index.md` 와 같은 방식으로
+   두 연결로 확인, 1,972 ms 대기 후 `INSERT 0 0`). 그래서 Redis 가 없어도 같은 키의 동시 요청 중
+   하나만 성공한다.
 4. 커밋 후 Redis 키를 `DONE` 으로 갱신(TTL 24h). 실패해도 무시한다 — 다음 요청은 1번에서 DB 로 걸린다.
    3번이 실패했다면 Redis 키를 지운다. 안 지우면 30초 동안 재시도가 409 가 된다.
 
-DB `status` 의 `IN_PROGRESS` 는 **읽기 경로에만** 있다. order-service 는 그 값을 쓰지 않는다 —
-프로세스가 3번 도중 죽으면 그 행이 남아 그 멱등 키로는 다시 주문할 수 없게 된다. in-flight 표시는
-30초 뒤 스스로 사라지는 Redis 키가 맡는다 (ADR-018).
+**보존은 7일이고, 그것은 클라이언트와의 계약이다** (ADR-019).
+`expires_at = created_at + 7일` 이며 만료된 행은 정리 배치가 지운다. 즉 **7일이 지난 멱등 키로
+같은 요청을 보내면 그것은 재생이 아니라 새 주문이 된다.** Redis 키의 TTL(24h)은 그대로다 —
+그 24시간은 DB 를 읽지 않고 중복을 걸러 내는 구간이고, 이후 7일까지는 DB 가 답한다.
+
+정리 방향이 `processed_events`(보존 14일, §4.4)와 **반대**라는 점이 7일의 근거다. 저쪽은 지워도
+같은 이벤트가 다시 오지 않으면 그만이지만, 이쪽은 지운 뒤 같은 키가 오면 **새 주문이 만들어진다**.
+잘못 지웠을 때의 대가가 크므로 재시도 창(수 분)보다 훨씬 큰 여유를 둔다.
 
 **Redis**: `idem:order:*`, 레이트 리밋 `rl:customer:{id}` (토큰 버킷 Lua, 기본 60 req/min).
 
@@ -497,6 +511,53 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 - 웨이브는 (campId, tier, cutoffAt)당 1개. 주문 편입 시 없으면 생성(`INSERT … ON CONFLICT DO NOTHING` 후 재조회).
 - 컷오프 스케줄러: 매 30초 `cutoff_at <= now() AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
 - 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가(낙관적 락으로 경합 차단).
+
+**컷오프는 order-service 가 정하고 fulfillment 는 받아 쓴다 (Phase 2 선결, ADR-020 예정)**
+
+웨이브 키는 `(campId, tier, cutoffAt)` 인데, 그 `cutoffAt` 을 여기서 다시 계산하지 않는다.
+`order.placed` 가 싣고 온 값을 그대로 쓴다.
+
+이유는 order-service 가 접수 시점에 **이미 그 값을 썼기 때문**이다. 고객에게 약속한 배송창은
+§2.2 표를 `(티어, 접수 시각)` 에 적용한 결과이고, 그 계산의 중간 산물이 컷오프다. 두 서비스가
+같은 스케줄 표를 각자 들고 각자 계산하면, 표를 한쪽만 고치는 날 **약속한 창과 실제로 실린 웨이브가
+말없이 어긋난다.** 계산은 한 곳에서 하고, 나머지는 결과를 받는다.
+
+`fulfillment.planned` 소비 시각으로 웨이브를 고르는 일은 없어야 한다. 그 값은 outbox 지연·소비
+지연·재처리에 따라 흔들리며, 흔들리는 값으로 웨이브를 고르면 같은 주문이 재처리 때 다른 웨이브에
+들어간다(멱등 소비자가 막아 주는 것은 <em>중복</em>이지 <em>다른 결과</em>가 아니다).
+
+**약속을 깨야 할 때는 말없이 깨지 않는다 (Phase 2 선결, ADR-020 예정)**
+
+위 규칙에서 새 경합이 생긴다. 09:59:59에 접수돼 10:00 컷오프 창을 약속받은 주문이 있는데,
+outbox 릴레이 폴링(100ms)과 소비 지연을 거쳐 fulfillment 에 10:00:01에 도착한다고 하자.
+현재 규칙("컷오프 이후 도착은 다음 웨이브, `CLOSING/CLOSED` 편입 불가")대로면 그 주문은 다음
+웨이브로 밀리고, **고객은 이미 10:00–16:00을 약속받았다.** 정상 지연 하나가 약속을 조용히 깬다.
+
+둘로 나눠 처리한다.
+
+1. **정상 지연은 흡수한다.** 웨이브 마감은 `cutoffAt` 이 아니라 `cutoffAt + grace` 에 실행한다.
+   기본 90초, 설정값. 이 값은 "outbox 지연 + 소비 지연" 의 상한을 잡은 것이고, §9.1 의
+   outbox 지연 게이지가 그 상한을 넘기 시작하면 알림이 먼저 울린다. grace 동안 도착한 주문은
+   약속받은 그 웨이브에 그대로 들어간다.
+2. **흡수하지 못하면 개정 사실을 되돌려 알린다.** grace 를 넘겨 도착해 이미 `CLOSED` 인 웨이브의
+   `cutoffAt` 을 가진 주문은 다음 웨이브에 넣되, `fulfillment.planned` 에 **개정된**
+   `promisedWindow` 와 `promiseRevised: true` 를 실어 보낸다(additive, §4.7). order-service 는
+   그것을 받아 자기 `promised_start/end` 를 갱신한다 — 그러려면 애그리거트에 약속창을 바꾸는
+   메서드가 필요하다(현재 `Order.promisedWindow` 는 불변이다. 불변규칙 6에 따라 세터가 아니라
+   `revisePromise(window, at)` 같은 메서드로 연다).
+
+**왜 이 문단이 지금 여기 있는가**
+
+이것은 웨이브 구현의 세부가 아니라 **서비스 경계를 가로지르는 약속의 소유권** 문제다.
+약속은 상류(order-service)가 하고, 그 약속을 지킬 수 있는지는 하류(fulfillment-service)가 안다.
+하류가 지키지 못하게 됐을 때 선택지는 셋뿐이다 — 조용히 깬다(고객이 나중에 알게 된다),
+접수를 거절한다(이미 201을 준 뒤라 불가능하다), **개정 사실을 상류로 되돌려 알린다.**
+셋째만이 정직하고, 그래서 `promiseRevised` 가 필요하다. 정시율(§8.1)도 개정된 창을 기준으로
+재는 것이 아니라 **원래 약속과 개정 횟수를 함께** 봐야 의미가 있다.
+
+Phase 2 에서 구현하며 ADR 로 확정한다. 여기 적어 두는 이유는, 이 결정이 Phase 1의 "약속창을
+접수 시점에 계산한다" 에서 곧바로 따라 나오기 때문이다 — 그때 정하지 않으면 Phase 2 에서
+"이미 나간 약속" 을 마주하고 급하게 정하게 된다.
 
 **테이블(핵심)**
 
@@ -1101,6 +1162,8 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 016 | 레디니스에서 Kafka 브로커 연결 제외 | 코드에 Kafka 프로브 추가(§8.2 완충 설계 붕괴), 기동 시 1회 검사(기동 순서 의존성) | [ADR-016](adr/ADR-016-readiness-excludes-kafka.md) |
 | 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수(`PLANNED → DELIVERED` 추가 + 진행 단계 비교) | 백오프 재시도에 맡김(도착 상한 없음 → 정상 배송이 DLQ), `delivery.status` 키를 orderId 로 변경(다른 소비자의 라우트 단위 순서가 깨짐), 모든 전이 허용(불변규칙 6 포기) | [ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
 | 018 | 멱등 잠금은 Redis 키(PX 30000)가 잡고 DB `idempotency_keys` 에는 `DONE` 만 기록 | DB 에 `IN_PROGRESS` 선커밋(프로세스 사망 시 그 멱등 키가 영구히 409), 짧은 `expires_at` 으로 자가 만료(정리 배치가 또 필요), Redis 없이 PK 충돌만(중복 요청이 주문 INSERT 까지 하고 롤백) | [ADR-018](adr/ADR-018-idempotency-lock-in-redis-record-in-db.md) |
+| 019 | 멱등 기록 보존 7일 + `status` 컬럼 제거 + `ON CONFLICT DO NOTHING` | 무한 보존(테이블 무제한 증가), 24h(Redis TTL 과 같아 DB 경로의 의미 절반 상실), 30일(DLQ 숫자를 빌려 옴) | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
+| 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨) | — (Phase 2 예정) |
 
 013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다.
 
