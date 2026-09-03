@@ -190,7 +190,7 @@ com.dawnline.<service>
 |---|---|---|---|---|
 | dawnline.order.placed.v1 | orderId | order | fulfillment, ops | 주문 접수 완료 |
 | dawnline.order.cancelled.v1 | orderId | order | fulfillment, dispatch, ops | 취소 (디스패치 전에만 허용) |
-| dawnline.fulfillment.planned.v1 | orderId | fulfillment | dispatch, ops | FC·캠프·권역·웨이브 결정 |
+| dawnline.fulfillment.planned.v1 | orderId | fulfillment | **order**, dispatch, ops | FC·캠프·권역·웨이브 결정 |
 | dawnline.wave.closed.v1 | campId | fulfillment | dispatch, ops | 컷오프 도달, 계획 시작 신호 |
 | dawnline.route.assigned.v1 | routeId | dispatch | tracking, ops | 라우트 확정 (stops 포함) |
 | dawnline.order.dispatched.v1 | orderId | dispatch | order, ops | 주문이 라우트에 배정됨 |
@@ -339,12 +339,35 @@ API 버전은 URL 세그먼트 `v1` 기본. Spring Framework 7의 API Versioning
 
 **상태 머신**
 
+진행 축:  PLACED(0) ──▶ PLANNED(1) ──▶ DISPATCHED(2) ──▶ DELIVERED·FAILED(3)      CANCELLED(축 밖)
+
 ```
-PLACED ──(fulfillment.planned)──▶ PLANNED ──(order.dispatched)──▶ DISPATCHED ──(delivery COMPLETED)──▶ DELIVERED
-  │                                  │  │                              └──(delivery FAILED)──▶ FAILED
-  │                                  │  └──(delivery COMPLETED/FAILED, order.dispatched 보다 먼저 도착)──┤
-  └──────── cancel ──────────────────┴──▶ CANCELLED     (DISPATCHED 이후 취소 불가 → 409)
+PLACED ─(fulfillment.planned)─▶ PLANNED ─(order.dispatched)─▶ DISPATCHED ─(delivery COMPLETED)─▶ DELIVERED
+                                                                         └(delivery FAILED)───▶ FAILED
+
+건너뜀 (앞으로 가는 전이는 전부 허용):
+  PLACED  ─(order.dispatched 가 먼저)──────────────────────────────────────────────────▶ DISPATCHED
+  PLACED  ─(delivery COMPLETED/FAILED 가 먼저)────────────────────────────────────────▶ DELIVERED/FAILED
+  PLANNED ─(delivery COMPLETED/FAILED 가 먼저)────────────────────────────────────────▶ DELIVERED/FAILED
+
+취소 (이벤트가 아니라 명령):
+  PLACED·PLANNED ─ cancel ─▶ CANCELLED                   (DISPATCHED 이후 취소 불가 → 409)
+
+역행 (예: DELIVERED 인데 order.dispatched 도착):
+  전이하지 않고 stale 로 세고 버린다 — dawnline_event_stale_total
 ```
+
+**건너뜀은 정식 전이다.** 예외 처리가 아니라 표에 있는 경로이고, 규칙은 하나다 —
+<strong>진행 축에서 앞으로 가는 전이는 전부 허용한다.</strong> 배송이 끝났다면 배송은 시작된 것이고,
+중간 상태를 거치지 않았다는 것은 그 사건을 알리는 메시지가 아직 안 왔다는 뜻일 뿐이다.
+**사실은 이미 일어났고, 순서가 다른 것은 우리가 알게 된 순서일 뿐이다.**
+
+`PLACED` 에서 곧바로 건너뛰는 경로까지 여는 이유: order-service 가 소비하는 세 이벤트
+(`fulfillment.planned`·`order.dispatched`·`delivery.status`)는 **서로 다른 토픽**이라 셋 사이의
+순서가 보장되지 않는다(§4.5). `order.dispatched` 와 `fulfillment.planned` 는 둘 다 orderId 키지만
+토픽이 다르므로 같은 파티션이 아니다. 즉 `fulfillment.planned` 가 늦으면 주문은 `PLACED` 인 채로
+그 뒤의 이벤트를 먼저 받는다. `PLANNED → DELIVERED` 만 열고 `PLACED → DELIVERED` 를 닫아 두면
+같은 결함이 한 칸 앞에 그대로 남는다.
 
 **순서 뒤바뀜 흡수 (ADR-017).** `order.dispatched` 는 orderId 키, `delivery.status` 는 routeId 키로
 발행된다(§4.1). 서로 다른 파티션이므로 §4.5에 따라 둘 사이의 순서는 보장되지 않는다. 그래서
@@ -356,8 +379,12 @@ PLACED ──(fulfillment.planned)──▶ PLANNED ──(order.dispatched)─�
 | 상황 | 판정 | 처리 |
 |---|---|---|
 | 표에 있는 전이 | 적용 | 상태 변경 후 커밋 |
-| 이미 지나온 지점으로의 전이 (진행 단계가 현재보다 앞) | **철 지난 이벤트** | 무시하고 커밋. `debug` 로그. DLQ 아님 |
+| 이미 지나온 지점으로의 전이 (진행 단계가 현재보다 앞) | **철 지난 이벤트** | 무시하고 커밋. `debug` 로그 + `dawnline_event_stale_total{consumer,eventType}`. DLQ 아님 |
 | 그 밖의 전이 (예: `CANCELLED` 인데 `order.dispatched` 도착) | **비즈니스 규칙 위반** | 무시하고 커밋. `warn` + `dawnline_event_rejected_total{reason}` (§4.6 3행). DLQ 아님 |
+
+stale 을 <em>세는</em> 이유는 알림이 아니라 관찰이다. 순서 뒤바뀜은 정상이지만 그 빈도가 갑자기
+늘면 어딘가 지연이 커졌다는 신호이고, `rejected`(사람이 봐야 하는 상황)와 섞이면 그 신호가 묻힌다
+(§9.1).
 
 "진행 단계"는 `PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)` 순서다.
 `CANCELLED` 는 이 축에 있지 않다 — 취소된 주문에 배송 이벤트가 오는 것은 철 지난 중복이 아니라
@@ -559,6 +586,14 @@ outbox 릴레이 폴링(100ms)과 소비 지연을 거쳐 fulfillment 에 10:00:
 접수를 거절한다(이미 201을 준 뒤라 불가능하다), **개정 사실을 상류로 되돌려 알린다.**
 셋째만이 정직하고, 그래서 `promiseRevised` 가 필요하다. 정시율(§8.1)도 개정된 창을 기준으로
 재는 것이 아니라 **원래 약속과 개정 횟수를 함께** 봐야 의미가 있다.
+
+**Phase 2 에서 함께 만들 관측 지표** (§9.1 에 예약해 두었다)
+
+- `dawnline_promise_revised_total{camp,tier}` — 개정 횟수. 이 값이 0 이 아니라는 것은 grace 로
+  흡수하지 못한 지연이 있었다는 뜻이고, 늘어나면 grace 를 늘릴 것이 아니라 지연의 원인을 봐야 한다.
+- 정시율은 **원 약속 기준**과 **개정 약속 기준** 두 값을 따로 낸다
+  (`dawnline_delivery_on_time_ratio{basis}`). 하나만 내면 개정으로 정시율을 세탁할 수 있다 —
+  못 지킬 것 같으면 약속을 미루면 되기 때문이다. SLO 의 기준은 원 약속이다(§8.1).
 
 Phase 2 에서 구현하며 ADR 로 확정한다. 여기 적어 두는 이유는, 이 결정이 Phase 1의 "약속창을
 접수 시점에 계산한다" 에서 곧바로 따라 나오기 때문이다 — 그때 정하지 않으면 Phase 2 에서
@@ -897,8 +932,15 @@ public interface DispatchStrategy {
 | `POST /orders` 가용성 | ≥ 99.9% (5xx 비율) |
 | 주문 접수 → 디스패치 후보 적재 (E2E) | p95 ≤ 5초 |
 | 웨이브 계획 시간 (5,000 주문) | p95 ≤ 30초 |
-| 정시 배송률 (시뮬레이션, 지연 주입 5%) | ≥ 97% |
+| 정시 배송률 — **원 약속 기준** (시뮬레이션, 지연 주입 5%) | ≥ 97% |
+| 정시 배송률 — 개정 약속 기준 | 참고값 (목표 없음) |
 | Outbox 지연 | p95 ≤ 2초 |
+
+**정시율을 두 값으로 내는 이유**: 하류가 약속을 지키지 못해 창을 개정하면(§5.2 `promiseRevised`),
+개정된 창 기준으로는 여전히 "정시" 다. 그 값 하나만 내면 **개정으로 정시율을 세탁할 수 있다** —
+못 지킬 것 같으면 약속을 미루면 되기 때문이다. SLO 는 <strong>고객이 처음 받은 약속</strong>을
+기준으로 잰다. 개정 기준 값은 "개정 이후에는 잘 지켰는가" 를 보는 참고값이고, 그 둘의 차이가
+곧 `dawnline_promise_revised_total` 이 세는 사건의 크기다.
 
 ### 8.2 피크 시나리오 모델
 
@@ -957,15 +999,22 @@ public interface DispatchStrategy {
 | `dawnline_outbox_unpublished` | gauge | service |
 | `dawnline_outbox_failed` | gauge | service — 격리된(미해결) outbox 행 수 (§4.6) |
 | `dawnline_event_processed_total` | counter | consumer, eventType, outcome(ok/dup/rejected/dlq) |
+| `dawnline_event_stale_total` | counter | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
+| `dawnline_promise_revised_total` | counter | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_wave_orders` | gauge | camp, tier |
 | `dawnline_plan_duration_seconds` | histogram | strategy, mode |
 | `dawnline_plan_cost_krw` | gauge | camp |
 | `dawnline_plan_unassigned` | gauge | camp |
 | `dawnline_plan_degraded_total` | counter | camp |
-| `dawnline_delivery_on_time_ratio` | gauge | camp |
+| `dawnline_delivery_on_time_ratio` | gauge | camp, **basis(promised/revised)** — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
 | `dawnline_at_risk_total` | counter | camp |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
+
+`dawnline_event_stale_total` 과 `dawnline_event_processed_total{outcome=rejected}` 는 다른 것을 센다.
+**stale** 은 순서 뒤바뀜이라 정상이고(ADR-017 — 사실은 이미 일어났고 순서가 다른 것은 우리가 알게 된
+순서일 뿐이다), **rejected** 는 취소된 주문에 배송 이벤트가 오는 것처럼 사람이 봐야 하는 상황이다.
+한 카운터로 합치면 알림을 걸 수 없다 — stale 은 늘 조금씩 늘고 rejected 는 0이어야 하기 때문이다.
 
 ### 9.2 트레이싱
 

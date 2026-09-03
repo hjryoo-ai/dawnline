@@ -151,15 +151,36 @@ class OrderTest {
 
     @Test
     void 거부된_전이는_상태를_바꾸지_않는다() {
+        // 진행 축 위에서 앞으로 가는 전이는 전부 허용되므로(ADR-017), 거부되는 것은 취소 제약이나
+        // 역행뿐이다. 여기서는 배송이 시작된 뒤의 취소를 쓴다.
         Order order = placed();
+        order.markPlanned(PLACED_AT.plusSeconds(60));
+        order.markDispatched(PLACED_AT.plusSeconds(120));
         Instant before = order.updatedAt();
 
-        assertThatThrownBy(() -> order.markDelivered(PLACED_AT.plusSeconds(10)))
+        assertThatThrownBy(() -> order.cancel(PLACED_AT.plusSeconds(180)))
                 .isInstanceOf(IllegalStateTransitionException.class);
 
         // 실패한 전이가 updatedAt 만 움직여 놓으면, 아무 일도 없었는데 갱신된 것처럼 보인다.
-        assertThat(order.status()).isEqualTo(OrderStatus.PLACED);
+        assertThat(order.status()).isEqualTo(OrderStatus.DISPATCHED);
         assertThat(order.updatedAt()).isEqualTo(before);
+    }
+
+    @Test
+    void 배송_시작도_배송_완료도_계획보다_먼저_도착할_수_있다() {
+        // fulfillment.planned 가 늦으면 주문은 PLACED 인 채로 그 뒤의 이벤트를 먼저 받는다.
+        // 세 이벤트가 모두 다른 토픽이라 셋 사이의 순서는 보장되지 않는다 (§4.5, ADR-017).
+        Order dispatchedFirst = placed();
+        dispatchedFirst.markDispatched(PLACED_AT.plusSeconds(120));
+        assertThat(dispatchedFirst.status()).isEqualTo(OrderStatus.DISPATCHED);
+
+        Order deliveredFirst = placed();
+        deliveredFirst.markDelivered(PLACED_AT.plusSeconds(300));
+        assertThat(deliveredFirst.status()).isEqualTo(OrderStatus.DELIVERED);
+
+        Order failedFirst = placed();
+        failedFirst.markFailed(PLACED_AT.plusSeconds(300));
+        assertThat(failedFirst.status()).isEqualTo(OrderStatus.FAILED);
     }
 
     @Test

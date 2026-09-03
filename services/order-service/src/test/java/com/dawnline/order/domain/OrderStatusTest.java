@@ -24,7 +24,10 @@ class OrderStatusTest {
 
     /** DESIGN.md §5.1 다이어그램을 그대로 옮긴 표. 이 테스트의 명세다. */
     private static final Map<OrderStatus, Set<OrderStatus>> EXPECTED = new EnumMap<>(Map.of(
-            OrderStatus.PLACED, EnumSet.of(OrderStatus.PLANNED, OrderStatus.CANCELLED),
+            // PLACED 에서 DISPATCHED·DELIVERED·FAILED 로 곧바로 가는 것은 fulfillment.planned 가
+            // 늦게 도착한 경우다. 소비하는 세 이벤트가 모두 다른 토픽이라 순서가 보장되지 않는다.
+            OrderStatus.PLACED, EnumSet.of(OrderStatus.PLANNED, OrderStatus.DISPATCHED,
+                    OrderStatus.DELIVERED, OrderStatus.FAILED, OrderStatus.CANCELLED),
             // PLANNED → DELIVERED·FAILED 는 §4.5 순서 뒤바뀜 흡수용이다 (ADR-017).
             OrderStatus.PLANNED, EnumSet.of(OrderStatus.DISPATCHED, OrderStatus.DELIVERED,
                     OrderStatus.FAILED, OrderStatus.CANCELLED),
@@ -116,6 +119,41 @@ class OrderStatusTest {
                             .isGreaterThan(from.progress());
                 }
             }
+        }
+    }
+
+    @Test
+    void 전이표는_진행_축_위에서_앞으로_가는_모든_전이를_허용한다() {
+        // ADR-017의 규칙을 표 전체에 적용한 것이다: 미래로의 건너뜀은 수용, 과거로의 역행은 stale.
+        // 표를 손으로 적는 이상 규칙과 표가 어긋날 수 있으므로, 규칙에서 표를 만들어 대조한다.
+        for (OrderStatus from : OrderStatus.values()) {
+            if (from.progress() < 0) {
+                continue;               // CANCELLED 는 축 밖이다
+            }
+            Set<OrderStatus> forward = EnumSet.noneOf(OrderStatus.class);
+            for (OrderStatus to : OrderStatus.values()) {
+                if (to.progress() > from.progress()) {
+                    forward.add(to);
+                }
+            }
+            Set<OrderStatus> actual = EnumSet.noneOf(OrderStatus.class);
+            actual.addAll(from.allowedTransitions());
+            actual.remove(OrderStatus.CANCELLED);   // 취소는 이벤트가 아니라 명령이라 축 밖이다
+
+            assertThat(actual)
+                    .as("%s 에서 앞으로 가는 전이", from)
+                    .isEqualTo(forward);
+        }
+    }
+
+    @Test
+    void 취소는_배송이_시작되기_전까지만_가능하다() {
+        // 취소는 진행 축의 규칙이 아니라 별도 제약이다. 축 규칙만 있으면 DISPATCHED 에서도
+        // 취소가 열려 버린다 — 소포가 이미 차에 실린 뒤다.
+        for (OrderStatus from : OrderStatus.values()) {
+            assertThat(from.canTransitionTo(OrderStatus.CANCELLED))
+                    .as("%s → CANCELLED", from)
+                    .isEqualTo(from == OrderStatus.PLACED || from == OrderStatus.PLANNED);
         }
     }
 

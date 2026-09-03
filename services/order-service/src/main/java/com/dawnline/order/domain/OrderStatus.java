@@ -40,12 +40,18 @@ public enum OrderStatus {
     /** 이 상태에서 갈 수 있는 다음 상태들. */
     public Set<OrderStatus> allowedTransitions() {
         return switch (this) {
-            case PLACED -> Set.of(PLANNED, CANCELLED);
-            // PLANNED → DELIVERED·FAILED 는 정상 흐름에 없는 경로다. order.dispatched(키 orderId)와
-            // delivery.status(키 routeId)가 다른 파티션이라 순서가 보장되지 않아(§4.5), 배송 완료가
-            // 배송 시작보다 먼저 도착할 수 있다. 억지 보정이 아니라 사실을 반영한 것이다 —
-            // 배송이 완료됐다면 배송은 시작된 것이고, DISPATCHED 를 안 거친 것은 그 사건을 알리는
-            // 메시지가 아직 안 왔다는 뜻일 뿐이다 (§5.1, ADR-017).
+            // 진행 축에서 <앞으로> 가는 전이는 전부 허용한다. 건너뜀은 오류가 아니라 순서 뒤바뀜이다 —
+            // 사실은 이미 일어났고, 순서가 다른 것은 우리가 알게 된 순서일 뿐이다 (ADR-017).
+            //
+            // order-service 가 소비하는 세 이벤트는 서로 다른 토픽이라 셋 사이의 순서가 보장되지
+            // 않는다(§4.5): fulfillment.planned(키 orderId) · order.dispatched(키 orderId) ·
+            // delivery.status(키 routeId). 그래서 이런 일이 모두 실제로 가능하다.
+            //   - PLANNED 인데 delivery.status(COMPLETED) 가 먼저   → PLANNED → DELIVERED
+            //   - PLACED  인데 order.dispatched 가 먼저             → PLACED  → DISPATCHED
+            //   - PLACED  인데 delivery.status 가 먼저              → PLACED  → DELIVERED
+            // 억지 보정이 아니라 사실을 반영한 것이다 — 배송이 완료됐다면 배송은 시작된 것이고,
+            // 중간 상태를 안 거친 것은 그 사건을 알리는 메시지가 아직 안 왔다는 뜻일 뿐이다.
+            case PLACED -> Set.of(PLANNED, DISPATCHED, DELIVERED, FAILED, CANCELLED);
             case PLANNED -> Set.of(DISPATCHED, DELIVERED, FAILED, CANCELLED);
             case DISPATCHED -> Set.of(DELIVERED, FAILED);
             // 종료 상태. 배송 실패의 재시도는 새 주문이지 이 주문의 전이가 아니다.
