@@ -60,6 +60,17 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙5_는_adapter_에_붙은_Transactional_을_잡는다() {
+        // 규칙 5 는 대상 패키지가 com.dawnline.<service>.application.. 이고, 표본은 어느 서비스에도
+        // 속하지 않는다. that 절이 "@Transactional 이 붙은 모든 클래스" 라서 표본도 그대로 걸린다 —
+        // 즉 어떤 서비스 이름을 넣어도 이 표본은 위반이며, 규칙이 어노테이션의 위치를 실제로 본다는 뜻이다.
+        assertThatThrownBy(() -> HexagonalArchitectureRules.transactionalOnlyInApplicationLayer("order").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("TransactionalRepository")
+                .hasMessageContaining("com.dawnline.order.application..");
+    }
+
+    @Test
     void 규칙6_은_올바른_표본을_통과시킨다() {
         HexagonalArchitectureRules.PUBLISHING_GOES_THROUGH_OUTBOX_ONLY.check(GOOD);
     }
@@ -87,9 +98,9 @@ class HexagonalArchitectureRulesTest {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
         assertThat(rules).hasSize(6);
-        // 표본에는 com.dawnline.<service> 클래스가 없으므로 규칙 3·4·5 는 대상이 0개다.
-        // (규칙 3·4·5 의 "잡아야 할 것을 잡는가" 는 아직 검증되지 않았다 — Phase 1 에서
-        //  첫 @KafkaListener·@Transactional 이 생길 때 음성 표본을 함께 추가한다.)
+        // 표본에는 com.dawnline.<service> 클래스가 없으므로 규칙 3·4 는 대상이 0개다.
+        // (규칙 3·4 의 "잡아야 할 것을 잡는가" 는 Phase 1 의 첫 @KafkaListener 와 함께 추가한다.
+        //  규칙 5 는 바로 위 테스트가 음성 표본으로 확인한다.)
         // allowEmptyShould(true) 덕분에 "대상 없음"이 실패가 되지 않는다.
         rules.forEach(rule -> rule.check(GOOD));
     }
