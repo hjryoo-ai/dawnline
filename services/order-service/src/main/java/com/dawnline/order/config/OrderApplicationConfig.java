@@ -17,7 +17,6 @@ import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.TierEligibility;
 import java.time.Clock;
 import java.time.Duration;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -59,11 +58,11 @@ public class OrderApplicationConfig {
      * 티어 가능 여부 판정 (§5.1 도메인 서비스).
      *
      * @param zones 권역 조회
-     * @param clock 시각 출처
+     * @param clock 시각 출처 — libs/messaging 이 저장 정밀도(마이크로초)로 잘라서 준다
      */
     @Bean
-    public TierEligibility tierEligibility(TierEligibility.ServiceableZones zones, ObjectProvider<Clock> clock) {
-        return new TierEligibility(zones, clock.getIfAvailable(Clock::systemUTC));
+    public TierEligibility tierEligibility(TierEligibility.ServiceableZones zones, Clock clock) {
+        return new TierEligibility(zones, clock);
     }
 
     /** 약속 배송창 계산 (§2.2). */
@@ -106,13 +105,13 @@ public class OrderApplicationConfig {
      * @param cache       멱등 잠금(성능)
      * @param transaction 트랜잭션 경계
      * @param ids         UUIDv7 생성기
-     * @param clock       접수 시각 출처
+     * @param clock       접수 시각 출처 — 저장 정밀도로 잘린 시계여야 한다
      */
     @Bean
     public PlaceOrderUseCase placeOrderUseCase(Geocoder geocoder, TierEligibility tiers, DeliveryPromise promises,
             IdempotencyRecords records, IdempotencyCache cache, PlaceOrderTransaction transaction,
-            Ids ids, ObjectProvider<Clock> clock) {
+            Ids ids, Clock clock) {
         return new PlaceOrderService(geocoder, tiers, promises, records, cache, transaction,
-                ids, clock.getIfAvailable(Clock::systemUTC), IDEMPOTENCY_RETENTION);
+                ids, clock, IDEMPOTENCY_RETENTION);
     }
 }

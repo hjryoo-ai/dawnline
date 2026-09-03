@@ -125,6 +125,22 @@ class OrderPersistenceIT extends OrderIntegrationTestBase {
     }
 
     @Test
+    void TIMESTAMPTZ_는_마이크로초까지만_담는다() {
+        // 이것은 "그러면 안 된다" 가 아니라 "실제로 그렇다" 를 고정하는 테스트다. 그래서 시각 출처를
+        // 마이크로초로 잘라서 준다(libs/messaging 의 dawnlineClock). 자르지 않으면 접수 응답의
+        // placedAt 과 다시 읽은 주문의 placedAt 이 달라지고, 그 차이는 나노초를 주는 플랫폼
+        // (Linux)에서만 드러나 개발 기계에서는 보이지 않는다.
+        Instant withNanos = Instant.parse("2026-09-03T10:25:07.576754234Z");
+        Order original = order(Ids.newId(), withNanos, List.of(new OrderItem((short) 1, "SKU-1", 1)));
+        save(original);
+
+        Order loaded = transactions().execute(status -> orders.findById(original.id()).orElseThrow());
+
+        assertThat(loaded.placedAt()).isEqualTo(Instant.parse("2026-09-03T10:25:07.576754Z"));
+        assertThat(loaded.placedAt()).isNotEqualTo(withNanos);
+    }
+
+    @Test
     void 상태_전이를_반영하면_version_이_올라간다() {
         Order original = order(Ids.newId(), PLACED_AT, List.of(new OrderItem((short) 1, "SKU-1", 1)));
         save(original);

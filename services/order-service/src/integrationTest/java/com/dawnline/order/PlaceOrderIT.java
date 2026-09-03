@@ -58,11 +58,23 @@ class PlaceOrderIT extends OrderIntegrationTestBase {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
-    /** 아무도 듣지 않는 포트. Lettuce 는 연결 거부를 즉시 받고 {@code UNAVAILABLE} 로 바뀐다. */
+    /**
+     * Redis 는 아무도 듣지 않는 포트로, outbox 릴레이는 꺼 둔다.
+     *
+     * <p>Redis: Lettuce 가 연결 거부를 즉시 받고 {@code UNAVAILABLE} 로 바뀐다.
+     *
+     * <p>릴레이: 이 테스트가 보는 것은 <em>쓰기 경로</em>다 — 주문과 같은 트랜잭션에서 outbox 행이
+     * 생기는가. 브로커로 실제로 보내는 것은 {@code libs/messaging} 의 {@code OutboxRelayIT} 가 본다.
+     * 켜 두면 두 가지가 나빠진다. (1) 테스트 브로커는 자동 토픽 생성을 꺼 두었으므로 릴레이가
+     * {@code UNKNOWN_TOPIC_OR_PARTITION} 으로 무한 재시도하며 컨텍스트 종료를 30초씩 붙잡는다.
+     * (2) {@code published_at IS NULL} 어설션이 릴레이 폴링(100ms)과 경합하는 시한부 검사가 된다.
+     * {@code OutboxAppender} 는 이 플래그와 무관하게 그대로 동작한다.
+     */
     @DynamicPropertySource
-    static void deadRedis(DynamicPropertyRegistry registry) {
+    static void deadRedisAndNoRelay(DynamicPropertyRegistry registry) {
         registry.add("spring.data.redis.host", () -> "127.0.0.1");
         registry.add("spring.data.redis.port", () -> "1");
+        registry.add("dawnline.messaging.outbox.enabled", () -> "false");
     }
 
     private TransactionTemplate transactions() {
