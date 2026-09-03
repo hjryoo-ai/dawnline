@@ -13,7 +13,6 @@ import com.dawnline.messaging.json.EventJson;
 import com.dawnline.order.application.port.in.OrderAccepted;
 import com.dawnline.order.application.port.out.IdempotencyClaim;
 import com.dawnline.order.application.port.out.IdempotencyRecord;
-import com.dawnline.order.application.port.out.IdempotencyStatus;
 import com.dawnline.order.domain.OrderStatus;
 import com.dawnline.order.domain.ServiceTier;
 import jakarta.persistence.EntityManager;
@@ -102,61 +101,61 @@ class JpaIdempotencyRecordsTest {
     }
 
     @Test
-    void 완료된_행을_응답까지_되살린다() {
+    void 저장된_행을_응답까지_되살린다() {
         String body = json.writeValueAsString(accepted());
-        when(query.getResultList()).thenReturn(rows("a".repeat(64), "DONE", (short) 201, body));
+        when(query.getResultList()).thenReturn(rows("a".repeat(64), (short) 201, body));
 
         Optional<IdempotencyRecord> found = records.find("idem-1");
 
         assertThat(found).isPresent();
         IdempotencyRecord record = found.orElseThrow();
         assertThat(record.requestHash()).isEqualTo("a".repeat(64));
-        assertThat(record.status()).isEqualTo(IdempotencyStatus.DONE);
         assertThat(record.responseCode()).isEqualTo(201);
         assertThat(record.response()).isEqualTo(accepted());
     }
 
     @Test
-    void 처리중_행은_응답이_없다() {
-        when(query.getResultList()).thenReturn(rows("a".repeat(64), "IN_PROGRESS", null, null));
+    void CHAR_64_의_공백_패딩을_지운다() {
+        // 패딩이 남으면 지문 비교가 항상 실패해 모든 재요청이 422 가 된다.
+        String body = json.writeValueAsString(accepted());
+        when(query.getResultList()).thenReturn(rows("a".repeat(64) + "   ", (short) 201, body));
 
-        IdempotencyRecord record = records.find("idem-1").orElseThrow();
-
-        assertThat(record.status()).isEqualTo(IdempotencyStatus.IN_PROGRESS);
-        assertThat(record.responseCode()).isNull();
-        assertThat(record.response()).isNull();
+        assertThat(records.find("idem-1").orElseThrow().requestHash()).isEqualTo("a".repeat(64));
     }
 
     @Test
-    void 알_수_없는_상태값은_조용히_넘기지_않는다() {
-        // 컬럼이 VARCHAR 라 무엇이든 들어갈 수 있다. DONE 으로 넘겨짚으면 남의 응답을 재생하게 된다.
-        when(query.getResultList()).thenReturn(rows("a".repeat(64), "FINISHED", (short) 201, "{}"));
-
-        assertThatThrownBy(() -> records.find("idem-1"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("FINISHED");
-    }
-
-    @Test
-    void DONE_인데_본문이_비어_있으면_예외다() {
-        when(query.getResultList()).thenReturn(rows("a".repeat(64), "DONE", (short) 201, null));
-
-        assertThatThrownBy(() -> records.find("idem-1"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("response_body");
-    }
-
-    @Test
-    void 업서트는_이미_DONE_인_행을_덮어쓰지_않는다() {
-        // 이 WHERE 절이 멱등의 마지막 방어선이다. 없으면 두 번째 요청이 첫 번째의 응답을 지운다.
+    void 삽입은_이미_있는_행을_건드리지_않는다() {
+        // 멱등의 마지막 방어선이다. DO UPDATE 였다면 두 번째 요청이 첫 번째의 응답을 지운다.
         when(query.executeUpdate()).thenReturn(1);
 
         records.complete(claim(), 201, accepted());
 
         String sql = capturedSql();
-        assertThat(sql).contains("ON CONFLICT (idem_key) DO UPDATE");
-        assertThat(sql).contains("WHERE idempotency_keys.status = 'IN_PROGRESS'");
+        assertThat(sql).contains("ON CONFLICT (idem_key) DO NOTHING");
+        assertThat(sql).doesNotContain("DO UPDATE");
         assertThat(sql).contains("CAST(:body AS jsonb)");
+    }
+
+    @Test
+    void 만료_삭제는_ctid_와_LIMIT_으로_끊는다() {
+        // PostgreSQL 의 DELETE 에는 LIMIT 절이 없다. ctid 서브쿼리가 그 자리를 대신한다.
+        when(query.executeUpdate()).thenReturn(7);
+
+        assertThat(records.deleteExpired(NOW, 1000)).isEqualTo(7);
+
+        String sql = capturedSql();
+        assertThat(sql).contains("WHERE ctid IN (");
+        assertThat(sql).contains("ORDER BY expires_at");
+        assertThat(sql).contains("LIMIT :limit");
+        verify(query).setParameter("now", NOW);
+        verify(query).setParameter("limit", 1000);
+    }
+
+    @Test
+    void 만료_삭제의_배치_크기는_1_이상이어야_한다() {
+        assertThatThrownBy(() -> records.deleteExpired(NOW, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("batchSize");
     }
 
     @Test
@@ -174,7 +173,7 @@ class JpaIdempotencyRecordsTest {
     }
 
     @Test
-    void 한_행이_바뀌면_주인이_된_것이고_0행이면_아니다() {
+    void 한_행이_삽입되면_주인이_된_것이고_0행이면_아니다() {
         when(query.executeUpdate()).thenReturn(1);
         assertThat(records.complete(claim(), 201, accepted())).isTrue();
 
@@ -189,6 +188,7 @@ class JpaIdempotencyRecordsTest {
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> records.complete(claim(), 201, null))
                 .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> records.deleteExpired(null, 10)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new JpaIdempotencyRecords(null, json))
                 .isInstanceOf(NullPointerException.class);
     }

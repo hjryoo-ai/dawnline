@@ -5,6 +5,7 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.order.adapter.out.geo.AllTiersServiceableZones;
 import com.dawnline.order.adapter.out.geo.PostalPrefixGeocoder;
 import com.dawnline.order.adapter.out.messaging.OutboxOrderEvents;
+import com.dawnline.order.application.IdempotencyKeyCleaner;
 import com.dawnline.order.application.PlaceOrderService;
 import com.dawnline.order.application.PlaceOrderTransaction;
 import com.dawnline.order.application.port.in.PlaceOrderUseCase;
@@ -16,9 +17,12 @@ import com.dawnline.order.application.port.out.OrderRepository;
 import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.TierEligibility;
 import java.time.Clock;
-import java.time.Duration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * 도메인 서비스와 유스케이스 배선 (DESIGN.md §3.4, §5.1).
@@ -27,16 +31,9 @@ import org.springframework.context.annotation.Configuration;
  * 무엇이 무엇에 의존하는지가 한 화면에 보인다.
  */
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(OrderProperties.class)
+@EnableScheduling
 public class OrderApplicationConfig {
-
-    /**
-     * 멱등 기록 보관 기간. §7.2 의 Redis 키 TTL(24h)과 같은 값이다 — 두 경로가 같은 기간 동안
-     * 같은 답을 주도록.
-     *
-     * <p>{@code expires_at} 은 정리 기준일 뿐이고 지금은 지우는 배치가 없다. 행이 남아 있는 동안은
-     * 재생이 계속 되므로, 만료가 지나 <em>더 이상 못 지우는</em> 방향의 위험은 없다.
-     */
-    private static final Duration IDEMPOTENCY_RETENTION = Duration.ofHours(24);
 
     /**
      * 우편번호 → 좌표 (§5.1 기본 구현).
@@ -106,12 +103,33 @@ public class OrderApplicationConfig {
      * @param transaction 트랜잭션 경계
      * @param ids         UUIDv7 생성기
      * @param clock       접수 시각 출처 — 저장 정밀도로 잘린 시계여야 한다
+     * @param properties  {@code dawnline.order.*}
      */
     @Bean
     public PlaceOrderUseCase placeOrderUseCase(Geocoder geocoder, TierEligibility tiers, DeliveryPromise promises,
             IdempotencyRecords records, IdempotencyCache cache, PlaceOrderTransaction transaction,
-            Ids ids, Clock clock) {
+            Ids ids, Clock clock, OrderProperties properties) {
         return new PlaceOrderService(geocoder, tiers, promises, records, cache, transaction,
-                ids, clock, IDEMPOTENCY_RETENTION);
+                ids, clock, properties.idempotency().retention());
+    }
+
+    /**
+     * 멱등 기록 보존 정리 (ADR-019).
+     *
+     * <p>{@code dawnline.order.idempotency.cleanup-enabled=false} 로 끌 수 있다. 끄면 테이블이
+     * 자라기만 하므로, 여러 인스턴스 중 하나만 돌리고 싶을 때가 아니면 켜 둔다.
+     *
+     * @param records            멱등 기록 저장소
+     * @param transactionManager 배치마다 트랜잭션을 여는 데 쓴다
+     * @param clock              기준 시각
+     * @param properties         {@code dawnline.order.idempotency.*}
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "dawnline.order.idempotency", name = "cleanup-enabled",
+            havingValue = "true", matchIfMissing = true)
+    public IdempotencyKeyCleaner idempotencyKeyCleaner(IdempotencyRecords records,
+            PlatformTransactionManager transactionManager, Clock clock, OrderProperties properties) {
+        return new IdempotencyKeyCleaner(records, transactionManager, clock,
+                properties.idempotency().batchSize(), properties.idempotency().maxBatchesPerRun());
     }
 }

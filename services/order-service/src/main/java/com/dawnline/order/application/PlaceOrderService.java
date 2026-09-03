@@ -131,7 +131,12 @@ public class PlaceOrderService implements PlaceOrderUseCase {
         }
     }
 
-    /** 저장된 기록으로 답한다 — 같은 요청이면 재생, 다른 요청이면 422, 처리 중이면 409. */
+    /**
+     * 저장된 기록으로 답한다 — 같은 요청이면 재생, 다른 요청이면 422.
+     *
+     * <p>기록이 있다는 것은 곧 그 요청이 끝났다는 뜻이다(ADR-018·019). 처리 중 상태는 이 테이블에
+     * 없으므로 여기서 갈라지는 경우도 둘뿐이다.
+     */
     private PlaceOrderResult replay(IdempotencyRecord stored, String fingerprint) {
         if (!stored.requestHash().equals(fingerprint)) {
             throw new DomainException(CommonErrorCode.UNPROCESSABLE_REQUEST,
@@ -139,10 +144,7 @@ public class PlaceOrderService implements PlaceOrderUseCase {
                     // 지문 자체는 넣지 않는다. 요청 본문을 되짚을 수 있는 값이라 오류 응답에 남길 이유가 없다.
                     Map.of("reason", "idempotency-key-reused-with-different-body"));
         }
-        return switch (stored.status()) {
-            case DONE -> new PlaceOrderResult(Objects.requireNonNull(stored.response()), true);
-            case IN_PROGRESS -> throw inFlight();
-        };
+        return new PlaceOrderResult(stored.response(), true);
     }
 
     /**

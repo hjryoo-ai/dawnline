@@ -4,30 +4,30 @@ import com.dawnline.order.application.port.in.OrderAccepted;
 import com.dawnline.order.application.port.out.IdempotencyClaim;
 import com.dawnline.order.application.port.out.IdempotencyRecord;
 import com.dawnline.order.application.port.out.IdempotencyRecords;
-import com.dawnline.order.application.port.out.IdempotencyStatus;
 import jakarta.persistence.EntityManager;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * {@link IdempotencyRecords} 의 JPA 구현 (DESIGN.md §5.1, ADR-018).
+ * {@link IdempotencyRecords} 의 JPA 구현 (DESIGN.md §5.1, ADR-018·019).
  *
  * <h2>왜 엔티티가 아니라 네이티브 SQL 인가</h2>
- * 이 어댑터의 정확성은 {@code ON CONFLICT ... DO UPDATE ... WHERE} 한 문장에 달려 있다.
- * 그 문장이 JPA 로는 표현되지 않는다 — {@code merge} 는 "있으면 덮어쓴다" 라서 이미 완료된 응답을
- * 뒤엎고, 그러면 두 번째 요청이 첫 번째의 답을 지운 뒤 자기 답을 준다. 멱등이 아니다.
+ * 이 어댑터의 정확성은 {@code ON CONFLICT DO NOTHING} 한 절에 달려 있다. JPA 로는 표현되지 않는다 —
+ * {@code merge} 는 "있으면 덮어쓴다" 라서 이미 완료된 응답을 뒤엎고, 그러면 두 번째 요청이 첫 번째의
+ * 답을 지운 뒤 자기 답을 준다. 멱등이 아니다.
  *
- * <p>{@code WHERE idempotency_keys.status = 'IN_PROGRESS'} 가 그것을 막는다. 이미 {@code DONE} 인
- * 행에는 0행이 걸리고, 0행이 곧 "내가 졌다" 는 신호다. 동시 요청은 첫 번째가 커밋할 때까지 인덱스에서
- * 기다렸다가 그 결과를 본다.
+ * <p>{@code DO NOTHING} 이 필요한 성질을 다 갖는지는 추측하지 않고 측정했다(ADR-019 §2):
+ * 충돌 상대가 아직 커밋되지 않았으면 <strong>그 트랜잭션이 끝날 때까지 기다렸다가</strong>
+ * 0행을 돌려주고, 기존 행은 건드리지 않는다. 0행이 곧 "내가 졌다" 는 신호다.
+ * {@code IdempotencyRecordsIT} 가 두 연결로 그 동작을 다시 확인한다.
  *
  * <h2>왜 애플리케이션 {@code ObjectMapper} 인가</h2>
  * {@code response_body} 는 <strong>HTTP 응답을 그대로 재생하기 위한</strong> 값이다(§5.1 1단계).
- * 그러니 저장할 때와 응답을 쓸 때가 같은 매퍼여야 한다. 이벤트 계약용
- * {@code EventJson} 은 여기 쓰지 않는다 — 그쪽은 서비스 간 계약이라 설정이 따로 굳어 있어야 한다.
+ * 그러니 저장할 때와 응답을 쓸 때가 같은 매퍼여야 한다. 이벤트 계약용 {@code EventJson} 은 여기
+ * 쓰지 않는다 — 그쪽은 서비스 간 계약이라 설정이 따로 굳어 있어야 한다.
  */
 public class JpaIdempotencyRecords implements IdempotencyRecords {
 
@@ -36,23 +36,31 @@ public class JpaIdempotencyRecords implements IdempotencyRecords {
      * 파서가 {@code :text} 를 파라미터로 본다.
      */
     private static final String FIND_SQL = """
-            SELECT request_hash, status, response_code, CAST(response_body AS text)
+            SELECT request_hash, response_code, CAST(response_body AS text)
               FROM idempotency_keys
              WHERE idem_key = :key
             """;
 
     private static final String COMPLETE_SQL = """
             INSERT INTO idempotency_keys
-                   (idem_key, request_hash, status, response_code, response_body, created_at, expires_at)
-            VALUES (:key, :hash, 'DONE', :code, CAST(:body AS jsonb), :createdAt, :expiresAt)
-            ON CONFLICT (idem_key) DO UPDATE
-               SET request_hash  = EXCLUDED.request_hash,
-                   status        = 'DONE',
-                   response_code = EXCLUDED.response_code,
-                   response_body = EXCLUDED.response_body,
-                   created_at    = EXCLUDED.created_at,
-                   expires_at    = EXCLUDED.expires_at
-             WHERE idempotency_keys.status = 'IN_PROGRESS'
+                   (idem_key, request_hash, response_code, response_body, created_at, expires_at)
+            VALUES (:key, :hash, :code, CAST(:body AS jsonb), :createdAt, :expiresAt)
+            ON CONFLICT (idem_key) DO NOTHING
+            """;
+
+    /**
+     * 복합 PK 가 아니어도 {@code LIMIT} 을 건 삭제에는 {@code ctid} 가 필요하다 —
+     * PostgreSQL 의 {@code DELETE} 에는 {@code LIMIT} 절이 없다.
+     * {@code ORDER BY expires_at} 가 인덱스를 타는지는 EXPLAIN 으로 확인했다
+     * (docs/benchmarks/phase1-idempotency-cleanup-index.md).
+     */
+    private static final String DELETE_EXPIRED_SQL = """
+            DELETE FROM idempotency_keys
+             WHERE ctid IN (
+                   SELECT ctid FROM idempotency_keys
+                    WHERE expires_at < :now
+                    ORDER BY expires_at
+                    LIMIT :limit)
             """;
 
     private final EntityManager entityManager;
@@ -77,10 +85,11 @@ public class JpaIdempotencyRecords implements IdempotencyRecords {
             return Optional.empty();
         }
         Object[] row = (Object[]) rows.getFirst();
-        IdempotencyStatus status = statusOf((String) row[1]);
-        Integer responseCode = row[2] == null ? null : ((Number) row[2]).intValue();
+        // request_hash 는 CHAR(64) 다. 공백 패딩이 남으면 지문 비교가 항상 실패해 모든 재요청이 422 가 된다.
         return Optional.of(new IdempotencyRecord(
-                ((String) row[0]).trim(), status, responseCode, responseOf(status, (String) row[3])));
+                ((String) row[0]).trim(),
+                ((Number) row[1]).intValue(),
+                json.readValue((String) row[2], OrderAccepted.class)));
     }
 
     @Override
@@ -98,22 +107,15 @@ public class JpaIdempotencyRecords implements IdempotencyRecords {
         return affected == 1;
     }
 
-    private static IdempotencyStatus statusOf(String stored) {
-        try {
-            return IdempotencyStatus.valueOf(stored.trim());
-        } catch (IllegalArgumentException e) {
-            // 컬럼이 VARCHAR 라 무엇이든 들어갈 수 있다. 조용히 DONE 으로 보면 남의 응답을 재생하게 된다.
-            throw new IllegalStateException("알 수 없는 idempotency_keys.status: " + stored, e);
+    @Override
+    public int deleteExpired(Instant now, int batchSize) {
+        Objects.requireNonNull(now, "now");
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("batchSize 는 1 이상이어야 합니다: " + batchSize);
         }
-    }
-
-    private @Nullable OrderAccepted responseOf(IdempotencyStatus status, @Nullable String body) {
-        if (status != IdempotencyStatus.DONE) {
-            return null;
-        }
-        if (body == null) {
-            throw new IllegalStateException("DONE 인데 response_body 가 비어 있습니다");
-        }
-        return json.readValue(body, OrderAccepted.class);
+        return entityManager.createNativeQuery(DELETE_EXPIRED_SQL)
+                .setParameter("now", now)
+                .setParameter("limit", batchSize)
+                .executeUpdate();
     }
 }

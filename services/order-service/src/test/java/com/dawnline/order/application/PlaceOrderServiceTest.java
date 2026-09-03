@@ -24,7 +24,6 @@ import com.dawnline.order.application.port.out.IdempotencyCache;
 import com.dawnline.order.application.port.out.IdempotencyClaim;
 import com.dawnline.order.application.port.out.IdempotencyRecord;
 import com.dawnline.order.application.port.out.IdempotencyRecords;
-import com.dawnline.order.application.port.out.IdempotencyStatus;
 import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.Order;
 import com.dawnline.order.domain.OrderItem;
@@ -149,7 +148,7 @@ class PlaceOrderServiceTest {
         OrderAccepted stored = new OrderAccepted(Ids.newId(), OrderStatus.PLACED, ServiceTier.DAWN,
                 NOW.plusSeconds(3600), NOW.plusSeconds(7200), NOW);
         when(records.find("idem-1")).thenReturn(Optional.of(new IdempotencyRecord(
-                command().fingerprint(), IdempotencyStatus.DONE, 201, stored)));
+                command().fingerprint(), 201, stored)));
 
         PlaceOrderResult result = service.place(command());
 
@@ -162,7 +161,7 @@ class PlaceOrderServiceTest {
     @Test
     void 같은_키에_다른_본문이면_422_다() {
         when(records.find("idem-1")).thenReturn(Optional.of(new IdempotencyRecord(
-                "0".repeat(64), IdempotencyStatus.DONE, 201,
+                "0".repeat(64), 201,
                 new OrderAccepted(Ids.newId(), OrderStatus.PLACED, ServiceTier.DAWN,
                         NOW, NOW.plusSeconds(1), NOW))));
 
@@ -175,7 +174,7 @@ class PlaceOrderServiceTest {
     @Test
     void 다른_본문_오류_응답에_지문을_담지_않는다() {
         when(records.find("idem-1")).thenReturn(Optional.of(new IdempotencyRecord(
-                "0".repeat(64), IdempotencyStatus.DONE, 201,
+                "0".repeat(64), 201,
                 new OrderAccepted(Ids.newId(), OrderStatus.PLACED, ServiceTier.DAWN,
                         NOW, NOW.plusSeconds(1), NOW))));
 
@@ -183,16 +182,6 @@ class PlaceOrderServiceTest {
                 .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.type(DomainException.class))
                 .extracting(DomainException::details)
                 .satisfies(details -> assertThat(details.values().toString()).doesNotContain("0000"));
-    }
-
-    @Test
-    void DB_에_IN_PROGRESS_기록이_있으면_409_다() {
-        // 이 서비스는 IN_PROGRESS 를 쓰지 않지만(ADR-018), 읽기 경로는 그 값을 다뤄야 한다.
-        when(records.find("idem-1")).thenReturn(Optional.of(
-                new IdempotencyRecord(command().fingerprint(), IdempotencyStatus.IN_PROGRESS, null, null)));
-
-        assertThatThrownBy(() -> service.place(command())).isInstanceOf(ConflictException.class);
-        verifyNoInteractions(transaction);
     }
 
     @Test
@@ -215,7 +204,7 @@ class PlaceOrderServiceTest {
         when(records.find("idem-1"))
                 .thenReturn(Optional.empty())
                 .thenReturn(Optional.of(new IdempotencyRecord(
-                        command().fingerprint(), IdempotencyStatus.DONE, 201, stored)));
+                        command().fingerprint(), 201, stored)));
 
         PlaceOrderResult result = service.place(command());
 
