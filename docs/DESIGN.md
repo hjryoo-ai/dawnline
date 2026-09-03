@@ -1085,13 +1085,15 @@ dawnline/
 | 성능 | 주문 API 부하, 계획 시간 | k6, benchmark 도구 | §8.1 목표 대비 리포트 |
 | 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료 | Compose `stop/start` 스크립트 | 데이터 유실·중복 0 (검증 쿼리) |
 
-**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1).
+**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12).
+
+규칙 7이 이름이 아니라 **인자 타입**으로 판정하는 이유: `LocalTime.now(Clock)` 은 주입받은 시계를 읽는 <em>올바른</em> 형태이고 `LocalTime.now(ZoneId)` 는 시스템 시계를 읽는 위반이다. 이름만 보면 둘이 같아 보인다 — 규칙을 처음 켰을 때 `TierEligibility.nowInServiceZone()` 이 그렇게 잘못 걸렸다. 분석 대상에서 테스트 클래스는 뺀다(`DoNotIncludeTests`): 규칙은 프로덕션 구조를 서술하는 것이고, "생성자가 잘못된 인자를 거부하는가" 를 보는 테스트는 버릴 객체를 만들려고 시스템 시계를 부를 수 있다.
 
 규칙 6이 따로 필요한 이유: `libs/messaging` 이 Kafka 의존을 `api` 로 노출하므로 `KafkaTemplate` 이 5개 서비스 전부의 컴파일 클래스패스에 있다. 유스케이스가 그것을 직접 부르면 도메인 변경과 이벤트 발행이 서로 다른 트랜잭션이 되는데, 규칙 5는 어노테이션의 *위치*만 보므로 이를 잡지 못한다.
 
-**규칙의 검증 상태**(정직하게): 규칙 1·2·6은 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. 규칙 5는 Phase 1의 첫 `@Transactional`(`PlaceOrderTransaction`)과 함께 음성 표본(`samples/bad/adapter/out/persistence/TransactionalRepository`)이 추가돼 탐지 능력까지 확인된다. 규칙 3·4는 아직 검사 대상이 0개라(`@KafkaListener` 가 없다) `allowEmptyShould(true)` 로 통과하며, 탐지 능력은 검증되지 않았다 — Phase 1의 첫 리스너와 함께 표본을 추가한다.
+**규칙의 검증 상태**(정직하게): 규칙 1·2·6·7은 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. 규칙 7은 반대 방향(주입받은 시계를 읽는 `good` 표본이 통과하는지)도 함께 본다 — 그 방향이 없으면 "시각을 아예 못 읽게 만드는" 규칙이 되어도 테스트가 통과한다. 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. 규칙 5는 Phase 1의 첫 `@Transactional`(`PlaceOrderTransaction`)과 함께 음성 표본(`samples/bad/adapter/out/persistence/TransactionalRepository`)이 추가돼 탐지 능력까지 확인된다. 규칙 3·4는 아직 검사 대상이 0개라(`@KafkaListener` 가 없다) `allowEmptyShould(true)` 로 통과하며, 탐지 능력은 검증되지 않았다 — Phase 1의 첫 리스너와 함께 표본을 추가한다.
 
-**불변 규칙 ↔ 강제 수단 매핑** (CLAUDE.md 「아키텍처 불변 규칙」 12개 기준). ArchUnit이 닿는 것은 12개 중 5개(1·2·3·4·5)이고 그중 온전히 강제되는 것은 5번뿐이다. 나머지는 API 설계·DB 권한·컴파일러·리뷰가 맡는다 — 이 표는 "무엇이 자동으로 막히지 *않는지*"를 보이는 것이 목적이다.
+**불변 규칙 ↔ 강제 수단 매핑** (CLAUDE.md 「아키텍처 불변 규칙」 13개 기준). ArchUnit이 닿는 것은 13개 중 6개(1·2·3·4·5·12)이고 그중 온전히 강제되는 것은 5·12번이다. 나머지는 API 설계·DB 권한·컴파일러·CI·리뷰가 맡는다 — 이 표는 "무엇이 자동으로 막히지 *않는지*"를 보이는 것이 목적이다.
 
 | # | 불변 규칙 | ArchUnit | 그 밖의 강제 수단 | 음성 검증 |
 |---|---|---|---|---|
@@ -1106,7 +1108,8 @@ dawnline/
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
 | 10 | ID는 UUIDv7 | — | `Ids.newId()`, `IdsTest`(RFC 9562 비트 레이아웃·단조 증가) | ✅(생성기) |
 | 11 | 인덱스 추가 금지(설계서 명시분 외) | — | PR 체크리스트(EXPLAIN 첨부), 마이그레이션 리뷰 | — |
-| 12 | 시간·난수는 주입 | — | 생성자 시그니처(`Clock`, `RandomGenerator`), seed 재현성 테스트 | — |
+| 12 | 시간·난수는 주입 | 규칙 7 — 시계 쪽은 온전히 강제된다. 난수(`RandomGenerator`)는 아직 아니다 | 생성자 시그니처, seed 재현성 테스트, `libs/messaging` 이 저장 정밀도로 자른 `Clock` 빈을 제공 | 규칙 7 ✅(양방향) |
+| 13 | 머지된 마이그레이션 불변 | — | CI 「마이그레이션 불변 검사」 job — PR 에서 기존 `V*.sql` 이 수정·삭제·이동되면 실패 | ✅(CI) |
 
 **결정론**: 최적화 테스트는 seed 고정. 시간은 `Clock` 주입으로 제어. Testcontainers 재사용(`testcontainers.reuse.enable=true`)으로 로컬 실행 시간 단축.
 

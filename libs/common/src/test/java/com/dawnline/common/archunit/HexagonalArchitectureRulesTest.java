@@ -71,6 +71,30 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙7_은_시스템_시계를_직접_읽으면_실패한다() {
+        assertThatThrownBy(() -> systemClockRuleFor(SAMPLES + ".bad..").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("ClockReadingUseCase")
+                .hasMessageContaining("Instant.now");
+    }
+
+    @Test
+    void 규칙7_은_주입된_시계를_읽는_것은_통과시킨다() {
+        // clock.instant() 는 금지 대상이 아니다. 이것까지 막으면 규칙이 쓸모없어진다 —
+        // 시각을 아예 못 읽게 되기 때문이다. 금지하는 것은 "어떤 시계를 쓸지 코드가 스스로 정하는 것" 이다.
+        systemClockRuleFor(SAMPLES + ".good..").check(GOOD);
+    }
+
+    @Test
+    void 규칙7_이_금지_목록을_설명에_밝힌다() {
+        String description = HexagonalArchitectureRules.clocksAreInjected("dispatch").getDescription();
+
+        assertThat(description)
+                .contains("com.dawnline.dispatch..")
+                .contains("Instant.now");
+    }
+
+    @Test
     void 규칙6_은_올바른_표본을_통과시킨다() {
         HexagonalArchitectureRules.PUBLISHING_GOES_THROUGH_OUTBOX_ONLY.check(GOOD);
     }
@@ -94,15 +118,31 @@ class HexagonalArchitectureRulesTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"order", "fulfillment", "dispatch", "tracking", "ops"})
-    void 서비스별_규칙_5개를_만들_수_있고_대상이_없으면_통과한다(String service) {
+    void 서비스별_규칙_전부를_만들_수_있고_대상이_없으면_통과한다(String service) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
-        assertThat(rules).hasSize(6);
+        assertThat(rules).hasSize(7);
         // 표본에는 com.dawnline.<service> 클래스가 없으므로 규칙 3·4 는 대상이 0개다.
         // (규칙 3·4 의 "잡아야 할 것을 잡는가" 는 Phase 1 의 첫 @KafkaListener 와 함께 추가한다.
         //  규칙 5 는 바로 위 테스트가 음성 표본으로 확인한다.)
         // allowEmptyShould(true) 덕분에 "대상 없음"이 실패가 되지 않는다.
         rules.forEach(rule -> rule.check(GOOD));
+    }
+
+    /**
+     * 규칙 7 과 <strong>같은 조건</strong>을 표본 패키지에 적용한다. 규칙의 {@code that} 절이
+     * {@code com.dawnline.<service>..} 로 좁혀져 있어 표본에는 닿지 않기 때문이고, 조건 자체는
+     * {@link HexagonalArchitectureRules#SYSTEM_CLOCK_CALL} 을 그대로 쓴다 — 여기서 다시 적으면
+     * 규칙과 테스트가 표류한다.
+     */
+    private static ArchRule systemClockRuleFor(String samplePackage) {
+        return com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses()
+                .that()
+                .resideInAPackage(samplePackage)
+                .should()
+                .callMethodWhere(com.tngtech.archunit.lang.conditions.ArchPredicates.are(
+                        HexagonalArchitectureRules.SYSTEM_CLOCK_CALL))
+                .allowEmptyShould(true);
     }
 
     @Test
