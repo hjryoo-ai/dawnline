@@ -92,7 +92,7 @@ public class OutboxRelayAutoConfiguration {
             EventJson json, PlatformTransactionManager transactionManager, ObjectProvider<Clock> clock,
             DawnlineMessagingProperties properties, Environment environment) {
         return new OutboxBatchPublisher(repository, publisher, json, new TransactionTemplate(transactionManager),
-                clock.getIfAvailable(Clock::systemUTC),
+                clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock),
                 MessagingAutoConfiguration.resolveProducer(properties, environment),
                 properties.outbox().batchSize(), properties.outbox().sendTimeout());
     }
@@ -113,6 +113,6 @@ public class OutboxRelayAutoConfiguration {
             OutboxMetrics metrics, PlatformTransactionManager transactionManager, ObjectProvider<Clock> clock,
             DawnlineMessagingProperties properties) {
         return new OutboxRelay(publisher, repository, metrics, transactionManager,
-                clock.getIfAvailable(Clock::systemUTC), properties.outbox().retention());
+                clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock), properties.outbox().retention());
     }
 }

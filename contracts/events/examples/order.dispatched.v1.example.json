@@ -1,0 +1,16 @@
+{
+  "eventId": "01a04e09-9c31-7b02-8d41-5f2a7c8e10d4",
+  "eventType": "order.dispatched",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:00:42.115Z",
+  "producer": "dispatch-service",
+  "partitionKey": "01a04dad-80da-7f6e-a63a-e91c103516b0",
+  "traceId": "e57b243f302badb9a32e5b85691c0ecb",
+  "payload": {
+    "orderId": "01a04dad-80da-7f6e-a63a-e91c103516b0",
+    "routeId": "01a04e09-854a-770c-b7b7-03325dccc708",
+    "planId": "01a04e09-854a-72a5-af19-e08ff0ac563d",
+    "waveId": "01a04dad-80da-7521-9af9-6d6c3fd38228",
+    "dispatchedAt": "2026-08-29T15:00:42.115Z"
+  }
+}

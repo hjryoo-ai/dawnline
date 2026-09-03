@@ -35,3 +35,16 @@ dependencies {
     integrationTestImplementation(libs.awaitility)
     integrationTestRuntimeOnly(libs.postgresql)
 }
+
+// -----------------------------------------------------------------------------
+// 계약 파일을 test 태스크의 입력으로 선언한다 (CLAUDE.md 불변규칙 8).
+//
+// EventContractsTest 는 contracts/events/ 를 런타임에 읽는다. 그런데 그 디렉터리는 이 모듈의
+// 소스도 리소스도 아니라서, Gradle 이 보기에는 스키마나 예시만 고친 빌드는 "입력이 안 바뀐" 빌드다.
+// 그러면 test 가 UP-TO-DATE 로 건너뛰고, 깨진 계약이 로컬에서 초록으로 보인다.
+// (CI 는 매번 새 체크아웃이라 걸리지만, 그때는 이미 커밋된 뒤다.)
+tasks.named<Test>("test") {
+    inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
+            .withPropertyName("eventContracts")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}

@@ -82,7 +82,7 @@ public class MessagingJpaAutoConfiguration {
     public OutboxAppender dawnlineOutboxAppender(OutboxRepository repository, EventJson json, Ids ids,
             ObjectProvider<Clock> clock, TraceparentSupplier traceparents, DawnlineMessagingProperties properties,
             Environment environment) {
-        return new OutboxAppender(repository, json, ids, clock.getIfAvailable(Clock::systemUTC),
+        return new OutboxAppender(repository, json, ids, clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock),
                 MessagingAutoConfiguration.resolveProducer(properties, environment), traceparents);
     }
 
@@ -100,6 +100,6 @@ public class MessagingJpaAutoConfiguration {
             PlatformTransactionManager transactionManager, ObjectProvider<MeterRegistry> meters,
             ObjectProvider<Clock> clock) {
         return new IdempotentConsumer(repository, transactionManager,
-                meters.getIfAvailable(SimpleMeterRegistry::new), clock.getIfAvailable(Clock::systemUTC));
+                meters.getIfAvailable(SimpleMeterRegistry::new), clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock));
     }
 }

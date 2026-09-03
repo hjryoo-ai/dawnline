@@ -47,7 +47,7 @@ public class ProcessedEventCleanupAutoConfiguration {
             PlatformTransactionManager transactionManager, ObjectProvider<Clock> clock,
             DawnlineMessagingProperties properties) {
         DawnlineMessagingProperties.ProcessedEvents config = properties.processedEvents();
-        return new ProcessedEventCleaner(repository, transactionManager, clock.getIfAvailable(Clock::systemUTC),
+        return new ProcessedEventCleaner(repository, transactionManager, clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock),
                 config.retention(), config.batchSize(), config.maxBatchesPerRun());
     }
 }

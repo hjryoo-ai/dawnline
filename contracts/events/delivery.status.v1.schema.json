@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dawnline.internal/contracts/events/delivery.status.v1.schema.json",
+  "title": "delivery.status v1 페이로드",
+  "description": "배송 진행 상태 (DESIGN.md §4.1: ARRIVED/COMPLETED/FAILED). 토픽 dawnline.delivery.status.v1, 키 routeId, 발행 tracking-service(Phase 5), 소비 order-service(Phase 1)·ops-api. **소비자 주도 계약**: 소비자인 order-service 가 Phase 1 에 먼저 정의했다(contracts/events/README.md 참조).",
+  "type": "object",
+  "required": [
+    "routeId",
+    "stopSeq",
+    "orderIds",
+    "status",
+    "occurredAt"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "routeId": {
+      "$ref": "#/$defs/uuid",
+      "description": "라우트. 이 이벤트의 partitionKey 와 같아야 한다 (§4.1 키 = routeId). 같은 라우트의 진행 상태가 순서대로 온다는 것이 이 키 선택의 목적이다."
+    },
+    "stopSeq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "라우트 안의 stop 순번 (route.assigned.v1 의 stops[].seq 와 같은 값). 한 stop 에 여러 주문이 묶일 수 있으므로 주문이 아니라 stop 단위로 발행된다 (§6.2 stop 통합)."
+    },
+    "orderIds": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/uuid" },
+      "description": "이 stop 에 묶인 주문들. order-service 는 이 목록의 각 주문에 상태 전이를 적용한다. 배열인 이유는 §6.2 가 같은 geohash7 격자의 주문들을 하나의 stop 으로 합치기 때문이다 — 주문당 하나씩 발행하면 같은 방문이 여러 사건으로 쪼개진다.",
+      "$comment": "order-service 는 이 배열을 하나의 트랜잭션에서 처리한다. 일부만 성공하면 재처리 시 이미 전이된 주문에서 IllegalStateTransitionException 이 나기 때문이다."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ARRIVED", "COMPLETED", "FAILED"],
+      "description": "§4.1 의 세 값. order-service 의 상태 머신(§5.1)에는 ARRIVED 에 대응하는 상태가 없다 — 도착은 배송 진행 정보이지 주문 상태가 아니므로 order-service 는 무시하고, ops-api 의 실시간 추적만 쓴다. COMPLETED → DELIVERED, FAILED → FAILED 로 전이한다. 같은 major 안에서 enum 값 추가는 허용되므로(§4.7), 소비자는 모르는 값을 만나면 무시해야 한다."
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "사건 발생 시각. order-service 는 이 값을 상태 전이 시각으로 쓴다 — 정시율(§8.1)이 약속창과 이 시각을 비교하므로, 리스너가 처리한 시각을 쓰면 지연 배달이 그대로 지표 왜곡이 된다."
+    },
+    "failureReason": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "status 가 FAILED 일 때의 사유(부재, 주소 오류 등). 자유 텍스트이므로 개인정보가 섞이지 않도록 길이를 제한한다. JSON Schema 로 status 와의 상관 필수 조건을 걸지 않은 이유는 §4.7 의 '추가만 허용' 원칙 아래에서 조건부 required 가 발행자를 불필요하게 묶기 때문이다."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "소문자 UUID. order.placed.v1 의 정의와 같다."
+    }
+  }
+}

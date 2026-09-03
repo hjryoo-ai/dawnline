@@ -305,6 +305,7 @@ com.dawnline.<service>
 - 같은 major 안에서는 **추가만** 허용(필드 추가, enum 값 추가). 소비자는 알 수 없는 필드를 무시해야 한다(`FAIL_ON_UNKNOWN_PROPERTIES=false`).
 - 필드 삭제·의미 변경·타입 변경은 새 토픽 `v2`로 발행하고 소비자가 이관될 때까지 v1·v2 병행 발행(dual-publish).
 - 계약 테스트: 발행자는 스키마 검증, 소비자는 `contracts/events/examples/*.json`으로 역직렬화 테스트.
+- **소비자가 먼저 정의하는 계약**: 소비자가 발행자보다 먼저 만들어지는 경우(예: order-service 의 `order.dispatched`·`delivery.status` 리스너는 Phase 1, 발행자는 Phase 3·5), 소비자가 자신이 읽는 최소 필드로 스키마와 예시를 먼저 정의한다. 요구사항을 가진 쪽이 소비자이기 때문이며, 발행자는 그 계약을 만족시키되 필요한 필드를 위 규칙대로 추가만 한다. 리스너 통합 테스트는 예시 이벤트를 직접 발행해 돌리므로 발행자 없이 완결된다.
 
 ---
 ## 5. 서비스 상세 설계
@@ -335,9 +336,28 @@ API 버전은 URL 세그먼트 `v1` 기본. Spring Framework 7의 API Versioning
 
 ```
 PLACED ──(fulfillment.planned)──▶ PLANNED ──(order.dispatched)──▶ DISPATCHED ──(delivery COMPLETED)──▶ DELIVERED
-  │                                  │                                 └──(delivery FAILED)──▶ FAILED
+  │                                  │  │                              └──(delivery FAILED)──▶ FAILED
+  │                                  │  └──(delivery COMPLETED/FAILED, order.dispatched 보다 먼저 도착)──┤
   └──────── cancel ──────────────────┴──▶ CANCELLED     (DISPATCHED 이후 취소 불가 → 409)
 ```
+
+**순서 뒤바뀜 흡수 (ADR-017).** `order.dispatched` 는 orderId 키, `delivery.status` 는 routeId 키로
+발행된다(§4.1). 서로 다른 파티션이므로 §4.5에 따라 둘 사이의 순서는 보장되지 않는다. 그래서
+`PLANNED → DELIVERED` 와 `PLANNED → FAILED` 를 정식 전이로 둔다 — "배송이 완료됐다면 배송이
+시작된 것"이 사실이므로 의미적으로도 맞다. 뒤늦게 도착한 `order.dispatched` 는 아래 규칙으로 무시된다.
+
+리스너가 전이를 시도한 결과는 셋 중 하나다.
+
+| 상황 | 판정 | 처리 |
+|---|---|---|
+| 표에 있는 전이 | 적용 | 상태 변경 후 커밋 |
+| 이미 지나온 지점으로의 전이 (진행 단계가 현재보다 앞) | **철 지난 이벤트** | 무시하고 커밋. `debug` 로그. DLQ 아님 |
+| 그 밖의 전이 (예: `CANCELLED` 인데 `order.dispatched` 도착) | **비즈니스 규칙 위반** | 무시하고 커밋. `warn` + `dawnline_event_rejected_total{reason}` (§4.6 3행). DLQ 아님 |
+
+"진행 단계"는 `PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)` 순서다.
+`CANCELLED` 는 이 축에 있지 않다 — 취소된 주문에 배송 이벤트가 오는 것은 철 지난 중복이 아니라
+**실제로 잘못된 상황**(취소된 주문의 소포가 차에 실려 있다)이라, 조용히 삼키지 않고 알림 가능한
+메트릭으로 남긴다.
 
 **테이블**
 
@@ -413,11 +433,46 @@ CREATE TABLE processed_events (
 CREATE INDEX ix_processed_events_cleanup ON processed_events (processed_at);
 ```
 
-**멱등 처리 흐름 (POST /orders)**
-1. Redis `SET idem:order:{key} IN_PROGRESS NX PX 30000` — 실패 시 DB `idempotency_keys` 조회: `DONE`이면 저장된 응답 반환, `IN_PROGRESS`면 409.
-2. 본문 해시가 기존과 다르면 422 (같은 키, 다른 요청).
-3. 트랜잭션: orders + order_items + outbox + idempotency_keys(DONE) INSERT.
-4. Redis 키를 `DONE`으로 갱신 (TTL 24h). Redis 장애 시 DB 경로만으로 동작(성능 저하, 정확성 유지).
+**약속 배송창은 접수 시점에 order-service 가 계산한다**
+
+`order.placed` 는 `promisedWindow` 를 필수로 싣고(§4.3), 접수 응답도 고객에게 그 창을 알려 준다.
+그러므로 창은 **접수 시점에** 정해져야 하며, 그 시점에 존재하는 서비스는 order-service 뿐이다.
+값은 §2.2 표를 `(티어, 접수 시각)` 에 적용한 결과이고 클라이언트가 지정할 수 없다 —
+배송 SLA 를 호출자가 정하게 두면 그것은 약속이 아니다.
+
+| 티어 | 접수 시각 (Asia/Seoul) | 약속 배송창 |
+|---|---|---|
+| DAWN | 언제나 | 익일 00:00–07:00 |
+| SAME_DAY | 10:00 이전 | 당일 10:00–16:00 |
+| SAME_DAY | 10:00 이후 14:00 이전 | 당일 14:00–20:00 |
+| SAME_DAY | 14:00 이후 | 익일 10:00–16:00 |
+| NEXT_DAY | 언제나 | 익일 08:00–22:00 |
+
+이것은 **어느 웨이브에 실릴지**와 다르다. 웨이브 편성·컷오프 판정은 fulfillment-service 의 몫이고(§5.2),
+order-service 는 고객에게 한 약속만 정한다. 두 값이 어긋나면(예: 컷오프를 놓쳐 다음 웨이브로 밀림)
+그것은 지연이고, 정시율(§8.1)이 그 사실을 그대로 드러낸다.
+
+**멱등 처리 흐름 (POST /orders)** — 잠금은 Redis, 진실은 DB (ADR-018)
+
+0. 요청의 **표준형**에서 SHA-256 지문을 만든다. 같은 키에 다른 요청이 왔는지 판정하는 기준이며,
+   원문 바이트가 아니라 표준형을 쓰는 이유는 공백·필드 순서만 다른 재전송이 422 가 되면 안 되기 때문이다.
+1. DB `idempotency_keys` 를 PK 로 한 번 읽는다.
+   - 지문이 다르면 **422** (같은 키, 다른 요청)
+   - `DONE` 이면 저장된 응답을 **200** 으로 재생
+   - `IN_PROGRESS` 면 **409**
+2. 행이 없으면 Redis `SET idem:order:{key} IN_PROGRESS NX PX 30000`.
+   - 획득 → 3
+   - 이미 있음 → **409** (다른 요청이 처리 중이고 아직 커밋되지 않았다)
+   - Redis 불가 → 잠금 없이 3 으로 간다. 동시성은 `idempotency_keys` PK 가 커밋 시점에 막는다
+     (성능 저하, 정확성 유지 — 불변규칙 7)
+3. 트랜잭션 하나: orders + order_items + outbox(`order.placed`) + idempotency_keys(`DONE`) 업서트.
+   업서트가 0행이면 그 사이 다른 요청이 끝냈다는 뜻이므로 롤백하고 **409**.
+4. 커밋 후 Redis 키를 `DONE` 으로 갱신(TTL 24h). 실패해도 무시한다 — 다음 요청은 1번에서 DB 로 걸린다.
+   3번이 실패했다면 Redis 키를 지운다. 안 지우면 30초 동안 재시도가 409 가 된다.
+
+DB `status` 의 `IN_PROGRESS` 는 **읽기 경로에만** 있다. order-service 는 그 값을 쓰지 않는다 —
+프로세스가 3번 도중 죽으면 그 행이 남아 그 멱등 키로는 다시 주문할 수 없게 된다. in-flight 표시는
+30초 뒤 스스로 사라지는 Redis 키가 맡는다 (ADR-018).
 
 **Redis**: `idem:order:*`, 레이트 리밋 `rl:customer:{id}` (토큰 버킷 Lua, 기본 60 req/min).
 
@@ -870,7 +925,16 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 
 ## 10. 보안 (최소 범위)
 
-- 고객 주문 API: 데모용 API 키 헤더(`X-Api-Key`) `[결정 필요: 생략 가능]`. 
+- **고객 주문 API: 무인증 — 의도된 결정** (Phase 1 확정, §17 참조). 데모용 `X-Api-Key` 는 넣지 않는다.
+  이 프로젝트가 증명하려는 것(멱등 처리, 상태 머신, 경로 최적화)에 API 키가 더하는 것이 없고,
+  보안 역량은 아래 ops-api 의 JWT 가 담당한다. 나중에 붙이면 k6·sim-runner·통합 테스트를 전부
+  소급 수정해야 하므로 "일단 미루기" 도 고르지 않았다.
+  - 남용 방지는 레이트 리밋(`rl:customer:{id}`, §7.2)이 담당한다. **인증이 없으므로 그 키인
+    `customerId` 는 클라이언트가 주장하는 값이다** — 다른 고객의 id 로 요청하면 그 고객의 버킷을
+    소모시킬 수 있고, 자기 id 를 바꿔 가며 레이트 리밋을 우회할 수도 있다. 즉 현재의 레이트 리밋은
+    악의적 공격이 아니라 폭주하는 클라이언트를 막는 장치다.
+  - 실서비스 전환 시 인증 도입과 함께 재검토한다. 그때 레이트 리밋 키는 주장값이 아니라 인증된
+    주체에서 와야 한다.
 - ops-api: JWT + 역할. 시크릿은 환경변수. `.env` 커밋 금지.
 - 입력 검증: Bean Validation, 주소·SKU 길이 제한, 좌표 범위.
 - 의존성 취약점: GitHub Dependabot + `gradle dependencyCheck`(선택).
@@ -959,19 +1023,19 @@ dawnline/
 
 규칙 6이 따로 필요한 이유: `libs/messaging` 이 Kafka 의존을 `api` 로 노출하므로 `KafkaTemplate` 이 5개 서비스 전부의 컴파일 클래스패스에 있다. 유스케이스가 그것을 직접 부르면 도메인 변경과 이벤트 발행이 서로 다른 트랜잭션이 되는데, 규칙 5는 어노테이션의 *위치*만 보므로 이를 잡지 못한다.
 
-**규칙의 검증 상태**(정직하게): 규칙 1·2·6은 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. 규칙 3·4·5는 Phase 0 시점에 검사 대상이 0개라(`@KafkaListener`·`@Transactional` 이 아직 없다) `allowEmptyShould(true)` 로 통과하며, 탐지 능력은 아직 검증되지 않았다. Phase 1에서 첫 리스너·트랜잭션이 생길 때 음성 표본을 함께 추가한다.
+**규칙의 검증 상태**(정직하게): 규칙 1·2·6은 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. 규칙 5는 Phase 1의 첫 `@Transactional`(`PlaceOrderTransaction`)과 함께 음성 표본(`samples/bad/adapter/out/persistence/TransactionalRepository`)이 추가돼 탐지 능력까지 확인된다. 규칙 3·4는 아직 검사 대상이 0개라(`@KafkaListener` 가 없다) `allowEmptyShould(true)` 로 통과하며, 탐지 능력은 검증되지 않았다 — Phase 1의 첫 리스너와 함께 표본을 추가한다.
 
 **불변 규칙 ↔ 강제 수단 매핑** (CLAUDE.md 「아키텍처 불변 규칙」 12개 기준). ArchUnit이 닿는 것은 12개 중 5개(1·2·3·4·5)이고 그중 온전히 강제되는 것은 5번뿐이다. 나머지는 API 설계·DB 권한·컴파일러·리뷰가 맡는다 — 이 표는 "무엇이 자동으로 막히지 *않는지*"를 보이는 것이 목적이다.
 
 | # | 불변 규칙 | ArchUnit | 그 밖의 강제 수단 | 음성 검증 |
 |---|---|---|---|---|
-| 1 | Outbox 필수 | 규칙 6(직접 발행 차단), 규칙 5(트랜잭션 경계 위치) | `OutboxAppender` 가 유일한 발행 API — `libs/messaging` 은 다른 발행 경로를 제공하지 않는다 | 규칙 6 ✅ / 규칙 5 ✗(대상 0) |
+| 1 | Outbox 필수 | 규칙 6(직접 발행 차단), 규칙 5(트랜잭션 경계 위치) | `OutboxAppender` 가 유일한 발행 API — `libs/messaging` 은 다른 발행 경로를 제공하지 않는다. 어노테이션이 <em>사라지는</em> 것은 ArchUnit이 못 잡으므로 `PlaceOrderTransactionTest` 가 그 존재를 직접 확인한다 | 규칙 6 ✅ / 규칙 5 ✅ |
 | 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트 | ✗(대상 0) |
 | 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✗ / DB 권한 ✅(컨테이너에서 거부 확인) |
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰 | — |
-| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`) | — |
+| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등만) — `PlaceOrderIT` 가 죽은 Redis 주소로 컨텍스트를 띄워 멱등이 DB만으로 성립함을 보인다 |
 | 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
 | 10 | ID는 UUIDv7 | — | `Ids.newId()`, `IdsTest`(RFC 9562 비트 레이아웃·단조 증가) | ✅(생성기) |
@@ -1035,8 +1099,10 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 014 | JDK 25 툴체인 자동 프로비저닝(foojay-resolver) | 로컬 JDK 수동 설치 전제(환경별 재현성 저하) | [ADR-014](adr/ADR-014-jdk25-toolchain-auto-provisioning.md) |
 | 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | 무한 재시도 유지(진행 보장 없음), DLQ 토픽 우회 발행(실패 원인과 순환), N회 후 자동 폐기(이벤트 소실) | [ADR-015](adr/ADR-015-outbox-publish-side-quarantine.md) |
 | 016 | 레디니스에서 Kafka 브로커 연결 제외 | 코드에 Kafka 프로브 추가(§8.2 완충 설계 붕괴), 기동 시 1회 검사(기동 순서 의존성) | [ADR-016](adr/ADR-016-readiness-excludes-kafka.md) |
+| 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수(`PLANNED → DELIVERED` 추가 + 진행 단계 비교) | 백오프 재시도에 맡김(도착 상한 없음 → 정상 배송이 DLQ), `delivery.status` 키를 orderId 로 변경(다른 소비자의 라우트 단위 순서가 깨짐), 모든 전이 허용(불변규칙 6 포기) | [ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
+| 018 | 멱등 잠금은 Redis 키(PX 30000)가 잡고 DB `idempotency_keys` 에는 `DONE` 만 기록 | DB 에 `IN_PROGRESS` 선커밋(프로세스 사망 시 그 멱등 키가 영구히 409), 짧은 `expires_at` 으로 자가 만료(정리 배치가 또 필요), Redis 없이 PK 충돌만(중복 요청이 주문 INSERT 까지 하고 롤백) | [ADR-018](adr/ADR-018-idempotency-lock-in-redis-record-in-db.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에 확정되어 추가됐다.
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다.
 
 ---
 
@@ -1054,12 +1120,11 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 
 | # | 항목 | 결정 시점 |
 |---|---|---|
-| 2 | 고객 주문 API 키(`X-Api-Key`) 적용 여부 | Phase 1 |
 | 4 | Redis vs Valkey | Redis 8로 진행, 라이선스 이슈 발생 시 재검토(명령 호환) |
 | 5 | ops-web 지도 타일 서버 정책 | Phase 6 |
 | 6 | Timefold 실험 포함 여부 | Phase 4 stretch (ADR-004와 함께) |
 
-**해소된 항목**: (1) 도메인 모델과 JPA 엔티티 분리 → **분리한다**, ADR-007로 확정. (3) 이미지 빌드 Jib vs Buildpacks → **Buildpacks**, ADR-013으로 확정.
+**해소된 항목**: (1) 도메인 모델과 JPA 엔티티 분리 → **분리한다**, ADR-007로 확정. (2) 고객 주문 API 키 → **생략한다**(무인증), Phase 1 착수 시 확정 — 근거와 그 대가는 §10. Phase 6 이월도 고르지 않았다: 나중에 붙이면 k6·sim-runner·통합 테스트를 소급 수정해야 한다. (3) 이미지 빌드 Jib vs Buildpacks → **Buildpacks**, ADR-013으로 확정.
 
 Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원래 `[결정 필요]` 목록에는 없던 항목이다): outbox 발행 측 독약 행 처리 → ADR-015, 레디니스의 Kafka 조건 → ADR-016.
 

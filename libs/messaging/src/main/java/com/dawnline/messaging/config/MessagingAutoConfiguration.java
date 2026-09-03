@@ -4,6 +4,7 @@ import com.dawnline.common.Ids;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.outbox.TraceparentSupplier;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.random.RandomGenerator;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -25,11 +26,51 @@ import org.springframework.core.env.Environment;
 @EnableConfigurationProperties(DawnlineMessagingProperties.class)
 public class MessagingAutoConfiguration {
 
+    /** PostgreSQL {@code TIMESTAMPTZ} 의 해상도. 이보다 정밀한 값은 저장할 때 잘린다. */
+    private static final Duration STORAGE_RESOLUTION = Duration.ofNanos(1_000);
+
     /** {@code spring.application.name} 도 {@code dawnline.messaging.producer} 도 없을 때의 안내. */
     private static final String MISSING_PRODUCER =
             "발행자 이름을 알 수 없습니다. dawnline.messaging.producer 또는 spring.application.name 을 "
                     + "소문자 kebab-case(예: order-service)로 설정하세요. "
                     + "이 값은 이벤트 봉투의 producer 필드(envelope.v1.schema.json)가 됩니다.";
+
+    /**
+     * DB 가 담을 수 있는 정밀도까지만 내려주는 시각 출처 (CLAUDE.md 불변규칙 12).
+     *
+     * <h2>왜 {@code Clock.systemUTC()} 를 그대로 쓰지 않는가</h2>
+     * PostgreSQL 의 {@code TIMESTAMPTZ} 는 <strong>마이크로초</strong>까지만 저장한다.
+     * 그런데 {@code Clock.systemUTC()} 의 해상도는 플랫폼에 달려 있어서, Linux 에서는 나노초까지
+     * 나오고 macOS 에서는 마이크로초에서 끊긴다. 나노초가 섞이면 이런 일이 생긴다.
+     *
+     * <ul>
+     *   <li>{@code POST /orders} 응답의 {@code placedAt} 과 {@code GET /orders/{id}} 의
+     *       {@code placedAt} 이 다르다 — 같은 사실에 두 개의 표기가 생긴다.</li>
+     *   <li>{@code idempotency_keys.response_body} 에 저장한 응답(나노초)과 DB 에서 다시 읽은
+     *       주문(마이크로초)이 어긋난다. 멱등 재생이 "그때 준 답" 을 그대로 주지 못한다.</li>
+     *   <li>테스트가 <strong>개발 기계에서는 통과하고 CI 에서만 깨진다.</strong>
+     *       실제로 그렇게 발견됐다.</li>
+     * </ul>
+     *
+     * <p>그래서 저장소가 담을 수 있는 정밀도로 잘라서 내려준다. 잘린 값은 왕복해도 그대로다.
+     * 서비스가 자기 {@code Clock} 빈을 등록하면 그쪽이 이긴다(테스트의 고정 시계 등) — 그때는
+     * 같은 이유로 마이크로초 이하를 넣지 않는 것이 낫다.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public Clock dawnlineClock() {
+        return storagePrecisionClock();
+    }
+
+    /**
+     * {@link #dawnlineClock()} 과 같은 시계를 빈 없이 만든다.
+     *
+     * <p>{@code ObjectProvider<Clock>} 의 폴백으로 쓴다. 폴백이 {@code Clock.systemUTC()} 면
+     * 빈이 없는 구성에서 나노초가 다시 들어오고, 그것은 이 클래스가 고치려던 바로 그 문제다.
+     */
+    public static Clock storagePrecisionClock() {
+        return Clock.tick(Clock.systemUTC(), STORAGE_RESOLUTION);
+    }
 
     /**
      * 이벤트 전용 JSON 코덱.
@@ -65,7 +106,7 @@ public class MessagingAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public Ids dawnlineIds(ObjectProvider<Clock> clock) {
-        return new Ids(clock.getIfAvailable(Clock::systemUTC), RandomGenerator.getDefault());
+        return new Ids(clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock), RandomGenerator.getDefault());
     }
 
     /**
