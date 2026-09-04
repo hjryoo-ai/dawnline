@@ -970,7 +970,7 @@ public interface DispatchStrategy {
 - **DB-per-service**: Compose에서는 PostgreSQL 인스턴스 1개에 서비스별 데이터베이스(`dawnline_order` 등) 분리. 접속 계정도 분리해 교차 접근을 물리적으로 차단.
 - 마이그레이션: Flyway, `V<n>__<desc>.sql` (서비스별). JPA `ddl-auto`는 `validate`만 허용.
 - ID: UUIDv7 (애플리케이션 생성, 시간순 → 인덱스 지역성). PostgreSQL 18의 `uuidv7()`은 사용하지 않는다(ID를 DB 왕복 전에 알아야 outbox·이벤트에 쓸 수 있음).
-- 인덱스는 위 DDL 명시분 외에 추가 금지(추가 시 EXPLAIN 근거를 PR에 첨부).
+- 인덱스는 위 DDL 명시분 외에 추가 금지(추가 시 EXPLAIN 근거를 PR에 첨부). **넣지 않기로 한 판단도 행 수와 함께 남긴다** — 예: `waves` 는 90일치가 4,000행 남짓이라 정리 배치가 순차 스캔으로 충분하다([ADR-023](adr/ADR-023-fulfillment-retention.md)). 그 문장이 있어야 규모가 바뀌었을 때 재검토 지점이 생긴다.
 - 파티셔닝: `shipment_events`(일 단위), `outbox_events`는 발행 후 7일 지난 행을 배치 삭제(파티션 대신 삭제, 규모가 작음). `processed_events` 는 14일 보존(§4.4) — 같은 정리 스케줄러가 일 1회 처리한다. 두 삭제 모두 `LIMIT` 배치를 반복해 긴 락을 잡지 않는다.
 - 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 웨이브 편입의 `waves` 행 `SELECT … FOR UPDATE`(짧은 트랜잭션)에만 허용.
@@ -1049,6 +1049,20 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 - Kafka 소비자: `max.poll.records=100`, 처리 중 `pause()`, 완료 후 `resume()`. 리스너 컨테이너 concurrency = 파티션 수 이하.
 - dispatch 계획 큐: `wave.closed`는 캠프별 직렬이므로 큐 자체가 백프레셔. 연속 지연 감지 시 FAST 모드.
 - 주문 API: 고객별 레이트 리밋(Phase 1) + 전역 `Bulkhead`(동시 요청 상한, 초과 시 429 + `Retry-After`) — **Bulkhead 는 Phase 7 이월**이며, Phase 1-9 의 k6 에서 HikariCP 풀(인스턴스당 10) 포화가 관측되면 Phase 1 안으로 당긴다(IMPLEMENTATION_PLAN).
+
+**Bulkhead 판정 기록** — Phase 2 마감의 게이트다. 이 표가 채워지지 않으면 Phase 2 를 닫지 않는다.
+
+| 항목 | 값 |
+|---|---|
+| 측정 커밋 · 일시 | —(미측정) |
+| `POST /orders` p99 (500 rps × 60초) | —(미측정) · 목표 ≤ 200 ms |
+| Outbox 지연 p95 | —(미측정) · 목표 ≤ 2초 |
+| `hikaricp_connections_pending` 최댓값 | —(미측정) |
+| 판정 | —(미판정) · `pending` 이 0 을 넘어 유지되면 Phase 1 으로 당기고, 계속 0 이면 Phase 7 유지 |
+
+원자료는 `docs/benchmarks/phase1-orders-k6.md` 3·5·6절이고 여기에는 결론만 옮긴다.
+**두 번 요청되고도 오지 않은 항목은 기억이 아니라 게이트로 처리한다** — 이 프로젝트에서 레이트
+리밋이 그렇게 빠질 뻔했다.
 - 모든 소비자 랙은 `kafka_consumer_lag`로 노출, 임계 초과 알림.
 
 ### 8.4 장애 모드 표

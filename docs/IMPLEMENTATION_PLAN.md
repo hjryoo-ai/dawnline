@@ -118,8 +118,19 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    `contracts/seed/order-service-geohash5.txt` 를 생성물로 커밋하고 양쪽 서비스가 각자 검사한다.
 2. Redis GEO 적재(기동 시), `GEOSEARCH` 기반 최근접 FC 선택, geohash5 → zone 캐시.
 3. FC 선택 규칙(§5.2 1~6단계), `UNSERVICEABLE` 경로.
+   **순수 함수로 만든다**: `(주문, 캠프, FC 목록, Clock) → 결과(FC | UNSERVICEABLE 사유 | fallback 사유)`.
+   Redis GEO·DB 는 어댑터가 **FC 목록과 거리를 준비해 넘기고**, 판정 자체는 Spring 없이 단위
+   테스트된다(불변규칙 5). 시드에 일부러 넣은 세 결손(`tier`/`cold`/`inventory`)이 각각 fallback
+   사유로 나오는 테스트가 **그 함수의 명세**다.
+   `STALE_PLACED`(24h)와 grace(90초)는 둘 다 주입된 `Clock` 으로 판정하고, 시간 경계 테스트는
+   **경계 양쪽 1초씩** 둔다(불변규칙 12).
 4. **애그리거트 둘**: `Wave`(상태 머신 `OPEN→CLOSING→CLOSED→PLANNED/PLAN_FAILED`)와
    `FulfillmentOrder`(`PLANNED | UNSERVICEABLE | CANCELLED`, [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md)).
+   `FulfillmentOrder` 의 전이는 order-service 와 같은 **축 규칙**을 쓴다(`4a44df4`, ADR-017) —
+   진행 축에서 앞으로 가는 전이는 건너뛰어도 허용하고, 뒤로 가는 전이는 무시하고 stale 로 센다.
+   **취소 선착이 그 축의 한 사례라는 것을 전이표 주석에 남긴다**: `CANCELLED` 는 축 밖의 종결
+   상태이고, 그 뒤에 오는 `order.placed` 는 "역행" 이라 무시된다 — 별도 마커가 필요 없는 이유가
+   바로 이 규칙이다.
    편입 로직(UNIQUE + `FOR UPDATE` 짧은 트랜잭션), 컷오프 스케줄러(30초, Redis 락, Lua 언락),
    `CLOSING→CLOSED` 전이와 `wave.closed` outbox.
 4-1. **`V2__fulfillment_orders.sql`**: `fulfillment_orders` 생성 + `wave_orders` 드롭 + 부분 인덱스
@@ -130,8 +141,15 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    (`updated_at` 기준, **종결 상태만** — `CANCELLED`·`UNSERVICEABLE`·소속 웨이브가
    `PLANNED`/`PLAN_FAILED` 인 `PLANNED`), `waves` 90일. `ProcessedEventCleaner` 패턴으로 일 1회,
    `ctid` 경유 `LIMIT` 배치 반복, **배치마다 커밋**(ADR-019 의 측정: 0.47초 vs 11.29초).
-   `updated_at` 인덱스도 EXPLAIN 첨부. **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면
-   ADR-022 가 확보한 `order_id` 단독 PK 보장이 약해진다.
+   **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 ADR-022 가 확보한 `order_id` 단독 PK
+   보장이 약해진다.
+
+   인덱스 판단을 표에 남긴다(불변규칙 11 — 넣는 것도, **넣지 않는 것도** 기록한다).
+
+   | 표 | 30·90일치 행 수 | 인덱스 | 근거 |
+   |---|---|---|---|
+   | `fulfillment_orders` | 피크 150,000/일 × 30일 = **450만** | `updated_at` 추가 · EXPLAIN 첨부 | 삭제 조건이 `updated_at < now() - 30d` 범위 스캔이다. PK 가 `order_id` 라 이 범위를 돕지 못한다 — `idempotency_keys`·`processed_events` 와 같은 상황 |
+   | `waves` | 하루 40행 × 90일 = **약 4,000** | **넣지 않는다** | 이 규모에서는 순차 스캔이 인덱스보다 싸다. 행 수를 함께 적어 두는 이유는 캠프·티어가 늘어 규모가 바뀌었을 때 **재검토 지점**이 되게 하기 위해서다 |
 5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 웨이브에서 제거(OPEN일 때만).
    마감은 `cutoffAt + grace`(기본 90초)이고, grace 를 넘긴 주문은 다음 웨이브 + `promiseRevised: true` ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).
    단 **`cutoffAt < now − 24h`(설정값)이면 다음 웨이브가 아니라 `UNSERVICEABLE`(`STALE_PLACED`)** 이다
@@ -162,6 +180,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 - 순서 역전 두 방향(취소 선착·후착)과 웨이브 상태별 분기가 통합 테스트로 증명된다(ADR-022 표 전체).
 - 24시간 넘은 `order.placed` 가 `UNSERVICEABLE`(`STALE_PLACED`)로 종결되고 다음 웨이브에 들어가지 않는다.
 - 정리 배치가 종결 상태만 지우고 진행 중 주문을 건드리지 않는다(ADR-023).
+- **게이트 — §8.3 Bulkhead 판정이 설계서에 기록되어 있지 않으면 Phase 2 를 닫지 않는다.**
+  기록에는 Phase 1 k6 의 `POST /orders` p99, outbox 지연 p95, `hikaricp_connections_pending`
+  최댓값, 그리고 판정(Phase 1 으로 당김 / Phase 7 유지)이 함께 들어간다. 자리는 DESIGN §8.3 의
+  「Bulkhead 판정 기록」 표이고 원자료는 `docs/benchmarks/phase1-orders-k6.md` 다.
+  **두 번 요청되고도 오지 않은 항목은 기억이 아니라 게이트로 처리한다** — Phase 1 의 레이트
+  리밋이 그렇게 빠질 뻔했고, 이 항목은 이미 두 번 미뤄졌다.
 - `UNSERVICEABLE` 이 **시드 부족 때문에** 나오지 않는다: 시드된 `zones` 가 `contracts/seed/order-service-geohash5.txt` 의 91개 셀을 전부 덮는지 양쪽 서비스가 각자 검사(ADR-021).
 
 **Phase 7 로 이월 (조건부)**
