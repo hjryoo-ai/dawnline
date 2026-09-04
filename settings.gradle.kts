@@ -34,3 +34,10 @@ include(
     "services:tracking-service",
     "services:ops-api",
 )
+
+// --- 도구 --------------------------------------------------------------------
+// sim-runner 는 서비스가 아니라 REST 로 부하·시나리오를 만드는 CLI 다 (DESIGN.md §5.6).
+// 코어 서비스 DB 나 토픽에 직접 붙지 않는다 — 불변규칙 3·4 는 도구에도 그대로다.
+include(
+    "tools:sim-runner",
+)
