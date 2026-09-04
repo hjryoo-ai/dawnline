@@ -51,10 +51,15 @@ class ZoneSeedCoverageIT {
     /** ADR-021 의 계약 파일. order-service 가 만든다. */
     private static final Path ZONE_CONTRACT = Path.of("../../contracts/seed/order-service-geohash5.txt");
 
+    /** 이 모듈의 시드 스크립트. 재실행 멱등성을 확인할 때 직접 읽는다. */
+    private static final Path SEED_SCRIPT = Path.of("src/main/resources/db/migration/R__seed_fulfillment.sql");
+
     /** §5.2 5단계 GEOSEARCH 의 반경 상한(km) — FC → 캠프 간선의 상한이다. */
     private static final double LINEHAUL_RADIUS_KM = 50.0;
 
     private static final double EARTH_RADIUS_KM = 6371.0;
+
+    private static final List<String> TIERS = List.of("DAWN", "SAME_DAY", "NEXT_DAY");
 
     private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(POSTGRES_IMAGE)
             .withDatabaseName("dawnline_fulfillment")
@@ -64,15 +69,6 @@ class ZoneSeedCoverageIT {
     @BeforeAll
     static void start() {
         POSTGRES.start();
-        migrate();
-    }
-
-    @AfterAll
-    static void stop() {
-        POSTGRES.stop();
-    }
-
-    private static void migrate() {
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
@@ -80,17 +76,19 @@ class ZoneSeedCoverageIT {
                 .migrate();
     }
 
+    @AfterAll
+    static void stop() {
+        POSTGRES.stop();
+    }
+
     @Test
     void 권역_시드가_지오코더의_출력을_전부_덮는다() {
-        Set<String> contract = contractZones();
-        Set<String> seeded = queryStrings("SELECT geohash5 FROM zones");
-
-        assertThat(seeded)
+        assertThat(queryStrings("SELECT geohash5 FROM zones"))
                 .as("""
                         시드된 zones 가 contracts/seed/order-service-geohash5.txt 를 덮지 못합니다.
                         덮이지 않은 셀의 주소는 UNSERVICEABLE(NO_ZONE_MATCH)이 되는데, 그것은 설계된
                         실패 경로와 같은 값이라 구별되지 않습니다 (ADR-021).""")
-                .containsAll(contract);
+                .containsAll(contractZones());
     }
 
     @Test
@@ -109,48 +107,24 @@ class ZoneSeedCoverageIT {
                  WHERE c.active = FALSE OR f.active = FALSE"""))
                 .as("비활성 캠프·FC 에 붙은 권역이 있으면 그 주소는 배차 대상이 아니게 된다")
                 .isEmpty();
-        // 전 FC 품절(SKU-00013)은 OUT_OF_STOCK 이지 대체가 아니다. 대체가 되려면
-        // **어느 FC 에서는 품절이고 다른 FC 에는 있어야** 한다.
-        assertThat(count("""
-                SELECT count(*) FROM inventory_stock out_of_stock
-                 WHERE out_of_stock.available_qty = 0
-                   AND EXISTS (SELECT 1 FROM inventory_stock elsewhere
-                                WHERE elsewhere.sku = out_of_stock.sku
-                                  AND elsewhere.available_qty > 0)"""))
-                .as("홈 FC 만 품절이라 대체가 일어나는 경우")
-                .isPositive();"SELECT count(*) FROM zones")).isEqualTo(91);
-        // 전 FC 품절(SKU-00013)은 OUT_OF_STOCK 이지 대체가 아니다. 대체가 되려면
-        // **어느 FC 에서는 품절이고 다른 FC 에는 있어야** 한다.
-        assertThat(count("""
-                SELECT count(*) FROM inventory_stock out_of_stock
-                 WHERE out_of_stock.available_qty = 0
-                   AND EXISTS (SELECT 1 FROM inventory_stock elsewhere
-                                WHERE elsewhere.sku = out_of_stock.sku
-                                  AND elsewhere.available_qty > 0)"""))
-                .as("홈 FC 만 품절이라 대체가 일어나는 경우")
-                .isPositive();"SELECT count(*) FROM camps")).isEqualTo(10);
-        // 전 FC 품절(SKU-00013)은 OUT_OF_STOCK 이지 대체가 아니다. 대체가 되려면
-        // **어느 FC 에서는 품절이고 다른 FC 에는 있어야** 한다.
-        assertThat(count("""
-                SELECT count(*) FROM inventory_stock out_of_stock
-                 WHERE out_of_stock.available_qty = 0
-                   AND EXISTS (SELECT 1 FROM inventory_stock elsewhere
-                                WHERE elsewhere.sku = out_of_stock.sku
-                                  AND elsewhere.available_qty > 0)"""))
-                .as("홈 FC 만 품절이라 대체가 일어나는 경우")
-                .isPositive();"SELECT count(*) FROM fulfillment_centers")).isEqualTo(3);
+    }
+
+    @Test
+    void 시드된_참조_데이터의_규모가_부록_A_와_같다() {
+        assertThat(count("SELECT count(*) FROM zones")).isEqualTo(91);
+        assertThat(count("SELECT count(*) FROM camps")).isEqualTo(10);
+        assertThat(count("SELECT count(*) FROM fulfillment_centers")).isEqualTo(3);
     }
 
     @Test
     void 모든_캠프_티어_냉장_조합에_반경_50km_안의_적격_FC_가_있다() {
         // 이것이 성립하지 않으면 그 조합의 주문은 NO_ELIGIBLE_FC 가 된다(ADR-021 결정 3-b).
         // 시드를 손대는 날 조용히 깨질 수 있는 성질이라 못 박아 둔다.
-        List<Camp> camps = camps();
         List<Fc> centers = centers();
         List<String> missing = new ArrayList<>();
 
-        for (Camp camp : camps) {
-            for (String tier : List.of("DAWN", "SAME_DAY", "NEXT_DAY")) {
+        for (Camp camp : camps()) {
+            for (String tier : TIERS) {
                 for (boolean cold : List.of(false, true)) {
                     boolean eligible = centers.stream().anyMatch(fc -> fc.active()
                             && fc.tiers().contains(tier)
@@ -180,7 +154,7 @@ class ZoneSeedCoverageIT {
         List<String> coldFallback = new ArrayList<>();
         for (Camp camp : camps()) {
             Fc home = byId.get(camp.fcId());
-            for (String tier : List.of("DAWN", "SAME_DAY", "NEXT_DAY")) {
+            for (String tier : TIERS) {
                 if (!home.tiers().contains(tier)) {
                     tierFallback.add(camp.code() + "/" + tier);
                 }
@@ -192,6 +166,7 @@ class ZoneSeedCoverageIT {
 
         assertThat(tierFallback).as("홈 FC 의 티어 미지원으로 대체가 일어나는 캠프").isNotEmpty();
         assertThat(coldFallback).as("홈 FC 의 냉장 미지원으로 대체가 일어나는 캠프").isNotEmpty();
+
         // 전 FC 품절(SKU-00013)은 OUT_OF_STOCK 이지 대체가 아니다. 대체가 되려면
         // **어느 FC 에서는 품절이고 다른 FC 에는 있어야** 한다.
         assertThat(count("""
@@ -201,11 +176,6 @@ class ZoneSeedCoverageIT {
                                 WHERE elsewhere.sku = out_of_stock.sku
                                   AND elsewhere.available_qty > 0)"""))
                 .as("홈 FC 만 품절이라 대체가 일어나는 경우")
-                .isPositive();"""
-                SELECT count(*) FROM inventory_stock i
-                  JOIN camps c ON c.fc_id = i.fc_id
-                 WHERE i.available_qty = 0"""))
-                .as("홈 FC 의 재고 부족으로 대체가 일어나는 경우")
                 .isPositive();
     }
 
@@ -213,16 +183,7 @@ class ZoneSeedCoverageIT {
     void 재고_스텁은_예외만_담는다() {
         // 행이 없으면 가용이다. 2,000개 SKU 를 전부 적어 두면 "왜 OUT_OF_STOCK 인가" 의 답이
         // 6,000행 어딘가에 묻힌다.
-        // 전 FC 품절(SKU-00013)은 OUT_OF_STOCK 이지 대체가 아니다. 대체가 되려면
-        // **어느 FC 에서는 품절이고 다른 FC 에는 있어야** 한다.
-        assertThat(count("""
-                SELECT count(*) FROM inventory_stock out_of_stock
-                 WHERE out_of_stock.available_qty = 0
-                   AND EXISTS (SELECT 1 FROM inventory_stock elsewhere
-                                WHERE elsewhere.sku = out_of_stock.sku
-                                  AND elsewhere.available_qty > 0)"""))
-                .as("홈 FC 만 품절이라 대체가 일어나는 경우")
-                .isPositive();"SELECT count(*) FROM inventory_stock")).isEqualTo(9);
+        assertThat(count("SELECT count(*) FROM inventory_stock")).isEqualTo(9);
         assertThat(queryStrings("SELECT DISTINCT sku FROM inventory_stock"))
                 .containsExactly("SKU-00013", "SKU-00666", "SKU-01337");
     }
@@ -236,23 +197,12 @@ class ZoneSeedCoverageIT {
 
         execute("R__ 시드 재실행", connection -> {
             try (Statement statement = connection.createStatement()) {
-                statement.execute(Files.readString(
-                        Path.of("src/main/resources/db/migration/R__seed_fulfillment.sql"),
-                        StandardCharsets.UTF_8));
+                statement.execute(Files.readString(SEED_SCRIPT, StandardCharsets.UTF_8));
             }
         });
 
         assertThat(zoneIdsByGeohash()).isEqualTo(before);
-        // 전 FC 품절(SKU-00013)은 OUT_OF_STOCK 이지 대체가 아니다. 대체가 되려면
-        // **어느 FC 에서는 품절이고 다른 FC 에는 있어야** 한다.
-        assertThat(count("""
-                SELECT count(*) FROM inventory_stock out_of_stock
-                 WHERE out_of_stock.available_qty = 0
-                   AND EXISTS (SELECT 1 FROM inventory_stock elsewhere
-                                WHERE elsewhere.sku = out_of_stock.sku
-                                  AND elsewhere.available_qty > 0)"""))
-                .as("홈 FC 만 품절이라 대체가 일어나는 경우")
-                .isPositive();"SELECT count(*) FROM zones")).isEqualTo(91);
+        assertThat(count("SELECT count(*) FROM zones")).isEqualTo(91);
     }
 
     // --- 조회 도우미 ---------------------------------------------------------
@@ -277,36 +227,44 @@ class ZoneSeedCoverageIT {
     private static List<Fc> centers() {
         List<Fc> centers = new ArrayList<>();
         query("SELECT id, code, lat, lng, supports_cold, tiers, active FROM fulfillment_centers",
-                rs -> centers.add(new Fc(rs.getString("id"), rs.getString("code"),
-                        rs.getDouble("lat"), rs.getDouble("lng"), rs.getBoolean("supports_cold"),
-                        List.of((String[]) rs.getArray("tiers").getArray()), rs.getBoolean("active"))));
+                resultSet -> centers.add(new Fc(
+                        resultSet.getString("id"),
+                        resultSet.getString("code"),
+                        resultSet.getDouble("lat"),
+                        resultSet.getDouble("lng"),
+                        resultSet.getBoolean("supports_cold"),
+                        List.of((String[]) resultSet.getArray("tiers").getArray()),
+                        resultSet.getBoolean("active"))));
         return centers;
     }
 
     private static List<Camp> camps() {
         List<Camp> camps = new ArrayList<>();
         query("SELECT code, fc_id, lat, lng FROM camps",
-                rs -> camps.add(new Camp(rs.getString("code"), rs.getString("fc_id"),
-                        rs.getDouble("lat"), rs.getDouble("lng"))));
+                resultSet -> camps.add(new Camp(
+                        resultSet.getString("code"),
+                        resultSet.getString("fc_id"),
+                        resultSet.getDouble("lat"),
+                        resultSet.getDouble("lng"))));
         return camps;
     }
 
     private static Map<String, String> zoneIdsByGeohash() {
         Map<String, String> ids = new LinkedHashMap<>();
         query("SELECT geohash5, id FROM zones ORDER BY geohash5",
-                rs -> ids.put(rs.getString("geohash5"), rs.getString("id")));
+                resultSet -> ids.put(resultSet.getString("geohash5"), resultSet.getString("id")));
         return ids;
     }
 
     private static Set<String> queryStrings(String sql) {
         Set<String> values = new TreeSet<>();
-        query(sql, rs -> values.add(rs.getString(1)));
+        query(sql, resultSet -> values.add(resultSet.getString(1)));
         return values;
     }
 
     private static long count(String sql) {
         long[] value = {0};
-        query(sql, rs -> value[0] = rs.getLong(1));
+        query(sql, resultSet -> value[0] = resultSet.getLong(1));
         return value[0];
     }
 
