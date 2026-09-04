@@ -126,8 +126,17 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    `ix_fulfillment_orders_wave`. 인덱스는 불변규칙 11 대로 EXPLAIN 을 PR 에 첨부한다.
    V1 은 이미 `main` 에 있으므로 고치지 않는다(불변규칙 13, 예외 없음) — 방금 만든 빈 테이블을
    지우는 마이그레이션이 이력에 남고, 그것이 정직한 이력이다.
+4-2. **정리 배치** ([ADR-023](adr/ADR-023-fulfillment-retention.md)): `fulfillment_orders` 30일
+   (`updated_at` 기준, **종결 상태만** — `CANCELLED`·`UNSERVICEABLE`·소속 웨이브가
+   `PLANNED`/`PLAN_FAILED` 인 `PLANNED`), `waves` 90일. `ProcessedEventCleaner` 패턴으로 일 1회,
+   `ctid` 경유 `LIMIT` 배치 반복, **배치마다 커밋**(ADR-019 의 측정: 0.47초 vs 11.29초).
+   `updated_at` 인덱스도 EXPLAIN 첨부. **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면
+   ADR-022 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 웨이브에서 제거(OPEN일 때만).
    마감은 `cutoffAt + grace`(기본 90초)이고, grace 를 넘긴 주문은 다음 웨이브 + `promiseRevised: true` ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).
+   단 **`cutoffAt < now − 24h`(설정값)이면 다음 웨이브가 아니라 `UNSERVICEABLE`(`STALE_PLACED`)** 이다
+   (ADR-020 후속 정정). 상한이 없으면 20일 묵은 `order.placed` 가 DLQ replay 로 들어와 오늘 날짜의
+   새 배송 약속을 만든다 — 유령 배송이다.
 5-1. **order-service 쪽 대응** — `fulfillment.planned` 리스너: `outcome=UNSERVICEABLE` → 주문 `FAILED` + `reason` 기록(§5.2 6단계),
    `promiseRevised: true` → `Order.revisePromise(window, at)` 로 `promised_start/end` 갱신(세터가 아니라 메서드, 불변규칙 6).
    **원래 작업 목록에 없던 항목이다.** §4.1 은 `fulfillment.planned` 의 소비자로 order 를 적었고 §5.2 도
@@ -151,12 +160,9 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 - `make demo` 실행 시 주문 200건이 자동으로 웨이브에 편입되고, 컷오프(테스트용 짧은 컷오프 설정)에 `wave.closed`가 캠프별 1회 발행됨을 Kafka 소비 로그·DB로 확인.
 - 이중 마감 없음 테스트 통과.
 - 순서 역전 두 방향(취소 선착·후착)과 웨이브 상태별 분기가 통합 테스트로 증명된다(ADR-022 표 전체).
+- 24시간 넘은 `order.placed` 가 `UNSERVICEABLE`(`STALE_PLACED`)로 종결되고 다음 웨이브에 들어가지 않는다.
+- 정리 배치가 종결 상태만 지우고 진행 중 주문을 건드리지 않는다(ADR-023).
 - `UNSERVICEABLE` 이 **시드 부족 때문에** 나오지 않는다: 시드된 `zones` 가 `contracts/seed/order-service-geohash5.txt` 의 91개 셀을 전부 덮는지 양쪽 서비스가 각자 검사(ADR-021).
-
-**Phase 2 를 닫기 전에 정해야 할 것**
-- **`fulfillment_orders`·`waves` 의 보존 정책.** 주문마다 행이 하나 쌓이는데(§8.1 피크 150,000/일)
-  이 표들에는 정리가 없다. `idempotency_keys` 가 ADR-019 로 7일을 정한 것과 같은 문제다.
-  하류(dispatch)가 계획을 끝낸 웨이브의 주문 행을 언제까지 두는가 — ADR-022 가 남긴 항목이다.
 
 **Phase 7 로 이월 (조건부)**
 - **lag-aware grace** — 웨이브 마감 grace 를 고정 90초가 아니라 컨슈머 랙에 연동한다.

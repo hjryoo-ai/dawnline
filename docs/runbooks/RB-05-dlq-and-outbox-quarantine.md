@@ -149,6 +149,26 @@ DLQ 레코드의 헤더에 원인 예외와 원본 토픽·파티션·오프셋�
 | 하류 의존 장애가 3회 재시도를 넘겼다 | 의존을 먼저 복구하고 replay |
 | 비즈니스 규칙 위반 | DLQ에 오면 안 되는 경우다. `dawnline_event_rejected_total` 로 가야 한다 — 소비자 버그 |
 
+> **replay 버튼을 누르기 전에 알아야 할 것 — 24시간 넘은 `order.placed` 는 replay 해도 실패로 종결된다.**
+>
+> fulfillment-service 는 `cutoffAt` 이 24시간을 넘긴 `order.placed` 를 다음 웨이브로 밀지 않고
+> `UNSERVICEABLE`(`reason=STALE_PLACED`)로 종결한다([ADR-020](../adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)
+> 후속 정정). order-service 는 그 주문을 `FAILED` 로 둔다.
+>
+> 이것은 결함이 아니라 방어다. 그 상한이 없으면 20일 묵은 주문이 replay 만으로 **오늘 날짜의 새
+> 배송 약속**을 받는다 — 고객은 20일 전에 주문했고 시스템은 오늘 배송하겠다고 말한다.
+>
+> 그러므로 오래된 `dawnline.order.placed.v1.dlq` 레코드를 replay 하는 목적은 **배송을 살리는 것이
+> 아니라 기록을 남기는 것**이다. 그 주문을 실제로 살리려면 고객에게 다시 접수받아야 하고,
+> 그 판단은 사람이 한다. replay 전에 레코드의 `cutoffAt` 을 먼저 본다:
+>
+> ```bash
+> # DLQ 레코드의 payload.cutoffAt 확인 (§2.1 의 콘솔 컨슈머 출력에서)
+> ```
+>
+> `fulfillment_orders` 는 30일 보존이므로([ADR-023](../adr/ADR-023-fulfillment-retention.md)),
+> **30일이 지난 DLQ 레코드는 fulfillment 쪽 기록도 이미 없다.** 두 창을 같은 30일로 맞춰 둔 이유다.
+
 ### 2.3 재처리
 
 ```
