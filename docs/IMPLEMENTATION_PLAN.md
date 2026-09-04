@@ -57,10 +57,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 - §8.3 의 전역 `Bulkhead`(동시 요청 상한). Phase 1 에서는 고객별 레이트 리밋까지만 한다.
   **조건**: 9단계 k6 에서 HikariCP 풀(인스턴스당 10, §8.2) 포화가 관측되면 Phase 1 안으로 당긴다.
   포화 여부는 `hikaricp_connections_pending` 로 판단하고, k6 리포트에 그 값을 함께 기록한다.
+  판정 기준과 기록 자리는 `docs/benchmarks/phase1-orders-k6.md` 6절에 있다 — 기준을 **측정 전에**
+  적어 둔 것은, 숫자를 본 뒤에 기준을 만들면 어떤 결과든 설명이 되기 때문이다.
 
 **마감 대조표** (CLAUDE.md 「작업 방식」 — 기억이 아니라 표로 확인한다)
 
-기준일 2026-09-04, `main` = PR #6 머지 시점. 빠진 항목은 **표에 남긴다**.
+기준일 2026-09-05, `main` = PR #7 머지 시점. 빠진 항목은 **표에 남긴다**.
 
 | # | 작업 | 상태 | 근거 |
 |---|---|---|---|
@@ -71,15 +73,16 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 5 | OpenAPI → `contracts/openapi/order-service.yaml` | ✅ | `OpenApiContractIT` — 문서와 코드의 일치까지 검사 |
 | 6 | 메트릭 `dawnline_orders_placed_total`, outbox 지표 | ✅ | `PlaceOrderServiceTest`(접수·재생 카운터), outbox 게이지는 `libs/messaging` 이 등록 |
 | 6-1 | 레이트 리밋(Lua 토큰버킷) | ✅ | `RateLimitIT`(실물 Redis 8건)·`RateLimitApiIT`(429 계약 4건) |
-| 7 | 테스트: 단위·통합·계약 | ✅ | 단위 734건 · 통합 97건. 빈 칸 5개는 8단계에서 채웠다(아래) |
-| 8 | k6 `orders.js` + `rate-limit.js` | ❌ **미구현** | 9단계 |
-| 9 | `sim-runner` smoke 200건 | ❌ **미구현** | 9단계 |
+| 7 | 테스트: 단위·통합·계약 | ✅ | 단위 770건(9단계의 sim-runner 36건 포함) · 통합 97건. 빈 칸 5개는 8단계에서 채웠다(아래) |
+| 8 | k6 `orders.js` + `rate-limit.js` | ⚠️ **스크립트만** | `tools/k6/`. 실측은 아직 — 아래 DoD 참고 |
+| 9 | `sim-runner` smoke 200건 | ✅ | `tools/sim-runner` (36건, 라인 97.1%). `make smoke` |
 
 | DoD | 상태 | 근거 |
 |---|---|---|
 | 통합 테스트 통과(PG·Kafka·Redis) | ✅ | 91건 통과. Redis 컨테이너는 `RateLimitIT`·`RateLimitApiIT` 가 띄운다 |
 | Redis 중단 상태에서 멱등 POST | ✅ | `PlaceOrderIT`(유스케이스) + `OrderApiIT.Redis_없이도_멱등_POST_가_HTTP_계층에서_성립한다`(HTTP). 후자는 먼저 `tryLock` 이 `UNAVAILABLE` 인지 확인해 **전제를 테스트가 스스로 말한다** — 확인하지 않으면 나중에 누가 Redis 를 붙였을 때 전제가 조용히 사라진다 |
-| k6 결과 기록 | ❌ **미구현** | 9단계 |
+| k6 결과 기록 | ❌ **미측정** | 스크립트·문서 골격은 `main` 에 있다(`docs/benchmarks/phase1-orders-k6.md`). 결과 표는 **빈 칸인 채로 커밋했다** — 채워지지 않은 칸이 있어야 Phase 1 이 안 닫혔다는 것이 표에 보인다. 실측은 스택을 띄울 수 있는 환경에서 별도로 한다 |
+| §8.3 Bulkhead 를 Phase 1 으로 당길지 판정 | ❌ **미판정** | 판정 기준과 자리는 벤치마크 문서 6절에 있다. `hikaricp_connections_pending` 실측이 있어야 판정된다 |
 
 **빈 칸 5개 — 8단계에서 모두 채웠다**
 
