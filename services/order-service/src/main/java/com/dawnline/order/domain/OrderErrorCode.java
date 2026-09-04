@@ -26,7 +26,15 @@ public enum OrderErrorCode implements ErrorCode {
      * <p>{@code VALIDATION_FAILED}(400)가 아닌 이유: 요청 값 자체는 형식·범위 모두 유효하다.
      * 처리할 수 없는 것은 <em>의미</em> 때문이다.
      */
-    TIER_NOT_SERVICEABLE("tier-not-serviceable", 422, "해당 지역에 제공되지 않는 배송 티어입니다");
+    TIER_NOT_SERVICEABLE("tier-not-serviceable", 422, "해당 지역에 제공되지 않는 배송 티어입니다"),
+
+    /**
+     * 고객별 레이트 리밋 초과 (§7.2, §8.3).
+     *
+     * <p>{@code Retry-After} 가 함께 나간다 — 얼마나 기다려야 하는지는 버킷이 알고 있고,
+     * 클라이언트가 그것을 추측하게 두면 지수 백오프로 과하게 물러나거나 즉시 재시도로 더 밀어붙인다.
+     */
+    RATE_LIMITED("rate-limited", 429, "요청이 너무 잦습니다");
 
     private final String code;
     private final int status;

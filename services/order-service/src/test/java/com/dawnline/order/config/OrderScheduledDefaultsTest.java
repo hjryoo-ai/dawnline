@@ -114,10 +114,42 @@ class OrderScheduledDefaultsTest {
     }
 
     @Test
+    void 레이트_리밋_기본값이_7_2_표와_같다() {
+        // §7.2: 용량 60, 초당 1 리필, TTL 60s. 설계서의 숫자가 코드에만 있으면 둘이 표류한다.
+        OrderProperties.RateLimit rateLimit = defaults().rateLimit();
+
+        assertThat(rateLimit.enabled()).isTrue();
+        assertThat(rateLimit.capacity()).isEqualTo(60);
+        assertThat(rateLimit.refillPerSecond()).isEqualTo(1);
+        assertThat(rateLimit.ttlSeconds()).isEqualTo(60);
+    }
+
+    @Test
+    void Redis_지연_예산_기본값이_SLO_보다_한참_작다() {
+        // §8.1 POST /orders p99 200ms. 명령 타임아웃이 그것에 가까우면 폴백이 SLO 를 먹는다.
+        OrderProperties.Redis redis = defaults().redis();
+
+        assertThat(redis.commandTimeout()).isEqualTo(Duration.ofMillis(50));
+        assertThat(redis.commandTimeout()).isLessThan(Duration.ofMillis(200));
+        assertThat(redis.outageBypass()).isEqualTo(Duration.ofSeconds(10));
+    }
+
+    @Test
     void 잘못된_설정값은_기동에서_거부된다() {
         assertThat(invalid(0, 1000, 200)).hasMessageContaining("retention-days");
         assertThat(invalid(7, 0, 200)).hasMessageContaining("batch-size");
         assertThat(invalid(7, 1000, 0)).hasMessageContaining("max-batches-per-run");
+
+        assertThat(catchThrowable(() -> new OrderProperties.RateLimit(true, 0, 1, 60)))
+                .hasMessageContaining("capacity");
+        assertThat(catchThrowable(() -> new OrderProperties.RateLimit(true, 60, 0, 60)))
+                .hasMessageContaining("refill-per-second");
+        assertThat(catchThrowable(() -> new OrderProperties.RateLimit(true, 60, 1, 0)))
+                .hasMessageContaining("ttl-seconds");
+        assertThat(catchThrowable(() -> new OrderProperties.Redis(0, 10_000)))
+                .hasMessageContaining("command-timeout-ms");
+        assertThat(catchThrowable(() -> new OrderProperties.Redis(50, 0)))
+                .hasMessageContaining("outage-bypass-ms");
     }
 
     private static Throwable invalid(int retentionDays, int batchSize, int maxBatches) {

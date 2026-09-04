@@ -60,6 +60,12 @@ public class ProblemDetailsAdvice extends ResponseEntityExceptionHandler {
             Map.of(OrderErrorCode.IDEMPOTENT_REQUEST_IN_FLIGHT.code(), 1);
 
     /**
+     * 예외가 직접 실어 보내는 대기 시간. 레이트 리밋처럼 <em>얼마나</em> 기다려야 하는지가
+     * 상황마다 다른 경우에 쓴다 — 위 표의 고정값보다 우선한다.
+     */
+    static final String RETRY_AFTER_DETAIL = "retryAfterSeconds";
+
+    /**
      * 도메인 예외. 상태·코드·상세는 예외가 들고 온다.
      *
      * @param exception 도메인 예외
@@ -76,11 +82,18 @@ public class ProblemDetailsAdvice extends ResponseEntityExceptionHandler {
         exception.details().forEach(problem::setProperty);
 
         HttpHeaders headers = new HttpHeaders();
-        Integer retryAfter = RETRY_AFTER_SECONDS.get(exception.code());
-        if (retryAfter != null) {
-            headers.set(HttpHeaders.RETRY_AFTER, Integer.toString(retryAfter));
-        }
+        retryAfterFor(exception).ifPresent(seconds ->
+                headers.set(HttpHeaders.RETRY_AFTER, Integer.toString(seconds)));
         return new ResponseEntity<>(problem, headers, HttpStatusCode.valueOf(exception.status()));
+    }
+
+    /** 예외가 실어 온 값이 먼저이고, 없으면 코드별 고정값을 쓴다. */
+    private static java.util.Optional<Integer> retryAfterFor(DomainException exception) {
+        Object fromDetails = exception.details().get(RETRY_AFTER_DETAIL);
+        if (fromDetails instanceof Number seconds) {
+            return java.util.Optional.of(Math.max(1, seconds.intValue()));
+        }
+        return java.util.Optional.ofNullable(RETRY_AFTER_SECONDS.get(exception.code()));
     }
 
     /**

@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.dawnline.common.Ids;
 import jakarta.persistence.EntityManager;
+import java.time.Duration;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -362,6 +363,32 @@ class OrderApiIT extends OrderIntegrationTestBase {
         // 경로만으로 막으면 "그런 리소스 없음" 이 되는데, 사실은 "그 버전은 지원하지 않음" 이다.
         mockMvc.perform(get("/api/v2/orders").param("customerId", Ids.newId().toString()))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void Redis_가_없어도_레이트_리밋이_지연을_더하지_않는다() throws Exception {
+        // fail-open 은 정확성을 지키지만, 요청마다 Redis 응답을 기다린 뒤 통과시키면 그 기다림이
+        // 그대로 p99 에 실린다(§8.1). RedisOutageGate 가 첫 실패 뒤로는 Redis 를 부르지도 않는다.
+        //
+        // 이 컨텍스트의 Redis 는 죽은 주소라 연결 거부가 즉시 온다 — 그래서 이 어설션이 재는 것은
+        // "게이트가 경로에 무엇을 더하지 않는다" 이지 멈춘 Redis 의 타임아웃이 아니다.
+        // 후자는 RedisOutageGateTest 가 "차단 중에는 부르지도 않는다" 로 직접 확인한다.
+        UUID customerId = Ids.newId();
+        int requests = 30;
+
+        long startedAt = System.nanoTime();
+        for (int i = 0; i < requests; i++) {
+            mockMvc.perform(post("/api/v1/orders")
+                            .header(IDEMPOTENCY_KEY, "no-redis-" + i)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body(customerId, "DAWN")))
+                    .andExpect(status().isCreated());
+        }
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        // 넉넉한 상한이다. CI 의 느린 러너에서도 흔들리지 않으면서, 요청당 Redis 타임아웃을
+        // 기다리는 회귀(요청당 50ms 만 잡아도 1.5초, 기본값이면 30분)는 확실히 잡는다.
+        assertThat(elapsed).as("%d건에 %s 걸렸다", requests, elapsed).isLessThan(Duration.ofSeconds(20));
     }
 
     @Test

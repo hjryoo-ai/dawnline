@@ -8,11 +8,16 @@ import com.dawnline.order.application.port.in.OrderCursor;
 import com.dawnline.order.application.port.in.OrderView;
 import com.dawnline.order.application.port.in.PlaceOrderResult;
 import com.dawnline.order.application.port.in.PlaceOrderUseCase;
+import com.dawnline.order.application.port.out.RateLimiter;
+import com.dawnline.order.domain.OrderErrorCode;
 import com.dawnline.order.domain.OrderStatus;
+import com.dawnline.common.error.DomainException;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -51,19 +56,23 @@ public class OrderController {
     private final GetOrderUseCase getOrder;
     private final ListOrdersUseCase listOrders;
     private final CancelOrderUseCase cancelOrder;
+    private final Optional<RateLimiter> rateLimiter;
 
     /**
      * @param placeOrder  주문 접수
      * @param getOrder    주문 상세
      * @param listOrders  주문 목록
      * @param cancelOrder 주문 취소
+     * @param rateLimiter 고객별 레이트 리밋 (§7.2). 꺼 두면 비어 있다
      */
     public OrderController(PlaceOrderUseCase placeOrder, GetOrderUseCase getOrder,
-            ListOrdersUseCase listOrders, CancelOrderUseCase cancelOrder) {
+            ListOrdersUseCase listOrders, CancelOrderUseCase cancelOrder,
+            Optional<RateLimiter> rateLimiter) {
         this.placeOrder = Objects.requireNonNull(placeOrder, "placeOrder");
         this.getOrder = Objects.requireNonNull(getOrder, "getOrder");
         this.listOrders = Objects.requireNonNull(listOrders, "listOrders");
         this.cancelOrder = Objects.requireNonNull(cancelOrder, "cancelOrder");
+        this.rateLimiter = Objects.requireNonNull(rateLimiter, "rateLimiter");
     }
 
     /**
@@ -80,12 +89,39 @@ public class OrderController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody PlaceOrderRequest request) {
 
+        checkRateLimit(request.customerId());
+
         PlaceOrderResult result = placeOrder.place(request.toCommand(idempotencyKey));
         if (result.replayed()) {
             return ResponseEntity.ok(result.order());
         }
         return ResponseEntity.created(URI.create("/api/v1/orders/" + result.order().orderId()))
                 .body(result.order());
+    }
+
+    /**
+     * 레이트 리밋 (§7.2, §8.3). 쓰기 경로 중 <strong>가장 앞</strong>이다 — 이 뒤로는 지오코딩·DB·
+     * Redis 가 이어지므로, 막을 것은 그 전에 막아야 의미가 있다.
+     *
+     * <p>Bean Validation 뒤에 서는 것은 어쩔 수 없다. 판정에 필요한 {@code customerId} 가 본문에
+     * 있고(무인증이라 헤더에서 얻을 수 없다, §10), 본문을 읽으려면 바인딩이 끝나 있어야 한다.
+     * 형식이 틀린 요청은 어차피 DB·Redis 를 건드리지 않고 400 으로 끝난다.
+     *
+     * <p>Redis 장애로 판정을 건너뛴 경우({@code BYPASSED})도 통과시킨다(§7.2 fail-open).
+     * 그 상태는 {@code dawnline_rate_limit_decisions_total{outcome="bypassed"}} 로 보이고
+     * §9.4 가 알림을 건다 — 무인증 API 의 유일한 남용 방지 수단이 꺼진 상태이기 때문이다.
+     */
+    private void checkRateLimit(UUID customerId) {
+        if (rateLimiter.isEmpty()) {
+            return;
+        }
+        RateLimiter.Decision decision = rateLimiter.get().tryAcquire(customerId);
+        if (decision.isAllowed()) {
+            return;
+        }
+        throw new DomainException(OrderErrorCode.RATE_LIMITED,
+                "요청이 너무 잦습니다. 잠시 후 다시 시도하세요.",
+                Map.of(ProblemDetailsAdvice.RETRY_AFTER_DETAIL, decision.retryAfterSeconds()));
     }
 
     /**
