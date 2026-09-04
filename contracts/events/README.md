@@ -149,7 +149,7 @@ enum 값 추가는 같은 major 안에서 허용된다(§4.7). 다만 **소비�
 ### 4.5 `fulfillment.planned` 에 `reason` 을 추가했다
 
 §5.2 6단계는 "주문 서비스는 이를 받아 상태 `FAILED`, **사유 기록**"이라고 정한다. 사유가 이벤트에 실려 있지 않으면 order-service 는 사유를 기록할 방법이 없다(불변규칙 4: 코어 서비스 간 동기 호출 금지).
-그래서 `outcome=UNSERVICEABLE` 일 때 `reason` 을 필수로 만들었다. §4.3 의 필드 목록에 명시되지 않은 유일한 추가 필드다.
+그래서 `outcome=UNSERVICEABLE` 일 때 `reason` 을 필수로 만들었다.
 
 값은 enum 이 아니라 문자열이다. §5.2 의 필터 1~4 단계에서 파생되는 코드를 **권장 어휘**로 둔다:
 
@@ -160,8 +160,23 @@ enum 값 추가는 같은 major 안에서 허용된다(§4.7). 다만 **소비�
 | `OUT_OF_STOCK` | 3. 재고 부족 |
 | `NO_ZONE_MATCH` | 4. geohash5 → 권역 매핑 실패 |
 | `NO_ACTIVE_CAMP` | 4~5. 권역은 있으나 활성 캠프 없음 |
+| `NO_ELIGIBLE_FC` | 5~6. 권역·캠프는 있으나 반경 50 km 안에 1~3단계를 통과한 FC 가 없음 |
+
+`NO_ZONE_MATCH` 와 `NO_ELIGIBLE_FC` 를 한 값으로 합치지 않는다. 전자는 **주소를 아직 서비스하지
+않는다**(또는 시드가 모자라다)는 뜻이고, 후자는 **서비스하는 지역인데 그 티어·냉장·재고를 감당할
+FC 가 없다**는 뜻이다. 합치면 "어느 FC 에 무엇이 모자란가" 를 볼 수 없다(ADR-021).
 
 fulfillment-service 구현 시 이 목록이 확정되면 enum 으로 좁히는 것을 검토한다(같은 major 안에서 문자열 → enum 은 **축소**이므로 v2 가 필요하다. 좁히려면 그 전에 결정해야 한다).
+
+### 4.5-1 `fulfillment.planned` 의 `promiseRevised` 는 값 하나로 두 가지를 말하지 않는다
+
+`promisedWindow` 에는 **언제나 지금 유효한 창** 하나만 들어간다. 그것이 접수 시점의 약속과 다른
+값인지를 `promiseRevised` 가 따로 말한다(ADR-020).
+
+원래 창과 개정된 창을 <em>둘 다</em> 싣는 방법도 있었지만, 그러면 소비자가 매번 "어느 쪽이 유효한
+창인가" 를 판단해야 한다. 유효한 값 하나를 정해진 자리에 두고 그것이 개정된 것인지를 플래그로
+말하는 편이 읽는 쪽에서 실수할 여지가 적다. 원래 창이 필요한 쪽(ops-api 의 정시율 §8.1)은
+`order.placed` 를 함께 구독하므로 이미 갖고 있다.
 
 ### 4.6 페이로드에 넣지 않은 것
 
@@ -204,6 +219,7 @@ fulfillment-service 구현 시 이 목록이 확정되면 enum 으로 좁히는 
 | 언제 | 무엇 | 근거 |
 |---|---|---|
 | 2026-09-03 | `order.placed.v1` 에 `cutoffAt` 추가 (required) | Phase 1 브랜치. order-service 는 배포된 적이 없고 토픽도 만들어진 적이 없다. 소비자(fulfillment-service)는 Phase 2 에 생기며, 그쪽 웨이브 키가 이 값을 **반드시** 필요로 한다(§5.2) — 선택으로 두면 "없으면 직접 계산" 이라는 두 번째 계산 지점이 생겨 이 필드를 넣은 이유 자체가 사라진다 |
+| 2026-09-05 | `fulfillment.planned.v1` 에 `promiseRevised` 추가 (`outcome=PLANNED` 일 때 required) | Phase 2 착수 시점. 토픽 `dawnline.fulfillment.planned.v1` 은 어떤 환경에도 만들어진 적이 없고, 발행자(fulfillment-service)는 배포된 적이 없으며, 소비자(order-service·dispatch-service)는 같은 Phase 에서 함께 고친다. 선택으로 두면 소비자가 "없을 때" 를 처리하는 죽은 분기를 갖는데, 그 기본값 `false`("개정되지 않았다")는 이 필드가 막으려던 상황 — 조용한 약속 파기 — 과 구별되지 않는다 ([ADR-020](../../docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)) |
 
 ---
 

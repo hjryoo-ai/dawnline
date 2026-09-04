@@ -32,12 +32,18 @@
 | 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수 (`PLANNED → DELIVERED` + 진행 단계 비교) | ✅ Accepted (2026-09-02) | [ADR-017](ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
 | 018 | 멱등 잠금은 Redis 키(PX 30000), DB 에는 `DONE` 만 기록 | ✅ Accepted (2026-09-03) | [ADR-018](ADR-018-idempotency-lock-in-redis-record-in-db.md) |
 | 019 | 멱등 기록 보존 7일, `status` 컬럼 제거 | ✅ Accepted (2026-09-03) | [ADR-019](ADR-019-idempotency-record-retention-7-days.md) |
-| 020 | 컷오프 계산은 order-service 한 곳 + 웨이브 마감 grace + 약속 개정 | ⏳ Phase 2 예정 | — |
+| 020 | 컷오프 계산은 order-service 한 곳 + 웨이브 마감 grace + 약속 개정 | ✅ Accepted (2026-09-05) | [ADR-020](ADR-020-cutoff-ownership-wave-grace-promise-revision.md) |
+| 021 | 권역 시드를 order-service 지오코더의 출력에서 파생 (권역 91개) | ✅ Accepted (2026-09-05) | [ADR-021](ADR-021-zone-seed-derived-from-geocoder.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
 - **015·016은 Phase 0 마감 감사에서** 드러난 결함·설계서 내부 모순을 확정한 것이다.
   015는 릴레이의 head-of-line blocking(실제 도달 가능한 결함), 016은 §8.6과 §8.4의 모순을 해소한다.
+- **021은 §16 표에 없던 항목**이다. 부록 A 의 "권역 60개" 가 order-service 지오코더의 출력을 덮지
+  못한다는 것을 세어 보고(91개) 알게 되어 추가했다. 덮지 못하면 그 주소의 주문이 전부
+  `UNSERVICEABLE` 이 되는데, 그것이 설계된 실패 경로와 구별되지 않는다.
+- **020은 Phase 2 착수 시점에** 코드보다 먼저 확정했다. §5.2 가 "Phase 2 선결" 이라고 적어 둔 항목이며,
+  구현하다 마주치면 "이미 나간 약속" 을 앞에 두고 급하게 정하게 되는 종류의 결정이기 때문이다.
 - **017·018은 Phase 1 구현 중에** 설계서를 코드로 옮기다 드러난 미정·모순을 확정한 것이다.
   017은 §4.5가 "상태 머신으로 흡수"라고만 적고 방법을 정하지 않은 부분, 018은 §5.1 멱등 흐름의
   1단계(DB `IN_PROGRESS`)와 3단계(`DONE` INSERT)가 서로 맞지 않던 부분이다.

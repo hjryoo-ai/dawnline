@@ -1,0 +1,42 @@
+{
+  "eventId": "01a04ee2-9c40-7b31-8f52-6d2a41c9e007",
+  "eventType": "fulfillment.planned",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-30T01:01:35.902Z",
+  "producer": "fulfillment-service",
+  "partitionKey": "01a04ee2-9a11-7c04-b7de-2f0c9a35de41",
+  "traceId": "8b2f0c41d9ae57306a1c4b8e2f77d013",
+  "payload": {
+    "outcome": "PLANNED",
+    "orderId": "01a04ee2-9a11-7c04-b7de-2f0c9a35de41",
+    "customerId": "01a04ee2-9a11-7ff2-9c60-4a7b1e0d8c35",
+    "serviceTier": "SAME_DAY",
+    "address": {
+      "line": "서울특별시 마포구 월드컵북로 396, 12층",
+      "postalCode": "03925",
+      "lat": 37.5796,
+      "lng": 126.8895,
+      "geohash7": "wydjz3n"
+    },
+    "promisedWindow": {
+      "start": "2026-08-30T14:00:00+09:00",
+      "end": "2026-08-30T20:00:00+09:00"
+    },
+    "parcel": {
+      "weightG": 2100,
+      "volumeCm3": 12000,
+      "requiresCold": false,
+      "hazmat": false
+    },
+    "items": [
+      { "sku": "SKU-3307", "qty": 1 }
+    ],
+    "placedAt": "2026-08-30T00:59:58.402Z",
+    "fcId": "01a04ee2-9a11-7a58-8e13-cc07b6a1f290",
+    "campId": "01a04ee2-9a11-7d6b-9204-70e5b3c8a1df",
+    "zoneId": "01a04ee2-9a11-71ce-ba85-19d4f6027ab3",
+    "waveId": "01a04ee2-9b02-7e47-8a91-3f5c02d7bb64",
+    "waveCutoffAt": "2026-08-30T05:00:00Z",
+    "promiseRevised": true
+  }
+}

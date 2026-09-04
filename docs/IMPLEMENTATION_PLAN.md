@@ -84,6 +84,15 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | k6 결과 기록 | ❌ **미측정** | 스크립트·문서 골격은 `main` 에 있다(`docs/benchmarks/phase1-orders-k6.md`). 결과 표는 **빈 칸인 채로 커밋했다** — 채워지지 않은 칸이 있어야 Phase 1 이 안 닫혔다는 것이 표에 보인다. 실측은 스택을 띄울 수 있는 환경에서 별도로 한다 |
 | §8.3 Bulkhead 를 Phase 1 으로 당길지 판정 | ❌ **미판정** | 판정 기준과 자리는 벤치마크 문서 6절에 있다. `hikaricp_connections_pending` 실측이 있어야 판정된다 |
 
+**Phase 1 은 아직 닫히지 않았다** (2026-09-05)
+
+위 DoD 의 ❌ 두 줄(k6 결과 기록 · §8.3 Bulkhead 판정)은 `make up` 이 가능한 환경에서의 실측
+**한 번**으로 함께 채워진다. 사용자 결정으로 그 실측을 뒤로 미루고 **Phase 2 를 먼저 진행**한다.
+
+두 줄은 채워질 때까지 표에 ❌ 로 남는다. Phase 1 마감 보고는 그때 낸다 — 미룬 것을 "완료" 로
+바꿔 적지 않는다. 미루는 것과 끝난 것은 다르고, 표가 그 둘을 구별하지 못하면 표를 만든 이유가
+없다.
+
 **빈 칸 5개 — 8단계에서 모두 채웠다**
 
 | 빈 칸 | 왜 필요했나 | 채운 곳 |
@@ -102,17 +111,44 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 ## Phase 2 — fulfillment-service (FC 선택·웨이브·컷오프)
 
 **작업**
-1. 시드: FC 3, 캠프 10, 권역 60(geohash5), 재고 스텁, 차량·기사는 Phase 3에서. 시드는 Flyway `R__seed_*.sql` 또는 `sim-runner seed` 명령 `[둘 중 하나로 통일]`.
+1. 시드: FC 3, 캠프 10, **권역 91**(geohash5), 재고 스텁, 차량·기사는 Phase 3에서.
+   시드는 **Flyway `R__seed_*.sql`** 로 통일한다(2026-09-05 확정 — `sim-runner` 는 §5.6 대로 REST
+   전용으로 남아 남의 서비스 DB 에 쓰지 않고, Testcontainers 통합 테스트가 시드를 자동으로 얻는다).
+   권역이 60이 아니라 91인 이유와 셀→캠프 배정 규칙은 [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md).
+   `contracts/seed/order-service-geohash5.txt` 를 생성물로 커밋하고 양쪽 서비스가 각자 검사한다.
 2. Redis GEO 적재(기동 시), `GEOSEARCH` 기반 최근접 FC 선택, geohash5 → zone 캐시.
 3. FC 선택 규칙(§5.2 1~6단계), `UNSERVICEABLE` 경로.
 4. `Wave` 애그리거트·상태 머신, 편입 로직(UNIQUE + FOR UPDATE 짧은 트랜잭션), 컷오프 스케줄러(30초, Redis 락, Lua 언락), `CLOSING→CLOSED` 전이와 `wave.closed` outbox.
 5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 웨이브에서 제거(OPEN일 때만).
+   마감은 `cutoffAt + grace`(기본 90초)이고, grace 를 넘긴 주문은 다음 웨이브 + `promiseRevised: true` ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).
+5-1. **order-service 쪽 대응** — `fulfillment.planned` 리스너: `outcome=UNSERVICEABLE` → 주문 `FAILED` + `reason` 기록(§5.2 6단계),
+   `promiseRevised: true` → `Order.revisePromise(window, at)` 로 `promised_start/end` 갱신(세터가 아니라 메서드, 불변규칙 6).
+   **원래 작업 목록에 없던 항목이다.** §4.1 은 `fulfillment.planned` 의 소비자로 order 를 적었고 §5.2 도
+   order-service 가 사유를 기록한다고 적었는데, Phase 2 작업 목록에는 order-service 쪽 일이 한 줄도
+   없었다 — 넣지 않으면 마감 대조표에서 "누가 UNSERVICEABLE 을 FAILED 로 바꾸나" 가 빈 칸으로 남는다.
 6. 순서 역전 처리: `order.cancelled`가 먼저 오면 취소 마커 저장 후 `order.placed` 도착 시 무시.
+6-1. **메트릭**: `dawnline_wave_orders{camp,tier}`(게이지), `dawnline_promise_revised_total{camp,tier}`(카운터),
+   `dawnline_fc_fallback_total{camp,reason}`(카운터, `reason`=tier/cold/inventory).
+   앞의 둘은 §9.1 에 예약되어 있었으나 작업 목록에는 없었다. `promise_revised` 는 ADR-020 의 개정이
+   실제로 일어났는지를 보는 **유일한** 값이고, 이것이 없으면 §8.1 의 정시율 두 기준을 나중에 맞출 수 없다.
+   `fc_fallback` 은 [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) 이 §5.2 5단계를 확정하며
+   함께 정한 것으로, 대체 FC 선택이 조용히 일어나지 않게 한다 — 계속 오르는 캠프는 홈 FC 배정이
+   잘못됐거나 그 FC 의 역량이 부족한 것이고, 그것이 §5.2 FC 선택 규칙이 드러내려던 사실이다.
 7. 테스트: 스케줄러 인스턴스 2개 동시 실행 시 `wave.closed` 정확히 1회(통합), 컷오프 이후 주문이 다음 웨이브로 가는지, GEO 폴백(Redis 중단).
 
 **DoD**
 - `make demo` 실행 시 주문 200건이 자동으로 웨이브에 편입되고, 컷오프(테스트용 짧은 컷오프 설정)에 `wave.closed`가 캠프별 1회 발행됨을 Kafka 소비 로그·DB로 확인.
 - 이중 마감 없음 테스트 통과.
+- `UNSERVICEABLE` 이 **시드 부족 때문에** 나오지 않는다: 시드된 `zones` 가 `contracts/seed/order-service-geohash5.txt` 의 91개 셀을 전부 덮는지 양쪽 서비스가 각자 검사(ADR-021).
+
+**Phase 7 로 이월 (조건부)**
+- **lag-aware grace** — 웨이브 마감 grace 를 고정 90초가 아니라 컨슈머 랙에 연동한다.
+  Phase 2 에서는 고정 90초까지만 한다([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 5).
+  **조건**: Phase 7 `peak-day` 시뮬레이션에서 `dawnline_promise_revised_total` 이 **컷오프 직후에
+  뭉쳐서** 튀면 lag-aware 로 간다. 고르게 흩어져 있거나 거의 없으면 고정 90초를 유지한다.
+  판정 결과를 `docs/benchmarks/<date>-peak.md` 에 기록한다.
+  판정 조건을 지금 적어 두는 이유는 Phase 1 의 원인 판정표와 같다 — 수치를 본 뒤에 기준을 만들면
+  어떤 결과든 설명이 된다.
 
 ---
 
@@ -192,6 +228,9 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 2. 트레이싱 검증: 주문 1건 traceId로 4개 서비스 span이 Tempo에서 연결됨(스크린샷 README).
 3. 카오스 스크립트: `make chaos-kafka`, `make chaos-redis`, `make chaos-kill dispatch`. 각 실행 후 검증 SQL(주문 수 = 후보 수 + 취소 수, 라우트 stop 주문 중복 0, processed_events 중복 0)을 자동 실행.
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
+   **`dawnline_promise_revised_total` 을 시간축으로 함께 기록하고 lag-aware grace 판정을 내린다**
+   (Phase 2 「Phase 7 로 이월 (조건부)」, [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 5).
+   컷오프 직후에 뭉쳐서 튀면 grace 를 컨슈머 랙에 연동하고, 흩어져 있으면 고정 90초를 유지한다.
 5. 런북 RB-01~06, `docs/postmortems/2026-xx-peak-simulation.md`(가상 장애: 컷오프 시 계획 지연 → FAST 전환 → 원인·재발 방지, 실제 측정치 기반).
 6. ADR 전체 확정(001–012), README 완성(아키텍처 그림, 데모 GIF, 벤치마크 표, 실행 방법, 면접 스토리 링크).
 7. release.yml(GHCR 푸시, SBOM). (선택) `deploy/k8s` 매니페스트 + kind 스모크.

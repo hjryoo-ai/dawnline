@@ -237,7 +237,12 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 않는다** (§5.2). {@code orders} 테이블에는 저장하지 않는다 — 접수 이후 order-service 가 쓰는 곳이
 없고, 필요한 쪽으로 가는 통로가 이 이벤트다.
 
-**fulfillment.planned.v1** — order.placed 스냅샷 + `fcId, campId, zoneId, waveId, waveCutoffAt`
+**fulfillment.planned.v1** — order.placed 스냅샷 + `fcId, campId, zoneId, waveId, waveCutoffAt, promiseRevised`
+
+`promiseRevised` 는 `promisedWindow` 가 접수 시점의 약속과 다른지를 말한다(ADR-020). `true` 면 이
+주문은 grace(기본 90초)를 넘겨 도착해 원래 약속받은 웨이브에 들어가지 못했고, `promisedWindow` 는
+새 웨이브 기준으로 개정된 값이다. order-service 는 이것을 받아 `promised_start/end` 를 갱신한다.
+`outcome=UNSERVICEABLE` 에는 없다 — 배차되지 못한 주문에는 개정할 약속이 없다.
 
 **wave.closed.v1**
 ```json
@@ -531,8 +536,27 @@ order-service 는 고객에게 한 약속만 정한다. 두 값이 어긋나면(
 2. 냉장 필요 시 `supports_cold`
 3. 재고 가용 (`inventory_stock` 스텁, 모든 SKU 가용 시 통과) — 실서비스에서는 재고 서비스 연동 지점
 4. 주소 geohash5 → `zones` 매핑으로 캠프 결정; 캠프의 `fc_id` 후보
-5. 복수 후보면 Redis `GEOSEARCH geo:fc FROMLONLAT … BYRADIUS 50 km ASC`로 최근접 선택
-6. 어느 것도 없으면 주문을 `UNSERVICEABLE`로 표시하고 `fulfillment.planned`에 `outcome=UNSERVICEABLE`로 발행 (주문 서비스는 이를 받아 상태 `FAILED`, 사유 기록)
+5. 캠프의 홈 FC 가 1~3단계를 통과하지 못했으면 **대체 FC** 를 고른다 —
+   Redis `GEOSEARCH geo:fc FROMLONLAT <캠프 좌표> BYRADIUS 50 km ASC` 로 1~3단계를 통과한 FC 중
+   캠프에서 가장 가까운 것. 홈 FC 가 통과했으면 그대로 쓰고 이 단계는 건너뛴다.
+6. 반경 안에 통과한 FC 가 하나도 없으면 주문을 `UNSERVICEABLE`(`NO_ELIGIBLE_FC`)로 표시하고,
+   권역 자체를 찾지 못한 경우(`NO_ZONE_MATCH`)와 **따로 센다**. `fulfillment.planned` 에
+   `outcome=UNSERVICEABLE` 로 발행한다 (주문 서비스는 이를 받아 상태 `FAILED`, 사유 기록)
+
+**1~3단계와 4단계의 결과가 만나는 자리 ([ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md))**
+
+1~3단계는 **FC 후보 집합**을 거르고, 4단계는 주소로부터 **캠프**를 정한다. 이 문서는 오랫동안 그
+둘이 어떻게 만나는지를 적지 않았다. `zones.geohash5` 가 UNIQUE 이므로 한 주소 → 한 권역 → 한 캠프
+→ 홈 FC 하나이고, 그대로 읽으면 "복수 후보" 가 생길 일이 없어 5단계와 `geo:fc` 적재가 죽은 코드가
+된다. 정합한 읽기는 하나뿐이다 — **5단계는 캠프의 홈 FC 가 필터에서 떨어졌을 때의 대체 선택이다.**
+
+**거리 기준점은 고객 주소가 아니라 캠프다.** 라스트마일은 어느 FC 를 쓰든 캠프에서 출발하므로,
+대체 FC 선택에서 달라지는 비용은 **FC → 캠프 간선(linehaul)** 뿐이다. 고객 주소를 기준으로 재면
+어차피 캠프를 거칠 거리를 두 번 세게 된다. 반경 50 km 는 그 간선의 상한이다.
+
+**대체가 일어났다는 것은 세는 값이다.** `dawnline_fc_fallback_total{camp,reason}` (§9.1) —
+`reason` 은 홈 FC 가 떨어진 필터(`tier`/`cold`/`inventory`)다. 이 값이 계속 오르는 캠프는 홈 FC
+배정이 잘못됐거나 그 FC 의 역량이 부족한 것이고, 그것이 이 규칙이 처음부터 드러내려던 사실이다.
 
 **Wave 수명주기**
 
@@ -544,7 +568,7 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 - 컷오프 스케줄러: 매 30초 `cutoff_at <= now() AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
 - 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가(낙관적 락으로 경합 차단).
 
-**컷오프는 order-service 가 정하고 fulfillment 는 받아 쓴다 (Phase 2 선결, ADR-020 예정)**
+**컷오프는 order-service 가 정하고 fulfillment 는 받아 쓴다 ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md))**
 
 웨이브 키는 `(campId, tier, cutoffAt)` 인데, 그 `cutoffAt` 을 여기서 다시 계산하지 않는다.
 `order.placed` 가 싣고 온 값을 그대로 쓴다.
@@ -558,7 +582,7 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 지연·재처리에 따라 흔들리며, 흔들리는 값으로 웨이브를 고르면 같은 주문이 재처리 때 다른 웨이브에
 들어간다(멱등 소비자가 막아 주는 것은 <em>중복</em>이지 <em>다른 결과</em>가 아니다).
 
-**약속을 깨야 할 때는 말없이 깨지 않는다 (Phase 2 선결, ADR-020 예정)**
+**약속을 깨야 할 때는 말없이 깨지 않는다 ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md))**
 
 위 규칙에서 새 경합이 생긴다. 09:59:59에 접수돼 10:00 컷오프 창을 약속받은 주문이 있는데,
 outbox 릴레이 폴링(100ms)과 소비 지연을 거쳐 fulfillment 에 10:00:01에 도착한다고 하자.
@@ -595,9 +619,10 @@ outbox 릴레이 폴링(100ms)과 소비 지연을 거쳐 fulfillment 에 10:00:
   (`dawnline_delivery_on_time_ratio{basis}`). 하나만 내면 개정으로 정시율을 세탁할 수 있다 —
   못 지킬 것 같으면 약속을 미루면 되기 때문이다. SLO 의 기준은 원 약속이다(§8.1).
 
-Phase 2 에서 구현하며 ADR 로 확정한다. 여기 적어 두는 이유는, 이 결정이 Phase 1의 "약속창을
-접수 시점에 계산한다" 에서 곧바로 따라 나오기 때문이다 — 그때 정하지 않으면 Phase 2 에서
-"이미 나간 약속" 을 마주하고 급하게 정하게 된다.
+**2026-09-05 확정**: [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md).
+여기 적어 두었던 이유는, 이 결정이 Phase 1의 "약속창을 접수 시점에 계산한다" 에서 곧바로 따라
+나오기 때문이다 — 그때 정하지 않으면 Phase 2 에서 "이미 나간 약속" 을 마주하고 급하게 정하게 된다.
+`grace` 는 `dawnline.fulfillment.wave.grace` 설정값이고 기본 90초다.
 
 **테이블(핵심)**
 
@@ -1026,6 +1051,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
 | `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
 | `dawnline_wave_orders` | gauge | fulfillment | camp, tier |
+| `dawnline_fc_fallback_total` | counter | fulfillment | camp, reason(tier/cold/inventory) — 캠프의 홈 FC 가 §5.2 1~3단계 필터에서 떨어져 대체 FC 를 고른 횟수. 계속 오르는 캠프는 홈 FC 배정이 잘못됐거나 그 FC 의 역량이 부족한 것이다 |
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode |
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |
@@ -1127,7 +1153,8 @@ dawnline/
 │   └── postmortems/                  # 피크 시뮬레이션 가상 포스트모템 1건
 ├── contracts/
 │   ├── events/*.schema.json, examples/*.json
-│   └── openapi/*.yaml                # 빌드 시 생성물 커밋
+│   ├── openapi/*.yaml                # 빌드 시 생성물 커밋
+│   └── seed/*.txt                    # 생성물 커밋. 서비스 경계를 가로지르는 시드 전제 (ADR-021)
 ├── gradle/libs.versions.toml
 ├── settings.gradle.kts, build.gradle.kts, buildSrc/ (공통 컨벤션 플러그인)
 ├── libs/
@@ -1254,9 +1281,11 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수(`PLANNED → DELIVERED` 추가 + 진행 단계 비교) | 백오프 재시도에 맡김(도착 상한 없음 → 정상 배송이 DLQ), `delivery.status` 키를 orderId 로 변경(다른 소비자의 라우트 단위 순서가 깨짐), 모든 전이 허용(불변규칙 6 포기) | [ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
 | 018 | 멱등 잠금은 Redis 키(PX 30000)가 잡고 DB `idempotency_keys` 에는 `DONE` 만 기록 | DB 에 `IN_PROGRESS` 선커밋(프로세스 사망 시 그 멱등 키가 영구히 409), 짧은 `expires_at` 으로 자가 만료(정리 배치가 또 필요), Redis 없이 PK 충돌만(중복 요청이 주문 INSERT 까지 하고 롤백) | [ADR-018](adr/ADR-018-idempotency-lock-in-redis-record-in-db.md) |
 | 019 | 멱등 기록 보존 7일 + `status` 컬럼 제거 + `ON CONFLICT DO NOTHING` | 무한 보존(테이블 무제한 증가), 24h(Redis TTL 과 같아 DB 경로의 의미 절반 상실), 30일(DLQ 숫자를 빌려 옴) | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
-| 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨) | — (Phase 2 예정) |
+| 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨), `promiseRevised` 를 선택 필드로(소비자에 죽은 분기) | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다.
+| 021 | 권역 시드를 order-service 지오코더의 출력 집합에서 파생(권역 91개) | 60개를 손으로 고르기(31개 셀이 조용히 UNSERVICEABLE), 지오코더의 지터 축소(머지된 동작 변경 + 최적화 비교 무의미), 권역 키를 geohash4 로(캠프 단위 병렬성 붕괴), 양쪽에 목록을 각자 보관(한쪽만 고치는 날이 온다) | [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) |
+
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다.
 
 ---
 
@@ -1286,8 +1315,17 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
 
 ## 부록 A. 시드 데이터·시뮬레이션 시나리오
 
-- FC 3개, 캠프 10개(FC당 3~4), 권역 60개(캠프당 6), 차량 200대(캠프당 20: 일반 14, 냉장 4, 대형 2), 기사 200명.
-- 좌표: 서울 중심 근사 격자(위도 37.45–37.65, 경도 126.85–127.15). 캠프 중심에서 반경 8 km 안에 밀도 불균일(가우시안 혼합)로 주소 생성.
+- FC 3개, 캠프 10개(FC당 2·5·3), **권역 91개**(캠프당 6~13), 차량 200대(캠프당 20: 일반 14, 냉장 4, 대형 2), 기사 200명.
+- 좌표: 수도권(위도 37.16–37.78, 경도 126.61–127.22). 이 범위는 order-service 의 `PostalPrefixGeocoder`
+  가 실제로 만들어 내는 좌표의 경계다 — 우편번호 앞 2자리 앵커 19개 × 세 번째 자리 10단계 × 주소
+  해시 지터(±0.004°).
+- **권역 수·FC당 캠프 수는 어림수가 아니라 계산값이다** ([ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md)).
+  권역은 위 지오코더가 만들어 낼 수 있는 geohash5 셀 <em>전부</em>이고 세어 보면 91개다. 60개를
+  손으로 고르면 31개 셀의 주소가 전부 `UNSERVICEABLE` 이 되는데, 그것이 설계된 실패 경로와
+  구별되지 않는다. FC당 캠프가 2·5·3 인 것도 같은 이유다 — 수도권 우편번호 19개 접두어 중 8개가
+  서울이라 캠프가 서울에 몰린다.
+- 시드는 Flyway `R__seed_*.sql` 로 넣는다(Phase 2 확정). `sim-runner` 는 §5.6 대로 REST 전용으로
+  남아 남의 서비스 DB 에 쓰지 않는다(불변규칙 3).
 - 시나리오 YAML: `smoke`(200 주문, 1 캠프), `normal-day`(30k), `peak-day`(150k, 컷오프 전 버스트), `cold-heavy`(냉장 40%), `late-injection`(지연 확률 15%, 실패 3%).
 
 ## 부록 B. 면접 스토리 매핑
