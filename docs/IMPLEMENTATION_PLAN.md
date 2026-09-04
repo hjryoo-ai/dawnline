@@ -58,6 +58,42 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
   **조건**: 9단계 k6 에서 HikariCP 풀(인스턴스당 10, §8.2) 포화가 관측되면 Phase 1 안으로 당긴다.
   포화 여부는 `hikaricp_connections_pending` 로 판단하고, k6 리포트에 그 값을 함께 기록한다.
 
+**마감 대조표** (CLAUDE.md 「작업 방식」 — 기억이 아니라 표로 확인한다)
+
+기준일 2026-09-04, `main` = PR #6 머지 시점. 빠진 항목은 **표에 남긴다**.
+
+| # | 작업 | 상태 | 근거 |
+|---|---|---|---|
+| 1 | 도메인·상태 머신·`TierEligibility`·`Geocoder` 스텁 | ✅ | `OrderTest`·`OrderStatusTest`(36조합 + 축 규칙)·`DeliveryPromiseTest`·`PostalPrefixGeocoderTest` |
+| 2 | `PlaceOrder`·`CancelOrder`·`GetOrder`·`ListOrders` | ✅ | `PlaceOrderServiceTest`·`CancelOrderServiceTest`·`OrderQueryServiceTest` |
+| 3 | REST·JPA(V1·V2)·Outbox 발행·Redis 멱등 | ✅ | `OrderApiIT`·`OrderPersistenceIT`·`IdempotencyRecordsIT`·`OrderPlacedContractTest`·`OrderCancelledContractTest` |
+| 4 | 리스너 `order.dispatched`·`delivery.status` | ✅ | `OrderProgressListenerIT`(8건, 계약 예시를 브로커에 직접 발행) |
+| 5 | OpenAPI → `contracts/openapi/order-service.yaml` | ✅ | `OpenApiContractIT` — 문서와 코드의 일치까지 검사 |
+| 6 | 메트릭 `dawnline_orders_placed_total`, outbox 지표 | ✅ | `PlaceOrderServiceTest`(접수·재생 카운터), outbox 게이지는 `libs/messaging` 이 등록 |
+| 6-1 | 레이트 리밋(Lua 토큰버킷) | ✅ | `RateLimitIT`(실물 Redis 8건)·`RateLimitApiIT`(429 계약 4건) |
+| 7 | 테스트: 단위·통합·계약 | ✅ | 단위 734건 · 통합 97건. 빈 칸 5개는 8단계에서 채웠다(아래) |
+| 8 | k6 `orders.js` + `rate-limit.js` | ❌ **미구현** | 9단계 |
+| 9 | `sim-runner` smoke 200건 | ❌ **미구현** | 9단계 |
+
+| DoD | 상태 | 근거 |
+|---|---|---|
+| 통합 테스트 통과(PG·Kafka·Redis) | ✅ | 91건 통과. Redis 컨테이너는 `RateLimitIT`·`RateLimitApiIT` 가 띄운다 |
+| Redis 중단 상태에서 멱등 POST | ✅ | `PlaceOrderIT`(유스케이스) + `OrderApiIT.Redis_없이도_멱등_POST_가_HTTP_계층에서_성립한다`(HTTP). 후자는 먼저 `tryLock` 이 `UNAVAILABLE` 인지 확인해 **전제를 테스트가 스스로 말한다** — 확인하지 않으면 나중에 누가 Redis 를 붙였을 때 전제가 조용히 사라진다 |
+| k6 결과 기록 | ❌ **미구현** | 9단계 |
+
+**빈 칸 5개 — 8단계에서 모두 채웠다**
+
+| 빈 칸 | 왜 필요했나 | 채운 곳 |
+|---|---|---|
+| HTTP 계층의 Redis 중단 멱등 증명 | 이미 그 조건에서 돌고 있었으나 어설션이 없어 증거가 아니었다 | `OrderApiIT.Redis_없이도_멱등_POST_가_HTTP_계층에서_성립한다` |
+| `DISPATCHED` 이후 취소 409 | §5.1 API 표가 직접 든 경우인데 HTTP 계층에 없었다 | `OrderApiIT.배송이_시작된_뒤에는_취소가_409_다` |
+| 커서 빈 결과 | 주문이 없는 고객이 첫 화면에서 만나는 경로다 | `OrderApiIT.주문이_없는_고객의_목록은_빈_페이지다` |
+| 레이트 리밋 `bypassed` 가 메트릭까지 | §9.4 알림이 이 값에 걸린다. 값이 안 나오면 알림도 안 온다 | `OrderApiIT.Redis_가_없으면_레이트_리밋이_bypassed_로_기록된다` |
+| `order.placed` 가 실제 브로커에 도착 | 릴레이는 `libs/messaging` IT 가, 페이로드는 단위 계약 테스트가 본다. **그 둘 사이** — order-service 의 발행이 브로커까지 가서 <em>봉투까지</em> 계약을 지키는지 — 는 아무도 보지 않았다. 다른 IT 는 모두 릴레이를 꺼 두었기 때문이다 | `OrderPublishIT`(이 클래스만 릴레이를 켠다) |
+
+이 마지막 항목은 **대조표를 만들지 않았으면 못 봤다.** 두 테스트가 각자 자기 절반을 보고 있어서
+어느 쪽에서도 빠진 것으로 보이지 않았다.
+
 ---
 
 ## Phase 2 — fulfillment-service (FC 선택·웨이브·컷오프)
