@@ -1,6 +1,7 @@
 package com.dawnline.order.adapter.out.geo;
 
 import com.dawnline.common.GeoPoint;
+import com.dawnline.common.Geohash;
 import com.dawnline.order.application.port.out.Geocoder;
 import java.util.Map;
 import java.util.Optional;
@@ -92,5 +93,44 @@ public class PostalPrefixGeocoder implements Geocoder {
     /** 16비트 조각을 {@code -JITTER_DEG..+JITTER_DEG} 로 편다. */
     private static double jitter(int sixteenBits) {
         return (sixteenBits / HASH_SCALE - 0.5) * 2 * JITTER_DEG;
+    }
+
+    /**
+     * 이 스텁이 <strong>만들어 낼 수 있는</strong> 권역(geohash5) 전체.
+     *
+     * <h2>왜 운영 코드에 있는가</h2>
+     * fulfillment-service 는 주소의 geohash5 로 {@code zones} 를 찾고, 찾지 못하면 그 주문을
+     * {@code UNSERVICEABLE} 로 만든다(§5.2 4단계). 그러므로 <em>이 스텁의 출력 집합</em>이 곧
+     * fulfillment 의 권역 시드가 덮어야 할 범위다. 그 집합을 시드 쪽에서 손으로 세면 어긋나는 날이
+     * 오고, 어긋남은 예외가 아니라 "정상적인 UNSERVICEABLE" 로 나타나 설계된 실패와 구별되지 않는다
+     * (ADR-021).
+     *
+     * <p>그래서 출력 집합을 <strong>만드는 쪽이 직접 답한다.</strong> 이 값은
+     * {@code contracts/seed/order-service-geohash5.txt} 로 커밋되고, fulfillment 의 시드 테스트가
+     * 그 파일을 덮는지 검사한다. {@code contracts/openapi/order-service.yaml} 을 springdoc 이
+     * 운영 코드에서 만들어 내는 것과 같은 취급이다.
+     *
+     * <h2>왜 표본이 아니라 정확한가</h2>
+     * 한 (접두어, 세 번째 자리)의 좌표는 대표점을 중심으로 한 변 {@code 2×JITTER_DEG}(0.008°)의
+     * 정사각형 안에 있다. geohash5 셀은 위·경도 모두 약 0.0439° 이므로 이 사각형은 <strong>어느
+     * 축으로도 셀 하나를 넘지 못한다</strong> — 즉 최대 2×2 셀에 걸치고, <em>네 모서리를 보면
+     * 그 전부를 본 것</em>이다. 주소 문자열을 무작위로 넣어 표본을 뽑을 필요가 없다.
+     *
+     * @return 오름차순 정렬된 geohash5 집합
+     */
+    public java.util.SortedSet<String> reachableZones() {
+        java.util.SortedSet<String> zones = new java.util.TreeSet<>();
+        for (GeoPoint anchor : ANCHORS.values()) {
+            for (int third = 0; third < 10; third++) {
+                double lat = anchor.lat() + (third - DIGIT_CENTER) * PREFIX_STEP_DEG;
+                double lng = anchor.lng() + ((third * 7 % 10) - DIGIT_CENTER) * PREFIX_STEP_DEG;
+                for (double dLat : new double[] {-JITTER_DEG, JITTER_DEG}) {
+                    for (double dLng : new double[] {-JITTER_DEG, JITTER_DEG}) {
+                        zones.add(Geohash.encodeZone(GeoPoint.of(lat + dLat, lng + dLng)));
+                    }
+                }
+            }
+        }
+        return zones;
     }
 }
