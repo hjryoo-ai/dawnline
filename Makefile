@@ -36,7 +36,8 @@ SERVICE       ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls \
-        topics psql redis-cli config demo peak chaos-kafka clean-volumes
+        topics psql redis-cli config demo peak chaos-kafka clean-volumes \
+        k6-orders k6-rate-limit
 
 # -----------------------------------------------------------------------------
 help:
@@ -58,6 +59,9 @@ help:
 	@printf '    make logs [SERVICE=dispatch-service]\n'
 	@printf '    make config         compose 파일 문법·변수 치환 검증\n'
 	@printf '    make psql / make redis-cli\n\n'
+	@printf '  \033[1m부하·계약 스크립트\033[0m (tools/k6/README.md)\n'
+	@printf '    make k6-orders      500 rps 60초 부하 → summary.md         [Phase 1]\n'
+	@printf '    make k6-rate-limit  레이트 리밋 계약 검증 (통과/실패)      [Phase 1]\n\n'
 	@printf '  \033[1m시나리오\033[0m (아직 미구현 — 해당 Phase 에서 채운다)\n'
 	@printf '    make demo           시드 + smoke 시나리오        [Phase 1~2]\n'
 	@printf '    make peak           피크 시나리오                [Phase 7]\n'
@@ -186,6 +190,37 @@ psql: env
 
 redis-cli:
 	$(COMPOSE) exec redis redis-cli
+
+# -----------------------------------------------------------------------------
+# k6 (tools/k6). 로컬에 k6 가 있으면 그것을 쓰고, 없으면 컨테이너로 돌린다.
+#
+# 컨테이너에서 돌 때 BASE_URL 의 기본값이 달라진다 — 컨테이너 안의 localhost 는
+# 서비스가 아니라 그 컨테이너 자신이다. host.docker.internal 로 호스트를 가리킨다.
+# (이 한 줄이 없으면 "connection refused" 만 보고 서비스가 죽은 줄 안다.)
+K6_LOCAL  := $(shell command -v k6 2>/dev/null)
+K6_OUT    ?= .
+BASE_URL  ?=
+
+define run_k6
+	@mkdir -p $(K6_OUT)
+	@if [ -n "$(K6_LOCAL)" ]; then \
+	cd $(K6_OUT) && k6 run $(if $(BASE_URL),-e BASE_URL=$(BASE_URL),) $(CURDIR)/tools/k6/$(1); \
+	else \
+	echo "로컬에 k6 가 없다 → grafana/k6 컨테이너로 실행한다"; \
+	docker run --rm -i \
+	-v "$(CURDIR)/tools/k6:/scripts:ro" -v "$(CURDIR)/$(K6_OUT):/out" -w /out \
+	--add-host=host.docker.internal:host-gateway \
+	grafana/k6:latest run \
+	-e BASE_URL=$(if $(BASE_URL),$(BASE_URL),http://host.docker.internal:8081) \
+	/scripts/$(1); \
+	fi
+endef
+
+k6-orders:
+	$(call run_k6,orders.js)
+
+k6-rate-limit:
+	$(call run_k6,rate-limit.js)
 
 # -----------------------------------------------------------------------------
 # 아직 구현되지 않은 시나리오 타깃.
