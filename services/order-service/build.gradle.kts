@@ -47,6 +47,23 @@ tasks.named<Test>("test") {
 }
 
 // -----------------------------------------------------------------------------
+// 권역 계약 파일 재생성 (ADR-021).
+//
+// contracts/seed/order-service-geohash5.txt 는 생성물이고, fulfillment-service 의 권역 시드가
+// 덮어야 할 범위다. 지오코더의 앵커 표를 고치면 이 태스크로 다시 만들고, fulfillment 의 시드도
+// 함께 고친다 — 어긋나면 그 주소의 주문이 조용히 UNSERVICEABLE 이 된다.
+tasks.register<Test>("updateSeedContract") {
+    description = "contracts/seed/order-service-geohash5.txt 를 지오코더에서 다시 만든다 (ADR-021)"
+    group = "documentation"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform()
+    filter { includeTestsMatching("*ZoneSeedContractTest*") }
+    systemProperty("dawnline.seed.update", "true")
+    outputs.upToDateWhen { false }
+}
+
+// -----------------------------------------------------------------------------
 // OpenAPI 문서 재생성 (DESIGN.md §5.1, §14).
 //
 // contracts/openapi/order-service.yaml 은 생성물이고, OpenApiContractIT 가 코드와 어긋나지

@@ -138,4 +138,8 @@ val coverageVerification = tasks.named<JacocoCoverageVerification>("jacocoTestCo
 
 tasks.named("check") {
     dependsOn(tasks.named("jacocoTestReport"), coverageVerification)
+    // integrationTest 는 Docker 가 필요해서 `build` 에 넣지 않는다. 그런데 **컴파일까지** 빠지면
+    // 통합 테스트가 깨진 채로 커밋되고 CI 에서야 드러난다(실제로 그렇게 나갔다).
+    // 실행은 그대로 두고 컴파일만 붙인다 — Docker 없이도 문법·API 오류는 로컬에서 잡힌다.
+    dependsOn(tasks.named("compileIntegrationTestJava"))
 }
