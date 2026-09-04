@@ -89,6 +89,22 @@ order-service 는 그것을 받아 자기 `promised_start/end` 를 갱신한다.
 것은 grace 로 흡수하지 못한 지연이 있었다는 뜻이고, 늘어나면 grace 를 늘릴 것이 아니라 지연의
 원인을 봐야 한다.**
 
+**[후속 정정 — Phase 2]** 이 경로에는 **상한이 없었다.** grace 를 넘겨 도착한 주문을 조건 없이
+"다음 웨이브 + `promiseRevised`" 로 보내는데, 그것은 <em>초~분 단위</em> 지연을 겨냥한 규칙이다.
+20일 묵은 `order.placed` 가 DLQ replay 로 들어와도 같은 경로를 타고, 고객이 20일 전에 주문한
+물건에 대해 **오늘 새 배송 약속이 나간다** — 유령 배송이다.
+
+상한을 둔다. `cutoffAt < now − 24h`(설정값 `dawnline.fulfillment.wave.stale-placed-after`)이면
+다음 웨이브가 아니라 `UNSERVICEABLE`, `reason=STALE_PLACED` 다. order-service 는 그것을 받아
+주문을 `FAILED` 로 두고, **그 주문을 살릴지는 사람이 정한다** — 자동 재접수는 하지 않는다.
+20일 전 주문을 시스템이 조용히 되살리는 것이 유령 배송의 다른 이름이기 때문이다.
+
+24시간인 이유는 grace(90초)와 같은 축이 아니어서다. grace 는 "정상 지연의 상한" 이고, 이쪽은
+"이 주문을 아직 오늘 일로 볼 수 있는가" 다. 하루가 지난 컷오프는 §2.2 의 어느 배송창으로도
+설명되지 않는다(가장 긴 `NEXT_DAY` 창이 익일 22:00 까지다).
+
+운영자는 **replay 버튼을 누르기 전에** 이 사실을 알아야 하므로 RB-05 §2.2 에 적었다.
+
 ### 4. `promiseRevised` 는 `outcome=PLANNED` 일 때 `required` 다
 
 `contracts/events/README.md` §5 의 "아직 한 번도 발행된 적 없는 스키마" 예외를 적용한다.

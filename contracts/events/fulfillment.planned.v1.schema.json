@@ -68,7 +68,7 @@
       "minLength": 1,
       "maxLength": 200,
       "description": "UNSERVICEABLE 사유. order-service 가 주문 실패 사유로 기록한다 (§5.2 6단계). 권장 어휘는 README 참고. 값 집합이 아직 확정되지 않아 enum 대신 문자열로 둔다.",
-      "examples": ["NO_FC_FOR_TIER", "NO_COLD_FC", "OUT_OF_STOCK", "NO_ZONE_MATCH", "NO_ACTIVE_CAMP", "NO_ELIGIBLE_FC"]
+      "examples": ["NO_FC_FOR_TIER", "NO_COLD_FC", "OUT_OF_STOCK", "NO_ZONE_MATCH", "NO_ACTIVE_CAMP", "NO_ELIGIBLE_FC", "STALE_PLACED"]
     }
   },
   "allOf": [

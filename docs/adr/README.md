@@ -35,6 +35,7 @@
 | 020 | 컷오프 계산은 order-service 한 곳 + 웨이브 마감 grace + 약속 개정 | ✅ Accepted (2026-09-05) | [ADR-020](ADR-020-cutoff-ownership-wave-grace-promise-revision.md) |
 | 021 | 권역 시드를 order-service 지오코더의 출력에서 파생 (권역 91개) | ✅ Accepted (2026-09-05) | [ADR-021](ADR-021-zone-seed-derived-from-geocoder.md) |
 | 022 | fulfillment 주문 단위 애그리거트 `fulfillment_orders`, `wave_orders` 드롭 | ✅ Accepted (2026-09-05) | [ADR-022](ADR-022-fulfillment-order-aggregate.md) |
+| 023 | `fulfillment_orders` 30일 · `waves` 90일, 파티션 대신 배치 삭제 | ✅ Accepted (2026-09-05) | [ADR-023](ADR-023-fulfillment-retention.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
@@ -43,6 +44,10 @@
 - **021은 §16 표에 없던 항목**이다. 부록 A 의 "권역 60개" 가 order-service 지오코더의 출력을 덮지
   못한다는 것을 세어 보고(91개) 알게 되어 추가했다. 덮지 못하면 그 주소의 주문이 전부
   `UNSERVICEABLE` 이 되는데, 그것이 설계된 실패 경로와 구별되지 않는다.
+- **023은 022가 남긴 보존 문제를 닫는다.** 그 과정에서 ADR-020 의 지각 도착 경로에 상한이 없다는
+  것도 드러나 **ADR-020 에 후속 정정**을 붙였다(ADR-002 와 같은 방식 — 원문을 고쳐 쓰지 않는다).
+  20일 묵은 `order.placed` 가 DLQ replay 로 들어오면 "다음 웨이브 + 약속 개정" 을 타서 오늘 날짜의
+  새 배송 약속이 나가는 문제였다.
 - **022는 §16 표에 없던 항목**이다. 스키마를 구현하다 §5.2 의 `wave_orders` 가 주문에 대해
   fulfillment 가 아는 것의 절반만 담는다는 것이 드러났다 — `UNSERVICEABLE` 사유도, 약속 개정도,
   취소도 갈 곳이 없어 "주문 X 는 왜 웨이브에 없나" 에 답할 수 없었다.

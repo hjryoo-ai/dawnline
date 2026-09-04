@@ -543,6 +543,21 @@ order-service 는 고객에게 한 약속만 정한다. 두 값이 어긋나면(
    권역 자체를 찾지 못한 경우(`NO_ZONE_MATCH`)와 **따로 센다**. `fulfillment.planned` 에
    `outcome=UNSERVICEABLE` 로 발행한다 (주문 서비스는 이를 받아 상태 `FAILED`, 사유 기록)
 
+**`UNSERVICEABLE` 사유** (권장 어휘는 `contracts/events/README.md` §4.5)
+
+| 사유 | 언제 |
+|---|---|
+| `NO_FC_FOR_TIER` | 1단계 — 그 티어를 지원하는 FC 가 없다 |
+| `NO_COLD_FC` | 2단계 — 냉장이 필요한데 `supports_cold` FC 가 없다 |
+| `OUT_OF_STOCK` | 3단계 — 재고가 없다 |
+| `NO_ZONE_MATCH` | 4단계 — geohash5 → 권역 매핑 실패 |
+| `NO_ACTIVE_CAMP` | 4~5단계 — 권역은 있으나 활성 캠프가 없다 |
+| `NO_ELIGIBLE_FC` | 5~6단계 — 반경 50 km 안에 1~3단계를 통과한 FC 가 없다 |
+| `STALE_PLACED` | **FC 선택 전** — `cutoffAt < now − 24h`. 지각 도착 흡수 경로의 상한이다([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 후속 정정). 20일 묵은 `order.placed` 가 DLQ replay 로 들어와도 "다음 웨이브 + 약속 개정" 을 타지 않게 한다 — 그것은 유령 배송이다 |
+
+`STALE_PLACED` 는 **다른 사유들보다 먼저** 판정한다. 컷오프가 하루를 넘긴 주문은 FC·재고를 볼
+이유가 없고, 그 판정에 쓰는 비용도 아깝다.
+
 **1~3단계와 4단계의 결과가 만나는 자리 ([ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md))**
 
 1~3단계는 **FC 후보 집합**을 거르고, 4단계는 주소로부터 **캠프**를 정한다. 이 문서는 오랫동안 그
@@ -671,6 +686,11 @@ CREATE INDEX ix_fulfillment_orders_wave ON fulfillment_orders (wave_id) WHERE st
 취소도 담을 곳이 없어서 "주문 X 는 왜 웨이브에 없나" 에 답할 수 없었다. 그리고 복합 PK
 `(wave_id, order_id)` 는 같은 주문이 <em>서로 다른 두 웨이브</em>에 들어가는 것을 막지 못한다.
 `fulfillment_orders` 의 `order_id` 단독 PK 는 그것을 구조적으로 막는다.
+
+보존은 `fulfillment_orders` **30일**(`updated_at` 기준, 종결 상태만), `waves` **90일**이다
+([ADR-023](adr/ADR-023-fulfillment-retention.md)). 30일은 DLQ 보존(§7.3)과 같은 창이다 — DLQ 에
+남은 `order.placed` 를 30일째에 열었을 때 fulfillment 기록이 없으면 "이 주문은 왜 웨이브에 없나"
+에 답할 수 없고, 그 질문에 답하려고 만든 표가 정작 그 순간에 비어 있게 된다.
 
 **Redis**: `geo:fc`, `geo:camp` (GEOADD, 기동 시 적재·변경 시 갱신), `zone:geohash5:{prefix}` → zoneId 캐시 (TTL 10m), `lock:wave:{id}`.
 
@@ -950,8 +970,9 @@ public interface DispatchStrategy {
 - **DB-per-service**: Compose에서는 PostgreSQL 인스턴스 1개에 서비스별 데이터베이스(`dawnline_order` 등) 분리. 접속 계정도 분리해 교차 접근을 물리적으로 차단.
 - 마이그레이션: Flyway, `V<n>__<desc>.sql` (서비스별). JPA `ddl-auto`는 `validate`만 허용.
 - ID: UUIDv7 (애플리케이션 생성, 시간순 → 인덱스 지역성). PostgreSQL 18의 `uuidv7()`은 사용하지 않는다(ID를 DB 왕복 전에 알아야 outbox·이벤트에 쓸 수 있음).
-- 인덱스는 위 DDL 명시분 외에 추가 금지(추가 시 EXPLAIN 근거를 PR에 첨부).
+- 인덱스는 위 DDL 명시분 외에 추가 금지(추가 시 EXPLAIN 근거를 PR에 첨부). **넣지 않기로 한 판단도 행 수와 함께 남긴다** — 예: `waves` 는 90일치가 4,000행 남짓이라 정리 배치가 순차 스캔으로 충분하다([ADR-023](adr/ADR-023-fulfillment-retention.md)). 그 문장이 있어야 규모가 바뀌었을 때 재검토 지점이 생긴다.
 - 파티셔닝: `shipment_events`(일 단위), `outbox_events`는 발행 후 7일 지난 행을 배치 삭제(파티션 대신 삭제, 규모가 작음). `processed_events` 는 14일 보존(§4.4) — 같은 정리 스케줄러가 일 1회 처리한다. 두 삭제 모두 `LIMIT` 배치를 반복해 긴 락을 잡지 않는다.
+- 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 웨이브 편입의 `waves` 행 `SELECT … FOR UPDATE`(짧은 트랜잭션)에만 허용.
 - N+1 방지: 컬렉션 로딩은 `@EntityGraph` 또는 명시 fetch join. 테스트에서 Hibernate statement 카운터로 쿼리 수 상한 검증.
 
@@ -1028,6 +1049,20 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 - Kafka 소비자: `max.poll.records=100`, 처리 중 `pause()`, 완료 후 `resume()`. 리스너 컨테이너 concurrency = 파티션 수 이하.
 - dispatch 계획 큐: `wave.closed`는 캠프별 직렬이므로 큐 자체가 백프레셔. 연속 지연 감지 시 FAST 모드.
 - 주문 API: 고객별 레이트 리밋(Phase 1) + 전역 `Bulkhead`(동시 요청 상한, 초과 시 429 + `Retry-After`) — **Bulkhead 는 Phase 7 이월**이며, Phase 1-9 의 k6 에서 HikariCP 풀(인스턴스당 10) 포화가 관측되면 Phase 1 안으로 당긴다(IMPLEMENTATION_PLAN).
+
+**Bulkhead 판정 기록** — Phase 2 마감의 게이트다. 이 표가 채워지지 않으면 Phase 2 를 닫지 않는다.
+
+| 항목 | 값 |
+|---|---|
+| 측정 커밋 · 일시 | —(미측정) |
+| `POST /orders` p99 (500 rps × 60초) | —(미측정) · 목표 ≤ 200 ms |
+| Outbox 지연 p95 | —(미측정) · 목표 ≤ 2초 |
+| `hikaricp_connections_pending` 최댓값 | —(미측정) |
+| 판정 | —(미판정) · `pending` 이 0 을 넘어 유지되면 Phase 1 으로 당기고, 계속 0 이면 Phase 7 유지 |
+
+원자료는 `docs/benchmarks/phase1-orders-k6.md` 3·5·6절이고 여기에는 결론만 옮긴다.
+**두 번 요청되고도 오지 않은 항목은 기억이 아니라 게이트로 처리한다** — 이 프로젝트에서 레이트
+리밋이 그렇게 빠질 뻔했다.
 - 모든 소비자 랙은 `kafka_consumer_lag`로 노출, 임계 초과 알림.
 
 ### 8.4 장애 모드 표
@@ -1321,10 +1356,11 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 019 | 멱등 기록 보존 7일 + `status` 컬럼 제거 + `ON CONFLICT DO NOTHING` | 무한 보존(테이블 무제한 증가), 24h(Redis TTL 과 같아 DB 경로의 의미 절반 상실), 30일(DLQ 숫자를 빌려 옴) | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
 | 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨), `promiseRevised` 를 선택 필드로(소비자에 죽은 분기) | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) |
 
+| 023 | `fulfillment_orders` 30일 · `waves` 90일 보존, 파티션이 아니라 배치 삭제 | 무한 보존(월 4.5M 행 증가), 14일(DLQ 30일째 조사에서 기록이 없다), 90일(조사 창이 DLQ 를 넘어설 근거 없음), 날짜 파티셔닝(파티션 키가 PK 에 들어가 ADR-022 의 단독 PK 보장이 약해짐), 상태 무관 삭제(진행 중 주문이 지워짐) | [ADR-023](adr/ADR-023-fulfillment-retention.md) |
 | 022 | fulfillment 에 주문 단위 애그리거트 `fulfillment_orders` 도입, `wave_orders` 드롭 | 취소 마커 테이블 + `wave_orders(order_id)` 인덱스(사실이 두 곳에 흩어지고 UNSERVICEABLE 은 여전히 답 못 함), `wave_orders` 에 컬럼 추가(복합 PK 라 웨이브 없는 상태를 표현 못 함), 상태를 이벤트로만 두기(재처리·운영 질의에서 답 못 함), `processed_events` 재사용(의미·보존 기간이 다름) | [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) |
 | 021 | 권역 시드를 order-service 지오코더의 출력 집합에서 파생(권역 91개) | 60개를 손으로 고르기(31개 셀이 조용히 UNSERVICEABLE), 지오코더의 지터 축소(머지된 동작 변경 + 최적화 비교 무의미), 권역 키를 geohash4 로(캠프 단위 병렬성 붕괴), 양쪽에 목록을 각자 보관(한쪽만 고치는 날이 온다) | [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022는 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다.
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다.
 
 ---
 
