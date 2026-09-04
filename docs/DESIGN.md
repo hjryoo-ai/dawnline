@@ -536,8 +536,27 @@ order-service 는 고객에게 한 약속만 정한다. 두 값이 어긋나면(
 2. 냉장 필요 시 `supports_cold`
 3. 재고 가용 (`inventory_stock` 스텁, 모든 SKU 가용 시 통과) — 실서비스에서는 재고 서비스 연동 지점
 4. 주소 geohash5 → `zones` 매핑으로 캠프 결정; 캠프의 `fc_id` 후보
-5. 복수 후보면 Redis `GEOSEARCH geo:fc FROMLONLAT … BYRADIUS 50 km ASC`로 최근접 선택
-6. 어느 것도 없으면 주문을 `UNSERVICEABLE`로 표시하고 `fulfillment.planned`에 `outcome=UNSERVICEABLE`로 발행 (주문 서비스는 이를 받아 상태 `FAILED`, 사유 기록)
+5. 캠프의 홈 FC 가 1~3단계를 통과하지 못했으면 **대체 FC** 를 고른다 —
+   Redis `GEOSEARCH geo:fc FROMLONLAT <캠프 좌표> BYRADIUS 50 km ASC` 로 1~3단계를 통과한 FC 중
+   캠프에서 가장 가까운 것. 홈 FC 가 통과했으면 그대로 쓰고 이 단계는 건너뛴다.
+6. 반경 안에 통과한 FC 가 하나도 없으면 주문을 `UNSERVICEABLE`(`NO_ELIGIBLE_FC`)로 표시하고,
+   권역 자체를 찾지 못한 경우(`NO_ZONE_MATCH`)와 **따로 센다**. `fulfillment.planned` 에
+   `outcome=UNSERVICEABLE` 로 발행한다 (주문 서비스는 이를 받아 상태 `FAILED`, 사유 기록)
+
+**1~3단계와 4단계의 결과가 만나는 자리 ([ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md))**
+
+1~3단계는 **FC 후보 집합**을 거르고, 4단계는 주소로부터 **캠프**를 정한다. 이 문서는 오랫동안 그
+둘이 어떻게 만나는지를 적지 않았다. `zones.geohash5` 가 UNIQUE 이므로 한 주소 → 한 권역 → 한 캠프
+→ 홈 FC 하나이고, 그대로 읽으면 "복수 후보" 가 생길 일이 없어 5단계와 `geo:fc` 적재가 죽은 코드가
+된다. 정합한 읽기는 하나뿐이다 — **5단계는 캠프의 홈 FC 가 필터에서 떨어졌을 때의 대체 선택이다.**
+
+**거리 기준점은 고객 주소가 아니라 캠프다.** 라스트마일은 어느 FC 를 쓰든 캠프에서 출발하므로,
+대체 FC 선택에서 달라지는 비용은 **FC → 캠프 간선(linehaul)** 뿐이다. 고객 주소를 기준으로 재면
+어차피 캠프를 거칠 거리를 두 번 세게 된다. 반경 50 km 는 그 간선의 상한이다.
+
+**대체가 일어났다는 것은 세는 값이다.** `dawnline_fc_fallback_total{camp,reason}` (§9.1) —
+`reason` 은 홈 FC 가 떨어진 필터(`tier`/`cold`/`inventory`)다. 이 값이 계속 오르는 캠프는 홈 FC
+배정이 잘못됐거나 그 FC 의 역량이 부족한 것이고, 그것이 이 규칙이 처음부터 드러내려던 사실이다.
 
 **Wave 수명주기**
 
@@ -1032,6 +1051,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
 | `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
 | `dawnline_wave_orders` | gauge | fulfillment | camp, tier |
+| `dawnline_fc_fallback_total` | counter | fulfillment | camp, reason(tier/cold/inventory) — 캠프의 홈 FC 가 §5.2 1~3단계 필터에서 떨어져 대체 FC 를 고른 횟수. 계속 오르는 캠프는 홈 FC 배정이 잘못됐거나 그 FC 의 역량이 부족한 것이다 |
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode |
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |

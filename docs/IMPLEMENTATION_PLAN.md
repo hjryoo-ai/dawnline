@@ -127,15 +127,28 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    order-service 가 사유를 기록한다고 적었는데, Phase 2 작업 목록에는 order-service 쪽 일이 한 줄도
    없었다 — 넣지 않으면 마감 대조표에서 "누가 UNSERVICEABLE 을 FAILED 로 바꾸나" 가 빈 칸으로 남는다.
 6. 순서 역전 처리: `order.cancelled`가 먼저 오면 취소 마커 저장 후 `order.placed` 도착 시 무시.
-6-1. **메트릭**: `dawnline_wave_orders{camp,tier}`(게이지), `dawnline_promise_revised_total{camp,tier}`(카운터).
-   둘 다 §9.1 에 예약되어 있으나 작업 목록에는 없었다. `promise_revised` 는 ADR-020 의 개정이 실제로
-   일어났는지를 보는 **유일한** 값이고, 이것이 없으면 §8.1 의 정시율 두 기준을 나중에 맞출 수 없다.
+6-1. **메트릭**: `dawnline_wave_orders{camp,tier}`(게이지), `dawnline_promise_revised_total{camp,tier}`(카운터),
+   `dawnline_fc_fallback_total{camp,reason}`(카운터, `reason`=tier/cold/inventory).
+   앞의 둘은 §9.1 에 예약되어 있었으나 작업 목록에는 없었다. `promise_revised` 는 ADR-020 의 개정이
+   실제로 일어났는지를 보는 **유일한** 값이고, 이것이 없으면 §8.1 의 정시율 두 기준을 나중에 맞출 수 없다.
+   `fc_fallback` 은 [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) 이 §5.2 5단계를 확정하며
+   함께 정한 것으로, 대체 FC 선택이 조용히 일어나지 않게 한다 — 계속 오르는 캠프는 홈 FC 배정이
+   잘못됐거나 그 FC 의 역량이 부족한 것이고, 그것이 §5.2 FC 선택 규칙이 드러내려던 사실이다.
 7. 테스트: 스케줄러 인스턴스 2개 동시 실행 시 `wave.closed` 정확히 1회(통합), 컷오프 이후 주문이 다음 웨이브로 가는지, GEO 폴백(Redis 중단).
 
 **DoD**
 - `make demo` 실행 시 주문 200건이 자동으로 웨이브에 편입되고, 컷오프(테스트용 짧은 컷오프 설정)에 `wave.closed`가 캠프별 1회 발행됨을 Kafka 소비 로그·DB로 확인.
 - 이중 마감 없음 테스트 통과.
 - `UNSERVICEABLE` 이 **시드 부족 때문에** 나오지 않는다: 시드된 `zones` 가 `contracts/seed/order-service-geohash5.txt` 의 91개 셀을 전부 덮는지 양쪽 서비스가 각자 검사(ADR-021).
+
+**Phase 7 로 이월 (조건부)**
+- **lag-aware grace** — 웨이브 마감 grace 를 고정 90초가 아니라 컨슈머 랙에 연동한다.
+  Phase 2 에서는 고정 90초까지만 한다([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 5).
+  **조건**: Phase 7 `peak-day` 시뮬레이션에서 `dawnline_promise_revised_total` 이 **컷오프 직후에
+  뭉쳐서** 튀면 lag-aware 로 간다. 고르게 흩어져 있거나 거의 없으면 고정 90초를 유지한다.
+  판정 결과를 `docs/benchmarks/<date>-peak.md` 에 기록한다.
+  판정 조건을 지금 적어 두는 이유는 Phase 1 의 원인 판정표와 같다 — 수치를 본 뒤에 기준을 만들면
+  어떤 결과든 설명이 된다.
 
 ---
 
@@ -215,6 +228,9 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 2. 트레이싱 검증: 주문 1건 traceId로 4개 서비스 span이 Tempo에서 연결됨(스크린샷 README).
 3. 카오스 스크립트: `make chaos-kafka`, `make chaos-redis`, `make chaos-kill dispatch`. 각 실행 후 검증 SQL(주문 수 = 후보 수 + 취소 수, 라우트 stop 주문 중복 0, processed_events 중복 0)을 자동 실행.
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
+   **`dawnline_promise_revised_total` 을 시간축으로 함께 기록하고 lag-aware grace 판정을 내린다**
+   (Phase 2 「Phase 7 로 이월 (조건부)」, [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 5).
+   컷오프 직후에 뭉쳐서 튀면 grace 를 컨슈머 랙에 연동하고, 흩어져 있으면 고정 90초를 유지한다.
 5. 런북 RB-01~06, `docs/postmortems/2026-xx-peak-simulation.md`(가상 장애: 컷오프 시 계획 지연 → FAST 전환 → 원인·재발 방지, 실제 측정치 기반).
 6. ADR 전체 확정(001–012), README 완성(아키텍처 그림, 데모 GIF, 벤치마크 표, 실행 방법, 면접 스토리 링크).
 7. release.yml(GHCR 푸시, SBOM). (선택) `deploy/k8s` 매니페스트 + kind 스모크.
