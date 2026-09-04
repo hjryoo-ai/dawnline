@@ -1,0 +1,38 @@
+# =============================================================================
+# 시나리오 정의 (DESIGN.md §5.6 — "시나리오 YAML")
+#
+# 새 시나리오는 여기에 이름을 하나 더 만들면 된다. 코드를 고치지 않는다.
+# 기사 시뮬레이터가 붙는 Phase 5 에서 이 파일에 driver 절이 생긴다.
+# =============================================================================
+
+dawnline:
+  sim:
+    scenarios:
+
+      # Phase 1 의 최소 시나리오 — 주문 200건 (IMPLEMENTATION_PLAN Phase 1-9).
+      #
+      # 20 rps × 10초. 부하가 아니라 흐름을 만드는 것이 목적이다(부하는 tools/k6/orders.js).
+      # customers=200 이면 고객당 평균 1건이라 §7.2 레이트 리밋(용량 60)에 닿지 않는다.
+      smoke:
+        orders: 200
+        rate-per-second: 20
+        seed: 20260904
+        customers: 200
+        cold-ratio: 0.25
+        # §2.2 의 세 티어. 새벽 배송이 이 서비스의 주력이라는 전제를 비율로 적는다.
+        tier-weights:
+          DAWN: 5
+          SAME_DAY: 3
+          NEXT_DAY: 2
+
+      # 눈으로 확인할 때 쓰는 아주 작은 것. 스택이 떠 있는지만 본다.
+      tiny:
+        orders: 10
+        rate-per-second: 5
+        seed: 1
+        customers: 10
+        cold-ratio: 0.5
+        tier-weights:
+          DAWN: 1
+          SAME_DAY: 1
+          NEXT_DAY: 1

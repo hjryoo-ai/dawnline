@@ -1,0 +1,38 @@
+# =============================================================================
+# sim-runner — 시나리오 CLI (DESIGN.md §5.6)
+#
+# 실행: java -jar tools/sim-runner/build/libs/sim-runner.jar --dawnline.sim.scenario=smoke
+#       또는 ./gradlew :tools:sim-runner:bootRun --args='--dawnline.sim.scenario=smoke'
+#
+# 시나리오 정의는 scenarios.yml 에 있다. 여기에는 "어느 것을 어디에" 만 둔다.
+# =============================================================================
+
+spring:
+  application:
+    name: sim-runner
+
+  main:
+    # 서버가 아니다. 시나리오를 돌리고 끝난다.
+    web-application-type: none
+    banner-mode: "off"
+
+  config:
+    import:
+      - classpath:scenarios.yml
+
+dawnline:
+  sim:
+    # --dawnline.sim.scenario=... 로 바꾼다.
+    scenario: smoke
+    base-url: ${DAWNLINE_SIM_BASE_URL:http://localhost:8081}
+    # 요청 하나의 타임아웃. order-service 의 p99 목표(200ms, §8.1)보다 한참 크게 둔다 —
+    # 여기서 자르면 서비스가 느린 것과 도구가 성급한 것을 구별할 수 없다.
+    request-timeout-ms: 5000
+
+logging:
+  level:
+    root: WARN
+    com.dawnline: INFO
+  pattern:
+    # 도구의 출력은 사람이 읽는다. 서비스의 JSON 로그(§9.3)와 목적이 다르다.
+    console: "%d{HH:mm:ss} %-5level %msg%n"

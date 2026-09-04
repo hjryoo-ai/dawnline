@@ -37,7 +37,7 @@ SERVICE       ?=
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls \
         topics psql redis-cli config demo peak chaos-kafka clean-volumes \
-        k6-orders k6-rate-limit
+        k6-orders k6-rate-limit smoke
 
 # -----------------------------------------------------------------------------
 help:
@@ -62,8 +62,10 @@ help:
 	@printf '  \033[1m부하·계약 스크립트\033[0m (tools/k6/README.md)\n'
 	@printf '    make k6-orders      500 rps 60초 부하 → summary.md         [Phase 1]\n'
 	@printf '    make k6-rate-limit  레이트 리밋 계약 검증 (통과/실패)      [Phase 1]\n\n'
+	@printf '  \033[1m시나리오\033[0m (tools/sim-runner)\n'
+	@printf '    make smoke          주문 200건 생성 [SCENARIO=smoke|tiny]   [Phase 1]\n\n'
 	@printf '  \033[1m시나리오\033[0m (아직 미구현 — 해당 Phase 에서 채운다)\n'
-	@printf '    make demo           시드 + smoke 시나리오        [Phase 1~2]\n'
+	@printf '    make demo           시드 + 웨이브 편입까지        [Phase 2]\n'
 	@printf '    make peak           피크 시나리오                [Phase 7]\n'
 	@printf '    make chaos-kafka    Kafka 중단→복구 검증          [Phase 7]\n\n'
 
@@ -223,13 +225,26 @@ k6-rate-limit:
 	$(call run_k6,rate-limit.js)
 
 # -----------------------------------------------------------------------------
+# sim-runner 시나리오 (DESIGN.md §5.6). 시나리오 정의는
+# tools/sim-runner/src/main/resources/scenarios.yml 에 있다.
+#
+# 주문이 하나라도 접수되지 않으면 sim-runner 가 0 이 아닌 코드로 끝나고, 그러면 이 타깃도
+# 실패한다 — "성공했다" 고 말한 뒤 DB 가 비어 있는 상황을 만들지 않기 위해서다.
+SCENARIO     ?= smoke
+SIM_BASE_URL ?=
+
+smoke:
+	./gradlew --console=plain :tools:sim-runner:bootRun \
+	--args='--dawnline.sim.scenario=$(SCENARIO)$(if $(SIM_BASE_URL), --dawnline.sim.base-url=$(SIM_BASE_URL),)'
+
+# -----------------------------------------------------------------------------
 # 아직 구현되지 않은 시나리오 타깃.
 # 성공한 척하지 않는다 — 명확히 실패해서 스크립트가 오인하지 않게 한다.
 demo:
 	@echo ""
 	@echo "make demo 는 아직 구현되지 않았다."
-	@echo "  필요한 것: sim-runner 의 seed / smoke 시나리오 (IMPLEMENTATION_PLAN.md Phase 1~2)"
-	@echo "  지금 할 수 있는 것: make up-infra && make topics"
+	@echo "  필요한 것: sim-runner 의 seed 시나리오와 웨이브 편입 (IMPLEMENTATION_PLAN.md Phase 2)"
+	@echo "  지금 할 수 있는 것: make smoke  — 주문 200건을 order-service 에 넣는다"
 	@echo ""
 	@exit 2
 
