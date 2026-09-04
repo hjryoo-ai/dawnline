@@ -49,6 +49,41 @@ defaults:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # 0) 마이그레이션 불변 검사 (CLAUDE.md 불변규칙 13)
+  #    이미 머지된 Flyway 스크립트를 고치면 그것을 적용해 둔 데이터베이스에서
+  #    체크섬 불일치로 기동이 깨진다. 사람이 기억해야 하는 규칙을 하나 줄인다.
+  #
+  #    pull_request 이벤트의 HEAD 는 "base 에 PR 을 병합한 커밋" 이므로
+  #    HEAD^1 이 곧 base 브랜치의 그 시점 커밋이다 — 추가 fetch 없이 비교할 수 있다.
+  # ---------------------------------------------------------------------------
+  migrations:
+    name: 마이그레이션 불변 검사
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+        with:
+          # HEAD^1(base) 을 보려면 병합 커밋의 양쪽 부모가 있어야 한다.
+          fetch-depth: 2
+
+      - name: 기존 마이그레이션이 수정·삭제·이동되지 않았는지 확인
+        run: |
+          # M(수정) D(삭제) R(이동) 만 본다. 추가(A)는 정상적인 변경 방법이다.
+          changed=$(git diff --diff-filter=MDR --name-only HEAD^1 HEAD -- '*/db/migration/*' || true)
+          if [ -n "$changed" ]; then
+            echo "::error::이미 머지된 Flyway 스크립트가 바뀌었습니다 (CLAUDE.md 불변규칙 13)."
+            echo "$changed" | while read -r f; do echo "::error file=$f::이 파일은 불변입니다. 새 V<다음번호>__*.sql 을 추가하세요."; done
+            echo ""
+            echo "왜 예외가 없는가: Flyway 는 적용된 스크립트의 체크섬을 기록한다."
+            echo "파일이 바뀌면 그것을 이미 적용한 DB(로컬 make up 볼륨 포함)가 기동에서 깨진다."
+            echo "'아직 배포된 적 없으니까' 는 이 규칙을 무너뜨리는 전형적인 첫 예외다."
+            exit 1
+          fi
+          echo "기존 마이그레이션 변경 없음."
+
+  # ---------------------------------------------------------------------------
   # 1) 빌드 + 단위/ArchUnit/계약 테스트 + JaCoCo 게이트
   #    ./gradlew build = assemble + check (컨벤션 플러그인이 check 에
   #    jacocoTestReport·jacocoTestCoverageVerification 을 묶어 둔다)

@@ -60,6 +60,37 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙3_은_다른_서비스의_타입을_참조하면_실패한다() {
+        // 표본은 com.dawnline.order / com.dawnline.fulfillment 패키지에 있다. 규칙 3 의 that 절이
+        // 서비스 패키지로 좁혀져 있어 그렇게 두어야 검사 대상이 된다. 이 클래스들은 libs/common 의
+        // 테스트 소스에만 있으므로 실제 서비스의 ArchitectureTest 에는 섞이지 않는다.
+        JavaClasses crossService = new ClassFileImporter()
+                .importPackages("com.dawnline.order.archunitsample", "com.dawnline.fulfillment.archunitsample");
+
+        assertThatThrownBy(() -> HexagonalArchitectureRules.noCrossServiceDependency("order").check(crossService))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("CrossServiceUseCase")
+                .hasMessageContaining("ForeignAggregate");
+    }
+
+    @Test
+    void 규칙3_은_자기_서비스_안의_참조는_통과시킨다() {
+        // 반대 방향이 없으면 "모든 참조를 막는" 규칙이 되어도 테스트가 통과한다.
+        JavaClasses ownServiceOnly = new ClassFileImporter().importPackages("com.dawnline.fulfillment.archunitsample");
+
+        HexagonalArchitectureRules.noCrossServiceDependency("fulfillment").check(ownServiceOnly);
+    }
+
+    @Test
+    void 규칙4_는_인바운드_어댑터_밖의_KafkaListener_를_잡는다() {
+        assertThatThrownBy(() ->
+                HexagonalArchitectureRules.kafkaListenersOnlyInInboundMessagingAdapter("order").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("ListeningRepository")
+                .hasMessageContaining("com.dawnline.order.adapter.in.messaging..");
+    }
+
+    @Test
     void 규칙5_는_adapter_에_붙은_Transactional_을_잡는다() {
         // 규칙 5 는 대상 패키지가 com.dawnline.<service>.application.. 이고, 표본은 어느 서비스에도
         // 속하지 않는다. that 절이 "@Transactional 이 붙은 모든 클래스" 라서 표본도 그대로 걸린다 —
@@ -68,6 +99,30 @@ class HexagonalArchitectureRulesTest {
                 .isInstanceOf(AssertionError.class)
                 .hasMessageContaining("TransactionalRepository")
                 .hasMessageContaining("com.dawnline.order.application..");
+    }
+
+    @Test
+    void 규칙7_은_시스템_시계를_직접_읽으면_실패한다() {
+        assertThatThrownBy(() -> systemClockRuleFor(SAMPLES + ".bad..").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("ClockReadingUseCase")
+                .hasMessageContaining("Instant.now");
+    }
+
+    @Test
+    void 규칙7_은_주입된_시계를_읽는_것은_통과시킨다() {
+        // clock.instant() 는 금지 대상이 아니다. 이것까지 막으면 규칙이 쓸모없어진다 —
+        // 시각을 아예 못 읽게 되기 때문이다. 금지하는 것은 "어떤 시계를 쓸지 코드가 스스로 정하는 것" 이다.
+        systemClockRuleFor(SAMPLES + ".good..").check(GOOD);
+    }
+
+    @Test
+    void 규칙7_이_금지_목록을_설명에_밝힌다() {
+        String description = HexagonalArchitectureRules.clocksAreInjected("dispatch").getDescription();
+
+        assertThat(description)
+                .contains("com.dawnline.dispatch..")
+                .contains("Instant.now");
     }
 
     @Test
@@ -94,15 +149,30 @@ class HexagonalArchitectureRulesTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"order", "fulfillment", "dispatch", "tracking", "ops"})
-    void 서비스별_규칙_5개를_만들_수_있고_대상이_없으면_통과한다(String service) {
+    void 서비스별_규칙_전부를_만들_수_있고_대상이_없으면_통과한다(String service) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
-        assertThat(rules).hasSize(6);
-        // 표본에는 com.dawnline.<service> 클래스가 없으므로 규칙 3·4 는 대상이 0개다.
-        // (규칙 3·4 의 "잡아야 할 것을 잡는가" 는 Phase 1 의 첫 @KafkaListener 와 함께 추가한다.
-        //  규칙 5 는 바로 위 테스트가 음성 표본으로 확인한다.)
-        // allowEmptyShould(true) 덕분에 "대상 없음"이 실패가 되지 않는다.
+        assertThat(rules).hasSize(7);
+        // GOOD 표본에는 위반이 없으므로 전부 통과해야 한다. 규칙 3·4 는 이 표본에 대상이 0개이고,
+        // allowEmptyShould(true) 덕분에 "대상 없음" 이 실패가 되지 않는다.
+        // 그 둘의 탐지 능력은 위의 전용 테스트가 확인한다.
         rules.forEach(rule -> rule.check(GOOD));
+    }
+
+    /**
+     * 규칙 7 과 <strong>같은 조건</strong>을 표본 패키지에 적용한다. 규칙의 {@code that} 절이
+     * {@code com.dawnline.<service>..} 로 좁혀져 있어 표본에는 닿지 않기 때문이고, 조건 자체는
+     * {@link HexagonalArchitectureRules#SYSTEM_CLOCK_CALL} 을 그대로 쓴다 — 여기서 다시 적으면
+     * 규칙과 테스트가 표류한다.
+     */
+    private static ArchRule systemClockRuleFor(String samplePackage) {
+        return com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses()
+                .that()
+                .resideInAPackage(samplePackage)
+                .should()
+                .callMethodWhere(com.tngtech.archunit.lang.conditions.ArchPredicates.are(
+                        HexagonalArchitectureRules.SYSTEM_CLOCK_CALL))
+                .allowEmptyShould(true);
     }
 
     @Test

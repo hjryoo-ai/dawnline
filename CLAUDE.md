@@ -53,7 +53,7 @@ make down
 
 ## 아키텍처 불변 규칙
 
-불변 규칙 12개 중 일부만 ArchUnit이 강제하며, 규칙별 강제 수단과 음성 검증 현황은
+불변 규칙 13개 중 일부만 ArchUnit이 강제하며, 규칙별 강제 수단과 음성 검증 현황은
 **`docs/DESIGN.md` §13의 매핑표가 기준**이다. ArchUnit이 닿지 않는 규칙(상태 머신, Redis 폴백,
 인덱스 금지 등)은 코드 리뷰·PR 체크리스트·전용 테스트가 담당하므로, 해당 규칙을 건드리는
 변경은 매핑표의 강제 수단을 함께 갱신한다.
@@ -69,7 +69,8 @@ make down
 9. **돈은 정수 KRW**, 좌표는 `NUMERIC(9,6)`/`double`, 시간은 `TIMESTAMPTZ`/`Instant`. 부동소수 금액 금지.
 10. **ID는 UUIDv7**을 애플리케이션에서 생성한다(`libs/common`의 `Ids.newId()`).
 11. **인덱스 추가 금지(설계서 명시분 외)**: 필요하면 EXPLAIN 결과를 PR 설명에 첨부하고 설계서에 반영.
-12. **시간과 난수는 주입**: `Clock`, `RandomGenerator`(seed)를 생성자로 받는다. 최적화 결과는 seed가 같으면 동일해야 한다.
+12. **시간과 난수는 주입**: `Clock`, `RandomGenerator`(seed)를 생성자로 받는다. 최적화 결과는 seed가 같으면 동일해야 한다. 서비스 코드에서 `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`System.currentTimeMillis()`를 직접 부르지 않는다 — `libs/messaging`이 저장 정밀도(마이크로초)로 자른 `Clock` 빈을 준다.
+13. **머지된 마이그레이션은 불변**: `main`에 들어간 Flyway 스크립트는 주석 한 글자도 고치지 않는다. **예외 없음.** 바꿀 것이 있으면 새 `V<다음번호>__*.sql`을 추가한다. Flyway는 적용된 스크립트의 체크섬을 기록하므로, 파일이 바뀌면 그것을 이미 적용한 DB(로컬 `make up` 볼륨 포함)가 기동에서 깨진다. "아직 배포된 적 없으니까"는 이 규칙을 무너뜨리는 전형적인 첫 예외다. CI 의 「마이그레이션 불변 검사」 job 이 강제한다.
 
 ## 코딩 컨벤션
 

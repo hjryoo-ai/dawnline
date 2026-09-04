@@ -5,8 +5,19 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.order.adapter.out.geo.AllTiersServiceableZones;
 import com.dawnline.order.adapter.out.geo.PostalPrefixGeocoder;
 import com.dawnline.order.adapter.out.messaging.OutboxOrderEvents;
+import com.dawnline.messaging.idempotency.IdempotentConsumer;
+import com.dawnline.messaging.json.EventJson;
+import com.dawnline.order.adapter.in.messaging.OrderProgressListener;
+import com.dawnline.order.application.AdvanceOrderService;
+import com.dawnline.order.application.CancelOrderService;
+import com.dawnline.order.application.IdempotencyKeyCleaner;
+import com.dawnline.order.application.OrderQueryService;
 import com.dawnline.order.application.PlaceOrderService;
 import com.dawnline.order.application.PlaceOrderTransaction;
+import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
+import com.dawnline.order.application.port.in.CancelOrderUseCase;
+import com.dawnline.order.application.port.in.GetOrderUseCase;
+import com.dawnline.order.application.port.in.ListOrdersUseCase;
 import com.dawnline.order.application.port.in.PlaceOrderUseCase;
 import com.dawnline.order.application.port.out.Geocoder;
 import com.dawnline.order.application.port.out.IdempotencyCache;
@@ -15,10 +26,14 @@ import com.dawnline.order.application.port.out.OrderEvents;
 import com.dawnline.order.application.port.out.OrderRepository;
 import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.TierEligibility;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
-import java.time.Duration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * 도메인 서비스와 유스케이스 배선 (DESIGN.md §3.4, §5.1).
@@ -27,16 +42,9 @@ import org.springframework.context.annotation.Configuration;
  * 무엇이 무엇에 의존하는지가 한 화면에 보인다.
  */
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(OrderProperties.class)
+@EnableScheduling
 public class OrderApplicationConfig {
-
-    /**
-     * 멱등 기록 보관 기간. §7.2 의 Redis 키 TTL(24h)과 같은 값이다 — 두 경로가 같은 기간 동안
-     * 같은 답을 주도록.
-     *
-     * <p>{@code expires_at} 은 정리 기준일 뿐이고 지금은 지우는 배치가 없다. 행이 남아 있는 동안은
-     * 재생이 계속 되므로, 만료가 지나 <em>더 이상 못 지우는</em> 방향의 위험은 없다.
-     */
-    private static final Duration IDEMPOTENCY_RETENTION = Duration.ofHours(24);
 
     /**
      * 우편번호 → 좌표 (§5.1 기본 구현).
@@ -106,12 +114,85 @@ public class OrderApplicationConfig {
      * @param transaction 트랜잭션 경계
      * @param ids         UUIDv7 생성기
      * @param clock       접수 시각 출처 — 저장 정밀도로 잘린 시계여야 한다
+     * @param properties  {@code dawnline.order.*}
      */
     @Bean
     public PlaceOrderUseCase placeOrderUseCase(Geocoder geocoder, TierEligibility tiers, DeliveryPromise promises,
             IdempotencyRecords records, IdempotencyCache cache, PlaceOrderTransaction transaction,
-            Ids ids, Clock clock) {
+            Ids ids, Clock clock, OrderProperties properties) {
         return new PlaceOrderService(geocoder, tiers, promises, records, cache, transaction,
-                ids, clock, IDEMPOTENCY_RETENTION);
+                ids, clock, properties.idempotency().retention());
+    }
+
+    /**
+     * 주문 취소 (§5.1). 트랜잭션 경계가 유스케이스 안에 있다 — 트랜잭션 밖에서 할 일이 없어
+     * {@link PlaceOrderService} 처럼 쪼갤 이유가 없다.
+     *
+     * @param orders 주문 저장소
+     * @param events 이벤트 발행
+     * @param clock  전이 시각 출처
+     */
+    @Bean
+    public CancelOrderUseCase cancelOrderUseCase(OrderRepository orders, OrderEvents events, Clock clock) {
+        return new CancelOrderService(orders, events, clock);
+    }
+
+    /**
+     * 주문 조회 (§5.1). 상세와 목록을 한 클래스가 구현하고 빈도 하나다 — 같은 저장소를 같은 방식으로
+     * 읽는 두 메서드라 나눌 이유가 없다. 반환 타입을 구현 클래스로 두면 Spring 이
+     * {@link GetOrderUseCase}·{@link ListOrdersUseCase} 양쪽 주입 지점에 이 빈을 꽂는다.
+     * 인터페이스별로 빈을 따로 노출하면 같은 인스턴스가 두 이름으로 등록돼 주입이 모호해진다.
+     *
+     * @param orders 주문 저장소
+     */
+    @Bean
+    public OrderQueryService orderQueryService(OrderRepository orders) {
+        return new OrderQueryService(orders);
+    }
+
+    /**
+     * 배송 진행 이벤트를 상태 머신에 적용 (§5.1, ADR-017).
+     *
+     * @param orders 주문 저장소
+     */
+    @Bean
+    public AdvanceOrderUseCase advanceOrderUseCase(OrderRepository orders) {
+        return new AdvanceOrderService(orders);
+    }
+
+    /**
+     * {@code order.dispatched}·{@code delivery.status} 리스너 (§4.1).
+     *
+     * <p>{@code IdempotentConsumer}·{@code EventJson} 은 {@code libs/messaging} 의 자동설정이 준다.
+     *
+     * @param consumer     멱등 게이트
+     * @param advanceOrder 상태 전이 유스케이스
+     * @param json         이벤트 JSON 코덱
+     * @param meters       Micrometer 레지스트리
+     */
+    @Bean
+    public OrderProgressListener orderProgressListener(IdempotentConsumer consumer,
+            AdvanceOrderUseCase advanceOrder, EventJson json, MeterRegistry meters) {
+        return new OrderProgressListener(consumer, advanceOrder, json, meters);
+    }
+
+    /**
+     * 멱등 기록 보존 정리 (ADR-019).
+     *
+     * <p>{@code dawnline.order.idempotency.cleanup-enabled=false} 로 끌 수 있다. 끄면 테이블이
+     * 자라기만 하므로, 여러 인스턴스 중 하나만 돌리고 싶을 때가 아니면 켜 둔다.
+     *
+     * @param records            멱등 기록 저장소
+     * @param transactionManager 배치마다 트랜잭션을 여는 데 쓴다
+     * @param clock              기준 시각
+     * @param properties         {@code dawnline.order.idempotency.*}
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "dawnline.order.idempotency", name = "cleanup-enabled",
+            havingValue = "true", matchIfMissing = true)
+    public IdempotencyKeyCleaner idempotencyKeyCleaner(IdempotencyRecords records,
+            PlatformTransactionManager transactionManager, Clock clock, OrderProperties properties) {
+        return new IdempotencyKeyCleaner(records, transactionManager, clock,
+                properties.idempotency().batchSize(), properties.idempotency().maxBatchesPerRun());
     }
 }

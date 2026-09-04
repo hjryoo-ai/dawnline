@@ -66,6 +66,9 @@ class PlaceOrderTransactionTest {
                 List.of(new OrderItem((short) 1, "SKU-1", 1)), NOW);
     }
 
+    /** §2.2 DAWN 컷오프. 저장되지 않고 이벤트로만 나간다. */
+    private static final Instant CUTOFF_AT = NOW.plus(Duration.ofHours(14));
+
     private static IdempotencyClaim claim() {
         return new IdempotencyClaim("idem-1", "a".repeat(64), NOW, NOW.plus(Duration.ofHours(24)));
     }
@@ -74,11 +77,11 @@ class PlaceOrderTransactionTest {
     void 주문_이벤트_멱등기록을_그_순서로_쓴다() {
         Order order = order();
 
-        OrderAccepted accepted = transaction.commit(order, claim());
+        OrderAccepted accepted = transaction.commit(order, CUTOFF_AT, claim());
 
         InOrder calls = inOrder(orders, events, records);
         calls.verify(orders).save(order);
-        calls.verify(events).placed(order);
+        calls.verify(events).placed(order, CUTOFF_AT);
         calls.verify(records).complete(claim(), 201, accepted);
     }
 
@@ -86,7 +89,7 @@ class PlaceOrderTransactionTest {
     void 반환값은_저장한_주문에서_만든_응답이다() {
         Order order = order();
 
-        OrderAccepted accepted = transaction.commit(order, claim());
+        OrderAccepted accepted = transaction.commit(order, CUTOFF_AT, claim());
 
         assertThat(accepted).isEqualTo(OrderAccepted.of(order));
         assertThat(accepted.orderId()).isEqualTo(order.id());
@@ -99,7 +102,7 @@ class PlaceOrderTransactionTest {
         // 주문이 두 건 남는다 — 멱등의 실패이자 되돌리기 어려운 상태다.
         when(records.complete(any(), anyInt(), any())).thenReturn(false);
 
-        assertThatThrownBy(() -> transaction.commit(order(), claim()))
+        assertThatThrownBy(() -> transaction.commit(order(), CUTOFF_AT, claim()))
                 .isInstanceOf(ConflictException.class)
                 .hasMessageContaining("이미 완료");
     }
@@ -109,7 +112,7 @@ class PlaceOrderTransactionTest {
         // ArchUnit 규칙 5 는 어노테이션의 <위치>만 본다 — 없어진 것은 잡지 못한다.
         // 이 클래스가 존재하는 이유가 그 어노테이션이므로 여기서 확인한다.
         assertThat(PlaceOrderTransaction.class
-                .getMethod("commit", Order.class, IdempotencyClaim.class)
+                .getMethod("commit", Order.class, Instant.class, IdempotencyClaim.class)
                 .isAnnotationPresent(Transactional.class))
                 .as("@Transactional 이 없으면 주문·outbox·멱등 기록이 서로 다른 트랜잭션이 된다")
                 .isTrue();
@@ -117,8 +120,12 @@ class PlaceOrderTransactionTest {
 
     @Test
     void null_인자는_거부한다() {
-        assertThatThrownBy(() -> transaction.commit(null, claim())).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> transaction.commit(order(), null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> transaction.commit(null, CUTOFF_AT, claim()))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> transaction.commit(order(), null, claim()))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> transaction.commit(order(), CUTOFF_AT, null))
+                .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlaceOrderTransaction(null, events, records))
                 .isInstanceOf(NullPointerException.class);
     }

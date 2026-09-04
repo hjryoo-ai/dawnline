@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.archunit.HexagonalArchitectureRules;
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
@@ -14,7 +15,7 @@ import java.util.List;
  *
  * <p>규칙 본문은 {@code libs/common} 의 테스트 픽스처
  * {@link HexagonalArchitectureRules} 가 모든 서비스에 공통으로 제공한다.
- * 규칙 6개: domain 프레임워크 비의존 · application→adapter 역참조 금지 ·
+ * 규칙 7개: domain 프레임워크 비의존 · application→adapter 역참조 금지 ·
  * 서비스 간 참조 금지 · {@code @KafkaListener} 위치 · {@code @Transactional} 위치 ·
  * domain·application 의 Spring Kafka 의존 금지(발행은 Outbox 를 거친다, 불변규칙 1).
  *
@@ -28,7 +29,7 @@ import java.util.List;
  * </ol>
  * 여기에 더해 §3.4 의 헥사고날 패키지가 실제로 존재하는지도 확인한다.
  */
-@AnalyzeClasses(packages = "com.dawnline.fulfillment")
+@AnalyzeClasses(importOptions = ImportOption.DoNotIncludeTests.class, packages = "com.dawnline.fulfillment")
 class ArchitectureTest {
 
     /** {@link HexagonalArchitectureRules#SERVICES} 의 서비스 식별자. */
@@ -52,9 +53,9 @@ class ArchitectureTest {
             ".config");
 
     @ArchTest
-    static void 헥사고날_규칙_6개를_모두_지킨다(JavaClasses classes) {
+    static void 헥사고날_규칙을_모두_지킨다(JavaClasses classes) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(SERVICE);
-        assertThat(rules).as("DESIGN.md §13 의 ArchUnit 규칙 6개").hasSize(6);
+        assertThat(rules).as("DESIGN.md §13 의 ArchUnit 규칙 7개").hasSize(7);
         rules.forEach(rule -> rule.check(classes));
     }
 

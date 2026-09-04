@@ -54,8 +54,8 @@ order.dispatched             ← 나중 도착
 | 상황 | 판정 | 처리 |
 |---|---|---|
 | 표에 있는 전이 | 적용 | 상태 변경 후 커밋 |
-| 목표 상태의 진행 단계가 현재보다 **앞이거나 같음** | 철 지난 이벤트 | 무시하고 커밋, `debug` 로그 |
-| 그 밖 | 비즈니스 규칙 위반 | 무시하고 커밋, `warn` + `dawnline_event_rejected_total{reason}` |
+| 목표 상태의 진행 단계가 현재보다 **앞이거나 같음** | 철 지난 이벤트 | 무시하고 커밋, `debug` 로그 + `dawnline_event_stale_total{consumer,eventType}` |
+| 그 밖 | 비즈니스 규칙 위반 | 무시하고 커밋, `warn` + `dawnline_event_processed_total{outcome=rejected}` |
 
 두 번째가 뒤늦게 도착한 `order.dispatched` 를 처리한다. 주문이 이미 `DELIVERED`(3)인데
 `DISPATCHED`(2)로 가라는 요청은 과거를 가리키므로 버린다.
@@ -108,3 +108,74 @@ order.dispatched             ← 나중 도착
   도착하면 그 시각을 별도로 채우는 것은 Phase 5(추적 화면)에서 필요해지면 다룬다.
 - 진행 단계 비교가 상태 머신에 개념 하나를 더한다. 상태가 늘 때 전이표와 진행 단계 <em>둘 다</em>
   갱신해야 하며, 빠뜨리면 철 지난 판정이 틀린다. 테스트가 두 정의의 일관성을 검사한다.
+
+
+---
+
+## [후속 — Phase 1-6] stale 을 세는 카운터를 따로 둔다
+
+구현하며 한 가지를 더 정했다. 철 지난 이벤트를 `debug` 로그로만 남기면 **그 일이 얼마나 자주
+일어나는지 아무도 모른다.** 순서 뒤바뀜 자체는 정상이지만, 빈도가 갑자기 늘면 어딘가에서 지연이
+커졌다는 신호다 — 그것을 보려면 세어야 한다.
+
+`dawnline_event_stale_total{consumer,eventType}` 를 추가한다(§9.1). 기존
+`dawnline_event_processed_total{outcome=rejected}` 와 합치지 않는 이유는 알림 때문이다:
+**stale 은 늘 조금씩 늘고, rejected 는 0이어야 한다.** 한 카운터에 섞으면 어느 쪽에도 임계값을
+걸 수 없다.
+
+`outcome` 라벨에 `stale` 을 더하는 방법도 있었지만 그러지 않았다. 그 라벨은 "멱등 소비의 결과"
+(ok/dup/rejected/dlq)를 뜻하고, stale 은 그 축이 아니라 **상태 머신의 판정**이다.
+이벤트는 정상적으로 <em>처리</em>됐고(커밋됐고) 다만 상태를 바꾸지 않았을 뿐이다.
+
+
+## [후속 — Phase 1-6] 건너뜀은 `PLANNED` 에서만이 아니다
+
+이 ADR 의 §1 은 `PLANNED → DELIVERED`·`PLANNED → FAILED` 두 전이만 추가했다. 리스너를 만들며
+전이표를 다시 보니 **같은 결함이 한 칸 앞에 그대로 남아 있었다.**
+
+order-service 가 소비하는 이벤트는 셋이고(§4.1) 모두 다른 토픽이다.
+
+| 토픽 | 키 |
+|---|---|
+| `dawnline.fulfillment.planned.v1` | orderId |
+| `dawnline.order.dispatched.v1` | orderId |
+| `dawnline.delivery.status.v1` | routeId |
+
+앞의 둘은 키가 같지만 <em>토픽이 다르므로</em> 같은 파티션이 아니다. 순서 보장은 파티션 안에서만
+성립한다(§4.5). 따라서 `fulfillment.planned` 가 늦으면 주문은 `PLACED` 인 채로 `order.dispatched`
+나 `delivery.status` 를 먼저 받는다. 원래 표대로면 그 순간 정상 배송이 "비즈니스 규칙 위반" 으로
+분류돼 `warn` 과 알림용 메트릭에 올라간다 — 이 ADR 이 없애려던 바로 그 결과다.
+
+**규칙을 상태 쌍이 아니라 축으로 적는다.** 진행 축에서 앞으로 가는 전이는 전부 허용한다.
+
+```
+PLACED     → PLANNED, DISPATCHED, DELIVERED, FAILED   (+ CANCELLED)
+PLANNED    → DISPATCHED, DELIVERED, FAILED            (+ CANCELLED)
+DISPATCHED → DELIVERED, FAILED
+```
+
+취소는 이 규칙의 예외로 남는다 — 이벤트가 아니라 명령이고, `DISPATCHED` 이후에는 소포가 이미
+차에 실린 뒤라 막아야 한다. `OrderStatusTest` 가 두 가지를 함께 검사한다: 표가 축 규칙과 정확히
+같은가, 그리고 취소 제약이 표에서 축 규칙을 어떻게 벗어나는가.
+
+**잃는 것**: `PLACED → DELIVERED` 가 "계획도 안 된 주문이 배달됐다" 는 진짜 이상 상황일 가능성도
+있는데, 이제 그것을 정상으로 받는다. 그러나 <em>구분할 방법이 없다</em> — 늦은
+`fulfillment.planned` 와 구별되지 않기 때문이다. 구분할 수 없는 것을 구분하는 척하는 규칙보다
+받아들이는 규칙이 낫고, 정말 이상한 상황은 `CANCELLED` 축 밖 판정이 계속 잡는다.
+
+### Phase 2 를 위한 경고 — 상태 전이와 데이터 부착은 다른 일이다
+
+축 규칙의 대가가 하나 더 있다. `fulfillment.planned` 가 늦게 도착해 주문이 이미 `DISPATCHED`
+라면, 그 이벤트는 **stale 로 판정돼 버려진다.** 상태 전이만 보면 옳다 — 이미 그 지점을 지났다.
+
+그런데 `fulfillment.planned` 는 상태만 나르지 않는다. `fcId`·`campId`·`zoneId`·`waveId` 를 함께
+싣고(§4.3), 주문 상세 화면(§5.1 `GET /orders/{id}`)이 "어느 캠프에서 어느 웨이브로 가는가" 를
+보여주려면 그 값이 필요하다. **stale 판정으로 그 데이터까지 버리면 화면이 빈다.**
+
+그래서 Phase 2 에서 그 리스너를 만들 때는 두 가지를 나눠야 한다.
+
+1. **상태 전이** — 축 규칙을 그대로 따른다. 이미 지났으면 옮기지 않는다.
+2. **계획 데이터 부착** — 전이 여부와 무관하게 저장한다. 늦게 왔다고 사실이 아닌 것은 아니다.
+
+`AdvanceOrderUseCase` 를 그대로 재사용하면 2번이 빠진다. 그 포트는 "상태를 옮긴다" 만 하기
+때문이다. Phase 2 는 별도 유스케이스가 필요하다.

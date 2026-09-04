@@ -15,6 +15,10 @@ dependencies {
     // 이 스타터가 없으면 spring.flyway.* 가 죽은 설정이 되어 마이그레이션이 실행되지 않는다.
     implementation(libs.spring.boot.starter.flyway)
     runtimeOnly(libs.flyway.postgresql)
+    // 리스너가 dawnline_event_stale_total 을 직접 올린다(§9.1). 지금은 libs/observability 가
+    // 노출하는 OTel 스타터를 타고 전이로 들어오지만, 직접 쓰는 의존은 직접 선언한다 —
+    // 그 스타터를 바꾸는 날 컴파일이 깨지는 이유가 보이지 않게 된다.
+    implementation(libs.micrometer.core)
     implementation(libs.springdoc.openapi.webmvc)
     runtimeOnly(libs.postgresql)
 
@@ -24,6 +28,8 @@ dependencies {
     // libs/messaging 의 이벤트 계약 검증 픽스처 (CLAUDE.md 불변규칙 8)
     testImplementation(testFixtures(project(":libs:messaging")))
 
+    // Boot 4 모듈화: @AutoConfigureMockMvc 는 spring-boot-starter-test 가 아니라 이 모듈에 있다.
+    integrationTestImplementation(libs.spring.boot.webmvc.test)
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.testcontainers.redis)

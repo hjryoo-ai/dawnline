@@ -4,7 +4,10 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.messaging.outbox.OutboxMessage;
 import com.dawnline.order.application.port.out.OrderEvents;
 import com.dawnline.order.domain.Order;
+import com.dawnline.order.domain.OrderStatus;
+import java.time.Instant;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * {@link OrderEvents} 의 outbox 구현 (CLAUDE.md 불변규칙 1, DESIGN.md §4.4).
@@ -28,14 +31,28 @@ public class OutboxOrderEvents implements OrderEvents {
     }
 
     @Override
-    public void placed(Order order) {
+    public void placed(Order order, Instant cutoffAt) {
         Objects.requireNonNull(order, "order");
+        Objects.requireNonNull(cutoffAt, "cutoffAt");
         outbox.append(OutboxMessage.of(
                 OrderPlacedPayload.AGGREGATE_TYPE,
                 order.id(),
                 OrderPlacedPayload.EVENT_TYPE,
                 OrderPlacedPayload.SCHEMA_VERSION,
                 order.partitionKey(),
-                OrderPlacedPayload.of(order)));
+                OrderPlacedPayload.of(order, cutoffAt)));
+    }
+
+    @Override
+    public void cancelled(Order order, OrderStatus previousStatus, @Nullable String reason) {
+        Objects.requireNonNull(order, "order");
+        Objects.requireNonNull(previousStatus, "previousStatus");
+        outbox.append(OutboxMessage.of(
+                OrderCancelledPayload.AGGREGATE_TYPE,
+                order.id(),
+                OrderCancelledPayload.EVENT_TYPE,
+                OrderCancelledPayload.SCHEMA_VERSION,
+                order.partitionKey(),
+                OrderCancelledPayload.of(order, previousStatus, reason)));
     }
 }

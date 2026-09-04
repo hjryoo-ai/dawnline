@@ -38,6 +38,9 @@ spring-boot-starter-data-redis      = { module = "org.springframework.boot:sprin
 spring-boot-starter-actuator        = { module = "org.springframework.boot:spring-boot-starter-actuator" }
 spring-boot-starter-security        = { module = "org.springframework.boot:spring-boot-starter-security" }
 spring-boot-starter-test            = { module = "org.springframework.boot:spring-boot-starter-test" }
+# Boot 4 모듈화: MockMvc 자동설정(@AutoConfigureMockMvc)은 spring-boot-starter-test 에 없다.
+# 웹 계층 통합 테스트가 상태 코드·헤더·Problem Details 를 검증하려면 이 모듈이 필요하다.
+spring-boot-webmvc-test             = { module = "org.springframework.boot:spring-boot-webmvc-test" }
 # 주의(Boot 4 모듈화): spring-boot-autoconfigure 에는 자동설정이 12개뿐이다.
 #   Flyway·Kafka·OpenTelemetry 자동설정은 아래 전용 스타터에만 들어 있다.
 #   이걸 빼면 spring.flyway.* / spring.kafka.* 가 조용히 무시된다(빈이 아예 안 생김).

@@ -190,7 +190,7 @@ com.dawnline.<service>
 |---|---|---|---|---|
 | dawnline.order.placed.v1 | orderId | order | fulfillment, ops | 주문 접수 완료 |
 | dawnline.order.cancelled.v1 | orderId | order | fulfillment, dispatch, ops | 취소 (디스패치 전에만 허용) |
-| dawnline.fulfillment.planned.v1 | orderId | fulfillment | dispatch, ops | FC·캠프·권역·웨이브 결정 |
+| dawnline.fulfillment.planned.v1 | orderId | fulfillment | **order**, dispatch, ops | FC·캠프·권역·웨이브 결정 |
 | dawnline.wave.closed.v1 | campId | fulfillment | dispatch, ops | 컷오프 도달, 계획 시작 신호 |
 | dawnline.route.assigned.v1 | routeId | dispatch | tracking, ops | 라우트 확정 (stops 포함) |
 | dawnline.order.dispatched.v1 | orderId | dispatch | order, ops | 주문이 라우트에 배정됨 |
@@ -228,9 +228,14 @@ com.dawnline.<service>
   "promisedWindow": { "start": "2026-08-30T00:00:00+09:00", "end": "2026-08-30T07:00:00+09:00" },
   "parcel": { "weightG": 1200, "volumeCm3": 8000, "requiresCold": false, "hazmat": false },
   "items": [ { "sku": "SKU-1001", "qty": 2 } ],
-  "placedAt": "…"
+  "placedAt": "…",
+  "cutoffAt": "2026-08-30T00:00:00+09:00"
 }
 ```
+`cutoffAt` 은 order-service 가 §2.2 표를 `(티어, 접수 시각)` 에 적용해 계산한 값이다.
+fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 **그대로 쓰고 다시 계산하지
+않는다** (§5.2). {@code orders} 테이블에는 저장하지 않는다 — 접수 이후 order-service 가 쓰는 곳이
+없고, 필요한 쪽으로 가는 통로가 이 이벤트다.
 
 **fulfillment.planned.v1** — order.placed 스냅샷 + `fcId, campId, zoneId, waveId, waveCutoffAt`
 
@@ -334,12 +339,35 @@ API 버전은 URL 세그먼트 `v1` 기본. Spring Framework 7의 API Versioning
 
 **상태 머신**
 
+진행 축:  PLACED(0) ──▶ PLANNED(1) ──▶ DISPATCHED(2) ──▶ DELIVERED·FAILED(3)      CANCELLED(축 밖)
+
 ```
-PLACED ──(fulfillment.planned)──▶ PLANNED ──(order.dispatched)──▶ DISPATCHED ──(delivery COMPLETED)──▶ DELIVERED
-  │                                  │  │                              └──(delivery FAILED)──▶ FAILED
-  │                                  │  └──(delivery COMPLETED/FAILED, order.dispatched 보다 먼저 도착)──┤
-  └──────── cancel ──────────────────┴──▶ CANCELLED     (DISPATCHED 이후 취소 불가 → 409)
+PLACED ─(fulfillment.planned)─▶ PLANNED ─(order.dispatched)─▶ DISPATCHED ─(delivery COMPLETED)─▶ DELIVERED
+                                                                         └(delivery FAILED)───▶ FAILED
+
+건너뜀 (앞으로 가는 전이는 전부 허용):
+  PLACED  ─(order.dispatched 가 먼저)──────────────────────────────────────────────────▶ DISPATCHED
+  PLACED  ─(delivery COMPLETED/FAILED 가 먼저)────────────────────────────────────────▶ DELIVERED/FAILED
+  PLANNED ─(delivery COMPLETED/FAILED 가 먼저)────────────────────────────────────────▶ DELIVERED/FAILED
+
+취소 (이벤트가 아니라 명령):
+  PLACED·PLANNED ─ cancel ─▶ CANCELLED                   (DISPATCHED 이후 취소 불가 → 409)
+
+역행 (예: DELIVERED 인데 order.dispatched 도착):
+  전이하지 않고 stale 로 세고 버린다 — dawnline_event_stale_total
 ```
+
+**건너뜀은 정식 전이다.** 예외 처리가 아니라 표에 있는 경로이고, 규칙은 하나다 —
+<strong>진행 축에서 앞으로 가는 전이는 전부 허용한다.</strong> 배송이 끝났다면 배송은 시작된 것이고,
+중간 상태를 거치지 않았다는 것은 그 사건을 알리는 메시지가 아직 안 왔다는 뜻일 뿐이다.
+**사실은 이미 일어났고, 순서가 다른 것은 우리가 알게 된 순서일 뿐이다.**
+
+`PLACED` 에서 곧바로 건너뛰는 경로까지 여는 이유: order-service 가 소비하는 세 이벤트
+(`fulfillment.planned`·`order.dispatched`·`delivery.status`)는 **서로 다른 토픽**이라 셋 사이의
+순서가 보장되지 않는다(§4.5). `order.dispatched` 와 `fulfillment.planned` 는 둘 다 orderId 키지만
+토픽이 다르므로 같은 파티션이 아니다. 즉 `fulfillment.planned` 가 늦으면 주문은 `PLACED` 인 채로
+그 뒤의 이벤트를 먼저 받는다. `PLANNED → DELIVERED` 만 열고 `PLACED → DELIVERED` 를 닫아 두면
+같은 결함이 한 칸 앞에 그대로 남는다.
 
 **순서 뒤바뀜 흡수 (ADR-017).** `order.dispatched` 는 orderId 키, `delivery.status` 는 routeId 키로
 발행된다(§4.1). 서로 다른 파티션이므로 §4.5에 따라 둘 사이의 순서는 보장되지 않는다. 그래서
@@ -351,8 +379,12 @@ PLACED ──(fulfillment.planned)──▶ PLANNED ──(order.dispatched)─�
 | 상황 | 판정 | 처리 |
 |---|---|---|
 | 표에 있는 전이 | 적용 | 상태 변경 후 커밋 |
-| 이미 지나온 지점으로의 전이 (진행 단계가 현재보다 앞) | **철 지난 이벤트** | 무시하고 커밋. `debug` 로그. DLQ 아님 |
+| 이미 지나온 지점으로의 전이 (진행 단계가 현재보다 앞) | **철 지난 이벤트** | 무시하고 커밋. `debug` 로그 + `dawnline_event_stale_total{consumer,eventType}`. DLQ 아님 |
 | 그 밖의 전이 (예: `CANCELLED` 인데 `order.dispatched` 도착) | **비즈니스 규칙 위반** | 무시하고 커밋. `warn` + `dawnline_event_rejected_total{reason}` (§4.6 3행). DLQ 아님 |
+
+stale 을 <em>세는</em> 이유는 알림이 아니라 관찰이다. 순서 뒤바뀜은 정상이지만 그 빈도가 갑자기
+늘면 어딘가 지연이 커졌다는 신호이고, `rejected`(사람이 봐야 하는 상황)와 섞이면 그 신호가 묻힌다
+(§9.1).
 
 "진행 단계"는 `PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)` 순서다.
 `CANCELLED` 는 이 축에 있지 않다 — 취소된 주문에 배송 이벤트가 오는 것은 철 지난 중복이 아니라
@@ -393,15 +425,20 @@ CREATE TABLE order_items (
   PRIMARY KEY (order_id, line_no)
 );
 
+-- 행이 있다는 것은 곧 "그 요청은 끝났고 응답은 이것" 이다. 처리 중 상태는 여기 없다 —
+-- 그 표시는 30초 뒤 스스로 풀리는 Redis 키가 맡는다 (ADR-018). 그래서 status 컬럼이 없고,
+-- 응답 두 컬럼은 NOT NULL 이다.
 CREATE TABLE idempotency_keys (
   idem_key      VARCHAR(64) PRIMARY KEY,
-  request_hash  CHAR(64) NOT NULL,                   -- SHA-256(body)
-  status        VARCHAR(12) NOT NULL,                -- IN_PROGRESS | DONE
-  response_code SMALLINT,
-  response_body JSONB,
+  request_hash  CHAR(64) NOT NULL,                   -- SHA-256(요청 표준형)
+  response_code SMALLINT NOT NULL,
+  response_body JSONB NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL,
-  expires_at    TIMESTAMPTZ NOT NULL
+  expires_at    TIMESTAMPTZ NOT NULL                 -- created_at + 7일 (ADR-019)
 );
+-- 보존 7일 정리 배치용. PK 는 idem_key 라 expires_at 범위 삭제를 돕지 못한다.
+-- (불변규칙 11 — EXPLAIN 비교는 docs/benchmarks/phase1-idempotency-cleanup-index.md)
+CREATE INDEX ix_idempotency_keys_cleanup ON idempotency_keys (expires_at);
 
 -- 모든 서비스 공통 (libs/messaging 가 Flyway 스크립트 제공)
 CREATE TABLE outbox_events (
@@ -457,22 +494,31 @@ order-service 는 고객에게 한 약속만 정한다. 두 값이 어긋나면(
 0. 요청의 **표준형**에서 SHA-256 지문을 만든다. 같은 키에 다른 요청이 왔는지 판정하는 기준이며,
    원문 바이트가 아니라 표준형을 쓰는 이유는 공백·필드 순서만 다른 재전송이 422 가 되면 안 되기 때문이다.
 1. DB `idempotency_keys` 를 PK 로 한 번 읽는다.
-   - 지문이 다르면 **422** (같은 키, 다른 요청)
-   - `DONE` 이면 저장된 응답을 **200** 으로 재생
-   - `IN_PROGRESS` 면 **409**
+   - 행이 있고 지문이 다르면 **422** (같은 키, 다른 요청)
+   - 행이 있고 지문이 같으면 저장된 응답을 **200** 으로 재생
 2. 행이 없으면 Redis `SET idem:order:{key} IN_PROGRESS NX PX 30000`.
    - 획득 → 3
    - 이미 있음 → **409** (다른 요청이 처리 중이고 아직 커밋되지 않았다)
    - Redis 불가 → 잠금 없이 3 으로 간다. 동시성은 `idempotency_keys` PK 가 커밋 시점에 막는다
      (성능 저하, 정확성 유지 — 불변규칙 7)
-3. 트랜잭션 하나: orders + order_items + outbox(`order.placed`) + idempotency_keys(`DONE`) 업서트.
-   업서트가 0행이면 그 사이 다른 요청이 끝냈다는 뜻이므로 롤백하고 **409**.
+3. 트랜잭션 하나: orders + order_items + outbox(`order.placed`) + idempotency_keys
+   `INSERT … ON CONFLICT (idem_key) DO NOTHING`.
+   0행이면 그 사이 다른 요청이 끝냈다는 뜻이므로 롤백하고 **409**.
+   `DO NOTHING` 은 충돌 상대가 아직 커밋되지 않았으면 **그 트랜잭션이 끝날 때까지 기다렸다가**
+   0행을 돌려준다(측정: `docs/benchmarks/phase1-idempotency-cleanup-index.md` 와 같은 방식으로
+   두 연결로 확인, 1,972 ms 대기 후 `INSERT 0 0`). 그래서 Redis 가 없어도 같은 키의 동시 요청 중
+   하나만 성공한다.
 4. 커밋 후 Redis 키를 `DONE` 으로 갱신(TTL 24h). 실패해도 무시한다 — 다음 요청은 1번에서 DB 로 걸린다.
    3번이 실패했다면 Redis 키를 지운다. 안 지우면 30초 동안 재시도가 409 가 된다.
 
-DB `status` 의 `IN_PROGRESS` 는 **읽기 경로에만** 있다. order-service 는 그 값을 쓰지 않는다 —
-프로세스가 3번 도중 죽으면 그 행이 남아 그 멱등 키로는 다시 주문할 수 없게 된다. in-flight 표시는
-30초 뒤 스스로 사라지는 Redis 키가 맡는다 (ADR-018).
+**보존은 7일이고, 그것은 클라이언트와의 계약이다** (ADR-019).
+`expires_at = created_at + 7일` 이며 만료된 행은 정리 배치가 지운다. 즉 **7일이 지난 멱등 키로
+같은 요청을 보내면 그것은 재생이 아니라 새 주문이 된다.** Redis 키의 TTL(24h)은 그대로다 —
+그 24시간은 DB 를 읽지 않고 중복을 걸러 내는 구간이고, 이후 7일까지는 DB 가 답한다.
+
+정리 방향이 `processed_events`(보존 14일, §4.4)와 **반대**라는 점이 7일의 근거다. 저쪽은 지워도
+같은 이벤트가 다시 오지 않으면 그만이지만, 이쪽은 지운 뒤 같은 키가 오면 **새 주문이 만들어진다**.
+잘못 지웠을 때의 대가가 크므로 재시도 창(수 분)보다 훨씬 큰 여유를 둔다.
 
 **Redis**: `idem:order:*`, 레이트 리밋 `rl:customer:{id}` (토큰 버킷 Lua, 기본 60 req/min).
 
@@ -497,6 +543,61 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 - 웨이브는 (campId, tier, cutoffAt)당 1개. 주문 편입 시 없으면 생성(`INSERT … ON CONFLICT DO NOTHING` 후 재조회).
 - 컷오프 스케줄러: 매 30초 `cutoff_at <= now() AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
 - 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가(낙관적 락으로 경합 차단).
+
+**컷오프는 order-service 가 정하고 fulfillment 는 받아 쓴다 (Phase 2 선결, ADR-020 예정)**
+
+웨이브 키는 `(campId, tier, cutoffAt)` 인데, 그 `cutoffAt` 을 여기서 다시 계산하지 않는다.
+`order.placed` 가 싣고 온 값을 그대로 쓴다.
+
+이유는 order-service 가 접수 시점에 **이미 그 값을 썼기 때문**이다. 고객에게 약속한 배송창은
+§2.2 표를 `(티어, 접수 시각)` 에 적용한 결과이고, 그 계산의 중간 산물이 컷오프다. 두 서비스가
+같은 스케줄 표를 각자 들고 각자 계산하면, 표를 한쪽만 고치는 날 **약속한 창과 실제로 실린 웨이브가
+말없이 어긋난다.** 계산은 한 곳에서 하고, 나머지는 결과를 받는다.
+
+`fulfillment.planned` 소비 시각으로 웨이브를 고르는 일은 없어야 한다. 그 값은 outbox 지연·소비
+지연·재처리에 따라 흔들리며, 흔들리는 값으로 웨이브를 고르면 같은 주문이 재처리 때 다른 웨이브에
+들어간다(멱등 소비자가 막아 주는 것은 <em>중복</em>이지 <em>다른 결과</em>가 아니다).
+
+**약속을 깨야 할 때는 말없이 깨지 않는다 (Phase 2 선결, ADR-020 예정)**
+
+위 규칙에서 새 경합이 생긴다. 09:59:59에 접수돼 10:00 컷오프 창을 약속받은 주문이 있는데,
+outbox 릴레이 폴링(100ms)과 소비 지연을 거쳐 fulfillment 에 10:00:01에 도착한다고 하자.
+현재 규칙("컷오프 이후 도착은 다음 웨이브, `CLOSING/CLOSED` 편입 불가")대로면 그 주문은 다음
+웨이브로 밀리고, **고객은 이미 10:00–16:00을 약속받았다.** 정상 지연 하나가 약속을 조용히 깬다.
+
+둘로 나눠 처리한다.
+
+1. **정상 지연은 흡수한다.** 웨이브 마감은 `cutoffAt` 이 아니라 `cutoffAt + grace` 에 실행한다.
+   기본 90초, 설정값. 이 값은 "outbox 지연 + 소비 지연" 의 상한을 잡은 것이고, §9.1 의
+   outbox 지연 게이지가 그 상한을 넘기 시작하면 알림이 먼저 울린다. grace 동안 도착한 주문은
+   약속받은 그 웨이브에 그대로 들어간다.
+2. **흡수하지 못하면 개정 사실을 되돌려 알린다.** grace 를 넘겨 도착해 이미 `CLOSED` 인 웨이브의
+   `cutoffAt` 을 가진 주문은 다음 웨이브에 넣되, `fulfillment.planned` 에 **개정된**
+   `promisedWindow` 와 `promiseRevised: true` 를 실어 보낸다(additive, §4.7). order-service 는
+   그것을 받아 자기 `promised_start/end` 를 갱신한다 — 그러려면 애그리거트에 약속창을 바꾸는
+   메서드가 필요하다(현재 `Order.promisedWindow` 는 불변이다. 불변규칙 6에 따라 세터가 아니라
+   `revisePromise(window, at)` 같은 메서드로 연다).
+
+**왜 이 문단이 지금 여기 있는가**
+
+이것은 웨이브 구현의 세부가 아니라 **서비스 경계를 가로지르는 약속의 소유권** 문제다.
+약속은 상류(order-service)가 하고, 그 약속을 지킬 수 있는지는 하류(fulfillment-service)가 안다.
+하류가 지키지 못하게 됐을 때 선택지는 셋뿐이다 — 조용히 깬다(고객이 나중에 알게 된다),
+접수를 거절한다(이미 201을 준 뒤라 불가능하다), **개정 사실을 상류로 되돌려 알린다.**
+셋째만이 정직하고, 그래서 `promiseRevised` 가 필요하다. 정시율(§8.1)도 개정된 창을 기준으로
+재는 것이 아니라 **원래 약속과 개정 횟수를 함께** 봐야 의미가 있다.
+
+**Phase 2 에서 함께 만들 관측 지표** (§9.1 에 예약해 두었다)
+
+- `dawnline_promise_revised_total{camp,tier}` — 개정 횟수. 이 값이 0 이 아니라는 것은 grace 로
+  흡수하지 못한 지연이 있었다는 뜻이고, 늘어나면 grace 를 늘릴 것이 아니라 지연의 원인을 봐야 한다.
+- 정시율은 **원 약속 기준**과 **개정 약속 기준** 두 값을 따로 낸다
+  (`dawnline_delivery_on_time_ratio{basis}`). 하나만 내면 개정으로 정시율을 세탁할 수 있다 —
+  못 지킬 것 같으면 약속을 미루면 되기 때문이다. SLO 의 기준은 원 약속이다(§8.1).
+
+Phase 2 에서 구현하며 ADR 로 확정한다. 여기 적어 두는 이유는, 이 결정이 Phase 1의 "약속창을
+접수 시점에 계산한다" 에서 곧바로 따라 나오기 때문이다 — 그때 정하지 않으면 Phase 2 에서
+"이미 나간 약속" 을 마주하고 급하게 정하게 된다.
 
 **테이블(핵심)**
 
@@ -831,8 +932,15 @@ public interface DispatchStrategy {
 | `POST /orders` 가용성 | ≥ 99.9% (5xx 비율) |
 | 주문 접수 → 디스패치 후보 적재 (E2E) | p95 ≤ 5초 |
 | 웨이브 계획 시간 (5,000 주문) | p95 ≤ 30초 |
-| 정시 배송률 (시뮬레이션, 지연 주입 5%) | ≥ 97% |
+| 정시 배송률 — **원 약속 기준** (시뮬레이션, 지연 주입 5%) | ≥ 97% |
+| 정시 배송률 — 개정 약속 기준 | 참고값 (목표 없음) |
 | Outbox 지연 | p95 ≤ 2초 |
+
+**정시율을 두 값으로 내는 이유**: 하류가 약속을 지키지 못해 창을 개정하면(§5.2 `promiseRevised`),
+개정된 창 기준으로는 여전히 "정시" 다. 그 값 하나만 내면 **개정으로 정시율을 세탁할 수 있다** —
+못 지킬 것 같으면 약속을 미루면 되기 때문이다. SLO 는 <strong>고객이 처음 받은 약속</strong>을
+기준으로 잰다. 개정 기준 값은 "개정 이후에는 잘 지켰는가" 를 보는 참고값이고, 그 둘의 차이가
+곧 `dawnline_promise_revised_total` 이 세는 사건의 크기다.
 
 ### 8.2 피크 시나리오 모델
 
@@ -891,15 +999,22 @@ public interface DispatchStrategy {
 | `dawnline_outbox_unpublished` | gauge | service |
 | `dawnline_outbox_failed` | gauge | service — 격리된(미해결) outbox 행 수 (§4.6) |
 | `dawnline_event_processed_total` | counter | consumer, eventType, outcome(ok/dup/rejected/dlq) |
+| `dawnline_event_stale_total` | counter | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
+| `dawnline_promise_revised_total` | counter | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_wave_orders` | gauge | camp, tier |
 | `dawnline_plan_duration_seconds` | histogram | strategy, mode |
 | `dawnline_plan_cost_krw` | gauge | camp |
 | `dawnline_plan_unassigned` | gauge | camp |
 | `dawnline_plan_degraded_total` | counter | camp |
-| `dawnline_delivery_on_time_ratio` | gauge | camp |
+| `dawnline_delivery_on_time_ratio` | gauge | camp, **basis(promised/revised)** — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
 | `dawnline_at_risk_total` | counter | camp |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
+
+`dawnline_event_stale_total` 과 `dawnline_event_processed_total{outcome=rejected}` 는 다른 것을 센다.
+**stale** 은 순서 뒤바뀜이라 정상이고(ADR-017 — 사실은 이미 일어났고 순서가 다른 것은 우리가 알게 된
+순서일 뿐이다), **rejected** 는 취소된 주문에 배송 이벤트가 오는 것처럼 사람이 봐야 하는 상황이다.
+한 카운터로 합치면 알림을 걸 수 없다 — stale 은 늘 조금씩 늘고 rejected 는 0이어야 하기 때문이다.
 
 ### 9.2 트레이싱
 
@@ -1019,20 +1134,24 @@ dawnline/
 | 성능 | 주문 API 부하, 계획 시간 | k6, benchmark 도구 | §8.1 목표 대비 리포트 |
 | 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료 | Compose `stop/start` 스크립트 | 데이터 유실·중복 0 (검증 쿼리) |
 
-**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1).
+**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12).
+
+규칙 7이 이름이 아니라 **인자 타입**으로 판정하는 이유: `LocalTime.now(Clock)` 은 주입받은 시계를 읽는 <em>올바른</em> 형태이고 `LocalTime.now(ZoneId)` 는 시스템 시계를 읽는 위반이다. 이름만 보면 둘이 같아 보인다 — 규칙을 처음 켰을 때 `TierEligibility.nowInServiceZone()` 이 그렇게 잘못 걸렸다. 분석 대상에서 테스트 클래스는 뺀다(`DoNotIncludeTests`): 규칙은 프로덕션 구조를 서술하는 것이고, "생성자가 잘못된 인자를 거부하는가" 를 보는 테스트는 버릴 객체를 만들려고 시스템 시계를 부를 수 있다.
 
 규칙 6이 따로 필요한 이유: `libs/messaging` 이 Kafka 의존을 `api` 로 노출하므로 `KafkaTemplate` 이 5개 서비스 전부의 컴파일 클래스패스에 있다. 유스케이스가 그것을 직접 부르면 도메인 변경과 이벤트 발행이 서로 다른 트랜잭션이 되는데, 규칙 5는 어노테이션의 *위치*만 보므로 이를 잡지 못한다.
 
-**규칙의 검증 상태**(정직하게): 규칙 1·2·6은 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. 규칙 5는 Phase 1의 첫 `@Transactional`(`PlaceOrderTransaction`)과 함께 음성 표본(`samples/bad/adapter/out/persistence/TransactionalRepository`)이 추가돼 탐지 능력까지 확인된다. 규칙 3·4는 아직 검사 대상이 0개라(`@KafkaListener` 가 없다) `allowEmptyShould(true)` 로 통과하며, 탐지 능력은 검증되지 않았다 — Phase 1의 첫 리스너와 함께 표본을 추가한다.
+**규칙의 검증 상태**: 일곱 규칙 <strong>전부</strong> 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. Phase 0 마감 시점에는 규칙 3·4·5가 대상 0개라 미검증이었고, Phase 1에서 첫 `@Transactional`(규칙 5)·첫 `@KafkaListener`(규칙 4)·서비스 간 참조 표본(규칙 3)이 생기며 채워졌다.
 
-**불변 규칙 ↔ 강제 수단 매핑** (CLAUDE.md 「아키텍처 불변 규칙」 12개 기준). ArchUnit이 닿는 것은 12개 중 5개(1·2·3·4·5)이고 그중 온전히 강제되는 것은 5번뿐이다. 나머지는 API 설계·DB 권한·컴파일러·리뷰가 맡는다 — 이 표는 "무엇이 자동으로 막히지 *않는지*"를 보이는 것이 목적이다.
+규칙별 주의점 세 가지. (1) 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. (2) 규칙 3의 표본은 `that` 절이 서비스 패키지로 좁혀져 있어 `com.dawnline.order`·`com.dawnline.fulfillment` 패키지에 두어야 한다. 그 클래스들은 `libs/common` 의 테스트 소스에만 있고 서비스의 테스트 클래스패스에는 없으므로 실제 분석에 섞이지 않는다. (3) 규칙 3·7은 <strong>반대 방향</strong>(통과해야 할 표본이 통과하는지)도 함께 본다 — 그 방향이 없으면 "모든 참조를 막는" 규칙이나 "시각을 아예 못 읽게 만드는" 규칙이 되어도 테스트가 통과한다.
+
+**불변 규칙 ↔ 강제 수단 매핑** (CLAUDE.md 「아키텍처 불변 규칙」 13개 기준). ArchUnit이 닿는 것은 13개 중 6개(1·2·3·4·5·12)이고 그중 온전히 강제되는 것은 5·12번이다. 나머지는 API 설계·DB 권한·컴파일러·CI·리뷰가 맡는다 — 이 표는 "무엇이 자동으로 막히지 *않는지*"를 보이는 것이 목적이다.
 
 | # | 불변 규칙 | ArchUnit | 그 밖의 강제 수단 | 음성 검증 |
 |---|---|---|---|---|
 | 1 | Outbox 필수 | 규칙 6(직접 발행 차단), 규칙 5(트랜잭션 경계 위치) | `OutboxAppender` 가 유일한 발행 API — `libs/messaging` 은 다른 발행 경로를 제공하지 않는다. 어노테이션이 <em>사라지는</em> 것은 ArchUnit이 못 잡으므로 `PlaceOrderTransactionTest` 가 그 존재를 직접 확인한다 | 규칙 6 ✅ / 규칙 5 ✅ |
-| 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트 | ✗(대상 0) |
-| 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✗ / DB 권한 ✅(컨테이너에서 거부 확인) |
-| 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | ✗ |
+| 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트, 리스너 IT 가 같은 이벤트를 두 번 보내 상태가 한 번만 바뀌는지 확인 | 규칙 4 ✅ / 멱등 체크 자체는 ✗ |
+| 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✅(양방향) / DB 권한 ✅(컨테이너에서 거부 확인) |
+| 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰 | — |
 | 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등만) — `PlaceOrderIT` 가 죽은 Redis 주소로 컨텍스트를 띄워 멱등이 DB만으로 성립함을 보인다 |
@@ -1040,7 +1159,8 @@ dawnline/
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
 | 10 | ID는 UUIDv7 | — | `Ids.newId()`, `IdsTest`(RFC 9562 비트 레이아웃·단조 증가) | ✅(생성기) |
 | 11 | 인덱스 추가 금지(설계서 명시분 외) | — | PR 체크리스트(EXPLAIN 첨부), 마이그레이션 리뷰 | — |
-| 12 | 시간·난수는 주입 | — | 생성자 시그니처(`Clock`, `RandomGenerator`), seed 재현성 테스트 | — |
+| 12 | 시간·난수는 주입 | 규칙 7 — 시계 쪽은 온전히 강제된다. 난수(`RandomGenerator`)는 아직 아니다 | 생성자 시그니처, seed 재현성 테스트, `libs/messaging` 이 저장 정밀도로 자른 `Clock` 빈을 제공 | 규칙 7 ✅(양방향) |
+| 13 | 머지된 마이그레이션 불변 | — | CI 「마이그레이션 불변 검사」 job — PR 에서 기존 `V*.sql` 이 수정·삭제·이동되면 실패 | ✅(CI) |
 
 **결정론**: 최적화 테스트는 seed 고정. 시간은 `Clock` 주입으로 제어. Testcontainers 재사용(`testcontainers.reuse.enable=true`)으로 로컬 실행 시간 단축.
 
@@ -1091,7 +1211,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 006 | at-least-once + 멱등 소비자 | Kafka 트랜잭션/EOS(DB 쓰기와 원자성 불가) | [ADR-006](adr/ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제 | 계층형(경계 침식) | [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) |
 | 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | 전부 플랫폼 스레드 | — (Phase 4 예정) |
-| 009 | URL 경로 API 버저닝(v1) | 헤더 버저닝 | — (Phase 1 예정) |
+| 009 | URL 경로 API 버저닝(v1), 매핑은 `{version}` 자리표시자 | 헤더 버저닝(URL·로그·데모에서 안 보임), 미디어 타입 파라미터(캐시·프록시 복잡), 리터럴 `v1` + 버저닝 끄기(지원하지 않는 버전이 404 가 됨) | [ADR-009](adr/ADR-009-url-path-api-versioning.md) |
 | 010 | 하버사인 × 도로계수 기본, OSRM 어댑터 선택 | 상용 지도 API(비용·키 관리) | — (Phase 3 예정) |
 | 011 | 롤링 배포 시 소비자 static membership | 기본 리밸런스 | — (Phase 7 예정) |
 | 012 | CQRS 읽기 모델을 ops-api에 집중 | 각 서비스에 조회 API 노출(서비스 간 동기 호출 증가) | — (Phase 6 예정) |
@@ -1101,6 +1221,8 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 016 | 레디니스에서 Kafka 브로커 연결 제외 | 코드에 Kafka 프로브 추가(§8.2 완충 설계 붕괴), 기동 시 1회 검사(기동 순서 의존성) | [ADR-016](adr/ADR-016-readiness-excludes-kafka.md) |
 | 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수(`PLANNED → DELIVERED` 추가 + 진행 단계 비교) | 백오프 재시도에 맡김(도착 상한 없음 → 정상 배송이 DLQ), `delivery.status` 키를 orderId 로 변경(다른 소비자의 라우트 단위 순서가 깨짐), 모든 전이 허용(불변규칙 6 포기) | [ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
 | 018 | 멱등 잠금은 Redis 키(PX 30000)가 잡고 DB `idempotency_keys` 에는 `DONE` 만 기록 | DB 에 `IN_PROGRESS` 선커밋(프로세스 사망 시 그 멱등 키가 영구히 409), 짧은 `expires_at` 으로 자가 만료(정리 배치가 또 필요), Redis 없이 PK 충돌만(중복 요청이 주문 INSERT 까지 하고 롤백) | [ADR-018](adr/ADR-018-idempotency-lock-in-redis-record-in-db.md) |
+| 019 | 멱등 기록 보존 7일 + `status` 컬럼 제거 + `ON CONFLICT DO NOTHING` | 무한 보존(테이블 무제한 증가), 24h(Redis TTL 과 같아 DB 경로의 의미 절반 상실), 30일(DLQ 숫자를 빌려 옴) | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
+| 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨) | — (Phase 2 예정) |
 
 013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다.
 

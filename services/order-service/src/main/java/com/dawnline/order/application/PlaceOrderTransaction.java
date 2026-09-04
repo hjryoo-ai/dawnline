@@ -7,6 +7,7 @@ import com.dawnline.order.application.port.out.IdempotencyRecords;
 import com.dawnline.order.application.port.out.OrderEvents;
 import com.dawnline.order.application.port.out.OrderRepository;
 import com.dawnline.order.domain.Order;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,18 +55,20 @@ public class PlaceOrderTransaction {
     /**
      * 주문·이벤트·멱등 기록을 한 트랜잭션으로 쓴다.
      *
-     * @param order 접수할 주문
-     * @param claim 멱등 키·지문·보관 기간
+     * @param order    접수할 주문
+     * @param cutoffAt 이 주문이 실릴 웨이브의 컷오프. 이벤트에만 실린다(저장하지 않는다)
+     * @param claim    멱등 키·지문·보관 기간
      * @return 저장된 응답
      * @throws ConflictException 그 사이 다른 요청이 같은 멱등 키를 끝냈을 때 (트랜잭션은 롤백된다)
      */
     @Transactional
-    public OrderAccepted commit(Order order, IdempotencyClaim claim) {
+    public OrderAccepted commit(Order order, Instant cutoffAt, IdempotencyClaim claim) {
         Objects.requireNonNull(order, "order");
+        Objects.requireNonNull(cutoffAt, "cutoffAt");
         Objects.requireNonNull(claim, "claim");
 
         orders.save(order);
-        events.placed(order);
+        events.placed(order, cutoffAt);
 
         OrderAccepted accepted = OrderAccepted.of(order);
         if (!records.complete(claim, CREATED, accepted)) {
