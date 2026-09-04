@@ -151,7 +151,9 @@ public class PlaceOrderService implements PlaceOrderUseCase {
                     // 지문 자체는 넣지 않는다. 요청 본문을 되짚을 수 있는 값이라 오류 응답에 남길 이유가 없다.
                     Map.of("reason", "idempotency-key-reused-with-different-body"));
         }
-        return new PlaceOrderResult(stored.response(), true);
+        OrderAccepted response = stored.response();
+        countReplay(response);
+        return new PlaceOrderResult(response, true);
     }
 
     /**
@@ -202,6 +204,18 @@ public class PlaceOrderService implements PlaceOrderUseCase {
         Counter.builder(OrderMetrics.ORDERS_PLACED)
                 .description("접수된 주문 수 (§9.1)")
                 .tag(OrderMetrics.TAG_TIER, accepted.serviceTier().name())
+                .register(meters)
+                .increment();
+    }
+
+    /**
+     * 재생을 센다 (§9.1). {@code ORDERS_PLACED} 와 나눠 두어야 "요청이 늘었다" 와 "클라이언트가
+     * 재시도를 퍼붓고 있다" 를 구분할 수 있다.
+     */
+    private void countReplay(OrderAccepted response) {
+        Counter.builder(OrderMetrics.IDEMPOTENT_REPLAYS)
+                .description("멱등 재생 횟수 — 저장된 응답을 다시 준 횟수 (§9.1)")
+                .tag(OrderMetrics.TAG_TIER, response.serviceTier().name())
                 .register(meters)
                 .increment();
     }

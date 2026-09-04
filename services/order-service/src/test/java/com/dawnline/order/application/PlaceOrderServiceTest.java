@@ -154,11 +154,18 @@ class PlaceOrderServiceTest {
         return counter == null ? 0 : counter.count();
     }
 
+    private double replayCount(ServiceTier tier) {
+        var counter = meters.find(OrderMetrics.IDEMPOTENT_REPLAYS)
+                .tag(OrderMetrics.TAG_TIER, tier.name()).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
     @Test
     void 접수하면_티어별로_센다() {
         service.place(command());
 
         assertThat(placedCount(ServiceTier.DAWN)).isEqualTo(1);
+        assertThat(replayCount(ServiceTier.DAWN)).as("새 접수는 재생이 아니다").isZero();
     }
 
     @Test
@@ -186,6 +193,8 @@ class PlaceOrderServiceTest {
         verifyNoInteractions(transaction, cache);
         // 재생은 새 주문이 아니다. 세면 클라이언트의 재시도 패턴이 주문량 지표를 부풀린다.
         assertThat(placedCount(ServiceTier.DAWN)).isZero();
+        // 대신 별도 카운터로 센다 — 그래야 재시도 폭주와 실제 주문 증가를 구분할 수 있다.
+        assertThat(replayCount(ServiceTier.DAWN)).isEqualTo(1);
     }
 
     @Test

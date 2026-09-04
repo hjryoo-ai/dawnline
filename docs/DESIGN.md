@@ -1010,25 +1010,38 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 
 ### 9.1 커스텀 메트릭 (Micrometer)
 
-| 메트릭 | 타입 | 라벨 |
-|---|---|---|
-| `dawnline_orders_placed_total` | counter | tier — **camp 는 없다**. 캠프는 fulfillment-service 가 정하므로(§5.2) 접수 시점에는 알 수 없다. 캠프별 유입은 `dawnline_wave_orders{camp,tier}` 가 보여 준다 |
-| `dawnline_outbox_lag_seconds` | gauge | service |
-| `dawnline_outbox_unpublished` | gauge | service |
-| `dawnline_outbox_failed` | gauge | service — 격리된(미해결) outbox 행 수 (§4.6) |
-| `dawnline_event_processed_total` | counter | consumer, eventType, outcome(ok/dup/rejected/dlq) |
-| `dawnline_event_stale_total` | counter | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
-| `dawnline_rate_limit_decisions_total` | counter | outcome(allowed/limited/bypassed) — `bypassed` 는 Redis 장애로 레이트 리밋을 건너뛴 것이다 (§7.2) |
-| `dawnline_promise_revised_total` | counter | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
-| `dawnline_wave_orders` | gauge | camp, tier |
-| `dawnline_plan_duration_seconds` | histogram | strategy, mode |
-| `dawnline_plan_cost_krw` | gauge | camp |
-| `dawnline_plan_unassigned` | gauge | camp |
-| `dawnline_plan_degraded_total` | counter | camp |
-| `dawnline_delivery_on_time_ratio` | gauge | camp, **basis(promised/revised)** — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
-| `dawnline_at_risk_total` | counter | camp |
+**emit 주체를 적는 이유**: 라벨은 그것을 <strong>내보내는 서비스가 실제로 아는 값</strong>이어야 한다.
+모르는 라벨을 표에 적어 두면 구현할 때 `unknown` 으로 채우거나(카디널리티만 늘고 쓸모없다) 다른
+서비스의 데이터를 끌어오게 된다(불변규칙 3·4 위반). Phase 1 에서 `dawnline_orders_placed_total`
+의 `camp` 가 정확히 그 경우였다 — 캠프는 접수 시점에 존재하지 않는다.
+
+| 메트릭 | 타입 | emit 주체 | 라벨 |
+|---|---|---|---|
+| `dawnline_orders_placed_total` | counter | order | tier — **camp 는 없다**. 캠프는 fulfillment 가 정하므로(§5.2) 접수 시점에는 존재하지 않는다. 캠프별 유입은 `dawnline_wave_orders` 가 본다 |
+| `dawnline_idempotent_replays_total` | counter | order | tier — 같은 멱등 키의 재요청으로 저장된 응답을 재생한 횟수. `orders_placed` 와 함께 보면 **클라이언트 재시도 폭주와 실제 주문 증가를 구분**할 수 있다 |
+| `dawnline_rate_limit_decisions_total` | counter | order | outcome(allowed/limited/bypassed) — `bypassed` 는 Redis 장애로 판정을 건너뛴 것이다 (§7.2) |
+| `dawnline_outbox_lag_seconds` | gauge | 전 서비스 | service |
+| `dawnline_outbox_unpublished` | gauge | 전 서비스 | service |
+| `dawnline_outbox_failed` | gauge | 전 서비스 | service — 격리된(미해결) outbox 행 수 (§4.6) |
+| `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
+| `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
+| `dawnline_wave_orders` | gauge | fulfillment | camp, tier |
+| `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
+| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode |
+| `dawnline_plan_cost_krw` | gauge | dispatch | camp |
+| `dawnline_plan_unassigned` | gauge | dispatch | camp |
+| `dawnline_plan_degraded_total` | counter | dispatch | camp |
+| `dawnline_at_risk_total` | counter | tracking | camp — campId 는 `route.assigned` 가 싣고 오지만(필수 필드) §5.4 의 `shipments` 에는 컬럼이 없다. **Phase 5 에서 보관해야 이 라벨을 붙일 수 있다** |
+| `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
+
+**정시율을 tracking 이 아니라 ops-api 가 내는 이유**: `basis` 라벨은 <em>원래 약속</em>과
+<em>개정된 약속</em> 두 기준을 모두 알아야 성립한다(§8.1). tracking 은 `route.assigned` 가 준
+`promised_end` 하나만 갖고 있어 그것이 원래 것인지 개정된 것인지 구분하지 못한다. ops-api 는 모든
+토픽을 구독하므로(§5.5) `order.placed` 의 원래 창과 `fulfillment.planned` 의 `promiseRevised` 를
+함께 본다 — 그 둘을 아는 유일한 자리다. 이것을 tracking 에 두면 개정 여부를 알기 위해
+fulfillment 의 데이터를 끌어와야 하고, 그것이 불변규칙 4가 막으려는 것이다.
 
 `dawnline_event_stale_total` 과 `dawnline_event_processed_total{outcome=rejected}` 는 다른 것을 센다.
 **stale** 은 순서 뒤바뀜이라 정상이고(ADR-017 — 사실은 이미 일어났고 순서가 다른 것은 우리가 알게 된
@@ -1086,8 +1099,8 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | RDB | PostgreSQL | **18.x** | 서비스별 DB. 파티셔닝·JSONB |
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
-| 문서 | springdoc-openapi | Spring Boot 4 호환 최신판 (빌드 시 확인) | OpenAPI 3 자동 생성, `contracts/openapi/`로 내보내기 |
-| 회복탄력성 | Resilience4j | Boot 4 호환 최신판 (빌드 시 확인) | Bulkhead, Retry, CircuitBreaker(OSRM 어댑터) |
+| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/order-service.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사 |
+| 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
 | 최적화(선택) | Timefold Solver Community | 최신 안정 | ADR-004 비교 실험용, 기본 경로 아님 |

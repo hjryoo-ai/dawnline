@@ -11,6 +11,7 @@ package com.dawnline.order;
  *   <caption>이름 대응</caption>
  *   <tr><th>여기</th><th>Prometheus (§9.1)</th></tr>
  *   <tr><td>dawnline.orders.placed</td><td>dawnline_orders_placed_total</td></tr>
+ *   <tr><td>dawnline.idempotent.replays</td><td>dawnline_idempotent_replays_total</td></tr>
  *   <tr><td>dawnline.rate.limit.decisions</td><td>dawnline_rate_limit_decisions_total</td></tr>
  * </table>
  */
@@ -35,6 +36,17 @@ public final class OrderMetrics {
      * (§5.2 FC·캠프 선택) 접수 시점에는 알 수 없다. 캠프별 유입은 {@code dawnline_wave_orders} 가 본다.
      */
     public static final String ORDERS_PLACED = "dawnline.orders.placed";
+
+    /**
+     * counter — 멱등 재생 횟수 (§9.1). 태그: tier.
+     *
+     * <p>{@link #ORDERS_PLACED} 와 <strong>함께 볼 때</strong> 의미가 있다. 접수 수만 보면
+     * "요청이 늘었다" 와 "클라이언트가 재시도를 퍼붓고 있다" 가 구분되지 않는다. 재생이 급증하는데
+     * 접수가 그대로면 원인은 우리 쪽 응답 지연이거나 클라이언트의 타임아웃 설정이지, 수요가 아니다.
+     *
+     * <p>같은 {@code tier} 라벨을 쓰는 이유는 두 값의 비를 티어별로 바로 계산할 수 있어서다.
+     */
+    public static final String IDEMPOTENT_REPLAYS = "dawnline.idempotent.replays";
 
     /** 태그: 판정 결과. {@code allowed} / {@code limited} / {@code bypassed}. */
     public static final String TAG_OUTCOME = "outcome";
