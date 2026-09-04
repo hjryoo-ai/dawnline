@@ -8,11 +8,18 @@ import com.dawnline.order.application.port.in.OrderCursor;
 import com.dawnline.order.application.port.in.OrderView;
 import com.dawnline.order.application.port.in.PlaceOrderResult;
 import com.dawnline.order.application.port.in.PlaceOrderUseCase;
+import com.dawnline.order.application.port.out.RateLimiter;
+import com.dawnline.order.domain.OrderErrorCode;
 import com.dawnline.order.domain.OrderStatus;
+import com.dawnline.common.error.DomainException;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -51,19 +58,23 @@ public class OrderController {
     private final GetOrderUseCase getOrder;
     private final ListOrdersUseCase listOrders;
     private final CancelOrderUseCase cancelOrder;
+    private final Optional<RateLimiter> rateLimiter;
 
     /**
      * @param placeOrder  주문 접수
      * @param getOrder    주문 상세
      * @param listOrders  주문 목록
      * @param cancelOrder 주문 취소
+     * @param rateLimiter 고객별 레이트 리밋 (§7.2). 꺼 두면 비어 있다
      */
     public OrderController(PlaceOrderUseCase placeOrder, GetOrderUseCase getOrder,
-            ListOrdersUseCase listOrders, CancelOrderUseCase cancelOrder) {
+            ListOrdersUseCase listOrders, CancelOrderUseCase cancelOrder,
+            Optional<RateLimiter> rateLimiter) {
         this.placeOrder = Objects.requireNonNull(placeOrder, "placeOrder");
         this.getOrder = Objects.requireNonNull(getOrder, "getOrder");
         this.listOrders = Objects.requireNonNull(listOrders, "listOrders");
         this.cancelOrder = Objects.requireNonNull(cancelOrder, "cancelOrder");
+        this.rateLimiter = Objects.requireNonNull(rateLimiter, "rateLimiter");
     }
 
     /**
@@ -75,10 +86,26 @@ public class OrderController {
      * @param idempotencyKey {@code Idempotency-Key} 헤더 (필수)
      * @param request        요청 본문
      */
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "접수됨. `Location` 에 주문 주소가 온다"),
+            @ApiResponse(responseCode = "200",
+                    description = "같은 멱등 키의 재요청 — 저장된 응답을 그대로 재생한다. `Location` 은 없다"),
+            @ApiResponse(responseCode = "400",
+                    description = "요청 값이 유효하지 않거나 `Idempotency-Key` 가 없다. "
+                            + "본문은 Problem Details 이고 `errors[]` 에 어긋난 필드가 모두 들어온다"),
+            @ApiResponse(responseCode = "409",
+                    description = "같은 멱등 키의 요청이 처리 중이다. **잠시 후 같은 요청을 그대로 재시도한다** — "
+                            + "`Retry-After` 가 대기 시간을 알려 준다"),
+            @ApiResponse(responseCode = "422",
+                    description = "같은 멱등 키에 다른 본문이거나, 이 지역에 제공되지 않는 배송 티어다"),
+            @ApiResponse(responseCode = "429",
+                    description = "고객별 레이트 리밋 초과. `Retry-After` 초 뒤에 다시 시도한다")})
     @PostMapping
     public ResponseEntity<Object> place(
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody PlaceOrderRequest request) {
+
+        checkRateLimit(request.customerId());
 
         PlaceOrderResult result = placeOrder.place(request.toCommand(idempotencyKey));
         if (result.replayed()) {
@@ -89,10 +116,39 @@ public class OrderController {
     }
 
     /**
+     * 레이트 리밋 (§7.2, §8.3). 쓰기 경로 중 <strong>가장 앞</strong>이다 — 이 뒤로는 지오코딩·DB·
+     * Redis 가 이어지므로, 막을 것은 그 전에 막아야 의미가 있다.
+     *
+     * <p>Bean Validation 뒤에 서는 것은 어쩔 수 없다. 판정에 필요한 {@code customerId} 가 본문에
+     * 있고(무인증이라 헤더에서 얻을 수 없다, §10), 본문을 읽으려면 바인딩이 끝나 있어야 한다.
+     * 형식이 틀린 요청은 어차피 DB·Redis 를 건드리지 않고 400 으로 끝난다.
+     *
+     * <p>Redis 장애로 판정을 건너뛴 경우({@code BYPASSED})도 통과시킨다(§7.2 fail-open).
+     * 그 상태는 {@code dawnline_rate_limit_decisions_total{outcome="bypassed"}} 로 보이고
+     * §9.4 가 알림을 건다 — 무인증 API 의 유일한 남용 방지 수단이 꺼진 상태이기 때문이다.
+     */
+    private void checkRateLimit(UUID customerId) {
+        if (rateLimiter.isEmpty()) {
+            return;
+        }
+        RateLimiter.Decision decision = rateLimiter.get().tryAcquire(customerId);
+        if (decision.isAllowed()) {
+            return;
+        }
+        throw new DomainException(OrderErrorCode.RATE_LIMITED,
+                "요청이 너무 잦습니다. 잠시 후 다시 시도하세요.",
+                Map.of(ProblemDetailsAdvice.RETRY_AFTER_DETAIL, decision.retryAfterSeconds()));
+    }
+
+    /**
      * 주문 상세.
      *
      * @param orderId 주문 id
      */
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "주문 상세"),
+            @ApiResponse(responseCode = "400", description = "주문 id 가 UUID 형식이 아니다"),
+            @ApiResponse(responseCode = "404", description = "그런 주문이 없다")})
     @GetMapping("/{orderId}")
     public OrderView get(@PathVariable UUID orderId) {
         return getOrder.get(orderId);
@@ -104,6 +160,12 @@ public class OrderController {
      * @param orderId 주문 id
      * @param request 취소 사유. 본문 없이 보내도 된다
      */
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "취소됨"),
+            @ApiResponse(responseCode = "404", description = "그런 주문이 없다"),
+            @ApiResponse(responseCode = "409",
+                    description = "취소할 수 없는 상태다. 배송이 시작된 뒤에는 취소되지 않는다 — "
+                            + "재시도해도 결과가 같아 `Retry-After` 는 없다")})
     @PostMapping("/{orderId}/cancel")
     public OrderView cancel(@PathVariable UUID orderId,
             @Valid @RequestBody(required = false) @Nullable CancelOrderRequest request) {
@@ -120,6 +182,12 @@ public class OrderController {
      * @param cursor     이전 응답의 {@code nextCursor}
      * @param limit      한 페이지 건수
      */
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "한 페이지. `nextCursor` 가 없으면 마지막 페이지다"),
+            @ApiResponse(responseCode = "400",
+                    description = "`limit` 이 범위를 벗어났거나 `cursor` 형식이 올바르지 않다. "
+                            + "`limit` 은 조용히 줄이지 않는다 — 줄이면 목록의 끝을 오판한다")})
     @GetMapping
     public OrderPageResponse list(
             @RequestParam UUID customerId,

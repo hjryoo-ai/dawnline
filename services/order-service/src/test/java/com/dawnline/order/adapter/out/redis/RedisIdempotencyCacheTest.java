@@ -10,7 +10,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.dawnline.order.application.port.out.IdempotencyCache;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,8 +32,11 @@ class RedisIdempotencyCacheTest {
     private static final String KEY = "idem-1";
     private static final String REDIS_KEY = "idem:order:idem-1";
 
+    private static final java.time.Instant NOW = java.time.Instant.parse("2026-09-04T00:00:00Z");
+
     private StringRedisTemplate redis;
     private ValueOperations<String, String> values;
+    private RedisOutageGate gate;
     private RedisIdempotencyCache cache;
 
     @BeforeEach
@@ -40,7 +45,8 @@ class RedisIdempotencyCacheTest {
         redis = mock(StringRedisTemplate.class);
         values = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(values);
-        cache = new RedisIdempotencyCache(redis);
+        gate = new RedisOutageGate(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(10));
+        cache = new RedisIdempotencyCache(redis, gate);
     }
 
     @Test
@@ -106,10 +112,35 @@ class RedisIdempotencyCacheTest {
     }
 
     @Test
+    void 차단_중에는_Redis_를_부르지도_않는다() {
+        // 이것이 SLO 보호의 핵심이다. 타임아웃만 있으면 500 rps 에서 초당 500번씩 기다린다.
+        gate.recordFailure();
+
+        assertThat(cache.tryLock(KEY)).isEqualTo(IdempotencyCache.Lock.UNAVAILABLE);
+        cache.markDone(KEY);
+        cache.release(KEY);
+
+        org.mockito.Mockito.verifyNoInteractions(values);
+        verify(redis, org.mockito.Mockito.never()).delete(anyString());
+    }
+
+    @Test
+    void 실패하면_차단기를_연다() {
+        // 다음 요청부터는 아예 부르지 않는다.
+        when(values.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenThrow(new RedisConnectionFailureException("연결 실패"));
+
+        cache.tryLock(KEY);
+
+        assertThat(gate.isBypassing()).isTrue();
+    }
+
+    @Test
     void null_키는_거부한다() {
         assertThatCode(() -> cache.tryLock(null)).isInstanceOf(NullPointerException.class);
         assertThatCode(() -> cache.markDone(null)).isInstanceOf(NullPointerException.class);
         assertThatCode(() -> cache.release(null)).isInstanceOf(NullPointerException.class);
-        assertThatCode(() -> new RedisIdempotencyCache(null)).isInstanceOf(NullPointerException.class);
+        assertThatCode(() -> new RedisIdempotencyCache(null, gate)).isInstanceOf(NullPointerException.class);
+        assertThatCode(() -> new RedisIdempotencyCache(redis, null)).isInstanceOf(NullPointerException.class);
     }
 }

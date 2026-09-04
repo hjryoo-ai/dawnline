@@ -904,7 +904,7 @@ public interface DispatchStrategy {
 | 키 패턴 | 자료구조 | 서비스 | TTL | 장애 시 폴백 |
 |---|---|---|---|---|
 | `idem:order:{key}` | STRING | order | 24h | DB `idempotency_keys`만으로 동작 |
-| `rl:customer:{id}` | STRING(Lua 토큰버킷) | order | 60s | 레이트 리밋 비활성(허용) |
+| `rl:customer:{id}` | HASH(Lua 토큰버킷) | order | 60s | **허용**(fail-open) + `bypassed` 메트릭·알림 |
 | `geo:fc`, `geo:camp` | GEO | fulfillment | 없음(기동 시 재적재) | DB 전체 조회 후 메모리 하버사인 |
 | `zone:geohash5:{p}` | STRING | fulfillment | 10m | DB 조회 |
 | `lock:wave:{id}`, `lock:plan:{waveId}` | STRING NX | fulfillment, dispatch | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
@@ -915,6 +915,24 @@ public interface DispatchStrategy {
 | `route:{id}:atrisk:cooldown` | STRING NX | tracking | 5m | 중복 at-risk 허용(멱등 소비자가 흡수) |
 
 원칙: Redis는 **성능·조정(coordination)** 용도이며 **유일한 진실 저장소가 아니다**. 어떤 키가 사라져도 정확성은 DB로 회복된다.
+
+**레이트 리밋 버킷의 의미** (`rl:customer:{id}`): 용량 60, 초당 1개 리필. 정확히 "분당 60회" 가 아니라
+**분당 60을 넘는 지속 부하를 막되 짧은 버스트는 허용**한다는 뜻이다. 오래 쉰 고객은 가득 찬 버킷으로
+시작해 60회를 연속으로 쓸 수 있고, 그 뒤에는 초당 1회 속도로만 이어갈 수 있다. 멱등 재요청도 센다 —
+구분하면 복잡도만 늘고, 이 속도에서 재시도 몇 번은 문제가 되지 않는다. 자료구조가 HASH 인 이유는
+토큰 수와 마지막 갱신 시각 두 값을 원자적으로 읽고 써야 하기 때문이다.
+
+**fail-open 은 반드시 관측된다.** 인증이 없는 API(§10)에서 레이트 리밋은 <strong>유일한 남용
+방지 수단</strong>이다. Redis 장애로 그것이 조용히 사라지면 보상 통제가 사라진 채로 서비스가
+계속 도는 것이므로, 건너뛴 판정은 `dawnline_rate_limit_decisions_total{outcome=bypassed}` 로
+세고 §9.4 알림에 넣는다.
+
+**Redis 명령 타임아웃은 짧다**(`dawnline.order.redis.command-timeout-ms`, 기본 50ms).
+order-service 의 Redis 사용은 <em>전부</em> 실패해도 안전한 최적화이고(멱등은 DB 폴백, 레이트
+리밋은 허용), 둘 다 `POST /orders` 핫패스에 있다. 기본 명령 타임아웃(60초)을 그대로 두면
+Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — 응답을 60초 기다린 뒤 "허용" 하는 것은
+허용이 아니다. 여기에 더해 실패가 감지되면 `dawnline.order.redis.outage-bypass-ms`(기본 10초)
+동안 Redis 호출 자체를 건너뛴다.
 
 ### 7.3 Kafka 토픽 설정 (로컬)
 
@@ -953,7 +971,7 @@ public interface DispatchStrategy {
 
 - Kafka 소비자: `max.poll.records=100`, 처리 중 `pause()`, 완료 후 `resume()`. 리스너 컨테이너 concurrency = 파티션 수 이하.
 - dispatch 계획 큐: `wave.closed`는 캠프별 직렬이므로 큐 자체가 백프레셔. 연속 지연 감지 시 FAST 모드.
-- 주문 API: 고객별 레이트 리밋 + 전역 `Bulkhead`(동시 요청 상한, 초과 시 429 + `Retry-After`).
+- 주문 API: 고객별 레이트 리밋(Phase 1) + 전역 `Bulkhead`(동시 요청 상한, 초과 시 429 + `Retry-After`) — **Bulkhead 는 Phase 7 이월**이며, Phase 1-9 의 k6 에서 HikariCP 풀(인스턴스당 10) 포화가 관측되면 Phase 1 안으로 당긴다(IMPLEMENTATION_PLAN).
 - 모든 소비자 랙은 `kafka_consumer_lag`로 노출, 임계 초과 알림.
 
 ### 8.4 장애 모드 표
@@ -992,24 +1010,38 @@ public interface DispatchStrategy {
 
 ### 9.1 커스텀 메트릭 (Micrometer)
 
-| 메트릭 | 타입 | 라벨 |
-|---|---|---|
-| `dawnline_orders_placed_total` | counter | tier, camp |
-| `dawnline_outbox_lag_seconds` | gauge | service |
-| `dawnline_outbox_unpublished` | gauge | service |
-| `dawnline_outbox_failed` | gauge | service — 격리된(미해결) outbox 행 수 (§4.6) |
-| `dawnline_event_processed_total` | counter | consumer, eventType, outcome(ok/dup/rejected/dlq) |
-| `dawnline_event_stale_total` | counter | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
-| `dawnline_promise_revised_total` | counter | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
-| `dawnline_wave_orders` | gauge | camp, tier |
-| `dawnline_plan_duration_seconds` | histogram | strategy, mode |
-| `dawnline_plan_cost_krw` | gauge | camp |
-| `dawnline_plan_unassigned` | gauge | camp |
-| `dawnline_plan_degraded_total` | counter | camp |
-| `dawnline_delivery_on_time_ratio` | gauge | camp, **basis(promised/revised)** — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
-| `dawnline_at_risk_total` | counter | camp |
+**emit 주체를 적는 이유**: 라벨은 그것을 <strong>내보내는 서비스가 실제로 아는 값</strong>이어야 한다.
+모르는 라벨을 표에 적어 두면 구현할 때 `unknown` 으로 채우거나(카디널리티만 늘고 쓸모없다) 다른
+서비스의 데이터를 끌어오게 된다(불변규칙 3·4 위반). Phase 1 에서 `dawnline_orders_placed_total`
+의 `camp` 가 정확히 그 경우였다 — 캠프는 접수 시점에 존재하지 않는다.
+
+| 메트릭 | 타입 | emit 주체 | 라벨 |
+|---|---|---|---|
+| `dawnline_orders_placed_total` | counter | order | tier — **camp 는 없다**. 캠프는 fulfillment 가 정하므로(§5.2) 접수 시점에는 존재하지 않는다. 캠프별 유입은 `dawnline_wave_orders` 가 본다 |
+| `dawnline_idempotent_replays_total` | counter | order | tier — 같은 멱등 키의 재요청으로 저장된 응답을 재생한 횟수. `orders_placed` 와 함께 보면 **클라이언트 재시도 폭주와 실제 주문 증가를 구분**할 수 있다 |
+| `dawnline_rate_limit_decisions_total` | counter | order | outcome(allowed/limited/bypassed) — `bypassed` 는 Redis 장애로 판정을 건너뛴 것이다 (§7.2) |
+| `dawnline_outbox_lag_seconds` | gauge | 전 서비스 | service |
+| `dawnline_outbox_unpublished` | gauge | 전 서비스 | service |
+| `dawnline_outbox_failed` | gauge | 전 서비스 | service — 격리된(미해결) outbox 행 수 (§4.6) |
+| `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
+| `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
+| `dawnline_wave_orders` | gauge | fulfillment | camp, tier |
+| `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
+| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode |
+| `dawnline_plan_cost_krw` | gauge | dispatch | camp |
+| `dawnline_plan_unassigned` | gauge | dispatch | camp |
+| `dawnline_plan_degraded_total` | counter | dispatch | camp |
+| `dawnline_at_risk_total` | counter | tracking | camp — campId 는 `route.assigned` 가 싣고 오지만(필수 필드) §5.4 의 `shipments` 에는 컬럼이 없다. **Phase 5 에서 보관해야 이 라벨을 붙일 수 있다** |
+| `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
+
+**정시율을 tracking 이 아니라 ops-api 가 내는 이유**: `basis` 라벨은 <em>원래 약속</em>과
+<em>개정된 약속</em> 두 기준을 모두 알아야 성립한다(§8.1). tracking 은 `route.assigned` 가 준
+`promised_end` 하나만 갖고 있어 그것이 원래 것인지 개정된 것인지 구분하지 못한다. ops-api 는 모든
+토픽을 구독하므로(§5.5) `order.placed` 의 원래 창과 `fulfillment.planned` 의 `promiseRevised` 를
+함께 본다 — 그 둘을 아는 유일한 자리다. 이것을 tracking 에 두면 개정 여부를 알기 위해
+fulfillment 의 데이터를 끌어와야 하고, 그것이 불변규칙 4가 막으려는 것이다.
 
 `dawnline_event_stale_total` 과 `dawnline_event_processed_total{outcome=rejected}` 는 다른 것을 센다.
 **stale** 은 순서 뒤바뀜이라 정상이고(ADR-017 — 사실은 이미 일어났고 순서가 다른 것은 우리가 알게 된
@@ -1030,7 +1062,7 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%, **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03)
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
@@ -1067,8 +1099,8 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | RDB | PostgreSQL | **18.x** | 서비스별 DB. 파티셔닝·JSONB |
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
-| 문서 | springdoc-openapi | Spring Boot 4 호환 최신판 (빌드 시 확인) | OpenAPI 3 자동 생성, `contracts/openapi/`로 내보내기 |
-| 회복탄력성 | Resilience4j | Boot 4 호환 최신판 (빌드 시 확인) | Bulkhead, Retry, CircuitBreaker(OSRM 어댑터) |
+| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/order-service.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사 |
+| 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
 | 최적화(선택) | Timefold Solver Community | 최신 안정 | ADR-004 비교 실험용, 기본 경로 아님 |

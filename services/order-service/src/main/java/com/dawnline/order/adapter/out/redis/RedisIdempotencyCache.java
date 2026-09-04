@@ -42,23 +42,32 @@ public class RedisIdempotencyCache implements IdempotencyCache {
     private static final Duration DONE_TTL = Duration.ofHours(24);
 
     private final StringRedisTemplate redis;
+    private final RedisOutageGate gate;
 
     /**
      * @param redis 문자열 전용 템플릿
+     * @param gate  Redis 장애 차단기. 한 번 실패하면 그 뒤로는 <em>부르지도 않는다</em> —
+     *              멱등 캐시도 {@code POST /orders} 핫패스에 있어, 요청마다 타임아웃을 기다리면
+     *              DB 폴백이 정확성을 지키면서 SLO 를 무너뜨린다(§8.1)
      */
-    public RedisIdempotencyCache(StringRedisTemplate redis) {
+    public RedisIdempotencyCache(StringRedisTemplate redis, RedisOutageGate gate) {
         this.redis = Objects.requireNonNull(redis, "redis");
+        this.gate = Objects.requireNonNull(gate, "gate");
     }
 
     @Override
     public Lock tryLock(String key) {
         Objects.requireNonNull(key, "key");
+        if (gate.isBypassing()) {
+            return Lock.UNAVAILABLE;
+        }
         try {
             Boolean acquired = redis.opsForValue().setIfAbsent(redisKey(key), IN_PROGRESS, LOCK_TTL);
             // setIfAbsent 는 파이프라인·트랜잭션 안에서 null 을 돌려준다. 여기서는 그럴 일이 없지만,
             // null 을 "획득함" 으로 읽으면 잠금이 없는 채로 진행하게 되므로 보수적으로 다룬다.
             return Boolean.TRUE.equals(acquired) ? Lock.ACQUIRED : Lock.HELD;
         } catch (DataAccessException e) {
+            gate.recordFailure();
             log.warn("멱등 잠금을 얻지 못했습니다(Redis 불가). 잠금 없이 진행합니다 — 정확성은 DB 가 지킵니다.", e);
             return Lock.UNAVAILABLE;
         }
@@ -67,10 +76,14 @@ public class RedisIdempotencyCache implements IdempotencyCache {
     @Override
     public void markDone(String key) {
         Objects.requireNonNull(key, "key");
+        if (gate.isBypassing()) {
+            return;
+        }
         try {
             redis.opsForValue().set(redisKey(key), DONE, DONE_TTL);
         } catch (DataAccessException e) {
             // 다음 요청은 DB 에서 같은 답을 얻는다. 여기서 던지면 이미 커밋된 주문이 실패로 보인다.
+            gate.recordFailure();
             log.warn("멱등 키의 완료 표시에 실패했습니다. 재요청은 DB 경로로 처리됩니다.", e);
         }
     }
@@ -78,10 +91,14 @@ public class RedisIdempotencyCache implements IdempotencyCache {
     @Override
     public void release(String key) {
         Objects.requireNonNull(key, "key");
+        if (gate.isBypassing()) {
+            return;
+        }
         try {
             redis.delete(redisKey(key));
         } catch (DataAccessException e) {
             // 못 지워도 30초 뒤 만료된다. 그 사이 재시도는 409 를 받는다.
+            gate.recordFailure();
             log.warn("멱등 잠금 해제에 실패했습니다. {} 뒤 만료됩니다.", LOCK_TTL, e);
         }
     }

@@ -39,6 +39,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 4. 리스너: `order.dispatched`, `delivery.status` → 상태 전이(멱등).
 5. OpenAPI 생성 → `contracts/openapi/order-service.yaml`.
 6. 메트릭: `dawnline_orders_placed_total`, outbox 지표 노출.
+6-1. 레이트 리밋(§7.2 `rl:customer:{id}`, Lua 토큰버킷 60/min): `POST /orders` 앞단, 429 + Problem Details + `Retry-After`, Redis 장애 시 fail-open + `bypassed` 메트릭·알림. **§10 무인증 결정의 보상 통제이므로 Phase 1 을 이것 없이 닫지 않는다.**
 7. 테스트: 단위(상태 머신 전이표 전체), 통합(멱등 재요청·다른 본문 422·취소 409·outbox 발행), 계약(order.placed 스키마).
 8. k6 스크립트 `tools/k6/orders.js`(500 rps 60초).
 9. `sim-runner` 최소 버전: 주문 생성기만(`smoke` 시나리오 200건).
@@ -47,6 +48,15 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 - 통합 테스트 통과(Testcontainers PG·Kafka·Redis).
 - Redis를 중단한 상태에서도 멱등 POST가 정확히 동작(테스트로 증명).
 - k6 결과를 `docs/benchmarks/phase1-orders-k6.md`에 기록(p50/p95/p99, 오류율). 목표 미달이면 원인 분석 포함.
+- k6 는 두 스크립트다. `orders.js` 는 `customerId` 를 1만 명 이상으로 분산해 **부하만** 측정하고
+  (500 rps ÷ 10,000 = 고객당 0.05 rps 라 레이트 리밋에 걸리지 않는다), `rate-limit.js` 는 고객
+  한 명이 5 rps 로 쏴서 60건 이후 429 와 `Retry-After` 가 나오는지를 **동작 검증**한다.
+  후자는 부하 리포트가 아니라 통합 테스트의 연장이므로 같은 문서의 별도 절에 적는다.
+
+**Phase 7 로 이월 (조건부)**
+- §8.3 의 전역 `Bulkhead`(동시 요청 상한). Phase 1 에서는 고객별 레이트 리밋까지만 한다.
+  **조건**: 9단계 k6 에서 HikariCP 풀(인스턴스당 10, §8.2) 포화가 관측되면 Phase 1 안으로 당긴다.
+  포화 여부는 `hikaricp_connections_pending` 로 판단하고, k6 리포트에 그 값을 함께 기록한다.
 
 ---
 

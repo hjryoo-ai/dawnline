@@ -30,7 +30,10 @@ import com.dawnline.order.domain.OrderItem;
 import com.dawnline.order.domain.OrderStatus;
 import com.dawnline.order.domain.Parcel;
 import com.dawnline.order.domain.ServiceTier;
+import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.domain.TierEligibility;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -64,6 +67,7 @@ class PlaceOrderServiceTest {
     private IdempotencyRecords records;
     private IdempotencyCache cache;
     private PlaceOrderTransaction transaction;
+    private MeterRegistry meters;
     private PlaceOrderService service;
 
     @BeforeEach
@@ -85,8 +89,9 @@ class PlaceOrderServiceTest {
         when(transaction.commit(any(), any(), any()))
                 .thenAnswer(invocation -> OrderAccepted.of(invocation.getArgument(0, Order.class)));
 
+        meters = new SimpleMeterRegistry();
         service = new PlaceOrderService(geocoder, tiers, DeliveryPromise.standard(), records, cache,
-                transaction, new Ids(clock, new Random(42)), clock, RETENTION);
+                transaction, new Ids(clock, new Random(42)), clock, RETENTION, meters);
     }
 
     private static PlaceOrderCommand command() {
@@ -143,6 +148,36 @@ class PlaceOrderServiceTest {
         assertThat(claim.expiresAt()).isEqualTo(NOW.plus(RETENTION));
     }
 
+    private double placedCount(ServiceTier tier) {
+        var counter = meters.find(OrderMetrics.ORDERS_PLACED)
+                .tag(OrderMetrics.TAG_TIER, tier.name()).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    private double replayCount(ServiceTier tier) {
+        var counter = meters.find(OrderMetrics.IDEMPOTENT_REPLAYS)
+                .tag(OrderMetrics.TAG_TIER, tier.name()).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    @Test
+    void 접수하면_티어별로_센다() {
+        service.place(command());
+
+        assertThat(placedCount(ServiceTier.DAWN)).isEqualTo(1);
+        assertThat(replayCount(ServiceTier.DAWN)).as("새 접수는 재생이 아니다").isZero();
+    }
+
+    @Test
+    void 커밋에_실패하면_세지_않는다() {
+        // 롤백된 주문을 세면 지표가 실제 주문량보다 많아지고, 그 차이는 장애 때 가장 커진다.
+        doThrow(new IllegalStateException("boom")).when(transaction).commit(any(), any(), any());
+
+        assertThatThrownBy(() -> service.place(command())).isInstanceOf(IllegalStateException.class);
+
+        assertThat(placedCount(ServiceTier.DAWN)).isZero();
+    }
+
     @Test
     void 완료된_기록이_있으면_저장된_응답을_재생한다() {
         OrderAccepted stored = new OrderAccepted(Ids.newId(), OrderStatus.PLACED, ServiceTier.DAWN,
@@ -156,6 +191,10 @@ class PlaceOrderServiceTest {
         assertThat(result.order()).isEqualTo(stored);
         // 재생은 아무것도 쓰지 않는다 — 잠금조차 잡지 않는다.
         verifyNoInteractions(transaction, cache);
+        // 재생은 새 주문이 아니다. 세면 클라이언트의 재시도 패턴이 주문량 지표를 부풀린다.
+        assertThat(placedCount(ServiceTier.DAWN)).isZero();
+        // 대신 별도 카운터로 센다 — 그래야 재시도 폭주와 실제 주문 증가를 구분할 수 있다.
+        assertThat(replayCount(ServiceTier.DAWN)).isEqualTo(1);
     }
 
     @Test
@@ -277,12 +316,12 @@ class PlaceOrderServiceTest {
     void 생성자는_잘못된_인자를_거부한다() {
         assertThatThrownBy(() -> new PlaceOrderService(geocoder, null, DeliveryPromise.standard(),
                 records, cache, transaction, new Ids(Clock.systemUTC(), new Random(1)),
-                Clock.systemUTC(), RETENTION))
+                Clock.systemUTC(), RETENTION, meters))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new PlaceOrderService(geocoder,
                 new TierEligibility(geohash5 -> Set.of(), Clock.systemUTC()), DeliveryPromise.standard(),
                 records, cache, transaction, new Ids(Clock.systemUTC(), new Random(1)),
-                Clock.systemUTC(), Duration.ZERO))
+                Clock.systemUTC(), Duration.ZERO, meters))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("recordRetention");
         assertThatThrownBy(() -> service.place(null)).isInstanceOf(NullPointerException.class);
