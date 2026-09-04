@@ -1012,7 +1012,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 
 | 메트릭 | 타입 | 라벨 |
 |---|---|---|
-| `dawnline_orders_placed_total` | counter | tier, camp |
+| `dawnline_orders_placed_total` | counter | tier — **camp 는 없다**. 캠프는 fulfillment-service 가 정하므로(§5.2) 접수 시점에는 알 수 없다. 캠프별 유입은 `dawnline_wave_orders{camp,tier}` 가 보여 준다 |
 | `dawnline_outbox_lag_seconds` | gauge | service |
 | `dawnline_outbox_unpublished` | gauge | service |
 | `dawnline_outbox_failed` | gauge | service — 격리된(미해결) outbox 행 수 (§4.6) |

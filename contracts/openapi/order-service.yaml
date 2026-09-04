@@ -1,0 +1,414 @@
+openapi: 3.1.0
+info:
+  title: Dawnline order-service
+  description: |-
+    주문 접수·조회·취소 API (DESIGN.md §5.1).
+
+    **인증이 없다.** 의도된 결정이며(§10) 대가도 분명하다 — `customerId` 는 클라이언트 주장값이고, 주문 id 를 아는 사람은 누구나 그 주문을 읽고 취소할 수 있다. 주문 id 가 UUIDv7(무작위 74비트)이라는 것이 사실상 유일한 방어다. 남용 방지는 고객별 레이트 리밋이 담당한다(§7.2, 분당 60을 넘는 지속 부하 차단).
+
+    **`POST /orders` 는 `Idempotency-Key` 헤더가 필수다.** 같은 키의 재요청은 저장된 응답을 200 으로 재생하고, 같은 키에 다른 본문이면 422 다. 보존은 7일이며 그 뒤의 같은 키는 새 주문이 된다(ADR-019).
+
+    오류 응답은 RFC 9457 Problem Details 이고 `type` 과 `code` 가 항상 채워진다.
+  termsOfService: https://dawnline.internal/terms
+  version: 1.0.0
+servers:
+- url: http://localhost:8081
+  description: 로컬 개발
+paths:
+  /api/v1/orders:
+    get:
+      tags:
+      - order-controller
+      operationId: list
+      parameters:
+      - name: customerId
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - PLACED
+          - PLANNED
+          - DISPATCHED
+          - DELIVERED
+          - FAILED
+          - CANCELLED
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 20
+      responses:
+        "200":
+          description: 한 페이지. `nextCursor` 가 없으면 마지막 페이지다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderPageResponse"
+        "400":
+          description: '`limit` 이 범위를 벗어났거나 `cursor` 형식이 올바르지 않다. `limit` 은 조용히 줄이지
+            않는다 — 줄이면 목록의 끝을 오판한다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderPageResponse"
+    post:
+      tags:
+      - order-controller
+      operationId: place
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceOrderRequest"
+        required: true
+      responses:
+        "201":
+          description: 접수됨. `Location` 에 주문 주소가 온다
+          content:
+            '*/*':
+              schema:
+                type: object
+        "200":
+          description: 같은 멱등 키의 재요청 — 저장된 응답을 그대로 재생한다. `Location` 은 없다
+          content:
+            '*/*':
+              schema:
+                type: object
+        "400":
+          description: "요청 값이 유효하지 않거나 `Idempotency-Key` 가 없다. 본문은 Problem Details\
+            \ 이고 `errors[]` 에 어긋난 필드가 모두 들어온다"
+          content:
+            '*/*':
+              schema:
+                type: object
+        "409":
+          description: 같은 멱등 키의 요청이 처리 중이다. **잠시 후 같은 요청을 그대로 재시도한다** — `Retry-After`
+            가 대기 시간을 알려 준다
+          content:
+            '*/*':
+              schema:
+                type: object
+        "422":
+          description: "같은 멱등 키에 다른 본문이거나, 이 지역에 제공되지 않는 배송 티어다"
+          content:
+            '*/*':
+              schema:
+                type: object
+        "429":
+          description: 고객별 레이트 리밋 초과. `Retry-After` 초 뒤에 다시 시도한다
+          content:
+            '*/*':
+              schema:
+                type: object
+  /api/v1/orders/{orderId}/cancel:
+    post:
+      tags:
+      - order-controller
+      operationId: cancel
+      parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelOrderRequest"
+      responses:
+        "200":
+          description: 취소됨
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderView"
+        "404":
+          description: 그런 주문이 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderView"
+        "409":
+          description: 취소할 수 없는 상태다. 배송이 시작된 뒤에는 취소되지 않는다 — 재시도해도 결과가 같아 `Retry-After`
+            는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderView"
+  /api/v1/orders/{orderId}:
+    get:
+      tags:
+      - order-controller
+      operationId: get
+      parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 주문 상세
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderView"
+        "400":
+          description: 주문 id 가 UUID 형식이 아니다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderView"
+        "404":
+          description: 그런 주문이 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderView"
+components:
+  schemas:
+    ItemRequest:
+      type: object
+      properties:
+        sku:
+          type: string
+          maxLength: 32
+          minLength: 0
+          pattern: "^[A-Za-z0-9._-]+$"
+        qty:
+          type: integer
+          format: int32
+          minimum: 1
+      required:
+      - qty
+      - sku
+    ParcelRequest:
+      type: object
+      properties:
+        weightG:
+          type: integer
+          format: int32
+          maximum: 1000000
+          minimum: 0
+        volumeCm3:
+          type: integer
+          format: int32
+          maximum: 1000000
+          minimum: 0
+        requiresCold:
+          type: boolean
+        hazmat:
+          type: boolean
+      required:
+      - hazmat
+      - requiresCold
+      - volumeCm3
+      - weightG
+    PlaceOrderRequest:
+      type: object
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        serviceTier:
+          type: string
+          enum:
+          - DAWN
+          - SAME_DAY
+          - NEXT_DAY
+        addressLine:
+          type: string
+          maxLength: 200
+          minLength: 0
+        postalCode:
+          type: string
+          pattern: "^[0-9]{5}$"
+        parcel:
+          $ref: "#/components/schemas/ParcelRequest"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItemRequest"
+          maxItems: 200
+          minItems: 0
+      required:
+      - addressLine
+      - customerId
+      - items
+      - parcel
+      - postalCode
+      - serviceTier
+    CancelOrderRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 200
+          minLength: 0
+    AddressView:
+      type: object
+      properties:
+        line:
+          type: string
+        postalCode:
+          type: string
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        geohash7:
+          type: string
+    ItemView:
+      type: object
+      properties:
+        lineNo:
+          type: integer
+          format: int32
+        sku:
+          type: string
+        qty:
+          type: integer
+          format: int32
+    OrderView:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        customerId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - PLACED
+          - PLANNED
+          - DISPATCHED
+          - DELIVERED
+          - FAILED
+          - CANCELLED
+        serviceTier:
+          type: string
+          enum:
+          - DAWN
+          - SAME_DAY
+          - NEXT_DAY
+        address:
+          $ref: "#/components/schemas/AddressView"
+        promisedStart:
+          type: string
+          format: date-time
+        promisedEnd:
+          type: string
+          format: date-time
+        parcel:
+          $ref: "#/components/schemas/ParcelView"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItemView"
+        placedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ParcelView:
+      type: object
+      properties:
+        weightG:
+          type: integer
+          format: int32
+        volumeCm3:
+          type: integer
+          format: int32
+        requiresCold:
+          type: boolean
+        hazmat:
+          type: boolean
+    OrderPageResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderSummaryView"
+        nextCursor:
+          type: string
+    OrderSummaryView:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - PLACED
+          - PLANNED
+          - DISPATCHED
+          - DELIVERED
+          - FAILED
+          - CANCELLED
+        serviceTier:
+          type: string
+          enum:
+          - DAWN
+          - SAME_DAY
+          - NEXT_DAY
+        postalCode:
+          type: string
+        geohash7:
+          type: string
+        promisedStart:
+          type: string
+          format: date-time
+        promisedEnd:
+          type: string
+          format: date-time
+        itemCount:
+          type: integer
+          format: int32
+        placedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time

@@ -10,6 +10,7 @@ package com.dawnline.order;
  * <table>
  *   <caption>이름 대응</caption>
  *   <tr><th>여기</th><th>Prometheus (§9.1)</th></tr>
+ *   <tr><td>dawnline.orders.placed</td><td>dawnline_orders_placed_total</td></tr>
  *   <tr><td>dawnline.rate.limit.decisions</td><td>dawnline_rate_limit_decisions_total</td></tr>
  * </table>
  */
@@ -24,8 +25,22 @@ public final class OrderMetrics {
      */
     public static final String RATE_LIMIT_DECISIONS = "dawnline.rate.limit.decisions";
 
+    /**
+     * counter — 접수된 주문 수 (§9.1). 태그: tier.
+     *
+     * <p><strong>재생은 세지 않는다.</strong> 같은 멱등 키의 재요청은 새 주문이 아니라 이미 센 주문의
+     * 응답을 다시 주는 것이다. 그것까지 세면 클라이언트의 재시도 패턴이 주문량 지표를 부풀린다.
+     *
+     * <p>§9.1 의 라벨에 {@code camp} 가 없는 이유: 캠프는 fulfillment-service 가 정하므로
+     * (§5.2 FC·캠프 선택) 접수 시점에는 알 수 없다. 캠프별 유입은 {@code dawnline_wave_orders} 가 본다.
+     */
+    public static final String ORDERS_PLACED = "dawnline.orders.placed";
+
     /** 태그: 판정 결과. {@code allowed} / {@code limited} / {@code bypassed}. */
     public static final String TAG_OUTCOME = "outcome";
+
+    /** 태그: 서비스 티어 (§2.2). */
+    public static final String TAG_TIER = "tier";
 
     private OrderMetrics() {
         throw new AssertionError("유틸리티 클래스는 생성하지 않는다");

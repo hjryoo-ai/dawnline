@@ -1,6 +1,7 @@
 package com.dawnline.order.application;
 
 import com.dawnline.common.GeoPoint;
+import com.dawnline.order.OrderMetrics;
 import com.dawnline.common.Ids;
 import com.dawnline.common.error.CommonErrorCode;
 import com.dawnline.common.error.ConflictException;
@@ -20,6 +21,8 @@ import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.Order;
 import com.dawnline.order.domain.ServiceTier;
 import com.dawnline.order.domain.TierEligibility;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -63,6 +66,7 @@ public class PlaceOrderService implements PlaceOrderUseCase {
     private final Ids ids;
     private final Clock clock;
     private final Duration recordRetention;
+    private final MeterRegistry meters;
 
     /**
      * @param geocoder        우편번호 → 좌표
@@ -74,10 +78,11 @@ public class PlaceOrderService implements PlaceOrderUseCase {
      * @param ids             UUIDv7 생성기 (불변규칙 10)
      * @param clock           접수 시각 출처 (불변규칙 12)
      * @param recordRetention 멱등 기록 보관 기간
+     * @param meters          Micrometer 레지스트리 (§9.1)
      */
     public PlaceOrderService(Geocoder geocoder, TierEligibility tiers, DeliveryPromise promises,
             IdempotencyRecords records, IdempotencyCache cache, PlaceOrderTransaction transaction,
-            Ids ids, Clock clock, Duration recordRetention) {
+            Ids ids, Clock clock, Duration recordRetention, MeterRegistry meters) {
         this.geocoder = Objects.requireNonNull(geocoder, "geocoder");
         this.tiers = Objects.requireNonNull(tiers, "tiers");
         this.promises = Objects.requireNonNull(promises, "promises");
@@ -87,6 +92,7 @@ public class PlaceOrderService implements PlaceOrderUseCase {
         this.ids = Objects.requireNonNull(ids, "ids");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.recordRetention = Objects.requireNonNull(recordRetention, "recordRetention");
+        this.meters = Objects.requireNonNull(meters, "meters");
         if (recordRetention.isNegative() || recordRetention.isZero()) {
             throw new IllegalArgumentException("recordRetention 은 양수여야 합니다: " + recordRetention);
         }
@@ -119,6 +125,7 @@ public class PlaceOrderService implements PlaceOrderUseCase {
         try {
             OrderAccepted accepted = transaction.commit(order, placement.cutoffAt(), claim);
             cache.markDone(key);
+            countPlaced(accepted);
             log.info("주문을 접수했습니다. orderId={}, tier={}, items={}",
                     accepted.orderId(), accepted.serviceTier(), order.items().size());
             return new PlaceOrderResult(accepted, false);
@@ -182,6 +189,21 @@ public class PlaceOrderService implements PlaceOrderUseCase {
         Order order = Order.place(ids.newUuid(), command.customerId(), tier, address, promise.window(),
                 command.parcel(), command.items(), now);
         return new Placement(order, promise.cutoffAt());
+    }
+
+    /**
+     * 접수 수를 센다 (§9.1). <strong>커밋된 뒤에만</strong> 부른다 — 롤백된 주문을 세면 지표가
+     * 실제 주문량보다 많아지고, 그 차이는 장애 때 가장 커진다.
+     *
+     * <p>재생(같은 멱등 키의 재요청)은 세지 않는다. 새 주문이 아니기 때문이고, 세면 클라이언트의
+     * 재시도 패턴이 주문량 지표를 부풀린다.
+     */
+    private void countPlaced(OrderAccepted accepted) {
+        Counter.builder(OrderMetrics.ORDERS_PLACED)
+                .description("접수된 주문 수 (§9.1)")
+                .tag(OrderMetrics.TAG_TIER, accepted.serviceTier().name())
+                .register(meters)
+                .increment();
     }
 
     private static ConflictException inFlight() {

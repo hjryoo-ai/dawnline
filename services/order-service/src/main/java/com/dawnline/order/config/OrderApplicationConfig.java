@@ -115,13 +115,14 @@ public class OrderApplicationConfig {
      * @param ids         UUIDv7 생성기
      * @param clock       접수 시각 출처 — 저장 정밀도로 잘린 시계여야 한다
      * @param properties  {@code dawnline.order.*}
+     * @param meters      Micrometer 레지스트리
      */
     @Bean
     public PlaceOrderUseCase placeOrderUseCase(Geocoder geocoder, TierEligibility tiers, DeliveryPromise promises,
             IdempotencyRecords records, IdempotencyCache cache, PlaceOrderTransaction transaction,
-            Ids ids, Clock clock, OrderProperties properties) {
+            Ids ids, Clock clock, OrderProperties properties, MeterRegistry meters) {
         return new PlaceOrderService(geocoder, tiers, promises, records, cache, transaction,
-                ids, clock, properties.idempotency().retention());
+                ids, clock, properties.idempotency().retention(), meters);
     }
 
     /**
