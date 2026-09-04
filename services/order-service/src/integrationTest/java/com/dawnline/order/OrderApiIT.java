@@ -8,6 +8,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.Ids;
+import com.dawnline.order.OrderMetrics;
+import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
+import com.dawnline.order.application.port.out.IdempotencyCache;
+import com.dawnline.order.domain.OrderStatus;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.util.UUID;
@@ -44,6 +49,15 @@ class OrderApiIT extends OrderIntegrationTestBase {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private IdempotencyCache idempotencyCache;
+
+    @Autowired
+    private AdvanceOrderUseCase advanceOrder;
+
+    @Autowired
+    private MeterRegistry meters;
 
     @Autowired
     private PlatformTransactionManager transactionManager;
@@ -87,6 +101,18 @@ class OrderApiIT extends OrderIntegrationTestBase {
                 .andReturn();
     }
 
+    private long count(String table) {
+        Number count = new TransactionTemplate(transactionManager).execute(status ->
+                (Number) entityManager.createNativeQuery("SELECT count(*) FROM " + table).getSingleResult());
+        return count == null ? -1 : count.longValue();
+    }
+
+    private double bypassedCount() {
+        var counter = meters.find(OrderMetrics.RATE_LIMIT_DECISIONS)
+                .tag(OrderMetrics.TAG_OUTCOME, "bypassed").counter();
+        return counter == null ? 0 : counter.count();
+    }
+
     private static String orderIdOf(MvcResult result) throws Exception {
         String json = result.getResponse().getContentAsString();
         return com.dawnline.messaging.json.EventJson.standard().readTree(json).get("orderId").asString();
@@ -106,6 +132,88 @@ class OrderApiIT extends OrderIntegrationTestBase {
                 .andExpect(jsonPath("$.serviceTier").value("DAWN"))
                 .andExpect(jsonPath("$.promisedStart").exists())
                 .andExpect(jsonPath("$.orderId").exists());
+    }
+
+    @Test
+    void Redis_없이도_멱등_POST_가_HTTP_계층에서_성립한다() throws Exception {
+        // Phase 1 DoD 2항의 HTTP 계층 증명이다. PlaceOrderIT 는 유스케이스 수준까지만 본다.
+        //
+        // 이 컨텍스트의 Redis 는 죽은 주소이고, 그 사실을 테스트가 스스로 확인한다 — 확인하지
+        // 않으면 나중에 누가 Redis 를 붙였을 때 "Redis 없이" 라는 전제가 조용히 사라진다.
+        assertThat(idempotencyCache.tryLock("전제-확인"))
+                .as("이 테스트의 전제: Redis 를 쓸 수 없다")
+                .isEqualTo(IdempotencyCache.Lock.UNAVAILABLE);
+
+        UUID customerId = Ids.newId();
+        String key = "no-redis-idem-" + customerId;
+
+        MvcResult created = mockMvc.perform(post("/api/v1/orders")
+                        .header(IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(customerId, "DAWN")))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        // 재생은 전적으로 idempotency_keys 만으로 이루어진다.
+        mockMvc.perform(post("/api/v1/orders")
+                        .header(IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(customerId, "DAWN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value(orderIdOf(created)));
+
+        // 그리고 다른 본문은 여전히 422 다 — 지문 비교도 DB 경로에서 동작한다.
+        mockMvc.perform(post("/api/v1/orders")
+                        .header(IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(customerId, "SAME_DAY")))
+                .andExpect(status().isUnprocessableContent());
+
+        assertThat(count("orders")).as("주문은 하나뿐이다").isEqualTo(1);
+    }
+
+    @Test
+    void Redis_가_없으면_레이트_리밋이_bypassed_로_기록된다() throws Exception {
+        // §9.4 알림이 이 값에 걸린다. 값이 안 나오면 알림도 안 온다 — 무인증 API 의 유일한
+        // 남용 방지 수단이 꺼진 것을 아무도 모르는 상태가 된다(§10, §7.2).
+        double before = bypassedCount();
+
+        mockMvc.perform(post("/api/v1/orders")
+                        .header(IDEMPOTENCY_KEY, "bypass-" + Ids.newId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(Ids.newId(), "DAWN")))
+                .andExpect(status().isCreated());
+
+        assertThat(bypassedCount()).as("판정을 건너뛴 사실이 메트릭에 남아야 한다").isGreaterThan(before);
+    }
+
+    @Test
+    void 주문이_없는_고객의_목록은_빈_페이지다() throws Exception {
+        // 주문이 없는 고객이 첫 화면에서 만나는 경로다. 빈 배열이어야지 404 나 null 이면 안 된다.
+        mockMvc.perform(get("/api/v1/orders").param("customerId", Ids.newId().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders").isArray())
+                .andExpect(jsonPath("$.orders.length()").value(0))
+                .andExpect(jsonPath("$.nextCursor").doesNotExist());
+    }
+
+    @Test
+    void 배송이_시작된_뒤에는_취소가_409_다() throws Exception {
+        // §5.1 API 표가 직접 든 경우다: "DISPATCHED 이후 취소 불가 → 409".
+        // 상태를 올리는 것은 리스너의 일이지만, 여기서 보려는 것은 취소 쪽 응답이라
+        // 유스케이스로 곧바로 전이시킨다.
+        String orderId = orderIdOf(place("dispatched-cancel", Ids.newId()));
+        advanceOrder.advance(UUID.fromString(orderId), OrderStatus.DISPATCHED,
+                java.time.Instant.parse("2026-09-04T05:00:00Z"));
+
+        mockMvc.perform(post("/api/v1/orders/{id}/cancel", orderId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("illegal-state-transition"))
+                // 재시도해도 결과가 같다. Retry-After 를 붙이면 클라이언트가 헛되이 다시 온다.
+                .andExpect(header().doesNotExist("Retry-After"));
+
+        mockMvc.perform(get("/api/v1/orders/{id}", orderId))
+                .andExpect(jsonPath("$.status").value("DISPATCHED"));
     }
 
     @Test
