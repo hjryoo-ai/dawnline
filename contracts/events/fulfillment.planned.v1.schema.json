@@ -59,6 +59,10 @@
       "format": "date-time",
       "description": "편입된 웨이브의 컷오프 시각. outcome=PLANNED 일 때 필수."
     },
+    "promiseRevised": {
+      "type": "boolean",
+      "description": "promisedWindow 가 접수 시점의 약속과 다른가 (ADR-020). true 면 이 주문은 grace(기본 90초)를 넘겨 도착해 원래 약속받은 웨이브에 들어가지 못했고, promisedWindow 는 새 웨이브 기준으로 개정된 값이다. order-service 는 이 값을 받아 promised_start/end 를 갱신한다. outcome=PLANNED 일 때 필수 — 선택으로 두면 소비자가 '없을 때' 를 처리하는 죽은 분기를 갖고, 그 기본값 false 가 '개정되지 않음' 과 '발행자가 옛 버전' 을 구별하지 못한다."
+    },
     "reason": {
       "type": "string",
       "minLength": 1,
@@ -74,7 +78,7 @@
         "required": ["outcome"]
       },
       "then": {
-        "required": ["fcId", "campId", "zoneId", "waveId", "waveCutoffAt"]
+        "required": ["fcId", "campId", "zoneId", "waveId", "waveCutoffAt", "promiseRevised"]
       }
     },
     {

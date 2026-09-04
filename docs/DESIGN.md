@@ -237,7 +237,12 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 않는다** (§5.2). {@code orders} 테이블에는 저장하지 않는다 — 접수 이후 order-service 가 쓰는 곳이
 없고, 필요한 쪽으로 가는 통로가 이 이벤트다.
 
-**fulfillment.planned.v1** — order.placed 스냅샷 + `fcId, campId, zoneId, waveId, waveCutoffAt`
+**fulfillment.planned.v1** — order.placed 스냅샷 + `fcId, campId, zoneId, waveId, waveCutoffAt, promiseRevised`
+
+`promiseRevised` 는 `promisedWindow` 가 접수 시점의 약속과 다른지를 말한다(ADR-020). `true` 면 이
+주문은 grace(기본 90초)를 넘겨 도착해 원래 약속받은 웨이브에 들어가지 못했고, `promisedWindow` 는
+새 웨이브 기준으로 개정된 값이다. order-service 는 이것을 받아 `promised_start/end` 를 갱신한다.
+`outcome=UNSERVICEABLE` 에는 없다 — 배차되지 못한 주문에는 개정할 약속이 없다.
 
 **wave.closed.v1**
 ```json
@@ -544,7 +549,7 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 - 컷오프 스케줄러: 매 30초 `cutoff_at <= now() AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
 - 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가(낙관적 락으로 경합 차단).
 
-**컷오프는 order-service 가 정하고 fulfillment 는 받아 쓴다 (Phase 2 선결, ADR-020 예정)**
+**컷오프는 order-service 가 정하고 fulfillment 는 받아 쓴다 ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md))**
 
 웨이브 키는 `(campId, tier, cutoffAt)` 인데, 그 `cutoffAt` 을 여기서 다시 계산하지 않는다.
 `order.placed` 가 싣고 온 값을 그대로 쓴다.
@@ -558,7 +563,7 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 지연·재처리에 따라 흔들리며, 흔들리는 값으로 웨이브를 고르면 같은 주문이 재처리 때 다른 웨이브에
 들어간다(멱등 소비자가 막아 주는 것은 <em>중복</em>이지 <em>다른 결과</em>가 아니다).
 
-**약속을 깨야 할 때는 말없이 깨지 않는다 (Phase 2 선결, ADR-020 예정)**
+**약속을 깨야 할 때는 말없이 깨지 않는다 ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md))**
 
 위 규칙에서 새 경합이 생긴다. 09:59:59에 접수돼 10:00 컷오프 창을 약속받은 주문이 있는데,
 outbox 릴레이 폴링(100ms)과 소비 지연을 거쳐 fulfillment 에 10:00:01에 도착한다고 하자.
@@ -595,9 +600,10 @@ outbox 릴레이 폴링(100ms)과 소비 지연을 거쳐 fulfillment 에 10:00:
   (`dawnline_delivery_on_time_ratio{basis}`). 하나만 내면 개정으로 정시율을 세탁할 수 있다 —
   못 지킬 것 같으면 약속을 미루면 되기 때문이다. SLO 의 기준은 원 약속이다(§8.1).
 
-Phase 2 에서 구현하며 ADR 로 확정한다. 여기 적어 두는 이유는, 이 결정이 Phase 1의 "약속창을
-접수 시점에 계산한다" 에서 곧바로 따라 나오기 때문이다 — 그때 정하지 않으면 Phase 2 에서
-"이미 나간 약속" 을 마주하고 급하게 정하게 된다.
+**2026-09-05 확정**: [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md).
+여기 적어 두었던 이유는, 이 결정이 Phase 1의 "약속창을 접수 시점에 계산한다" 에서 곧바로 따라
+나오기 때문이다 — 그때 정하지 않으면 Phase 2 에서 "이미 나간 약속" 을 마주하고 급하게 정하게 된다.
+`grace` 는 `dawnline.fulfillment.wave.grace` 설정값이고 기본 90초다.
 
 **테이블(핵심)**
 
@@ -1254,9 +1260,9 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수(`PLANNED → DELIVERED` 추가 + 진행 단계 비교) | 백오프 재시도에 맡김(도착 상한 없음 → 정상 배송이 DLQ), `delivery.status` 키를 orderId 로 변경(다른 소비자의 라우트 단위 순서가 깨짐), 모든 전이 허용(불변규칙 6 포기) | [ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
 | 018 | 멱등 잠금은 Redis 키(PX 30000)가 잡고 DB `idempotency_keys` 에는 `DONE` 만 기록 | DB 에 `IN_PROGRESS` 선커밋(프로세스 사망 시 그 멱등 키가 영구히 409), 짧은 `expires_at` 으로 자가 만료(정리 배치가 또 필요), Redis 없이 PK 충돌만(중복 요청이 주문 INSERT 까지 하고 롤백) | [ADR-018](adr/ADR-018-idempotency-lock-in-redis-record-in-db.md) |
 | 019 | 멱등 기록 보존 7일 + `status` 컬럼 제거 + `ON CONFLICT DO NOTHING` | 무한 보존(테이블 무제한 증가), 24h(Redis TTL 과 같아 DB 경로의 의미 절반 상실), 30일(DLQ 숫자를 빌려 옴) | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
-| 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨) | — (Phase 2 예정) |
+| 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨), `promiseRevised` 를 선택 필드로(소비자에 죽은 분기) | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다.
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다.
 
 ---
 
