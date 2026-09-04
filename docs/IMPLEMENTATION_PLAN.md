@@ -211,6 +211,16 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 7. 메트릭: `dawnline_plan_*`.
 8. `tools/benchmark`: 데이터셋 생성기(seed), `small/medium/large` 생성, 전략 실행·비교, Markdown 리포트 출력. CI에 `small` 회귀 체크 연결.
 9. 테스트: 룰 평가기 단위(각 룰 위반/통과), 하드 룰 위반 라우트가 최종 산출에 없음(PlanValidator), seed 고정 결정론, 5,000 주문 통합 계획(시간 측정), wave.closed 중복 도착 멱등.
+9-1. **[결정 필요] §4.1 과 §5.2 가 어긋나 있다** — §5.2 의 웨이브 수명주기는
+   `CLOSED ──(route.assigned)──▶ PLANNED`, `──(plan.failed)──▶ PLAN_FAILED` 인데,
+   **§4.1 의 소비자 목록에 fulfillment 가 없다**(`route.assigned` → tracking·ops,
+   `plan.failed` → ops). 둘 중 하나를 고쳐야 한다.
+   그리고 `route.assigned` 는 라우트 단위(웨이브 하나에 라우트 여럿)라 "언제 웨이브가 PLANNED 가
+   되는가" 가 정의되지 않는다 — 첫 라우트인가, 전부인가.
+   **이것이 남기는 것**: 그 전이가 없으면 `fulfillment_orders` 정리 배치가 `PLANNED` 주문 행을
+   영원히 지우지 못한다(ADR-023 은 "소속 웨이브가 `PLANNED`/`PLAN_FAILED`" 를 조건으로 쓴다).
+   Phase 2 에서 발견해 `WaveStatus` javadoc 에 적어 두었다.
+
 10. **릴레이 리더 락 + ADR**: 서비스당 릴레이 단일 활성을 보장한다(Redis `SET NX` + 주기 갱신, 락 상실 시 발행 중단). 스케일아웃으로 인스턴스가 2개 이상이 되기 **전에** 들어가야 한다 — 그 전까지는 인스턴스 1개라는 사실이 §4.4의 전제를 충족시키고 있을 뿐이다.
 
 **DoD**
