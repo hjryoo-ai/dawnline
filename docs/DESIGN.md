@@ -568,6 +568,20 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 - 컷오프 스케줄러: 매 30초 `cutoff_at <= now() AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
 - 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가(낙관적 락으로 경합 차단).
 
+**주문 단위 상태와 취소 ([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md))**
+
+`order.placed` 와 `order.cancelled` 는 키가 같지만(orderId) **다른 토픽**이라 순서가 보장되지
+않는다(§4.5). 별도의 취소 마커를 두지 않고 `fulfillment_orders` 의 한 상태로 흡수한다.
+
+| 순서 | 웨이브 상태 | 처리 |
+|---|---|---|
+| 취소 선착 | — | `status=CANCELLED`, `placed_event_id=NULL` 행 생성. 뒤에 온 `order.placed` 는 무시하고 `dawnline_event_rejected_total{reason="cancelled_before_placed"}` (§4.6, DLQ 아님) |
+| 취소 후착 | `OPEN` | `CANCELLED` 전이 + `waves.order_count` 감소 (`FOR UPDATE` 짧은 트랜잭션) |
+| 취소 후착 | `CLOSING`/`CLOSED` 이후 | 상태만 `CANCELLED`. **카운트는 건드리지 않는다** — `wave.closed` 가 이미 그 `orderCount` 로 나갔다. 후보 제거는 §4.1 대로 dispatch 가 자기 `order.cancelled` 소비로 한다 |
+
+두 리스너가 같은 `order_id` 로 동시에 INSERT 하면 PK 에서 한쪽이 대기한다.
+`INSERT … ON CONFLICT DO NOTHING` 후 재조회하고 상태 머신을 적용한다 — ADR-018 과 같은 패턴이다.
+
 **컷오프는 order-service 가 정하고 fulfillment 는 받아 쓴다 ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md))**
 
 웨이브 키는 `(campId, tier, cutoffAt)` 인데, 그 `cutoffAt` 을 여기서 다시 계산하지 않는다.
@@ -637,9 +651,26 @@ CREATE TABLE waves (id UUID PK, camp_id UUID NOT NULL, service_tier VARCHAR(16) 
   status VARCHAR(16) NOT NULL, order_count INTEGER NOT NULL DEFAULT 0, closed_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0,
   UNIQUE (camp_id, service_tier, cutoff_at));
 CREATE INDEX ix_waves_open_cutoff ON waves (cutoff_at) WHERE status = 'OPEN';
-CREATE TABLE wave_orders (wave_id UUID REFERENCES waves, order_id UUID, fc_id UUID, zone_id UUID, added_at TIMESTAMPTZ,
-  PRIMARY KEY (wave_id, order_id));
+-- 주문 단위 애그리거트 (ADR-022). fulfillment 가 한 주문에 대해 아는 것을 전부 담는다 —
+-- 어느 웨이브·FC·권역인지, 왜 UNSERVICEABLE 인지, 약속이 개정됐는지, 취소됐는지.
+-- 웨이브 소속은 (wave_id IS NOT NULL AND status='PLANNED') 로 정의된다.
+CREATE TABLE fulfillment_orders (
+  order_id UUID PRIMARY KEY, status VARCHAR(16) NOT NULL,     -- PLANNED | UNSERVICEABLE | CANCELLED
+  wave_id UUID REFERENCES waves, camp_id UUID, fc_id UUID, zone_id UUID,
+  cutoff_at TIMESTAMPTZ, promised_start TIMESTAMPTZ, promised_end TIMESTAMPTZ,
+  promise_revised BOOLEAN NOT NULL DEFAULT FALSE,
+  unserviceable_reason VARCHAR(24), fc_fallback_reason VARCHAR(16),
+  placed_event_id UUID,                                       -- NULL 이면 order.placed 가 아직 안 왔다
+  cancelled_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL);
+CREATE INDEX ix_fulfillment_orders_wave ON fulfillment_orders (wave_id) WHERE status = 'PLANNED';
 ```
+
+`wave_orders` 는 **V1 에만 있었고 V2 에서 드롭한다**([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md)).
+그 표는 주문에 대해 fulfillment 가 아는 것의 절반만 들었다 — `UNSERVICEABLE` 사유도, 약속 개정도,
+취소도 담을 곳이 없어서 "주문 X 는 왜 웨이브에 없나" 에 답할 수 없었다. 그리고 복합 PK
+`(wave_id, order_id)` 는 같은 주문이 <em>서로 다른 두 웨이브</em>에 들어가는 것을 막지 못한다.
+`fulfillment_orders` 의 `order_id` 단독 PK 는 그것을 구조적으로 막는다.
 
 **Redis**: `geo:fc`, `geo:camp` (GEOADD, 기동 시 적재·변경 시 갱신), `zone:geohash5:{prefix}` → zoneId 캐시 (TTL 10m), `lock:wave:{id}`.
 
@@ -1049,6 +1080,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_outbox_unpublished` | gauge | 전 서비스 | service |
 | `dawnline_outbox_failed` | gauge | 전 서비스 | service — 격리된(미해결) outbox 행 수 (§4.6) |
 | `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
+| `dawnline_event_rejected_total` | counter | 전 소비자 | reason — 비즈니스 규칙 위반으로 무시한 이벤트 (§4.6). `outcome=rejected` 가 "몇 번" 을 세고 이쪽이 "왜" 를 센다. **어느 소비자인지는 아직 라벨에 없다** — 거부하는 소비자가 둘 이상 되면 `consumer`·`eventType` 을 붙인다(ADR-022) |
 | `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
 | `dawnline_wave_orders` | gauge | fulfillment | camp, tier |
 | `dawnline_fc_fallback_total` | counter | fulfillment | camp, reason(tier/cold/inventory) — 캠프의 홈 FC 가 §5.2 1~3단계 필터에서 떨어져 대체 FC 를 고른 횟수. 계속 오르는 캠프는 홈 FC 배정이 잘못됐거나 그 FC 의 역량이 부족한 것이다 |
@@ -1068,6 +1100,12 @@ Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
 토픽을 구독하므로(§5.5) `order.placed` 의 원래 창과 `fulfillment.planned` 의 `promiseRevised` 를
 함께 본다 — 그 둘을 아는 유일한 자리다. 이것을 tracking 에 두면 개정 여부를 알기 위해
 fulfillment 의 데이터를 끌어와야 하고, 그것이 불변규칙 4가 막으려는 것이다.
+
+**`reason` 을 `dawnline_event_processed_total` 의 라벨로 합치지 않는 이유**: Micrometer 의 Prometheus
+레지스트리는 같은 이름의 미터가 서로 다른 태그 키 집합을 갖는 것을 거부한다(실제 메시지:
+*"Prometheus requires that all meters with the same name have the same set of tag keys."*).
+`reason` 을 붙이려면 `ok`·`dup`·`dlq` 에도 전부 붙여야 하고, 그러면 의미 없는 `reason="none"` 이
+대부분을 차지한다. 그래서 "몇 번" 과 "왜" 를 두 카운터로 나눈다 (ADR-022).
 
 `dawnline_event_stale_total` 과 `dawnline_event_processed_total{outcome=rejected}` 는 다른 것을 센다.
 **stale** 은 순서 뒤바뀜이라 정상이고(ADR-017 — 사실은 이미 일어났고 순서가 다른 것은 우리가 알게 된
@@ -1283,9 +1321,10 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 019 | 멱등 기록 보존 7일 + `status` 컬럼 제거 + `ON CONFLICT DO NOTHING` | 무한 보존(테이블 무제한 증가), 24h(Redis TTL 과 같아 DB 경로의 의미 절반 상실), 30일(DLQ 숫자를 빌려 옴) | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
 | 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨), `promiseRevised` 를 선택 필드로(소비자에 죽은 분기) | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) |
 
+| 022 | fulfillment 에 주문 단위 애그리거트 `fulfillment_orders` 도입, `wave_orders` 드롭 | 취소 마커 테이블 + `wave_orders(order_id)` 인덱스(사실이 두 곳에 흩어지고 UNSERVICEABLE 은 여전히 답 못 함), `wave_orders` 에 컬럼 추가(복합 PK 라 웨이브 없는 상태를 표현 못 함), 상태를 이벤트로만 두기(재처리·운영 질의에서 답 못 함), `processed_events` 재사용(의미·보존 기간이 다름) | [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) |
 | 021 | 권역 시드를 order-service 지오코더의 출력 집합에서 파생(권역 91개) | 60개를 손으로 고르기(31개 셀이 조용히 UNSERVICEABLE), 지오코더의 지터 축소(머지된 동작 변경 + 최적화 비교 무의미), 권역 키를 geohash4 로(캠프 단위 병렬성 붕괴), 양쪽에 목록을 각자 보관(한쪽만 고치는 날이 온다) | [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다.
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022는 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다.
 
 ---
 

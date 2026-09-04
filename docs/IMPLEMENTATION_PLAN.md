@@ -118,7 +118,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    `contracts/seed/order-service-geohash5.txt` 를 생성물로 커밋하고 양쪽 서비스가 각자 검사한다.
 2. Redis GEO 적재(기동 시), `GEOSEARCH` 기반 최근접 FC 선택, geohash5 → zone 캐시.
 3. FC 선택 규칙(§5.2 1~6단계), `UNSERVICEABLE` 경로.
-4. `Wave` 애그리거트·상태 머신, 편입 로직(UNIQUE + FOR UPDATE 짧은 트랜잭션), 컷오프 스케줄러(30초, Redis 락, Lua 언락), `CLOSING→CLOSED` 전이와 `wave.closed` outbox.
+4. **애그리거트 둘**: `Wave`(상태 머신 `OPEN→CLOSING→CLOSED→PLANNED/PLAN_FAILED`)와
+   `FulfillmentOrder`(`PLANNED | UNSERVICEABLE | CANCELLED`, [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md)).
+   편입 로직(UNIQUE + `FOR UPDATE` 짧은 트랜잭션), 컷오프 스케줄러(30초, Redis 락, Lua 언락),
+   `CLOSING→CLOSED` 전이와 `wave.closed` outbox.
+4-1. **`V2__fulfillment_orders.sql`**: `fulfillment_orders` 생성 + `wave_orders` 드롭 + 부분 인덱스
+   `ix_fulfillment_orders_wave`. 인덱스는 불변규칙 11 대로 EXPLAIN 을 PR 에 첨부한다.
+   V1 은 이미 `main` 에 있으므로 고치지 않는다(불변규칙 13, 예외 없음) — 방금 만든 빈 테이블을
+   지우는 마이그레이션이 이력에 남고, 그것이 정직한 이력이다.
 5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 웨이브에서 제거(OPEN일 때만).
    마감은 `cutoffAt + grace`(기본 90초)이고, grace 를 넘긴 주문은 다음 웨이브 + `promiseRevised: true` ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).
 5-1. **order-service 쪽 대응** — `fulfillment.planned` 리스너: `outcome=UNSERVICEABLE` → 주문 `FAILED` + `reason` 기록(§5.2 6단계),
@@ -126,7 +133,11 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    **원래 작업 목록에 없던 항목이다.** §4.1 은 `fulfillment.planned` 의 소비자로 order 를 적었고 §5.2 도
    order-service 가 사유를 기록한다고 적었는데, Phase 2 작업 목록에는 order-service 쪽 일이 한 줄도
    없었다 — 넣지 않으면 마감 대조표에서 "누가 UNSERVICEABLE 을 FAILED 로 바꾸나" 가 빈 칸으로 남는다.
-6. 순서 역전 처리: `order.cancelled`가 먼저 오면 취소 마커 저장 후 `order.placed` 도착 시 무시.
+6. 순서 역전 처리: **별도 마커를 두지 않는다.** `order.cancelled` 가 먼저 오면
+   `fulfillment_orders` 에 `status=CANCELLED`·`placed_event_id=NULL` 행이 생기고, 뒤에 온
+   `order.placed` 는 그 행을 보고 무시하며 `dawnline_event_rejected_total{reason="cancelled_before_placed"}`
+   를 올린다. 취소 후착의 두 분기(웨이브 `OPEN` 이면 카운트 감소, `CLOSING/CLOSED` 이후면 상태만)는
+   [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 의 표를 따른다.
 6-1. **메트릭**: `dawnline_wave_orders{camp,tier}`(게이지), `dawnline_promise_revised_total{camp,tier}`(카운터),
    `dawnline_fc_fallback_total{camp,reason}`(카운터, `reason`=tier/cold/inventory).
    앞의 둘은 §9.1 에 예약되어 있었으나 작업 목록에는 없었다. `promise_revised` 는 ADR-020 의 개정이
@@ -139,7 +150,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 **DoD**
 - `make demo` 실행 시 주문 200건이 자동으로 웨이브에 편입되고, 컷오프(테스트용 짧은 컷오프 설정)에 `wave.closed`가 캠프별 1회 발행됨을 Kafka 소비 로그·DB로 확인.
 - 이중 마감 없음 테스트 통과.
+- 순서 역전 두 방향(취소 선착·후착)과 웨이브 상태별 분기가 통합 테스트로 증명된다(ADR-022 표 전체).
 - `UNSERVICEABLE` 이 **시드 부족 때문에** 나오지 않는다: 시드된 `zones` 가 `contracts/seed/order-service-geohash5.txt` 의 91개 셀을 전부 덮는지 양쪽 서비스가 각자 검사(ADR-021).
+
+**Phase 2 를 닫기 전에 정해야 할 것**
+- **`fulfillment_orders`·`waves` 의 보존 정책.** 주문마다 행이 하나 쌓이는데(§8.1 피크 150,000/일)
+  이 표들에는 정리가 없다. `idempotency_keys` 가 ADR-019 로 7일을 정한 것과 같은 문제다.
+  하류(dispatch)가 계획을 끝낸 웨이브의 주문 행을 언제까지 두는가 — ADR-022 가 남긴 항목이다.
 
 **Phase 7 로 이월 (조건부)**
 - **lag-aware grace** — 웨이브 마감 grace 를 고정 90초가 아니라 컨슈머 랙에 연동한다.
