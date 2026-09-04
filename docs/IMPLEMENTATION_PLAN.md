@@ -111,17 +111,31 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 ## Phase 2 — fulfillment-service (FC 선택·웨이브·컷오프)
 
 **작업**
-1. 시드: FC 3, 캠프 10, 권역 60(geohash5), 재고 스텁, 차량·기사는 Phase 3에서. 시드는 Flyway `R__seed_*.sql` 또는 `sim-runner seed` 명령 `[둘 중 하나로 통일]`.
+1. 시드: FC 3, 캠프 10, **권역 91**(geohash5), 재고 스텁, 차량·기사는 Phase 3에서.
+   시드는 **Flyway `R__seed_*.sql`** 로 통일한다(2026-09-05 확정 — `sim-runner` 는 §5.6 대로 REST
+   전용으로 남아 남의 서비스 DB 에 쓰지 않고, Testcontainers 통합 테스트가 시드를 자동으로 얻는다).
+   권역이 60이 아니라 91인 이유와 셀→캠프 배정 규칙은 [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md).
+   `contracts/seed/order-service-geohash5.txt` 를 생성물로 커밋하고 양쪽 서비스가 각자 검사한다.
 2. Redis GEO 적재(기동 시), `GEOSEARCH` 기반 최근접 FC 선택, geohash5 → zone 캐시.
 3. FC 선택 규칙(§5.2 1~6단계), `UNSERVICEABLE` 경로.
 4. `Wave` 애그리거트·상태 머신, 편입 로직(UNIQUE + FOR UPDATE 짧은 트랜잭션), 컷오프 스케줄러(30초, Redis 락, Lua 언락), `CLOSING→CLOSED` 전이와 `wave.closed` outbox.
 5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 웨이브에서 제거(OPEN일 때만).
+   마감은 `cutoffAt + grace`(기본 90초)이고, grace 를 넘긴 주문은 다음 웨이브 + `promiseRevised: true` ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).
+5-1. **order-service 쪽 대응** — `fulfillment.planned` 리스너: `outcome=UNSERVICEABLE` → 주문 `FAILED` + `reason` 기록(§5.2 6단계),
+   `promiseRevised: true` → `Order.revisePromise(window, at)` 로 `promised_start/end` 갱신(세터가 아니라 메서드, 불변규칙 6).
+   **원래 작업 목록에 없던 항목이다.** §4.1 은 `fulfillment.planned` 의 소비자로 order 를 적었고 §5.2 도
+   order-service 가 사유를 기록한다고 적었는데, Phase 2 작업 목록에는 order-service 쪽 일이 한 줄도
+   없었다 — 넣지 않으면 마감 대조표에서 "누가 UNSERVICEABLE 을 FAILED 로 바꾸나" 가 빈 칸으로 남는다.
 6. 순서 역전 처리: `order.cancelled`가 먼저 오면 취소 마커 저장 후 `order.placed` 도착 시 무시.
+6-1. **메트릭**: `dawnline_wave_orders{camp,tier}`(게이지), `dawnline_promise_revised_total{camp,tier}`(카운터).
+   둘 다 §9.1 에 예약되어 있으나 작업 목록에는 없었다. `promise_revised` 는 ADR-020 의 개정이 실제로
+   일어났는지를 보는 **유일한** 값이고, 이것이 없으면 §8.1 의 정시율 두 기준을 나중에 맞출 수 없다.
 7. 테스트: 스케줄러 인스턴스 2개 동시 실행 시 `wave.closed` 정확히 1회(통합), 컷오프 이후 주문이 다음 웨이브로 가는지, GEO 폴백(Redis 중단).
 
 **DoD**
 - `make demo` 실행 시 주문 200건이 자동으로 웨이브에 편입되고, 컷오프(테스트용 짧은 컷오프 설정)에 `wave.closed`가 캠프별 1회 발행됨을 Kafka 소비 로그·DB로 확인.
 - 이중 마감 없음 테스트 통과.
+- `UNSERVICEABLE` 이 **시드 부족 때문에** 나오지 않는다: 시드된 `zones` 가 `contracts/seed/order-service-geohash5.txt` 의 91개 셀을 전부 덮는지 양쪽 서비스가 각자 검사(ADR-021).
 
 ---
 

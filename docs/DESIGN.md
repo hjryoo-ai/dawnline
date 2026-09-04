@@ -1133,7 +1133,8 @@ dawnline/
 │   └── postmortems/                  # 피크 시뮬레이션 가상 포스트모템 1건
 ├── contracts/
 │   ├── events/*.schema.json, examples/*.json
-│   └── openapi/*.yaml                # 빌드 시 생성물 커밋
+│   ├── openapi/*.yaml                # 빌드 시 생성물 커밋
+│   └── seed/*.txt                    # 생성물 커밋. 서비스 경계를 가로지르는 시드 전제 (ADR-021)
 ├── gradle/libs.versions.toml
 ├── settings.gradle.kts, build.gradle.kts, buildSrc/ (공통 컨벤션 플러그인)
 ├── libs/
@@ -1262,7 +1263,9 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 019 | 멱등 기록 보존 7일 + `status` 컬럼 제거 + `ON CONFLICT DO NOTHING` | 무한 보존(테이블 무제한 증가), 24h(Redis TTL 과 같아 DB 경로의 의미 절반 상실), 30일(DLQ 숫자를 빌려 옴) | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
 | 020 | 컷오프는 order-service 가 계산해 이벤트로 전달, 웨이브 마감은 `cutoffAt + grace`, 못 지킨 약속은 `promiseRevised` 로 되돌려 알림 | fulfillment 가 컷오프 재계산(같은 표를 두 곳에서 관리), grace 없이 엄격 마감(정상 지연이 약속을 깸), 조용히 다음 웨이브로 밀기(고객이 나중에 알게 됨), `promiseRevised` 를 선택 필드로(소비자에 죽은 분기) | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다.
+| 021 | 권역 시드를 order-service 지오코더의 출력 집합에서 파생(권역 91개) | 60개를 손으로 고르기(31개 셀이 조용히 UNSERVICEABLE), 지오코더의 지터 축소(머지된 동작 변경 + 최적화 비교 무의미), 권역 키를 geohash4 로(캠프 단위 병렬성 붕괴), 양쪽에 목록을 각자 보관(한쪽만 고치는 날이 온다) | [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) |
+
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다.
 
 ---
 
@@ -1292,8 +1295,17 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
 
 ## 부록 A. 시드 데이터·시뮬레이션 시나리오
 
-- FC 3개, 캠프 10개(FC당 3~4), 권역 60개(캠프당 6), 차량 200대(캠프당 20: 일반 14, 냉장 4, 대형 2), 기사 200명.
-- 좌표: 서울 중심 근사 격자(위도 37.45–37.65, 경도 126.85–127.15). 캠프 중심에서 반경 8 km 안에 밀도 불균일(가우시안 혼합)로 주소 생성.
+- FC 3개, 캠프 10개(FC당 2·5·3), **권역 91개**(캠프당 6~13), 차량 200대(캠프당 20: 일반 14, 냉장 4, 대형 2), 기사 200명.
+- 좌표: 수도권(위도 37.16–37.78, 경도 126.61–127.22). 이 범위는 order-service 의 `PostalPrefixGeocoder`
+  가 실제로 만들어 내는 좌표의 경계다 — 우편번호 앞 2자리 앵커 19개 × 세 번째 자리 10단계 × 주소
+  해시 지터(±0.004°).
+- **권역 수·FC당 캠프 수는 어림수가 아니라 계산값이다** ([ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md)).
+  권역은 위 지오코더가 만들어 낼 수 있는 geohash5 셀 <em>전부</em>이고 세어 보면 91개다. 60개를
+  손으로 고르면 31개 셀의 주소가 전부 `UNSERVICEABLE` 이 되는데, 그것이 설계된 실패 경로와
+  구별되지 않는다. FC당 캠프가 2·5·3 인 것도 같은 이유다 — 수도권 우편번호 19개 접두어 중 8개가
+  서울이라 캠프가 서울에 몰린다.
+- 시드는 Flyway `R__seed_*.sql` 로 넣는다(Phase 2 확정). `sim-runner` 는 §5.6 대로 REST 전용으로
+  남아 남의 서비스 DB 에 쓰지 않는다(불변규칙 3).
 - 시나리오 YAML: `smoke`(200 주문, 1 캠프), `normal-day`(30k), `peak-day`(150k, 컷오프 전 버스트), `cold-heavy`(냉장 40%), `late-injection`(지연 확률 15%, 실패 3%).
 
 ## 부록 B. 면접 스토리 매핑
