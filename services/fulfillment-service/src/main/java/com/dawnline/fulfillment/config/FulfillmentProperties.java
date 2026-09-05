@@ -9,11 +9,58 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * @param wave      웨이브 마감 grace 와 지각 도착 상한
  * @param retention 보존 정리 (ADR-023)
+ * @param redis     Redis 지연 예산과 캐시 TTL (§7.2)
+ * @param geo       GEO 인덱스 (§5.2, §7.2, ADR-016 후속 정정)
  */
 @ConfigurationProperties(prefix = "dawnline.fulfillment")
 public record FulfillmentProperties(
         @DefaultValue Wave wave,
-        @DefaultValue Retention retention) {
+        @DefaultValue Retention retention,
+        @DefaultValue Redis redis,
+        @DefaultValue Geo geo) {
+
+    /**
+     * Redis 설정 (§7.2).
+     *
+     * @param commandTimeout 명령 타임아웃. 기본값(60초)을 그대로 두면 Redis 가 <em>멈췄을 때</em>
+     *                       폴백이 아니라 SLO 파괴가 된다 — 응답을 60초 기다린 뒤 폴백하는 것은
+     *                       폴백이 아니다. order-service 와 같은 판단이다
+     * @param zoneCacheTtl   {@code zone:geohash5:{p}} TTL (§7.2 기본 10분)
+     */
+    public record Redis(
+            @DefaultValue("50ms") java.time.Duration commandTimeout,
+            @DefaultValue("10m") java.time.Duration zoneCacheTtl) {
+
+        public Redis {
+            requirePositive(commandTimeout, "dawnline.fulfillment.redis.command-timeout");
+            requirePositive(zoneCacheTtl, "dawnline.fulfillment.redis.zone-cache-ttl");
+        }
+    }
+
+    /**
+     * GEO 인덱스 ([ADR-016](docs/adr/ADR-016-readiness-excludes-kafka.md) 후속 정정).
+     *
+     * <p>적재는 <strong>레디니스 조건이 아니다.</strong> 실패해도 기동하고, 주기적으로 다시
+     * 시도하며, 상태는 {@code dawnline_geo_index_loaded} 게이지가 말한다.
+     *
+     * <p>적재 주기는 이 레코드가 아니라 {@code @Scheduled} 가 읽는
+     * {@code dawnline.fulfillment.geo.reload-interval-ms}(기본 300000)·
+     * {@code .initial-delay-ms}(기본 0)가 정한다 — 스케줄 값은 어노테이션이 문자열로 읽으므로
+     * 여기에 중복해 두면 <em>둘 중 하나만 고치는</em> 날이 온다(보존 정리도 같은 방식이다).
+     *
+     * @param catalogRadiusKm {@code GEOSEARCH} 반경(km). §5.2 5단계의 <em>판정</em> 반경 50 km 와
+     *                        다른 값이다 — 이쪽은 "카탈로그를 다 담는" 값이고, 여기서 미리 거르면
+     *                        반경 밖 FC 가 판정에서 사라져 {@code UNSERVICEABLE} 사유가 달라진다
+     */
+    public record Geo(@DefaultValue("500") double catalogRadiusKm) {
+
+        public Geo {
+            if (catalogRadiusKm <= 0) {
+                throw new IllegalArgumentException(
+                        "dawnline.fulfillment.geo.catalog-radius-km 은 양수여야 합니다: " + catalogRadiusKm);
+            }
+        }
+    }
 
     /**
      * 웨이브 시간 설정 ([ADR-020](docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).

@@ -731,7 +731,9 @@ CREATE INDEX ix_fulfillment_orders_cleanup ON fulfillment_orders (updated_at);
 남은 `order.placed` 를 30일째에 열었을 때 fulfillment 기록이 없으면 "이 주문은 왜 웨이브에 없나"
 에 답할 수 없고, 그 질문에 답하려고 만든 표가 정작 그 순간에 비어 있게 된다.
 
-**Redis**: `geo:fc`, `geo:camp` (GEOADD, 기동 시 적재·변경 시 갱신), `zone:geohash5:{prefix}` → zoneId 캐시 (TTL 10m), `lock:wave:{id}`.
+**Redis**: `geo:fc`, `geo:camp` (GEOADD, **best-effort 적재 + 주기 재시도** — 레디니스 조건이 아니다, §8.6), `zone:geohash5:{prefix}` → **`zoneId:campId`** 캐시 (TTL 10m), `lock:wave:{id}`.
+
+권역 캐시의 값이 zoneId <em>만</em>이 아닌 이유: 호출부가 권역 다음에 곧바로 캠프를 필요로 한다(§5.2 4단계). zoneId 만 캐시하면 캐시가 맞아도 캠프를 얻으려 DB 를 한 번 더 가야 하므로 왕복이 줄지 않는다 — 캐시가 없는 것과 같아진다.
 
 ### 5.3 dispatch-service
 
@@ -1040,7 +1042,7 @@ public interface DispatchStrategy {
 | `idem:order:{key}` | STRING | order | 24h | DB `idempotency_keys`만으로 동작 |
 | `rl:customer:{id}` | HASH(Lua 토큰버킷) | order | 60s | **허용**(fail-open) + `bypassed` 메트릭·알림 |
 | `geo:fc`, `geo:camp` | GEO | fulfillment | 없음(기동 시 재적재) | DB 전체 조회 후 메모리 하버사인 |
-| `zone:geohash5:{p}` | STRING | fulfillment | 10m | DB 조회 |
+| `zone:geohash5:{p}` | STRING(`zoneId:campId`) | fulfillment | 10m | DB 조회 |
 | `lock:wave:{id}`, `lock:plan:{waveId}` | STRING NX | fulfillment, dispatch | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
@@ -1346,7 +1348,7 @@ dawnline/
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트** | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다 |
-| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등만) — `PlaceOrderIT` 가 죽은 Redis 주소로 컨텍스트를 띄워 멱등이 DB만으로 성립함을 보인다 |
+| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |
 | 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
 | 10 | ID는 UUIDv7 | — | `Ids.newId()`, `IdsTest`(RFC 9562 비트 레이아웃·단조 증가) | ✅(생성기) |
