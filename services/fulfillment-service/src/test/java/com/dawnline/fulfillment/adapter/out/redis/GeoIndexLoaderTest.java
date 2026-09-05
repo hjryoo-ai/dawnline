@@ -60,7 +60,7 @@ class GeoIndexLoaderTest {
         when(redis.opsForGeo()).thenReturn(geo);
         registry = new SimpleMeterRegistry();
         referenceData = new StubReferenceData();
-        loader = new GeoIndexLoader(redis, referenceData, new GeoMetrics(registry));
+        loader = new GeoIndexLoader(redis, null, referenceData, new GeoMetrics(registry));
     }
 
     @Test
@@ -103,6 +103,17 @@ class GeoIndexLoaderTest {
 
         assertThat(loader.loadCenters()).isFalse();
         assertThat(gauge("fc")).isZero();
+    }
+
+    @Test
+    void 소유한_연결만_닫는다() throws Exception {
+        // 공유 템플릿을 쓰는 구성(null)에서는 닫을 것이 없다 — 닫으면 핫패스 연결이 끊긴다.
+        loader.destroy();
+
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
+        new GeoIndexLoader(redis, () -> closed.set(true), referenceData, new GeoMetrics(registry)).destroy();
+
+        assertThat(closed).isTrue();
     }
 
     @Test

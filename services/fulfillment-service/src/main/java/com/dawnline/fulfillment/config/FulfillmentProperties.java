@@ -22,17 +22,25 @@ public record FulfillmentProperties(
     /**
      * Redis 설정 (§7.2).
      *
-     * @param commandTimeout 명령 타임아웃. 기본값(60초)을 그대로 두면 Redis 가 <em>멈췄을 때</em>
-     *                       폴백이 아니라 SLO 파괴가 된다 — 응답을 60초 기다린 뒤 폴백하는 것은
-     *                       폴백이 아니다. order-service 와 같은 판단이다
-     * @param zoneCacheTtl   {@code zone:geohash5:{p}} TTL (§7.2 기본 10분)
+     * @param commandTimeout     <strong>핫패스</strong> 명령 타임아웃 — {@code order.placed} 를
+     *                           소비하며 부르는 {@code GEOSEARCH} 와 권역 캐시 조회다. 기본값(60초)을
+     *                           그대로 두면 Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가
+     *                           된다. 응답을 60초 기다린 뒤 폴백하는 것은 폴백이 아니다
+     * @param loadCommandTimeout GEO <strong>적재</strong> 전용 타임아웃. 적재는 핫패스가 아니고
+     *                           폴백도 없다(적재가 실패하면 이후 조회가 폴백을 탈 뿐이다). 여기에
+     *                           50 ms 를 쓰면 첫 명령에 연결 수립이 포함되는 느린 환경에서
+     *                           <em>매번</em> 첫 시도가 실패하고, 재시도가 있어 동작은 하지만
+     *                           그 실패 로그가 진짜 장애를 가리기 시작한다
+     * @param zoneCacheTtl       {@code zone:geohash5:{p}} TTL (§7.2 기본 10분)
      */
     public record Redis(
             @DefaultValue("50ms") java.time.Duration commandTimeout,
+            @DefaultValue("2s") java.time.Duration loadCommandTimeout,
             @DefaultValue("10m") java.time.Duration zoneCacheTtl) {
 
         public Redis {
             requirePositive(commandTimeout, "dawnline.fulfillment.redis.command-timeout");
+            requirePositive(loadCommandTimeout, "dawnline.fulfillment.redis.load-command-timeout");
             requirePositive(zoneCacheTtl, "dawnline.fulfillment.redis.zone-cache-ttl");
         }
     }
@@ -68,6 +76,11 @@ public record FulfillmentProperties(
      * @param grace           마감 여유. {@code cutoffAt + grace} 에 마감한다. 기본 90초는 outbox
      *                        릴레이 폴링(100ms) + 컨슈머 지연 예산(§8.1)에서 나온 값이고, 스케줄러
      *                        주기 30초는 마감을 늦추는 쪽으로만 작용하므로 예산이 아니라 여유다
+     * @param lockTtl         마감 락 TTL (§7.2 기본 60초). 마감 트랜잭션보다 넉넉해야 하고,
+     *                        프로세스가 죽어도 이 시간 뒤에는 스스로 풀린다. 이 락은 정확성의
+     *                        근거가 아니라 낭비를 줄이는 방어다 — 중복 마감을 실제로 막는 것은
+     *                        {@code FOR UPDATE} 와 상태 전이다(ADR-025, 불변규칙 7)
+     * @param closeBatchSize  한 주기에 닫을 최대 웨이브 수
      * @param stalePlacedAfter 지각 도착 상한. {@code cutoffAt < now − 이 값}이면 다음 웨이브가
      *                        아니라 {@code UNSERVICEABLE(STALE_PLACED)} 다 (ADR-020 후속 정정).
      *                        <strong>이 값을 늘리면 {@link Retention#orders()} 30일을 함께
@@ -76,11 +89,18 @@ public record FulfillmentProperties(
      */
     public record Wave(
             @DefaultValue("90s") Duration grace,
+            @DefaultValue("60s") Duration lockTtl,
+            @DefaultValue("200") int closeBatchSize,
             @DefaultValue("24h") Duration stalePlacedAfter) {
 
         public Wave {
             requirePositive(grace, "dawnline.fulfillment.wave.grace");
+            requirePositive(lockTtl, "dawnline.fulfillment.wave.lock-ttl");
             requirePositive(stalePlacedAfter, "dawnline.fulfillment.wave.stale-placed-after");
+            if (closeBatchSize < 1) {
+                throw new IllegalArgumentException(
+                        "dawnline.fulfillment.wave.close-batch-size 는 1 이상이어야 합니다");
+            }
         }
     }
 

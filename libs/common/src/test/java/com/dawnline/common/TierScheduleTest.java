@@ -12,13 +12,13 @@ import org.junit.jupiter.api.Test;
 /**
  * 컷오프 표 (DESIGN.md §2.2, ADR-020 후속 정정 2).
  *
- * <p>order-service 의 계산과 <em>같은 답</em>인지는 그쪽의 {@code CutoffScheduleContractTest} 가
+ * <p>order-service 의 계산과 <em>같은 답</em>인지는 그쪽의 {@code TierScheduleContractTest} 가
  * 본다. 여기서는 이 클래스 자체의 규칙을 본다.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
-class CutoffScheduleTest {
+class TierScheduleTest {
 
-    private final CutoffSchedule schedule = CutoffSchedule.standard();
+    private final TierSchedule schedule = TierSchedule.standard();
 
     /** 2026-09-06 09:00 KST. */
     private static final Instant MORNING = Instant.parse("2026-09-06T00:00:00Z");
@@ -74,7 +74,7 @@ class CutoffScheduleTest {
     @Test
     void 시간대는_주입한다() {
         // 컷오프는 벽시계 시각이다. 시간대를 바꾸면 절대 시각이 달라져야 한다.
-        CutoffSchedule utc = new CutoffSchedule(ZoneId.of("UTC"));
+        TierSchedule utc = new TierSchedule(ZoneId.of("UTC"));
 
         assertThat(utc.cutoffFor("SAME_DAY", MORNING))
                 .isNotEqualTo(schedule.cutoffFor("SAME_DAY", MORNING));
