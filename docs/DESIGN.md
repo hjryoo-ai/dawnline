@@ -419,9 +419,11 @@ stale 을 <em>세는</em> 이유는 알림이 아니라 관찰이다. 순서 뒤
 
 order-service 가 무시하고 메트릭으로 남기는 처리는 그대로 옳다. 바뀌는 것은 그 메트릭의 뜻이다 —
 이상 징후가 아니라 **이 경합 창의 크기를 재는 값**이고, 창을 줄이거나 없애는 일은 dispatch 가
-소유한다(`order.cancelled` 소비 시 후보 제거·stop 취소·revision 발행, Phase 3
-[결정 필요] 9-2). 축 밖에 두는 이유는 그것이 stale 로 조용히 흡수되면 그 크기를 볼 수 없기
-때문이다.
+소유한다([ADR-026](adr/ADR-026-dispatch-cancellation-window.md), §6.10). 축 밖에 두는 이유는 그것이
+stale 로 조용히 흡수되면 그 크기를 볼 수 없기 때문이다.
+
+그 창의 **반대쪽 끝**은 `dawnline_cancel_too_late_total` 이 센다 — 이쪽이 "취소된 주문에 배차가
+왔다" 를 세고 저쪽이 "배송된 주문에 취소가 왔다" 를 센다. 두 값은 같은 창의 양 끝이라 함께 본다.
 
 **테이블**
 
@@ -752,6 +754,10 @@ REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assign
   나가고, 그것이 웨이브를 `PLAN_FAILED → PLANNED` 로 되돌리는 유일한 경로다.
 - `route_plans.wave_id`는 UNIQUE. `wave.closed`가 중복 도착해도 두 번째는 기존 plan을 발견하고 종료(멱등).
 - 계획 중 인스턴스가 죽으면 `PLANNING` 상태로 남는다. 스타트업/스케줄러가 `PLANNING`이고 `started_at`이 10분 경과한 plan을 `REQUESTED`로 되돌려 재실행한다. 결과 쓰기는 plan 단위 트랜잭션이므로 부분 결과가 발행되지 않는다.
+- **`PLANNING` 중에 도착한 `order.cancelled` 는 계획을 멈추지 않는다.** 계획은 시작 시점 스냅샷으로
+  끝까지 돌고, `PUBLISHED` 직전 재검증(§6.5 6단계)이 후보 상태를 다시 읽어 취소된 것을 stop 에서
+  뺀다 — 그래야 이 경합 창이 `revision` 하나를 쓰지 않고 닫힌다
+  ([ADR-026](adr/ADR-026-dispatch-cancellation-window.md), §6.10).
 
 **API**
 
@@ -970,6 +976,8 @@ plan(problem, budget):
      - 개선 폭 < 0.1% 또는 예산 소진 시 종료
   6. 검증·산출
      - 모든 하드 룰을 최종 라우트에 재검증 (개선 단계 버그 방어선)
+     - 후보 상태 재조회 — 계획 중에 취소된 주문을 stop 에서 뺀다 (§6.10, ADR-026).
+       optimizer 밖의 일이다: 순수 함수는 스냅샷만 보고, 이 조회는 발행 어댑터가 한다
      - PlanResult(라우트, 미배정, 비용, 메트릭, 설명)
 ```
 
@@ -1020,12 +1028,46 @@ public interface DispatchStrategy {
    재계획마다 다시 내면 웨이브 상태와 ops 화면이 무엇을 세는지 모르게 된다([ADR-024](adr/ADR-024-plan-completed-event.md)).
 5. 재계획도 라우트당 10분 쿨다운.
 
+**트리거는 위 둘뿐이다.** 취소는 여기에 들어가지 않는다 — 취소는 최적화의 트리거가 아니라 입력
+변경이고, 다시 풀 가치가 있는지는 revision 을 받은 tracking 의 ETA 재계산이 정한다
+([ADR-026](adr/ADR-026-dispatch-cancellation-window.md) 결정 1). 트리거를 늘리면 같은 판단을 하는
+회로가 둘이 되고, 둘은 갈라진다.
+
 ### 6.9 벤치마크 방법
 
 - 데이터셋: `tools/benchmark/datasets/` — `small`(500 주문/5 차량), `medium`(2,000/20), `large`(5,000/40), `peak`(15,000/60), 각각 seed 고정 생성. 좌표는 서울 근사 격자(캠프 중심 반경 8 km, 밀도 불균일).
 - 지표: 총비용, 총거리, 계획 시간, 미배정 수, 지각 stop 수·평균 지각분, 차량 사용 대수.
 - 각 전략 × 데이터셋을 5회 반복, 중앙값·p95 기록. 결과는 `docs/benchmarks/YYYY-MM-DD.md`에 표와 함께 커밋. README 상단에 최신 표를 링크.
 - 회귀 방지: CI에서 `small`을 1회 실행해 기본 전략 비용이 베이스라인보다 나쁘면 실패.
+
+### 6.10 취소 처리 (`order.cancelled` 소비)
+
+[ADR-017 후속 정정](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md)이 §5.1 에
+정의한 경합 창 — 계획 발행부터 order-service 가 `order.dispatched` 를 소비하기까지 취소가 정상적으로
+성공하는 구간 — 을 **닫는 쪽이 여기다**([ADR-026](adr/ADR-026-dispatch-cancellation-window.md)).
+
+분기는 라우트의 출발 여부가 아니라 **stop 의 상태**로 자른다. 미출발과 출발 후 미도착은 처리가
+같아서(건너뛴다) 구분이 아무것도 만들지 않는다.
+
+| 취소 도착 시 상태 | 처리 | 이벤트 |
+|---|---|---|
+| 후보, 계획 전 | `dispatch_candidates.status = CANCELLED`. **삭제하지 않는다** — "주문 X 는 왜 라우트에 없나" 에 답해야 한다(§6.3 설명 가능성) | 없음 |
+| 후보, **계획 진행 중** | 계획은 시작 시점 스냅샷으로 돌고, **발행 직전 재검증(§6.5 6단계)** 이 후보 상태를 다시 읽어 `CANCELLED` 를 stop 에서 뺀 뒤 발행한다 | 없음 (revision 을 쓰지 않고 닫는 자리) |
+| 라우트 발행됨, stop 이 `ARRIVED` **이전** | `route_stops.status = CANCELLED` + 이후 stop 시간 **재전파**(순서 불변) | `route.assigned` revision + 1 |
+| stop 이 `ARRIVED`/`COMPLETED` **이후** | **거부.** 상태 불변 | 없음. `dawnline_cancel_too_late_total{camp}` (§9.4 알림) |
+
+시간만 당기고 **순서는 재시퀀싱하지 않는다.** 기사가 이미 그 순서를 보고 있기 때문이고, §6.8 이
+`relocate` 만 허용하는 것과 같은 종류의 판단이다.
+
+취소된 stop 은 `route.assigned` 페이로드에서 **지우지 않고** `status: CANCELLED` 로 남긴다 —
+부재는 값이 아니다. 지우면 소비자가 "취소" 와 "다른 라우트로 이동" 과 "발행 누락" 을 구별할 수
+없고, tracking 은 이 이벤트만으로 shipment 를 만들어야 하므로(불변규칙 4) 그 구별이 그쪽의 유일한
+정보원이다. `seq` 도 그대로 둔다.
+
+네 번째 행이 발화한다는 것은 order-service 가 `order.dispatched` 를 배송 완료 시점까지 소비하지
+못했다는 뜻이다(정상이면 발행과 출발 사이가 분 단위 이상). 그래서 그 카운터는 이상이 아니라
+**창의 폭**을 재는 값이고, 물리적으로는 배송됐는데 주문은 `CANCELLED` 인 상태를 ops 가 보게 하는
+것이 이 분기의 역할이다. 자동 보상은 넣지 않는다 — 환불·회수는 이 프로젝트의 범위 밖이다.
 
 ---
 
@@ -1208,6 +1250,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |
 | `dawnline_plan_unassigned` | gauge | dispatch | camp |
 | `dawnline_plan_degraded_total` | counter | dispatch | camp |
+| `dawnline_cancel_too_late_total` | counter | dispatch | camp — 이미 `ARRIVED`/`COMPLETED` 인 stop 에 도착해 **거부한** `order.cancelled` (§6.10, [ADR-026](adr/ADR-026-dispatch-cancellation-window.md)). order-service 의 축 밖 거부 카운터와 **한 쌍**이다 — 저쪽은 "취소된 주문에 배차가 왔다", 이쪽은 "배송된 주문에 취소가 왔다" 를 세고 둘 다 같은 경합 창의 양 끝이다. 오르면 볼 곳은 dispatch 가 아니라 order-service 의 `order.dispatched` 컨슈머 랙이다 |
 | `dawnline_at_risk_total` | counter | tracking | camp — campId 는 `route.assigned` 가 싣고 오지만(필수 필드) §5.4 의 `shipments` 에는 컬럼이 없다. **Phase 5 에서 보관해야 이 라벨을 붙일 수 있다** |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
 
@@ -1245,7 +1288,7 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%, **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03)
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%, **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10)
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 

@@ -38,6 +38,7 @@
 | 023 | `fulfillment_orders` 30일 · `waves` 90일, 파티션 대신 배치 삭제 | ✅ Accepted (2026-09-05) | [ADR-023](ADR-023-fulfillment-retention.md) |
 | 024 | 웨이브 계획 완료는 `plan.completed.v1` 이 알린다 (`route.assigned` 가 아니라) | ✅ Accepted (2026-09-05) | [ADR-024](ADR-024-plan-completed-event.md) |
 | 025 | 웨이브 편입은 `FOR SHARE`, 마감만 `FOR UPDATE`. `order_count` 는 마감 시 집계 | ✅ Accepted (2026-09-05) | [ADR-025](ADR-025-wave-admission-share-lock.md) |
+| 026 | 취소는 최적화 트리거가 아니라 입력 변경 — stop 을 죽이고 시간만 재전파한다 | ✅ Accepted (2026-09-05) | [ADR-026](ADR-026-dispatch-cancellation-window.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.

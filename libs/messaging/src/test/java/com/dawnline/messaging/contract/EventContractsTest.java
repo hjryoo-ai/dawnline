@@ -17,6 +17,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -119,12 +120,13 @@ class EventContractsTest {
         assertThat(start).isBefore(end);
     }
 
-    @Test
-    void route_assigned_예시의_stop_불변식() {
-        JsonNode payload = readExample("route.assigned.v1.example.json").get("payload");
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"route.assigned.v1.example.json", "route.assigned.v1.revised.example.json"})
+    void route_assigned_예시의_stop_불변식(String file) {
+        JsonNode payload = readExample(file).get("payload");
         JsonNode stops = payload.get("stops");
 
-        // summary.stopCount == stops 길이
+        // summary.stopCount == stops 길이. 취소된 stop 도 배열에 남으므로 여기 포함된다 (§6.10).
         assertThat(payload.get("summary").get("stopCount").intValue()).isEqualTo(stops.size());
 
         List<Integer> sequences = new ArrayList<>();
@@ -141,6 +143,50 @@ class EventContractsTest {
         // seq 는 1..n 연속
         assertThat(sequences).containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, stops.size())
                 .boxed().toList());
+    }
+
+    @Test
+    void route_assigned_취소된_stop_은_지워지지_않고_seq_도_그대로다() {
+        // §6.10 / ADR-026 — 부재는 값이 아니다. stop 을 배열에서 지우면 소비자가 "취소" 와
+        // "다른 라우트로 이동" 과 "발행 누락" 을 구별할 수 없고, seq 를 다시 매기면 기사가 보던
+        // 순번이 바뀐다. 예시 둘을 나란히 두는 이유가 그 둘을 실제로 대조하기 위해서다.
+        JsonNode base = readExample("route.assigned.v1.example.json").get("payload");
+        JsonNode revised = readExample("route.assigned.v1.revised.example.json").get("payload");
+
+        assertThat(revised.get("routeId").asString()).isEqualTo(base.get("routeId").asString());
+        assertThat(revised.get("revision").intValue())
+                .as("개정은 revision 이 오른다 (§6.8 4단계)").isGreaterThan(base.get("revision").intValue());
+
+        assertThat(seqOf(revised)).as("취소는 방문 순서를 바꾸지 않는다").isEqualTo(seqOf(base));
+        assertThat(revised.get("stops").size())
+                .as("취소된 stop 을 지우지 않는다").isEqualTo(base.get("stops").size());
+
+        List<String> cancelled = new ArrayList<>();
+        for (JsonNode stop : revised.get("stops")) {
+            if ("CANCELLED".equals(stop.path("status").asString(""))) {
+                cancelled.add(stop.get("seq").asString());
+            }
+        }
+        assertThat(cancelled).as("개정 예시는 취소된 stop 을 실제로 담아야 뜻이 있다").hasSize(1);
+    }
+
+    @Test
+    void route_assigned_status_없는_예시도_그대로_통과한다() {
+        // status 는 optional·기본 PLANNED 다 (ADR-026 결정 4). v1 을 낸 생산자가 없어
+        // "부재 = PLANNED" 가 실제 사실과 일치하기 때문이고, 기존 예시가 그대로 통과하는 것이
+        // 그 판단이 major 변경이 아니라는 증거다 (계약 README 체크리스트).
+        JsonNode base = readExample("route.assigned.v1.example.json");
+
+        CONTRACTS.validateRecord(base);
+        for (JsonNode stop : base.get("payload").get("stops")) {
+            assertThat(stop.has("status")).as("기준 예시는 status 를 담지 않는다").isFalse();
+        }
+    }
+
+    private static List<Integer> seqOf(JsonNode payload) {
+        List<Integer> sequences = new ArrayList<>();
+        payload.get("stops").forEach(stop -> sequences.add(stop.get("seq").intValue()));
+        return sequences;
     }
 
     @Test
