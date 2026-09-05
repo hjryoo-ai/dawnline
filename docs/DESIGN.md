@@ -716,7 +716,8 @@ CREATE TABLE fulfillment_orders (
   placed_event_id UUID,                                       -- NULL 이면 order.placed 가 아직 안 왔다
   cancelled_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL);
-CREATE INDEX ix_fulfillment_orders_wave ON fulfillment_orders (wave_id) WHERE status = 'PLANNED';
+CREATE INDEX ix_fulfillment_orders_wave ON fulfillment_orders (wave_id);
+CREATE INDEX ix_fulfillment_orders_cleanup ON fulfillment_orders (updated_at);
 ```
 
 `wave_orders` 는 **V1 에만 있었고 V2 에서 드롭한다**([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md)).
@@ -1025,6 +1026,7 @@ public interface DispatchStrategy {
 - ID: UUIDv7 (애플리케이션 생성, 시간순 → 인덱스 지역성). PostgreSQL 18의 `uuidv7()`은 사용하지 않는다(ID를 DB 왕복 전에 알아야 outbox·이벤트에 쓸 수 있음).
 - 인덱스는 위 DDL 명시분 외에 추가 금지(추가 시 EXPLAIN 근거를 PR에 첨부). **넣지 않기로 한 판단도 행 수와 함께 남긴다** — 예: `waves` 는 90일치가 4,000행 남짓이라 정리 배치가 순차 스캔으로 충분하다([ADR-023](adr/ADR-023-fulfillment-retention.md)). 그 문장이 있어야 규모가 바뀌었을 때 재검토 지점이 생긴다.
 - 파티셔닝: `shipment_events`(일 단위), `outbox_events`는 발행 후 7일 지난 행을 배치 삭제(파티션 대신 삭제, 규모가 작음). `processed_events` 는 14일 보존(§4.4) — 같은 정리 스케줄러가 일 1회 처리한다. 두 삭제 모두 `LIMIT` 배치를 반복해 긴 락을 잡지 않는다.
+- `fulfillment_orders` 의 두 인덱스는 [EXPLAIN 근거](benchmarks/phase2-fulfillment-orders-indexes.md)를 갖는다. `wave_id` 는 **부분 인덱스가 아니다** — 부분 조건이 거르는 행이 2% 뿐이고(정상 상태의 98% 가 `PLANNED`), 무엇보다 부분 인덱스는 FK 검사에 쓰이지 못해 `waves` 삭제가 웨이브당 전수 스캔이 된다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 웨이브 편입의 `waves` 행 `SELECT … FOR UPDATE`(짧은 트랜잭션)에만 허용.
 - N+1 방지: 컬렉션 로딩은 `@EntityGraph` 또는 명시 fetch join. 테스트에서 Hibernate statement 카운터로 쿼리 수 상한 검증.

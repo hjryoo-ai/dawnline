@@ -158,8 +158,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
    | 표 | 30·90일치 행 수 | 인덱스 | 근거 |
    |---|---|---|---|
-   | `fulfillment_orders` | 피크 150,000/일 × 30일 = **450만** | `updated_at` 추가 · EXPLAIN 첨부 | 삭제 조건이 `updated_at < now() - 30d` 범위 스캔이다. PK 가 `order_id` 라 이 범위를 돕지 못한다 — `idempotency_keys`·`processed_events` 와 같은 상황 |
-   | `waves` | 하루 40행 × 90일 = **약 4,000** | **넣지 않는다** | 이 규모에서는 순차 스캔이 인덱스보다 싸다. 행 수를 함께 적어 두는 이유는 캠프·티어가 늘어 규모가 바뀌었을 때 **재검토 지점**이 되게 하기 위해서다 |
+   | `fulfillment_orders` | 피크 150,000/일 × 30일 = **450만** | `updated_at` 추가 (100 MB) | 삭제 조건이 `updated_at < now() - 30d` 범위 스캔이다. PK 가 `order_id` 라 이 범위를 돕지 못한다. 하루치 정리 68초 → 0.24초 |
+   | `fulfillment_orders` | 〃 | `wave_id` **전체** 추가 (32 MB) | ADR-022 의 부분 인덱스를 **측정이 뒤집었다** — 부분 조건이 거르는 행이 2% 뿐이고, 부분 인덱스는 FK 검사에 쓰이지 못해 `waves` 삭제가 웨이브당 전수 스캔이 된다(40건에 6.7초 → 0.57 ms) |
+   | `waves` | 하루 40행 × 90일 = **약 4,000** | **넣지 않는다** | 후보를 고르는 순차 스캔이 3,600행에 0.42 ms · 50버퍼다. 재검토가 필요한 규모는 백만 행대(캠프 2,500개 수준)이며, 행 수를 함께 적는 이유가 그 재검토 지점을 만들기 위해서다 |
+
+   측정 결과는 [`docs/benchmarks/phase2-fulfillment-orders-indexes.md`](benchmarks/phase2-fulfillment-orders-indexes.md)
+   에 환경(호스트 사양·PG 버전·행 수)과 함께 남긴다.
 5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 웨이브에서 제거(OPEN일 때만).
    마감은 `cutoffAt + grace`(기본 90초)이고, grace 를 넘긴 주문은 다음 웨이브 + `promiseRevised: true` ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).
    단 **`cutoffAt < now − 24h`(설정값)이면 다음 웨이브가 아니라 `UNSERVICEABLE`(`STALE_PLACED`)** 이다

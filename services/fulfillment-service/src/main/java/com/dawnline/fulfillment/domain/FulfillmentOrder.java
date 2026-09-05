@@ -36,11 +36,16 @@ public final class FulfillmentOrder {
     private @Nullable FcFallbackReason fcFallbackReason;
     private @Nullable UUID placedEventId;
     private @Nullable Instant cancelledAt;
+    private Instant createdAt;
+    private Instant updatedAt;
     private long version;
 
-    private FulfillmentOrder(UUID orderId, FulfillmentOrderStatus status) {
+    private FulfillmentOrder(UUID orderId, FulfillmentOrderStatus status, Instant at) {
         this.orderId = Objects.requireNonNull(orderId, "orderId");
         this.status = Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(at, "at");
+        this.createdAt = at;
+        this.updatedAt = at;
     }
 
     /**
@@ -56,12 +61,13 @@ public final class FulfillmentOrder {
      * @param promisedWindow 지금 유효한 약속창
      * @param promiseRevised 그 창이 접수 시점의 약속과 다른가 (ADR-020)
      * @param fallbackReason 홈 FC 가 아닌 대체 FC 를 골랐다면 그 사유 (ADR-021)
+     * @param at             판정 시각. {@code created_at}·{@code updated_at} 이 된다
      */
     public static FulfillmentOrder planned(UUID orderId, UUID placedEventId, UUID waveId, UUID campId,
             UUID fcId, UUID zoneId, Instant cutoffAt, TimeWindow promisedWindow, boolean promiseRevised,
-            @Nullable FcFallbackReason fallbackReason) {
+            @Nullable FcFallbackReason fallbackReason, Instant at) {
 
-        FulfillmentOrder order = new FulfillmentOrder(orderId, FulfillmentOrderStatus.PLANNED);
+        FulfillmentOrder order = new FulfillmentOrder(orderId, FulfillmentOrderStatus.PLANNED, at);
         order.placedEventId = Objects.requireNonNull(placedEventId, "placedEventId");
         order.waveId = Objects.requireNonNull(waveId, "waveId");
         order.campId = Objects.requireNonNull(campId, "campId");
@@ -81,11 +87,12 @@ public final class FulfillmentOrder {
      * @param placedEventId 이 판정을 만든 {@code order.placed} 의 봉투 eventId
      * @param reason        사유
      * @param campId        캠프를 정한 뒤에 실패했다면 그 캠프. 권역을 못 찾았으면 {@code null}
+     * @param at            판정 시각
      */
     public static FulfillmentOrder unserviceable(UUID orderId, UUID placedEventId,
-            UnserviceableReason reason, @Nullable UUID campId) {
+            UnserviceableReason reason, @Nullable UUID campId, Instant at) {
 
-        FulfillmentOrder order = new FulfillmentOrder(orderId, FulfillmentOrderStatus.UNSERVICEABLE);
+        FulfillmentOrder order = new FulfillmentOrder(orderId, FulfillmentOrderStatus.UNSERVICEABLE, at);
         order.placedEventId = Objects.requireNonNull(placedEventId, "placedEventId");
         order.unserviceableReason = Objects.requireNonNull(reason, "reason");
         order.campId = campId;
@@ -102,20 +109,55 @@ public final class FulfillmentOrder {
      * @param at      취소 시각
      */
     public static FulfillmentOrder cancelledBeforePlaced(UUID orderId, Instant at) {
-        FulfillmentOrder order = new FulfillmentOrder(orderId, FulfillmentOrderStatus.CANCELLED);
-        order.cancelledAt = Objects.requireNonNull(at, "at");
+        FulfillmentOrder order = new FulfillmentOrder(orderId, FulfillmentOrderStatus.CANCELLED, at);
+        order.cancelledAt = at;
         return order;
     }
 
     /**
      * 저장된 상태에서 되살린다 (영속성 어댑터 전용).
      *
-     * @param orderId 주문 id
-     * @param status  상태
-     * @param version 낙관적 락 버전
+     * <p><strong>모든 필드를 복원한다.</strong> 상태만 복원하면 취소 한 번에 나머지 컬럼이 날아간다 —
+     * 어댑터는 되살린 애그리거트를 그대로 행에 반영하기 때문이다. 되살릴 수 없는 필드가 있으면
+     * 그것은 이 애그리거트가 소유하지 않아야 할 값이다.
+     *
+     * @param orderId              주문 id
+     * @param status               상태
+     * @param waveId               편입된 웨이브
+     * @param campId               캠프
+     * @param fcId                 FC
+     * @param zoneId               권역
+     * @param cutoffAt             컷오프
+     * @param promisedWindow       약속창
+     * @param promiseRevised       약속이 개정됐는가
+     * @param unserviceableReason  배차 불가 사유
+     * @param fcFallbackReason     대체 FC 사유
+     * @param placedEventId        판정을 만든 {@code order.placed} 의 eventId
+     * @param cancelledAt          취소 시각
+     * @param createdAt            행이 생긴 시각
+     * @param updatedAt            마지막 변경 시각 (ADR-023 보존 기준)
+     * @param version              낙관적 락 버전
      */
-    public static FulfillmentOrder rehydrate(UUID orderId, FulfillmentOrderStatus status, long version) {
-        FulfillmentOrder order = new FulfillmentOrder(orderId, status);
+    public static FulfillmentOrder rehydrate(UUID orderId, FulfillmentOrderStatus status,
+            @Nullable UUID waveId, @Nullable UUID campId, @Nullable UUID fcId, @Nullable UUID zoneId,
+            @Nullable Instant cutoffAt, @Nullable TimeWindow promisedWindow, boolean promiseRevised,
+            @Nullable UnserviceableReason unserviceableReason, @Nullable FcFallbackReason fcFallbackReason,
+            @Nullable UUID placedEventId, @Nullable Instant cancelledAt,
+            Instant createdAt, Instant updatedAt, long version) {
+
+        FulfillmentOrder order = new FulfillmentOrder(orderId, status, createdAt);
+        order.waveId = waveId;
+        order.campId = campId;
+        order.fcId = fcId;
+        order.zoneId = zoneId;
+        order.cutoffAt = cutoffAt;
+        order.promisedWindow = promisedWindow;
+        order.promiseRevised = promiseRevised;
+        order.unserviceableReason = unserviceableReason;
+        order.fcFallbackReason = fcFallbackReason;
+        order.placedEventId = placedEventId;
+        order.cancelledAt = cancelledAt;
+        order.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
         order.version = version;
         return order;
     }
@@ -147,6 +189,7 @@ public final class FulfillmentOrder {
         }
         status = FulfillmentOrderStatus.CANCELLED;
         cancelledAt = at;
+        updatedAt = at;
     }
 
     /**
@@ -158,8 +201,9 @@ public final class FulfillmentOrder {
      *
      * @param window 개정된 약속창
      * @param waveId 새로 편입된 웨이브
+     * @param at     개정 시각
      */
-    public void revisePromise(TimeWindow window, UUID waveId) {
+    public void revisePromise(TimeWindow window, UUID waveId, Instant at) {
         if (status != FulfillmentOrderStatus.PLANNED) {
             throw new IllegalStateTransitionException(
                     "FulfillmentOrder(약속 개정)", status, FulfillmentOrderStatus.PLANNED);
@@ -167,6 +211,7 @@ public final class FulfillmentOrder {
         this.promisedWindow = Objects.requireNonNull(window, "window");
         this.waveId = Objects.requireNonNull(waveId, "waveId");
         this.promiseRevised = true;
+        this.updatedAt = Objects.requireNonNull(at, "at");
     }
 
     /** 주문 id. */
@@ -232,6 +277,21 @@ public final class FulfillmentOrder {
     /** 취소 시각. */
     public Optional<Instant> cancelledAt() {
         return Optional.ofNullable(cancelledAt);
+    }
+
+    /** 행이 생긴 시각. */
+    public Instant createdAt() {
+        return createdAt;
+    }
+
+    /**
+     * 마지막으로 이 주문에 무슨 일이 있었던 시각.
+     *
+     * <p>보존 정리의 기준이다 (ADR-023 결정 1). 접수가 30일 전이라도 취소·약속 개정이 어제면
+     * 조사 대상은 어제 사건이므로 {@code created_at} 이 아니라 이 값으로 잰다.
+     */
+    public Instant updatedAt() {
+        return updatedAt;
     }
 
     /** 낙관적 락 버전. */
