@@ -12,7 +12,6 @@ import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import jakarta.persistence.EntityManager;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -28,8 +27,6 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -49,48 +46,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  * </ul>
  */
 @SpringBootTest(classes = DispatchApplication.class)
-@Import(PhaseThreeDoDIT.FixedClock.class)
+@Import(PlanningClock.class)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("PhaseThreeDoDIT — 마감 DoD")
 class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
-
-    /**
-     * 시계를 <strong>옮기되 멈추지는 않는다</strong> — 이 클래스의 수치가 문서로 옮겨지기 때문이다.
-     *
-     * <h2>왜 옮기는가</h2>
-     * 차량 근무창은 벽시계 {@code TIME}(06:00–22:00 KST)이고 어댑터가 <em>계획 날짜</em>에
-     * 붙인다({@code JdbcReferenceData.availableAt}). 실행 시각이 20시면 남은 근무창이 두 시간이라
-     * 오전에 돌린 것과 배정 수가 완전히 다르다. seed 를 고정하고 주문 id 를 결정적으로 만들어도
-     * 그 축은 남아 있었다 — 배정 906 · 898 · 922 (2026-09-05 측정). 09:00 KST 로 옮기면 근무창
-     * 한가운데에서 시작해 그 축이 사라진다.
-     *
-     * <h2>왜 멈추지 않는가</h2>
-     * {@link Clock#fixed}로 세우면 서비스가 재는 {@code planDurationMs} 가 <strong>0 이 된다</strong>
-     * (끝난 시각 − 시작 시각이므로). 그러면 "§6.7 목표 30초 이하" 어설션이 <em>언제나</em> 참이
-     * 되어 아무것도 검사하지 않는다 — 이 저장소가 세 번 데었던 공허한 테스트가 하나 더 는다.
-     * 그래서 {@link Clock#offset} 으로 <em>위치만</em> 옮기고 흐름은 그대로 둔다. 30초짜리 테스트가
-     * 근무창 안에서 30초 움직이는 것은 배정에 영향을 주지 않는다.
-     *
-     * <p>{@link Clock#tick} 으로 마이크로초에 맞추는 이유는 {@code libs/messaging} 의 기본 시계와
-     * 같은 정밀도를 쓰기 위해서다 — 저장 정밀도보다 고운 시각은 읽어 올 때 달라진다.
-     */
-    @TestConfiguration
-    static class FixedClock {
-
-        /** 2026-09-05 09:00 KST — 근무창(06:00–22:00) 한가운데. */
-        static final Instant PLAN_AT = Instant.parse("2026-09-05T00:00:00Z");
-
-        /**
-         * @return 09:00 KST 로 옮긴 <strong>흐르는</strong> 시계.
-         *         {@code @ConditionalOnMissingBean} 이라 이 빈이 자동설정을 이긴다
-         */
-        @Bean
-        Clock dawnlineClock() {
-            Clock system = Clock.systemUTC();
-            return Clock.tick(Clock.offset(system, Duration.between(system.instant(), PLAN_AT)),
-                    Duration.ofNanos(1_000));
-        }
-    }
 
     /** 시드의 첫 캠프 (서울 북부). 차량 20대가 여기 붙어 있다. */
     private static final UUID CAMP_ID = UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
@@ -246,7 +205,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
      * 합쳐지면 그 stop 은 통째로 냉장이 되고 검사가 흐려진다.
      */
     private Seeded seedMixedColdCandidates(UUID waveId, int count) {
-        Instant now = FixedClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(5)));
         Set<UUID> cold = new HashSet<>();
         Set<UUID> warm = new HashSet<>();
@@ -264,7 +223,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
     }
 
     private List<UUID> seedCandidates(UUID waveId, int count) {
-        Instant now = FixedClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(8)));
         List<UUID> orderIds = new ArrayList<>(count);
         tx().executeWithoutResult(status -> {

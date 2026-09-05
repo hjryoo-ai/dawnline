@@ -34,6 +34,7 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -51,6 +52,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * outbox 까지만 쓰면 충분하다.
  */
 @SpringBootTest(classes = DispatchApplication.class)
+@Import(PlanningClock.class)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("DispatchAdminIT — 조회·재배정·참조 데이터 SQL")
 class DispatchAdminIT extends DispatchIntegrationTestBase {
@@ -488,8 +490,16 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         return Ids.newId().toString().substring(24);
     }
 
+    /**
+     * 약속 창의 기준을 {@link PlanningClock#PLAN_AT} 에서 잡는다 — {@code Instant.now()} 가 아니다.
+     *
+     * <p>재배정은 "옮긴 뒤 복귀 시각이 근무 종료 − 30분 버퍼 안인가" 를 본다(§6.3). 21시에
+     * 돌리면 남은 근무창이 한 시간이라 어떤 이동도 그 검사를 통과하지 못하고, 세 테스트가
+     * {@code ConflictException} 으로 떨어진다 — 2026-09-05 에 실제로 그랬다. 이 클래스가 재는
+     * 것은 재배정 규칙이지 <em>지금 몇 시인가</em>가 아니다.
+     */
     private List<UUID> seedCandidates(UUID waveId, int count) {
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)),
                 now.plus(Duration.ofHours(5)));
         List<UUID> orderIds = new ArrayList<>(count);

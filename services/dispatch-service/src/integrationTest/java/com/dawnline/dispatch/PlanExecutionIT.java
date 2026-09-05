@@ -14,7 +14,7 @@ import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.messaging.contract.EventContracts;
-import com.redis.testcontainers.RedisContainer;
+import com.dawnline.messaging.outbox.OutboxMetrics;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,6 +36,7 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -51,6 +52,7 @@ import tools.jackson.databind.JsonNode;
  * <p>이 클래스만 릴레이를 켠다. 기반이 그것에 의견을 갖지 않는 이유는 기반 주석에 있다.
  */
 @SpringBootTest(classes = DispatchApplication.class)
+@Import(PlanningClock.class)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("PlanExecutionIT — 계획 실행과 발행")
 class PlanExecutionIT extends DispatchIntegrationTestBase {
@@ -68,11 +70,7 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
 
     private static KafkaConsumer<String, String> consumer;
 
-    /** 릴레이 리더 락용 (ADR-027). 아래 {@link #relay} 의 설명 참고. */
-    private static final RedisContainer REDIS = new RedisContainer("redis:8.8.2");
-
     static {
-        REDIS.start();
         createTopics(ROUTE_ASSIGNED, ORDER_DISPATCHED, PLAN_COMPLETED, PLAN_FAILED);
     }
 
@@ -91,15 +89,16 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
+    @Autowired
+    private OutboxMetrics outboxMetrics;
+
     /**
-     * 이 IT 만 릴레이를 켠다 — 발행이 브로커까지 가는 것이 검사 대상이다. 그리고 릴레이를 켜면
-     * <strong>Redis 도 붙여야 한다</strong>.
+     * 이 IT 만 릴레이를 켠다 — 발행이 브로커까지 가는 것이 검사 대상이다.
      *
-     * <p>Redis 가 필요해진 것은 2026-09-05 부터다([ADR-027]). 릴레이는 리더가 아니면 발행하지
-     * 않고, 리더십을 판정할 수 없으면(Redis 없음) 리더가 아니다 — 발행 경로가 Redis 에 의존한다.
-     * 락을 끄는 대신 붙이는 이유: 이 클래스가 보는 것은 <em>운영의 발행 경로</em>이고, 운영의 그
-     * 경로에는 리더 락이 있다. 다른 dispatch IT 들은 Redis 없이 돈다 — 그쪽은 규칙 캐시의 DB
-     * 폴백(불변규칙 7)을 그대로 밟아야 하므로 기반에 Redis 를 두지 않는다.
+     * <p><strong>여기 Redis 컨테이너가 있었다</strong>(2026-09-05 하루). 릴레이 리더 락이 Redis
+     * 였을 때는 리더십을 판정할 수 없으면 아무것도 발행되지 않았기 때문이다. 락을 advisory lock
+     * 으로 옮기면서([ADR-027] 후속 정정) 조정자가 <em>이 서비스의 DB</em> 가 됐고, 컨테이너는
+     * 필요 없어졌다. 발행 경로가 다시 DB + Kafka 둘뿐이다.
      *
      * @param registry 동적 속성 레지스트리
      */
@@ -107,8 +106,6 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
     static void relay(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "true");
         registry.add("dawnline.messaging.outbox.poll-interval-ms", () -> "200");
-        registry.add("spring.data.redis.host", REDIS::getRedisHost);
-        registry.add("spring.data.redis.port", REDIS::getRedisPort);
     }
 
     @BeforeAll
@@ -144,10 +141,24 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         });
     }
 
+    /**
+     * 전제 — 이 컨텍스트의 릴레이가 <strong>리더</strong>다.
+     *
+     * <p>여기에는 원래 시스템 프로퍼티를 보는 어설션이 있었고, 그것은 릴레이가 <em>켜져 있는지</em>
+     * 조차 보지 못했다. 리더 락이 advisory lock 이 된 뒤(ADR-027 후속 정정) 전제가 하나 더
+     * 늘었다: 같은 데이터베이스에 대해 릴레이는 한 컨텍스트만 리더가 되고, 스프링은 컨텍스트를
+     * 캐시하므로 <strong>먼저 뜬 다른 IT 가 락을 쥐고 있으면 여기서는 아무것도 발행되지 않는다.</strong>
+     *
+     * <p>그러면 아래 테스트들은 "레코드가 안 온다" 로 실패한다 — 원인을 말하지 않는 실패다.
+     * 전제를 여기서 어설션으로 말해 두면 그때 실패하는 것은 이 테스트이고, 메시지가 원인을
+     * 그대로 가리킨다. (CLAUDE.md — 폴백 테스트는 전제를 스스로 말한다.)
+     */
     @Test
-    void 전제_릴레이가_돈다() {
-        // 릴레이가 꺼져 있으면 아래 테스트들이 아무것도 발행되지 않은 채 브로커를 기다린다.
-        assertThat(System.getProperty("spring.profiles.active", "")).doesNotContain("norelay");
+    void 전제_이_컨텍스트의_릴레이가_리더다() {
+        await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(200))
+                .untilAsserted(() -> assertThat(outboxMetrics.leaderValue())
+                        .as("1 리더 · 0 팔로워(다른 IT 컨텍스트가 락을 쥐었다) · -1 판정 불가(DB)")
+                        .isEqualTo(1L));
     }
 
     @Test
@@ -308,9 +319,16 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
                 .createNativeQuery("SELECT count(*) FROM " + table).getSingleResult()).longValue());
     }
 
-    /** 캠프 주변에 후보를 흩는다. 차량 20대 · stop 상한 120 이라 넉넉히 들어간다. */
+    /**
+     * 캠프 주변에 후보를 흩는다. 차량 20대 · stop 상한 120 이라 넉넉히 들어간다.
+     *
+     * <p>약속 창의 기준을 {@link PlanningClock#PLAN_AT} 에서 잡는다 — {@code Instant.now()} 가
+     * 아니다. 21시에 돌리면 "지금+1시간 ~ 지금+5시간" 이 근무창(06:00–22:00 KST) 밖으로 나가고,
+     * 그러면 주문이 배정되지 않아 "주문당 하나" 가 시각에 따라 붙었다 떨어진다. 2026-09-05 에
+     * 실제로 그랬다(6건 중 5건).
+     */
     private List<UUID> seedCandidates(UUID waveId, int count) {
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)),
                 now.plus(Duration.ofHours(5)));
         List<UUID> orderIds = new ArrayList<>(count);

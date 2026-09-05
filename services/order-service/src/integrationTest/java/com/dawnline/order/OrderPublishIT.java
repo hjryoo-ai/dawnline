@@ -11,7 +11,6 @@ import com.dawnline.order.application.port.in.PlaceOrderUseCase;
 import com.dawnline.order.domain.OrderItem;
 import com.dawnline.order.domain.Parcel;
 import com.dawnline.order.domain.ServiceTier;
-import com.redis.testcontainers.RedisContainer;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -29,8 +28,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
@@ -44,6 +41,11 @@ import tools.jackson.databind.JsonNode;
  * 않았다 — 다른 IT 들은 릴레이를 꺼 두었기 때문이다.
  *
  * <p>여기서만 릴레이를 켠다. 그래서 이 클래스가 확인하는 것은 세 가지다.
+ *
+ * <p><strong>2026-09-05 하루 동안 이 클래스는 Redis 컨테이너를 띄웠다.</strong> 릴레이 리더 락이
+ * Redis 였을 때는 리더십을 판정할 수 없으면 아무것도 발행되지 않았고, 그래서 "Redis 는 있으나
+ * 없으나 발행 경로는 같다" 는 원래 주석이 거짓이 됐다([ADR-027]). 락을 advisory lock 으로
+ * 옮기면서 그 주석이 다시 참이 됐다 — 발행 경로는 DB 와 Kafka 뿐이다.
  *
  * <ol>
  *   <li>outbox 행이 실제로 발행되고 {@code published_at} 이 찍히는가</li>
@@ -61,11 +63,7 @@ class OrderPublishIT extends OrderIntegrationTestBase {
 
     private static KafkaConsumer<String, String> consumer;
 
-    /** 릴레이 리더 락용 (ADR-027). 아래 {@link #redis} 의 설명 참고. */
-    private static final RedisContainer REDIS = new RedisContainer("redis:8.8.2");
-
     static {
-        REDIS.start();
         // 릴레이가 붙기 전에 만들어야 한다. 브로커는 자동 토픽 생성을 꺼 두었다.
         createTopics(TOPIC);
     }
@@ -78,24 +76,6 @@ class OrderPublishIT extends OrderIntegrationTestBase {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
-
-    /**
-     * 살아 있는 Redis 를 붙인다 — <strong>2026-09-05 에 바뀐 전제다</strong>.
-     *
-     * <p>이 자리에는 원래 죽은 주소가 있었고 "있으나 없으나 발행 경로는 같다" 고 적혀 있었다.
-     * [ADR-027] 이 그 문장을 거짓으로 만들었다: 릴레이는 리더가 아니면 발행하지 않고, 리더십을
-     * 판정할 수 없으면(Redis 장애) 리더가 아니다. 이제 <em>발행 경로가 Redis 에 의존한다.</em>
-     *
-     * <p>죽은 주소로 두고 {@code leader.enabled=false} 를 주는 선택지도 있었지만 그러지 않았다.
-     * 이 클래스의 존재 이유는 "outbox 에 들어갔다" 가 아니라 <strong>실제로 브로커까지 간다</strong>
-     * 이고, 운영의 그 경로에는 리더 락이 있다. 락을 끄고 통과하는 발행 테스트는 운영 경로를
-     * 테스트하지 않는다.
-     */
-    @DynamicPropertySource
-    static void redis(DynamicPropertyRegistry registry) {
-        registry.add("spring.data.redis.host", REDIS::getRedisHost);
-        registry.add("spring.data.redis.port", REDIS::getRedisPort);
-    }
 
     @BeforeAll
     static void subscribe() {

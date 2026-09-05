@@ -17,6 +17,8 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -37,6 +39,25 @@ import tools.jackson.databind.ObjectMapper;
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("DispatchSeedCoverageIT — 시드와 계약 파일")
 class DispatchSeedCoverageIT extends DispatchIntegrationTestBase {
+
+    /**
+     * 릴레이를 끈다 — 이 클래스는 발행을 보지 않는다.
+     *
+     * <p>끄는 것이 <strong>격리</strong>다. 리더 락이 advisory lock 이 된 뒤(ADR-027 후속 정정)
+     * 이 컨테이너의 한 데이터베이스에 대해 릴레이는 <em>한 컨텍스트만</em> 리더가 된다. 스프링은
+     * 컨텍스트를 캐시하므로 먼저 뜬 클래스의 릴레이가 락을 계속 쥐고, 그러면 실제로 발행을 보는
+     * {@code PlanExecutionIT} 가 팔로워가 되어 아무것도 못 본다. 순서에 달린 실패다.
+     *
+     * <p>이전에는 이 문제가 보이지 않았다 — 리더 락이 Redis 였고 이 컨텍스트들에는 Redis 가
+     * 없어서 전부 판정 불가(발행 안 함)였기 때문이다. <strong>격리가 락의 무력함에 기대고
+     * 있었다.</strong>
+     *
+     * @param registry 동적 속성 레지스트리
+     */
+    @DynamicPropertySource
+    static void relayOff(DynamicPropertyRegistry registry) {
+        registry.add("dawnline.messaging.outbox.enabled", () -> "false");
+    }
 
     private static final Path RULES_CONTRACT = Path.of("../../contracts/seed/dispatch-rules.json");
     private static final ObjectMapper JSON = new ObjectMapper();

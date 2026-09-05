@@ -29,6 +29,7 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -44,6 +45,7 @@ import tools.jackson.databind.JsonNode;
  * 계획에서 빠지므로 순번 재부여가 그 자리를 비워 두면 커밋에서 유일성이 깨진다.
  */
 @SpringBootTest(classes = DispatchApplication.class)
+@Import(PlanningClock.class)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("DispatchCancellationIT — §6.10 취소")
 class DispatchCancellationIT extends DispatchIntegrationTestBase {
@@ -105,7 +107,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
         UUID orderId = seedCandidates(waveId, 1).getFirst();
 
         CancelOrderUseCase.Outcome outcome =
-                tx().execute(status -> cancelOrder.cancel(orderId, Instant.now()));
+                tx().execute(status -> cancelOrder.cancel(orderId, cancelledAt()));
 
         assertThat(outcome).isEqualTo(CancelOrderUseCase.Outcome.CANDIDATE_CANCELLED);
         DispatchCandidate stored =
@@ -121,7 +123,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
         Instant before = arrivalOfLastStop(planned.routeId());
 
         CancelOrderUseCase.Outcome outcome =
-                tx().execute(status -> cancelOrder.cancel(target, Instant.now()));
+                tx().execute(status -> cancelOrder.cancel(target, cancelledAt()));
 
         assertThat(outcome).isEqualTo(CancelOrderUseCase.Outcome.ROUTE_REVISED);
         assertThat(stopStatusOf(target)).isEqualTo("CANCELLED");
@@ -143,7 +145,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
         UUID middle = stopOrders.get(stopOrders.size() / 2);
         Instant lastBefore = arrivalOfLastStop(planned.routeId());
 
-        tx().execute(status -> cancelOrder.cancel(middle, Instant.now()));
+        tx().execute(status -> cancelOrder.cancel(middle, cancelledAt()));
 
         assertThat(arrivalOfLastStop(planned.routeId())).isBefore(lastBefore);
         assertThat(stopStatusOf(middle)).isEqualTo("CANCELLED");
@@ -154,7 +156,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
         Planned planned = plannedRoute();
         List<Integer> before = seqsOf(planned.routeId());
 
-        tx().execute(status -> cancelOrder.cancel(planned.lastStopOrderId(), Instant.now()));
+        tx().execute(status -> cancelOrder.cancel(planned.lastStopOrderId(), cancelledAt()));
 
         assertThat(seqsOf(planned.routeId())).as("기사가 보던 순번이다 (§6.10)").isEqualTo(before);
 
@@ -177,7 +179,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
         // 미룰 뿐 없애지 않는다. 어댑터가 취소된 stop 을 뒤로 보내는 것이 그 답이고, 이 테스트가
         // 그것을 붙잡는다.
         TwoRoutes routes = twoRoutes();
-        tx().execute(status -> cancelOrder.cancel(routes.cancelledOrderId(), Instant.now()));
+        tx().execute(status -> cancelOrder.cancel(routes.cancelledOrderId(), cancelledAt()));
 
         tx().execute(status ->
                 reassign.reassign(routes.fromRouteId(), routes.movedOrderId(), routes.toRouteId()));
@@ -203,7 +205,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
         int revision = revisionOf(planned.routeId());
 
         CancelOrderUseCase.Outcome outcome =
-                tx().execute(status -> cancelOrder.cancel(target, Instant.now()));
+                tx().execute(status -> cancelOrder.cancel(target, cancelledAt()));
 
         assertThat(outcome).isEqualTo(CancelOrderUseCase.Outcome.TOO_LATE);
         assertThat(tx().execute(status -> candidates.findById(target)).orElseThrow().status().name())
@@ -315,8 +317,21 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
                 """).setParameter(1, routeId).getSingleResult());
     }
 
+    /**
+     * {@code order.cancelled} 의 발생 시각. 계획 시각과 <strong>같은 축</strong>에 둔다 —
+     * 벽시계로 두면 §6.10 의 "너무 늦은 취소" 판정이 시각에 따라 갈린다.
+     */
+    private static Instant cancelledAt() {
+        return PlanningClock.PLAN_AT;
+    }
+
+    /**
+     * 약속 창의 기준도 {@link PlanningClock#PLAN_AT} 에서 잡는다 — {@code Instant.now()} 가 아니다.
+     * 22시에 돌리면 근무창(06:00–22:00 KST)이 거의 남지 않아 라우트의 stop 수가 줄고,
+     * "가운데 stop" 을 고르는 테스트가 시각에 따라 붙었다 떨어진다(2026-09-05 에 그랬다).
+     */
     private List<UUID> seedCandidates(UUID waveId, int count) {
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)),
                 now.plus(Duration.ofHours(5)));
         List<UUID> orderIds = new ArrayList<>(count);
