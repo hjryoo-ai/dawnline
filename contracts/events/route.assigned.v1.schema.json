@@ -107,6 +107,12 @@
           "type": "integer",
           "minimum": 0,
           "description": "이 stop 에서 소요될 하차·전달 시간(초). 통합된 주문 수에 따라 커진다."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PLANNED", "CANCELLED"],
+          "default": "PLANNED",
+          "description": "stop 의 상태 (DESIGN.md §6.10, ADR-026). CANCELLED 는 주문이 취소되어 기사가 건너뛰는 stop 이다. 취소된 stop 을 배열에서 지우지 않고 이 값으로 남기는 이유는 부재가 값이 아니기 때문이다 — 지우면 소비자가 '취소' 와 '다른 라우트로 이동' 과 '발행 누락' 을 구별할 수 없고, tracking 은 이 이벤트만으로 shipment 를 만들어야 하므로(불변규칙 4) 그 구별이 그쪽의 유일한 정보원이다. seq 도 다시 매기지 않는다 — 기사가 보던 순번이 바뀐다. required 가 아닌 근거: v1 을 낸 생산자가 아직 없어 '부재 = PLANNED' 가 실제 사실과 일치한다. 기본값이 거짓이 될 수 있는 필드였다면 required 로 갔을 것이다(cutoffAt 이 그랬다). summary.stopCount 는 CANCELLED 를 포함한 stops 배열 길이 그대로다."
         }
       }
     }

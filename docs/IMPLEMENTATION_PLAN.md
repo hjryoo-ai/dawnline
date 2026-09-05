@@ -352,15 +352,37 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    (`contracts/events/plan.completed.v1.schema.json`) 여기서는 **만족시키기만** 한다 — 자기에게
    필요한 필드는 같은 major 안에서 추가만(§4.7).
    `plan.failed` 도 같은 계약이 이미 있다. 부분 재계획(§6.8)은 `plan.completed` 를 다시 내지 않는다.
-9-2. **[결정 필요] dispatch 는 `order.cancelled` 를 어떻게 처리하나** — §4.1 은 dispatch 를
-   `order.cancelled` 소비자로 적었지만 **무엇을 하는지가 없다.** 이것은 ADR-017 후속 정정이
-   드러낸 구멍이다: 취소는 `PLANNED` 에서 허용되고 `PLANNED` 는 웨이브 마감 뒤에도 유지되므로,
-   계획 발행과 order-service 의 `order.dispatched` 소비 사이에 **설계된 경합 창**이 있다.
-   order-service 가 그것을 무시 + 메트릭으로 남기는 것은 옳지만 그 메트릭은 창의 *크기*를 잴 뿐이고,
-   **창을 없애는 일은 dispatch 가 소유한다.**
-   방향(세 갈래): ① 후보가 아직 미계획이면 제거 ② 발행된 라우트의 **미출발** stop 이면 stop 취소 +
-   `revision` 증가 ③ 출발 뒤면 stop 을 `CANCELLED` 로 표시해 기사가 건너뛰게 하고 `revision` 발행.
-   세 갈래가 라우트·배송·주문 세 도메인에 걸쳐 있어 **별도 ADR 감**이다.
+9-2. **`order.cancelled` 소비 — 취소는 최적화 트리거가 아니라 입력 변경이다**
+   (2026-09-05 결정, [ADR-026](adr/ADR-026-dispatch-cancellation-window.md), §6.10).
+   ADR-017 후속 정정이 **정의한** 경합 창 — 취소는 `PLANNED` 에서 허용되고 `PLANNED` 는 웨이브
+   마감 뒤에도 유지되므로 계획 발행과 order-service 의 `order.dispatched` 소비 사이가 그 창이다 —
+   을 **닫는 쪽이 여기다.**
+
+   dispatch 는 stop 을 죽이고 **이후 stop 의 시간만 재전파**한다. 남은 경로를 다시 풀지 않고
+   **순서도 재시퀀싱하지 않는다.** §6.8 재계획 트리거(`delivery.at-risk`, 운영자)는 그대로 둔다 —
+   다시 풀 가치가 있는지는 revision 을 받은 tracking 의 ETA 재계산이 정하고, 트리거를 늘리면 같은
+   판단을 하는 회로가 둘이 되어 갈라진다. 게다가 취소는 stop 을 빼서 **시간을 벌어 주는** 사건이라
+   재계획이 필요한 방향의 반대다.
+
+   분기는 라우트의 출발 여부가 아니라 **stop 의 상태**로 자른다(미출발과 출발 후 미도착은 처리가
+   같아 구분이 아무것도 만들지 않는다).
+
+   | 취소 도착 시 상태 | 처리 | 이벤트 |
+   |---|---|---|
+   | 후보, 계획 전 | `dispatch_candidates.status=CANCELLED` (**삭제 아님** — 설명 가능성) | 없음 |
+   | 후보, **계획 진행 중** | 발행 직전 재검증(§6.5 6단계)이 후보 상태를 다시 읽어 stop 에서 뺀다 | 없음 |
+   | 발행됨, stop 이 `ARRIVED` **이전** | `route_stops.status=CANCELLED` + 이후 stop 시간 재전파 | `route.assigned` revision+1 |
+   | stop 이 `ARRIVED`/`COMPLETED` 이후 | **거부.** 상태 불변 | `dawnline_cancel_too_late_total{camp}` + §9.4 알림 |
+
+   네 번째가 발화하면 order-service 가 `order.dispatched` 를 배송 완료 시점까지 소비하지 못한
+   것이므로, 그 카운터는 이상이 아니라 **창의 폭**이고 order-service 의 축 밖 거부 카운터와 한 쌍이다.
+   자동 보상은 넣지 않는다 — 물리적으로는 배송됐는데 주문은 `CANCELLED` 인 상태를 ops 가 보게 하는
+   것이 이 분기의 역할이다.
+
+   계약: `route.assigned.v1` 의 `revision` 은 **이미 required** 였고(v1 최초 정의부터), `plannedStop` 에
+   `status: PLANNED|CANCELLED` 를 **optional·기본 `PLANNED`** 로 추가했다 — v1 을 낸 생산자가 없어
+   "부재 = `PLANNED`" 가 실제 사실과 일치하기 때문이다. 취소된 stop 은 페이로드에서 **지우지 않는다**
+   (부재는 값이 아니다). 예시 `route.assigned.v1.revised.example.json` 과 계약 테스트 2건이 그것을 고정한다.
 
 10. **릴레이 리더 락 + ADR**: 서비스당 릴레이 단일 활성을 보장한다(Redis `SET NX` + 주기 갱신, 락 상실 시 발행 중단). 스케일아웃으로 인스턴스가 2개 이상이 되기 **전에** 들어가야 한다 — 그 전까지는 인스턴스 1개라는 사실이 §4.4의 전제를 충족시키고 있을 뿐이다.
 
