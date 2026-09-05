@@ -49,14 +49,15 @@ public final class PlanValidator {
     private void replay(PlanningProblem problem, PlannedRoute route, VehicleSpec vehicle,
             List<Violation> violations) {
 
-        RouteState state = RouteState.empty(vehicle, problem.depot(), problem.startedAt());
+        RouteState state = RouteState.empty(vehicle, problem.depot(), problem.distance(),
+                problem.startedAt());
         for (PlannedStop planned : route.stops()) {
             Stop stop = planned.stop();
             Feasibility feasibility = problem.rules().check(stop, vehicle, state);
             if (!feasibility.feasible()) {
                 violations.add(new Violation(route.vehicle(), planned.seq(), feasibility));
             }
-            state = state.append(stop, problem.distance().between(state.at(), stop.point()));
+            state = state.append(stop);
         }
     }
 

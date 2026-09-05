@@ -1,0 +1,79 @@
+[
+  {
+    "name": "cold-chain",
+    "type": "VEHICLE_ATTRIBUTE_MATCH",
+    "severity": "HARD",
+    "priority": 10,
+    "params": { "orderFlag": "requiresCold", "vehicleFlag": "isCold" }
+  },
+  {
+    "name": "hazmat",
+    "type": "VEHICLE_ATTRIBUTE_MATCH",
+    "severity": "HARD",
+    "priority": 11,
+    "params": { "orderFlag": "hazmat", "vehicleFlag": "allowsHazmat" }
+  },
+  {
+    "name": "capacity",
+    "type": "VEHICLE_CAPACITY",
+    "severity": "HARD",
+    "priority": 15,
+    "params": {}
+  },
+  {
+    "name": "max-stops",
+    "type": "MAX_STOPS_PER_ROUTE",
+    "severity": "HARD",
+    "priority": 20,
+    "params": { "max": 120 }
+  },
+  {
+    "name": "shift-window",
+    "type": "SHIFT_WINDOW",
+    "severity": "HARD",
+    "priority": 25,
+    "params": { "bufferMinutes": 30 }
+  },
+  {
+    "name": "late-hard-limit",
+    "type": "TIME_WINDOW_LIMIT",
+    "severity": "HARD",
+    "priority": 30,
+    "params": { "hardLimitMinutes": 60 }
+  },
+  {
+    "name": "late-penalty",
+    "type": "TIME_WINDOW_PENALTY",
+    "severity": "SOFT",
+    "priority": 100,
+    "params": { "penaltyPerMinuteKrw": 50 }
+  },
+  {
+    "name": "zone-affinity",
+    "type": "ZONE_AFFINITY",
+    "severity": "SOFT",
+    "priority": 110,
+    "params": { "crossZonePenaltyKrw": 2000 }
+  },
+  {
+    "name": "priority-boost",
+    "type": "PRIORITY_BOOST",
+    "severity": "SOFT",
+    "priority": 120,
+    "params": { "bonusKrw": 3000 }
+  },
+  {
+    "name": "vehicle-preference",
+    "type": "VEHICLE_PREFERENCE",
+    "severity": "SOFT",
+    "priority": 130,
+    "params": { "preferredTypes": ["BIKE", "VAN"], "penaltyKrw": 4000 }
+  },
+  {
+    "name": "unassigned",
+    "type": "UNASSIGNED_PENALTY",
+    "severity": "SOFT",
+    "priority": 900,
+    "params": { "baseKrw": 30000, "perPriorityKrw": 20000 }
+  }
+]

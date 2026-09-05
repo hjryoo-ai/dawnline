@@ -921,12 +921,24 @@ record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, i
 **설계 원칙**: 룰은 데이터(DB)로 정의하고 타입별 평가기는 코드로 제공한다. 룰은 **하드**(위반 시 배정 불가)와 **소프트**(비용 가산)로 나뉜다. 모든 평가 결과는 `Explanation`으로 남겨 운영자가 "왜 이 주문이 미배정인지 / 왜 이 차량인지"를 볼 수 있다.
 
 ```java
-sealed interface DispatchRule permits HardRule, SoftRule {
+sealed interface DispatchRule permits HardRule, SoftRule, UnassignedRule {
   String name(); int priority();
 }
-interface HardRule extends DispatchRule { Feasibility check(Stop s, VehicleSpec v, RouteState r); }
-interface SoftRule extends DispatchRule { Money penalty(Stop s, VehicleSpec v, RouteState r); }
+interface HardRule       extends DispatchRule { Feasibility check(Stop s, VehicleSpec v, RouteState r); }
+interface SoftRule       extends DispatchRule { Money penalty(Stop s, VehicleSpec v, RouteState r); }
+interface UnassignedRule extends DispatchRule { Money penalty(Stop s); }   // 배정 실패 시의 비용
 ```
+
+**세 번째 종류가 필요한 이유** (2026-09-05, Phase 3-2 구현 시): `UNASSIGNED_PENALTY` 는 심각도가
+SOFT 지만 **평가 시점이 다르다** — 배정에 실패한 주문에 붙는 비용이라 차량도 라우트 상태도 없다.
+앞의 두 서명에 억지로 끼우려면 둘 중 하나를 널 허용으로 열어야 하고, 그러면 <em>모든</em> 소프트
+룰이 "차량이 없을 수도 있다" 를 방어해야 한다. 심각도가 아니라 평가 시점으로 갈리는 종류라
+`sealed` 의 세 번째 자리에 둔다 — 새 시점이 또 생기면 처리하지 않은 분기가 컴파일 에러로 드러난다.
+
+`RouteState` 는 차량뿐 아니라 **캠프와 거리 제공자**를 함께 들고 있다. `SHIFT_WINDOW` 가
+"복귀 시각 ≤ 근무 종료 − 버퍼" 를 판정하려면 **캠프로 돌아가는 구간**이 필요하고, 그 구간은 라우트의
+일부이지 룰의 파라미터가 아니기 때문이다. 같은 이유로 `TIME_WINDOW_LIMIT` 은 "이 stop 을 붙였을 때의
+도착 시각" 을 `RouteState` 에 물어본다.
 
 평가 단위가 `Candidate` 가 아니라 **`Stop`** 인 것은 §6.5 의 1단계가 통합이기 때문이다 — 통합
 이후로는 주문 하나가 단독으로 배정되는 일이 없고, 용량·냉장·우선도는 전부 **합쳐진 값**으로 봐야

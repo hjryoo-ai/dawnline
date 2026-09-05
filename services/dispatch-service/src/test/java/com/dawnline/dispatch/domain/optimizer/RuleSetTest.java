@@ -17,7 +17,8 @@ class RuleSetTest {
     private final VehicleSpec vehicle = OptimizerFixtures.vehicle();
     private final Stop stop = OptimizerFixtures.stop(GANGNAM);
     private final RouteState state =
-            RouteState.empty(OptimizerFixtures.vehicle(), OptimizerFixtures.depot(), START);
+            RouteState.empty(OptimizerFixtures.vehicle(), OptimizerFixtures.depot(),
+                    OptimizerFixtures.distance(), START);
 
     /** 호출 여부를 기록하는 하드 룰. */
     private record RecordingHard(String name, int priority, boolean pass, List<String> calls)
