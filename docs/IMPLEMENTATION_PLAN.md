@@ -384,8 +384,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      시간은 CI 러너에 따라 흔들린다. 시간은 **기록만 하고 게이트 조건에 넣지 않는다** — 환경 탓으로
      빨개지는 게이트는 결국 꺼진다.
 
-5a. **영속성**: Flyway V1(§5.3 DDL), 시드 `R__seed_dispatch`(차량 200 · 기사 200 · 기본 룰셋 —
-   2 의 픽스처와 같은 파일), `fulfillment.planned` 리스너로 `dispatch_candidates` 적재.
+5a. **영속성** (2026-09-05 완료): Flyway V1(§5.3 DDL), 시드 `R__seed_dispatch`(차량 200 ·
+   기사 200 · 기본 룰셋 — 2 의 픽스처와 **같은 파일에서 생성**), `fulfillment.planned` 리스너로
+   `dispatch_candidates` 적재. 드리프트 검사는 `DispatchSeedCoverageIT` 가 한다.
+
+   **계약에 우선도가 없다** — `fulfillment.planned` 에 `priority` 필드가 없어서 운영에서는 모든
+   후보가 0 이고, 따라서 §6.3 의 `PRIORITY_BOOST` 가 한 번도 발화하지 않는다(벤치마크에서는
+   생성기가 값을 준다). `serviceTier` 로 유추하면 "DAWN 이 곧 VIP" 라는 정책을 코드가 몰래
+   정하는 셈이라 하지 않았다. 우선도의 출처를 정하는 것은 **계약 변경**이다.
 
 5b. **계획 실행**: `wave.closed` 리스너 → `RunPlan` 유스케이스 → Plan 상태 머신(§5.3,
    `route_plans.wave_id` UNIQUE 로 중복 도착 멱등) → 발행 3종. `PLANNING` 정체 회수 스케줄러

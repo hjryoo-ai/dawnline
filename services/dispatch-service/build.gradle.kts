@@ -37,6 +37,9 @@ dependencies {
 
     // libs/common 의 공유 ArchUnit 규칙 (DESIGN.md §13)
     testImplementation(testFixtures(project(":libs:common")))
+    // libs/messaging 의 이벤트 계약 픽스처 (불변규칙 8). 소비자는 examples 로 검증한다
+    // (계약 README §3) — 페이로드 매핑이 계약 예시에서 그대로 돌아야 한다.
+    testImplementation(testFixtures(project(":libs:messaging")))
 
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
