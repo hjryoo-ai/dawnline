@@ -140,30 +140,31 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         RunPlanUseCase.Outcome outcome = runPlan.run(RunPlanCommand.of(waveId, CAMP_ID));
 
         assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
-        List<ConsumerRecord<String, String>> records = drainUntil(ROUTE_ASSIGNED, ORDER_DISPATCHED,
-                PLAN_COMPLETED);
+        List<ConsumerRecord<String, String>> records =
+                drainUntil(waveId, orderIds, ROUTE_ASSIGNED, ORDER_DISPATCHED, PLAN_COMPLETED);
 
         // 셋 다 봉투까지 계약을 지켜야 한다.
         records.forEach(record -> CONTRACTS.validateRecord(record.value()));
 
-        assertThat(topicOf(records, PLAN_COMPLETED)).as("웨이브당 하나").hasSize(1);
-        assertThat(topicOf(records, ROUTE_ASSIGNED)).as("라우트당 하나").isNotEmpty();
-        assertThat(topicOf(records, ORDER_DISPATCHED)).as("주문당 하나").hasSize(orderIds.size());
+        assertThat(topicOf(records, PLAN_COMPLETED, waveId, orderIds)).as("웨이브당 하나").hasSize(1);
+        assertThat(topicOf(records, ROUTE_ASSIGNED, waveId, orderIds)).as("라우트당 하나").isNotEmpty();
+        assertThat(topicOf(records, ORDER_DISPATCHED, waveId, orderIds))
+                .as("주문당 하나").hasSize(orderIds.size());
     }
 
     @Test
     void 파티션_키가_설계서와_같다() {
         // §4.1 — route.assigned 는 routeId, order.dispatched 는 orderId, plan.completed 는 waveId.
         UUID waveId = Ids.newId();
-        seedCandidates(waveId, 3);
+        List<UUID> orderIds = seedCandidates(waveId, 3);
 
         runPlan.run(RunPlanCommand.of(waveId, CAMP_ID));
         List<ConsumerRecord<String, String>> records =
-                drainUntil(ROUTE_ASSIGNED, ORDER_DISPATCHED, PLAN_COMPLETED);
+                drainUntil(waveId, orderIds, ROUTE_ASSIGNED, ORDER_DISPATCHED, PLAN_COMPLETED);
 
-        assertKey(records, ROUTE_ASSIGNED, "routeId");
-        assertKey(records, ORDER_DISPATCHED, "orderId");
-        assertKey(records, PLAN_COMPLETED, "waveId");
+        assertKey(records, ROUTE_ASSIGNED, "routeId", waveId, orderIds);
+        assertKey(records, ORDER_DISPATCHED, "orderId", waveId, orderIds);
+        assertKey(records, PLAN_COMPLETED, "waveId", waveId, orderIds);
     }
 
     @Test
@@ -202,9 +203,9 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         assertThat(runPlan.run(RunPlanCommand.of(waveId, CAMP_ID)))
                 .isEqualTo(RunPlanUseCase.Outcome.NO_CANDIDATES);
 
-        List<ConsumerRecord<String, String>> records = drainUntil(PLAN_FAILED);
+        List<ConsumerRecord<String, String>> records = drainUntil(waveId, List.of(), PLAN_FAILED);
         records.forEach(record -> CONTRACTS.validateRecord(record.value()));
-        assertThat(topicOf(records, PLAN_FAILED)).isNotEmpty();
+        assertThat(topicOf(records, PLAN_FAILED, waveId, List.of())).hasSize(1);
         PlanStatus status = tx().execute(state -> plans.findByWaveId(waveId).orElseThrow().status());
         assertThat(status).isEqualTo(PlanStatus.FAILED);
     }
@@ -224,8 +225,8 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
     }
 
     private void assertKey(List<ConsumerRecord<String, String>> records, String topic,
-            String field) {
-        List<ConsumerRecord<String, String>> matched = topicOf(records, topic);
+            String field, UUID waveId, List<UUID> orders) {
+        List<ConsumerRecord<String, String>> matched = topicOf(records, topic, waveId, orders);
         assertThat(matched).isNotEmpty();
         matched.forEach(record -> {
             JsonNode payload = CONTRACTS.json().readTree(record.value()).get("payload");
@@ -234,18 +235,51 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         });
     }
 
+    /**
+     * 이 실행분만 남긴다.
+     *
+     * <p>컨슈머는 클래스 안에서 공유되고 오프셋이 이어지므로, 앞 테스트가 낸 레코드가 뒤
+     * 테스트의 집계에 섞인다 — CI 가 "웨이브당 하나: expected 1 but was 2" 로 잡았고
+     * 로컬은 실행 순서가 달라 통과했다. 토픽만 보고 세면 안 된다.
+     *
+     * @param records 지금까지 모은 레코드
+     * @param topic   토픽
+     * @param waveId  이번 실행의 웨이브
+     * @param orders  이번 실행의 주문들 ({@code order.dispatched} 는 페이로드에 waveId 가 없다)
+     */
     private static List<ConsumerRecord<String, String>> topicOf(
-            List<ConsumerRecord<String, String>> records, String topic) {
-        return records.stream().filter(record -> record.topic().equals(topic)).toList();
+            List<ConsumerRecord<String, String>> records, String topic, UUID waveId,
+            List<UUID> orders) {
+
+        return records.stream()
+                .filter(record -> record.topic().equals(topic))
+                .filter(record -> belongsToRun(record, waveId, orders))
+                .toList();
     }
 
-    private List<ConsumerRecord<String, String>> drainUntil(String... topics) {
+    private static boolean belongsToRun(ConsumerRecord<String, String> record, UUID waveId,
+            List<UUID> orders) {
+        JsonNode payload = CONTRACTS.json().readTree(record.value()).get("payload");
+        JsonNode wave = payload.get("waveId");
+        if (wave != null) {
+            return waveId.toString().equals(wave.asString());
+        }
+        JsonNode orderId = payload.get("orderId");
+        return orderId != null
+                && orders.stream().anyMatch(id -> id.toString().equals(orderId.asString()));
+    }
+
+    /** 이번 실행분이 모든 토픽에 도착할 때까지 모은다. */
+    private List<ConsumerRecord<String, String>> drainUntil(UUID waveId, List<UUID> orders,
+            String... topics) {
+
         List<ConsumerRecord<String, String>> seen = new ArrayList<>();
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> {
                     consumer.poll(Duration.ofMillis(200)).forEach(seen::add);
                     for (String topic : topics) {
-                        assertThat(topicOf(seen, topic)).as("%s 도착", topic).isNotEmpty();
+                        assertThat(topicOf(seen, topic, waveId, orders))
+                                .as("%s 도착 (waveId=%s)", topic, waveId).isNotEmpty();
                     }
                 });
         return seen;
