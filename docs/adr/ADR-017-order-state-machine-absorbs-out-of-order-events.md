@@ -163,6 +163,28 @@ DISPATCHED → DELIVERED, FAILED
 `fulfillment.planned` 와 구별되지 않기 때문이다. 구분할 수 없는 것을 구분하는 척하는 규칙보다
 받아들이는 규칙이 낫고, 정말 이상한 상황은 `CANCELLED` 축 밖 판정이 계속 잡는다.
 
+**[후속 정정 — Phase 2]** 마지막 문장의 "정말 이상한 상황" 이 틀렸다. `CANCELLED` 인 주문에
+`order.dispatched` 가 도착하는 것은 이상 상황이 아니라 **설계된 경합 창**이다.
+
+취소는 `PLACED`·`PLANNED` 에서 허용되고(§5.1 전이표), `PLANNED` 는 웨이브가 `CLOSED` 된 뒤에도
+유지된다. 그래서 dispatch 가 계획을 발행한 순간부터 order-service 가 `order.dispatched` 를
+소비하기까지의 몇 초 동안 취소가 **정상적으로 성공한다.** 그 뒤에 오는 `order.dispatched` 는 그
+창의 산물이지 누가 잘못한 결과가 아니다.
+
+바뀌는 것은 처리가 아니라 **읽는 법**이다. 무시하고 `dawnline_event_rejected_total` 로 남기는
+것은 그대로 옳다. 그러나 그 값은 알림을 위한 이상 징후가 아니라 **이 경합 창의 크기를 재는
+값**이다. 값이 오르면 order-service 를 고칠 일이 아니라 창이 넓어진 원인(계획 발행과 소비 사이의
+지연)을 봐야 한다.
+
+그리고 **창을 없애는 일은 이쪽이 아니라 dispatch 가 소유한다.** dispatch 는 §4.1 대로
+`order.cancelled` 를 소비하며, 그때 후보가 아직 미계획이면 제거, 발행된 라우트의 미출발 stop 이면
+stop 취소 + revision, 출발 뒤면 stop 을 `CANCELLED` 로 표시해 기사가 건너뛰게 하는 세 갈래가
+필요하다. 이 세 갈래는 Phase 3 `[결정 필요] 9-2` 로 적어 두었고 별도 ADR 감이다.
+
+`CANCELLED` 를 축 밖(`-1`)에 두는 결정 자체는 유지한다. 축 위에 올려 stale 로 흡수하면 이
+창의 크기를 볼 수 없게 되기 때문이다 — 이유가 "잘못됐으니 알려라" 에서 "재고 있어야 하니 남겨라"
+로 바뀔 뿐이다.
+
 ### Phase 2 를 위한 경고 — 상태 전이와 데이터 부착은 다른 일이다
 
 축 규칙의 대가가 하나 더 있다. `fulfillment.planned` 가 늦게 도착해 주문이 이미 `DISPATCHED`

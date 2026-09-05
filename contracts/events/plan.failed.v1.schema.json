@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dawnline.internal/contracts/events/plan.failed.v1.schema.json",
+  "title": "plan.failed v1 페이로드",
+  "description": "웨이브 계획 실행이 실패했다는 신호 (DESIGN.md §4.1, §5.2, §5.3). 토픽 dawnline.plan.failed.v1, 키 waveId, 발행 dispatch-service, 소비 fulfillment-service(CLOSED -> PLAN_FAILED)·ops-api. §5.3 Plan 상태 머신의 FAILED(예외·시간초과) 뿐이다 — 계획은 성공했는데 일부 주문이 배정되지 않은 것은 plan.completed 의 unassignedCount 가 나른다 (ADR-024 결정 6). 소비자 주도로 정의된 계약이다(계약 README 1절) — 소비자인 fulfillment 가 Phase 2 에 정의했고 발행자는 Phase 3 에 생긴다. 발행자는 자기에게 필요한 필드를 같은 major 안에서 추가만 한다 (4.7).",
+  "type": "object",
+  "required": ["planId", "waveId", "campId", "reason", "failedAt"],
+  "additionalProperties": true,
+  "properties": {
+    "planId": {
+      "$ref": "#/$defs/uuid",
+      "description": "실패한 계획. 운영자는 이 id 로 재실행한다 (POST /api/v1/plans/{waveId}/run, §5.3)."
+    },
+    "waveId": {
+      "$ref": "#/$defs/uuid",
+      "description": "계획하려던 웨이브. 이 이벤트의 partitionKey 와 같아야 한다. 재실행이 성공하면 plan.completed 가 나가고 웨이브는 PLAN_FAILED -> PLANNED 로 간다 (ADR-024 결정 3)."
+    },
+    "campId": {
+      "$ref": "#/$defs/uuid",
+      "description": "웨이브가 속한 캠프. 실패가 특정 캠프에 몰리는지를 보는 값이다."
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["TIMEOUT", "NO_VEHICLE", "RULE_VIOLATION", "INTERNAL_ERROR"],
+      "description": "실패 사유. 소비자가 분기하는 값이 아니라 운영자가 읽는 값이지만, ops 의 집계가 자유 문자열을 세면 오타가 새 사유가 되므로 값 집합을 고정한다 (계약 README 4.4). 사유가 늘면 같은 major 안에서 enum 을 넓힌다."
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "사람이 읽을 상세. 주소·고객 식별 정보를 담지 않는다 (CLAUDE.md 로그 규칙). 선택 필드다."
+    },
+    "failedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "PLANNING -> FAILED 전이가 커밋된 시각."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
+  }
+}
