@@ -266,6 +266,71 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
   판정 조건을 지금 적어 두는 이유는 Phase 1 의 원인 판정표와 같다 — 수치를 본 뒤에 기준을 만들면
   어떤 결과든 설명이 된다.
 
+**마감 대조표** (CLAUDE.md 「작업 방식」 — 기억이 아니라 표로 확인한다)
+
+기준일 2026-09-05, `main` = PR #18 머지 시점. 단위 990건 · 통합 147건 · 실패 0.
+커버리지 fulfillment 72.6% / order 91.2% / messaging 85.6% / common 96.2%.
+빠진 항목은 **표에 남긴다**.
+
+| # | 작업 | 상태 | 근거 |
+|---|---|---|---|
+| 1 | 시드 FC 3 · 캠프 10 · 권역 91 · 재고 스텁 (Flyway `R__`) | ✅ | `608a01c`(V1 + `R__seed_fulfillment`) · `9753ca8`(`contracts/seed/order-service-geohash5.txt`) · ADR-021. `ZoneSeedCoverageIT` 9건 — 91셀 전수 덮기, 규모 대조, 재실행 멱등, **홈 FC 50 km 이내**(`63f1e1b`) |
+| 2 | Redis GEO 적재 · `GEOSEARCH` · geohash5→zone 캐시 · **각각의 DB 폴백** | ✅ | `ba20c27` · `c45b260` · `0941c17`. `GeoEquivalenceIT`(캠프 10 × FC 3 **순위 완전 일치**, 거리 오차 2 m) · `GeoFallbackIT`(죽은 Redis, 전제를 첫 어설션으로) · `RedisFcDistancesTest` · `CachingReferenceDataTest` · `GeoIndexLoaderTest` · `GeoMetricsTest` |
+| 2a | 레디니스에서 GEO 제외 · 게이지 0/1 · `bypassed` 카운터 | ✅ | `d078f5b`(ADR-016 후속 정정). `GeoFallbackIT.적재가_실패해도_기동하고_게이지가_0_이_된다` |
+| 3 | FC 선택 §5.2 1~6단계 · `UNSERVICEABLE` · 순수 함수 | ✅ | `217ec48` · `0a28f8f`(ADR-021 5단계 확정). `FcSelectionTest` 19건 — 세 결손(tier/cold/inventory)이 각각 fallback 사유로, 6개 `UNSERVICEABLE` 사유, `STALE_PLACED` **경계 양쪽 1초** |
+| 4 | 애그리거트 둘 · 편입 · 컷오프 스케줄러 · `wave.closed` outbox | ✅ | `217ec48` · `3bcc0ff` · `d5d320c` · `ab3acf3` · `0889303` · `fdd5771`. `WaveTest` 14건 · `WaveStatusTest` 9건(전이표 25조합) · `FulfillmentOrderStatusTest` 7건(전이표 9조합 + 축 규칙) · `FulfillmentPersistenceIT` 11건 · `WaveLifecycleIT` 7건 |
+| 4-3 | `plan.completed`·`plan.failed` 계약(소비자 주도)과 웨이브 축 | ✅ | ADR-024(`228e65d`) · `3bcc0ff`. `contracts/events/plan.{completed,failed}.v1.schema.json` + 예시. `WaveLifecycleIT` 3건 |
+| 4-1 | `V2__fulfillment_orders.sql` + `wave_orders` 드롭 + 인덱스 EXPLAIN | ✅ | `047b741` · `3b87581`. `docs/benchmarks/phase2-fulfillment-orders-indexes.md`(465만 행, 환경 명시). **부분 인덱스 → 전체 인덱스로 정정**: FK 검사가 부분 인덱스를 쓰지 못해 웨이브 삭제가 7,067 ms(FK 트리거 6,681 ms) → 1.131 ms |
+| 4-2 | 정리 배치 30일·90일 (`updated_at`, 종결 상태만, 배치마다 커밋) | ✅ | `72e78a4` · ADR-023(`551cd78`·`5617540`). `FulfillmentRetentionIT` 8건 — 종결만 삭제, 나이는 `updated_at`, FK 순서, 상한 재개, **인덱스를 타는지까지** |
+| 5 | 리스너 `order.placed`·`order.cancelled`, 편입 `FOR SHARE`/마감 `FOR UPDATE` | ✅ | `0889303` · `ab3acf3`(ADR-025). `PlanOrderServiceTest` 13건 · `CancelFulfillmentOrderServiceTest` 5건 · `FulfillmentPersistenceIT.편입의_공유_락은_서로_막지_않고_마감의_배타_락은_기다린다` |
+| 5-2 | 계획 결과 리스너 둘 + 늦은 `plan.failed` 무시·카운트 | ✅ | `fdd5771`. `RecordPlanResultServiceTest` 6건 · `WaveLifecycleIT`(3전이 + 무시) · `PlanResultListenerTopicsTest`(사유 문자열 고정) |
+| 5-1 | order-service: `UNSERVICEABLE`→`FAILED`+사유, `promiseRevised`→약속 갱신 | ✅ | `ab041eb`(#18) · `V3__order_failure_reason.sql`. `ApplyFulfillmentPlanServiceTest` 10건 · `OrderProgressListenerIT` 3건 추가 |
+| 6 | 순서 역전 — 별도 마커 없이 `CANCELLED` 행으로 흡수 | ✅ | `0889303` · ADR-022(`988bad1`). `FulfillmentPersistenceIT` 2건 · `FulfillmentOrderTest` · `OrderEventListenerTopicsTest`(`cancelled_before_placed` 문자열 고정) |
+| 6-1 | 메트릭 3종 + `event_rejected` 라벨 확장 | ✅ | `ab041eb`(#18 에 스쿼시). `FulfillmentMetricsTest` 4건. `dawnline_wave_orders`·`promise_revised_total`·`fc_fallback_total`, `event_rejected_total{consumer,eventType,reason}` |
+| 7 | 테스트 — 이중 마감 · 다음 웨이브 · GEO 폴백 | ✅ | `af08791`(이중 마감 IT 둘) · `PlanOrderServiceTest.마감된_웨이브의_컷오프를_가진_주문은_다음_웨이브로_밀리고_개정된다` · `GeoFallbackIT` |
+| 8 | `make demo` | ✅ | `9720520`. `tools/demo/phase2-demo.sh` — DB·브로커 양쪽 확인 |
+
+**2-5 이 요구한 여섯 열** (「마감 대조표에 반드시 열로 들어갈 것」)
+
+| 항목 | 어떻게 증명했나 |
+|---|---|
+| `fulfillment.planned` 브로커 도착 | `FulfillmentPublishIT.계획된_주문이_브로커에_도착하고_봉투까지_계약을_지킨다`(+ 배차 불가도 같은 토픽). 이 클래스만 릴레이를 켠다 — 처음엔 기반 클래스가 릴레이를 꺼 이 IT 가 조용히 아무것도 안 봤고, 지금은 `전제_릴레이가_돈다` 가 첫 어설션이다 |
+| `wave.closed` 브로커 도착 | `WaveLifecycleIT.마감이_주문을_세어_wave_closed_를_브로커로_보낸다` — 봉투 계약 + `payload.waveId` + **키 = `campId`**(§4.5) + `orderCount` 가 마감 시 집계값(3) |
+| `plan.completed` 소비 | `WaveLifecycleIT.plan_completed_로_PLANNED_가_된다` — 예시 이벤트를 브로커에 직접 발행, `CLOSED → PLANNED` |
+| `plan.failed` 소비 + 재실행 | `WaveLifecycleIT.plan_failed_로_PLAN_FAILED_가_되고_재실행으로_되살아난다` — `CLOSED → PLAN_FAILED → PLANNED` |
+| 늦은 `plan.failed` 무시 + 카운트 | `WaveLifecycleIT.계획된_웨이브에_늦게_온_plan_failed_는_무시된다` — 3초 동안 상태가 그대로인 것까지. 사유 문자열은 `PlanResultListenerTopicsTest` 가 고정 |
+| 편입 동시성 | `FulfillmentPersistenceIT.편입의_공유_락은_서로_막지_않고_마감의_배타_락은_기다린다` — `FOR SHARE` 둘이 서로 통과하고, `FOR UPDATE` 가 `NOWAIT` 로 막히는 것을 함께 본다 |
+
+| DoD | 상태 | 근거 |
+|---|---|---|
+| `make demo` — 200건 편입 → 컷오프 → 캠프별 `wave.closed` 1회 | ✅ | 2026-09-05 실행. 주문 200건(편입 199 · 재고결손 1) → 웨이브 29개 마감 → `wave.closed` 29건 **중복 0**, `order_count` 불일치 0. 컷오프는 표가 아니라 `cutoff_at` 을 과거로 밀어 만든다 |
+| 이중 마감 없음 테스트 | ✅ | `WaveLifecycleIT` 둘(`af08791`). 세 번째 방어를 일부러 부수면 **fail-open 쪽만 빨개진다** — 실물 락 쪽은 락이 두 번째 인스턴스를 DB 앞에서 돌려보내 통과한다. 그래서 둘 다 둔다 |
+| 순서 역전 두 방향 + ADR-022 표 전체 | ✅ | 취소 선착 `FulfillmentPersistenceIT.취소_선착_뒤에_온_order_placed_는_행을_덮지_않는다`, 취소 후착 `취소가_웨이브_소속과_판정_결과를_지우지_않는다` · `WaveLifecycleIT.취소된_주문은_마감_카운트에서_빠진다`. **표의 행이 셋에서 둘로 줄었다** — ADR-025 이후 웨이브 상태별 분기가 사라졌고, 그 사실 자체가 ADR-022 에 정정으로 남아 있다 |
+| 24시간 넘은 `order.placed` → `STALE_PLACED` | ⚠️ **단위만** | `FcSelectionTest` 5건(경계 양쪽 1초, 상한이 설정값인 것, FC 선택보다 먼저 판정) · `PlanOrderServiceTest.하루_넘은_컷오프는_STALE_PLACED_다`. 브로커를 지나는 IT 는 없다 — 판정이 순수 함수 안에 있고 시각은 주입된 `Clock` 이라 IT 가 더 볼 것이 없다고 봤다. **DLQ replay 경로가 생기는 Phase 7 에서 다시 본다** |
+| 정리 배치가 종결 상태만 지운다 | ✅ | `FulfillmentRetentionIT` 8건 |
+| `plan.completed`/`plan.failed` 세 전이 + 늦은 실패 무시 | ✅ | `WaveLifecycleIT` 3건 (위 표) |
+| **게이트 — §8.3 Bulkhead 판정 기록** | ✅ **Phase 7 유지** | DESIGN §8.3 「Bulkhead 판정 기록」. 원자료 `docs/benchmarks/phase1-orders-k6.md`. 조건(`hikaricp_connections_pending` > 0)은 콜드에서 켜졌으나(191) 원인이 풀 분리로 완화되는 종류가 아니었다 |
+| 시드 부족으로 인한 `UNSERVICEABLE` 0건 | ✅ | `ZoneSeedCoverageIT` + `make demo`(이번 실행 200건 중 시드 부족 0). `OUT_OF_STOCK` 은 세지 않는다 — 시드가 §5.2 3단계를 보이려고 **일부러 넣은** 결손이다 |
+
+**Phase 2 마감** (2026-09-05)
+
+이 Phase 가 남긴 것 넷.
+
+1. **측정이 설계 결정을 두 번 뒤집었다.** ADR-022 의 부분 인덱스는 465만 행 EXPLAIN 앞에서
+   전체 인덱스로 바뀌었고(FK 검사가 부분 인덱스를 못 쓴다), 편입 락은 `FOR UPDATE` 에서
+   `FOR SHARE` 로 바뀌며 `order_count` 증감 로직이 통째로 사라졌다(ADR-025). 둘 다 **일반 규칙
+   두 줄**로 §7.1 에 올라갔다 — 이 프로젝트 고유의 교훈이 아니기 때문이다.
+2. **"통과했는데 아무것도 증명하지 못하는 테스트" 가 세 번 나왔다.** `GeoFallbackIT` 가 살아
+   있는 Redis 를 보고 통과했고, `FulfillmentPublishIT` 는 릴레이가 꺼진 채 돌았다. 세 번째라
+   규칙으로 올렸다(CLAUDE.md — 폴백 테스트는 전제를 첫 어설션으로 말한다). 이번 이중 마감
+   IT 를 **일부러 부숴 확인한 것**도 같은 습관이다.
+3. **복사본을 만들지 않는 쪽을 두 번 골랐다.** §2.2 컷오프 표는 `TierSchedule` 하나로 모으고
+   `DeliveryPromise` 가 위임한다(계약 테스트는 회귀 가드로 역할이 바뀌었다). `make demo` 도
+   "데모용 짧은 컷오프 표" 대신 `cutoff_at` 을 미는 쪽을 골랐다 — 표가 둘이 되면 갈라진다.
+4. **`plan.completed` 는 설계서의 어긋남에서 나왔다.** §4.1 과 §5.2 를 대조하지 않았으면
+   "웨이브가 언제 `PLANNED` 인가" 에 답할 이벤트가 없다는 것을 Phase 3 에서야 알았을 것이고,
+   4-2 정리 배치는 `PLANNED` 주문 행을 영원히 지우지 못했을 것이다(ADR-024).
+
 ---
 
 ## Phase 3 — dispatch-service 코어 (룰 엔진 + 기본 최적화)
