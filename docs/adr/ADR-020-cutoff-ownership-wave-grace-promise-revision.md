@@ -118,8 +118,9 @@ fulfillment 는 컷오프를 계산할 수 없다.
 | order-service 에 동기 조회(`GET /cutoffs?tier=&after=`) | 불변규칙 4 위반(코어 서비스 간 동기 호출 금지). 개정 경로가 order-service 가용성에 묶인다 |
 | `order.placed` 에 다음 컷오프까지 실어 보낸다 | 접수 시점에 "다음" 이 무엇인지는 <em>지연이 얼마나 났는지</em>에 달려 있어 미리 알 수 없다. 두 번 밀리면 그다음이 필요하다 |
 
-**정정**: 컷오프 표를 <strong>`libs/common` 의 순수 함수</strong>(`CutoffSchedule`)로 두고 양쪽이
-<em>같은 구현</em>을 쓴다.
+**정정**: §2.2 표를 <strong>`libs/common` 의 순수 함수</strong>(`TierSchedule`)로 두고 양쪽이
+<em>같은 구현</em>을 쓴다. 컷오프만이 아니라 **배송창까지** 그 표가 준다 — 개정 경로는 다음
+컷오프만으로는 부족하고, 그 컷오프의 창이 있어야 고객에게 할 약속이 정해지기 때문이다(결정 3).
 
 이 ADR 이 막으려던 것은 **"표의 복사본 둘"** 이지 **"구현 하나를 둘이 쓰는 것"** 이 아니다.
 복사본이 위험한 이유는 갈라지기 때문인데, 같은 클래스를 참조하면 갈라질 수 없다.
@@ -127,9 +128,18 @@ fulfillment 는 컷오프를 계산할 수 없다.
 `Ids`·`GeoPoint`·`TimeWindow` 가 이미 그 자리에 있다.
 
 **권위는 그대로 order-service 다.** 이벤트에 `cutoffAt` 을 찍는 것은 여전히 접수 경로 한 곳이고,
-fulfillment 는 그 값을 받아 쓴다. 공유 함수를 부르는 것은 <em>개정 경로에서 다음 컷오프를 물을
-때</em>뿐이다. 그리고 그 둘이 같은 표를 본다는 사실을 **계약 테스트**가 고정한다 — order-service 가
-찍은 `cutoffAt` 이 `CutoffSchedule` 의 출력과 같은지 검사한다. 한쪽만 고치면 그 자리에서 깨진다.
+fulfillment 는 그 값을 받아 쓴다. 공유 함수를 부르는 것은 <em>개정 경로에서 다음 컷오프와 그 창을
+물을 때</em>뿐이다.
+
+**그리고 `DeliveryPromise` 는 이 표를 직접 갖지 않고 위임한다.** 처음에는 order-service 쪽 계산을
+그대로 두고 계약 테스트로 두 구현을 묶었는데, 그것은 *"갈라지면 잡는다"* 이지 *"갈라질 수 없다"*
+가 아니다. 이 ADR 이 막으려던 것이 정확히 전자의 상태이므로, 계산을 하나로 만든다 —
+`DeliveryPromise` 에 남는 것은 `TimeWindow` 를 `PromisedWindow` 로 감싸며 티어별 길이 상한을
+검사하는 <em>도메인 타입 변환</em>뿐이다.
+
+계약 테스트(`TierScheduleContractTest`)는 남기되 역할이 바뀐다 — **회귀 가드**다. 누군가 표를
+다시 order-service 에 적으면 그 순간 두 계산이 생기고, 그때 거기서 깨진다. 길이 상한 검사가
+합성의 결과로 통과하는지도 거기서만 확인된다.
 
 티어를 <strong>이름(문자열)</strong>으로 받는 이유: 두 서비스는 `ServiceTier` enum 을 각자
 정의하고 공유되는 진실은 이벤트 계약의 enum <em>값</em>이다(`ServiceTierContractTest`).

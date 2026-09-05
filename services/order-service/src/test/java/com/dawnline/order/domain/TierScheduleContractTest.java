@@ -2,7 +2,7 @@ package com.dawnline.order.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.dawnline.common.CutoffSchedule;
+import com.dawnline.common.TierSchedule;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -16,25 +16,27 @@ import org.junit.jupiter.api.Test;
  * order-service 가 이벤트에 찍는 {@code cutoffAt} 과 {@code libs/common} 의 공유 표가 같은지
  * ([ADR-020](docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 후속 정정 2).
  *
- * <h2>왜 이 테스트가 그 정정의 조건인가</h2>
- * ADR-020 은 컷오프 계산을 order-service 한 곳에 두었다. 막으려던 것은 <strong>표의 복사본이
- * 둘이 되는 것</strong>이다. 그런데 약속 개정 경로에서 fulfillment 가 "다음 컷오프" 를 알아야
- * 하므로 표를 {@code libs/common} 으로 옮겨 <em>구현 하나를 둘이 쓰기로</em> 했다.
+ * <h2>이 테스트의 역할은 회귀 가드다</h2>
+ * {@link DeliveryPromise} 는 이제 §2.2 표를 <strong>갖지 않고</strong> {@link TierSchedule} 에
+ * 위임한다(ADR-020 후속 정정 2). 그래서 두 값은 같은 계산에서 나오고, 이 테스트는 그것이
+ * <em>다를 수 있는지</em>를 보는 것이 아니라 <strong>위임이 유지되는지</strong>를 본다.
  *
- * <p>그 결정이 안전한 이유는 "같은 클래스를 참조하면 갈라질 수 없다" 인데, order-service 는
- * 아직 자기 {@link DeliveryPromise} 로 계산한다 — 약속창까지 함께 만들어야 하기 때문이다.
- * 즉 <strong>여기에는 여전히 두 벌의 계산이 있다.</strong> 이 테스트가 그 둘을 묶는다.
- * 어느 한쪽만 고치면 여기서 깨진다.
+ * <p>처음에는 두 벌의 계산을 묶는 끈이었다. 그러나 "갈라지면 잡는다" 는 "갈라질 수 없다" 와
+ * 다르고, 정직한 기록보다 참인 구조가 싸다 — 그래서 위임으로 바꾸고 이 테스트는 남겼다.
+ * 누군가 이 클래스에 표를 다시 적으면 그 순간 두 계산이 생기고, 그때 여기가 깨진다.
  *
- * <p>권위는 order-service 다 — 이벤트에 값을 찍는 것은 접수 경로 한 곳이다. 공유 표는 그 값을
- * <em>재현</em>할 수 있어야 하고, 그것이 fulfillment 가 다음 컷오프를 물을 자격이다.
+ * <p>테스트가 여전히 무언가를 증명하는 지점도 있다. {@link PromisedWindow#of} 의 티어별 길이
+ * 상한은 order-service 에만 있으므로, 공유 표가 만든 창이 그 상한을 통과한다는 사실은
+ * <em>합성</em>의 결과이고 여기서만 확인된다.
+ *
+ * <p>권위는 그대로 order-service 다 — 이벤트에 값을 찍는 것은 접수 경로 한 곳이다.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
-@DisplayName("CutoffScheduleContractTest — 두 계산이 같은 표를 본다")
-class CutoffScheduleContractTest {
+@DisplayName("TierScheduleContractTest — 두 계산이 같은 표를 본다")
+class TierScheduleContractTest {
 
     private static final DeliveryPromise PROMISE = DeliveryPromise.standard();
-    private static final CutoffSchedule SCHEDULE = CutoffSchedule.standard();
+    private static final TierSchedule SCHEDULE = TierSchedule.standard();
 
     /** 하루를 15분 간격으로 훑는다 — 컷오프 경계(10:00·14:00·24:00) 양쪽이 모두 들어간다. */
     private static final Instant DAY_START = Instant.parse("2026-09-05T15:00:00Z");
@@ -94,6 +96,30 @@ class CutoffScheduleContractTest {
         org.assertj.core.api.Assertions
                 .assertThatThrownBy(() -> SCHEDULE.cutoffFor("EXPRESS", DAY_START))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void 하루_전체에서_두_계산의_약속창도_같다() {
+        // 개정 경로는 다음 컷오프만으로는 부족하다 — 그 컷오프의 배송창까지 있어야 고객에게 할
+        // 약속이 정해진다(ADR-020 결정 3). 창도 같은 표에서 나오므로 여기서 함께 묶는다.
+        List<String> mismatches = new ArrayList<>();
+
+        for (ServiceTier tier : ServiceTier.values()) {
+            for (int minutes = 0; minutes < 24 * 60; minutes += 15) {
+                Instant placedAt = DAY_START.plus(Duration.ofMinutes(minutes));
+                DeliveryPromise.Promise promise = PROMISE.promiseFor(tier, placedAt);
+                com.dawnline.common.TimeWindow shared =
+                        SCHEDULE.windowFor(tier.name(), promise.cutoffAt());
+                if (!promise.window().window().equals(shared)) {
+                    mismatches.add("%s @ %s: order=%s shared=%s"
+                            .formatted(tier, placedAt, promise.window().window(), shared));
+                }
+            }
+        }
+
+        assertThat(mismatches)
+                .as("창이 갈라지면 개정된 약속이 접수 시점의 규칙과 다른 값이 된다")
+                .isEmpty();
     }
 
     @Test

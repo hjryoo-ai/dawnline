@@ -10,7 +10,11 @@ import com.dawnline.fulfillment.application.port.out.FcDistances;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManagerFactory;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails;
 import org.springframework.boot.data.redis.autoconfigure.LettuceClientConfigurationBuilderCustomizer;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
@@ -92,13 +96,54 @@ public class RedisConfig {
     /**
      * GEO 인덱스 적재 — best-effort + 주기 재시도 (ADR-016 후속 정정).
      *
-     * @param redis         문자열 전용 템플릿
-     * @param referenceData FC·캠프 좌표 출처
-     * @param metrics       적재 상태 게이지
+     * <h2>왜 전용 연결을 만드는가</h2>
+     * 적재는 핫패스가 아니고 그 자리에는 폴백도 없다(적재가 실패하면 <em>이후 조회</em>가 폴백을
+     * 탄다). 핫패스 예산 50 ms 를 그대로 쓰면 첫 명령에 연결 수립이 포함되는 느린 환경에서 매번
+     * 첫 시도가 실패하고, 재시도가 있어 동작은 하지만 그 실패 로그가 진짜 장애를 가린다.
+     *
+     * <p>연결 팩토리를 <strong>빈으로 올리지 않는다.</strong> Boot 의 팩토리는
+     * {@code @ConditionalOnMissingBean(RedisConnectionFactory.class)} 라, 타입이 같은 빈을 하나 더
+     * 올리면 <em>Boot 의 것이 조용히 사라지고</em> 이 팩토리가 전부를 맡게 된다 — 핫패스까지
+     * 2초 예산으로 도는 정반대의 결과다. 그래서 이 메서드가 만들어 로더에게 소유시키고,
+     * 로더가 {@code DisposableBean} 으로 닫는다.
+     *
+     * @param connectionDetails 주소 출처. {@code spring.data.redis.url} 도 여기로 들어온다
+     * @param referenceData     FC·캠프 좌표 출처
+     * @param metrics           적재 상태 게이지
+     * @param properties        {@code dawnline.fulfillment.redis.load-command-timeout}
      */
     @Bean
-    public GeoIndexLoader geoIndexLoader(StringRedisTemplate redis, ReferenceData referenceData,
-            GeoMetrics metrics) {
-        return new GeoIndexLoader(redis, referenceData, metrics);
+    public GeoIndexLoader geoIndexLoader(DataRedisConnectionDetails connectionDetails,
+            ReferenceData referenceData, GeoMetrics metrics, FulfillmentProperties properties) {
+
+        DataRedisConnectionDetails.Standalone standalone = connectionDetails.getStandalone();
+        RedisStandaloneConfiguration server =
+                new RedisStandaloneConfiguration(standalone.getHost(), standalone.getPort());
+        server.setDatabase(standalone.getDatabase());
+        if (connectionDetails.getUsername() != null) {
+            server.setUsername(connectionDetails.getUsername());
+        }
+        if (connectionDetails.getPassword() != null) {
+            server.setPassword(connectionDetails.getPassword());
+        }
+
+        LettuceConnectionFactory factory = new LettuceConnectionFactory(server,
+                LettuceClientConfiguration.builder()
+                        .commandTimeout(properties.redis().loadCommandTimeout())
+                        .build());
+        factory.afterPropertiesSet();
+        factory.start();
+
+        return new GeoIndexLoader(new StringRedisTemplateFor(factory), factory::destroy,
+                referenceData, metrics);
+    }
+
+    /** 팩토리를 받아 바로 쓸 수 있게 초기화한 템플릿. {@code afterPropertiesSet} 을 잊지 않기 위한 것이다. */
+    private static final class StringRedisTemplateFor extends StringRedisTemplate {
+
+        private StringRedisTemplateFor(LettuceConnectionFactory factory) {
+            super(factory);
+            afterPropertiesSet();
+        }
     }
 }

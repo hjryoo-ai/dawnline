@@ -1063,6 +1063,13 @@ public interface DispatchStrategy {
 계속 도는 것이므로, 건너뛴 판정은 `dawnline_rate_limit_decisions_total{outcome=bypassed}` 로
 세고 §9.4 알림에 넣는다.
 
+**GEO 적재는 다른 예산을 쓴다** (`dawnline.fulfillment.redis.load-command-timeout`, 기본 2초).
+50 ms 는 `order.placed` 소비 중의 `GEOSEARCH`·권역 캐시 조회를 위한 **핫패스** 값이고, 그 자리에는
+폴백이 있다. 적재는 핫패스가 아니며 그 자리에는 폴백이 없다(적재 실패는 *이후 조회*가 폴백을
+타게 할 뿐이다). 핫패스 예산을 적재에 쓰면 첫 명령에 연결 수립이 포함되는 느린 환경에서 매번
+첫 시도가 실패하고, 재시도가 있어 동작은 하지만 **그 실패 로그가 진짜 장애를 가린다.**
+로더는 이 예산을 가진 전용 연결로 돈다.
+
 **Redis 명령 타임아웃은 짧다**(`dawnline.order.redis.command-timeout-ms`, 기본 50ms).
 order-service 의 Redis 사용은 <em>전부</em> 실패해도 안전한 최적화이고(멱등은 DB 폴백, 레이트
 리밋은 허용), 둘 다 `POST /orders` 핫패스에 있다. 기본 명령 타임아웃(60초)을 그대로 두면

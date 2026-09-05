@@ -1,5 +1,6 @@
 package com.dawnline.common;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -11,15 +12,17 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * 티어별 주문 컷오프 표 (DESIGN.md §2.2) — 순수 함수.
+ * 티어별 컷오프와 배송창 표 (DESIGN.md §2.2) — 순수 함수.
  *
  * <h2>왜 여기 있는가</h2>
  * [ADR-020](docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 은 컷오프 계산을
  * order-service 한 곳에 두었다. 막으려던 것은 <strong>표의 복사본이 둘이 되는 것</strong>이다 —
  * 한쪽만 고치는 날 약속창과 웨이브가 어긋나기 때문이다.
  *
- * <p>그런데 약속 개정 경로(§5.2)에서 fulfillment 는 <em>다음 컷오프가 언제인지</em> 알아야 한다.
- * grace 를 넘겨 도착한 주문을 다음 웨이브로 보내야 하고, 그 웨이브가 없으면 만들어야 한다.
+ * <p>그런데 약속 개정 경로(§5.2)에서 fulfillment 는 <em>다음 컷오프가 언제인지</em>, 그리고
+ * <em>그 컷오프의 배송창이 무엇인지</em> 알아야 한다. 다음 웨이브로 보내면서 개정된
+ * {@code promisedWindow} 를 함께 실어 보내야 하기 때문이다(ADR-020 결정 3). 둘은 §2.2 의 같은
+ * 표에서 나오므로 이 클래스는 컷오프만이 아니라 <strong>표 전체</strong>다.
  * 그래서 <strong>구현 하나를 둘이 쓴다</strong>(ADR-020 후속 정정 2). 복사본이 위험한 이유는
  * 갈라지기 때문인데, 같은 클래스를 참조하면 갈라질 수 없다.
  *
@@ -36,7 +39,7 @@ import java.util.Optional;
  * 지역 시간대에 붙인다. {@code Asia/Seoul} 은 서머타임이 없어 지금은 차이가 없지만, 시간대를
  * 바꿔 쓸 때 길이가 아니라 벽시계가 유지되는 쪽이 맞다.
  */
-public final class CutoffSchedule {
+public final class TierSchedule {
 
     /** 서비스 기준 시간대. */
     public static final ZoneId SERVICE_ZONE = ZoneId.of("Asia/Seoul");
@@ -56,13 +59,13 @@ public final class CutoffSchedule {
     /**
      * @param zone 컷오프를 해석할 시간대
      */
-    public CutoffSchedule(ZoneId zone) {
+    public TierSchedule(ZoneId zone) {
         this.zone = Objects.requireNonNull(zone, "zone");
     }
 
     /** §2.2 의 기본값 — 서비스 기준 시간대. */
-    public static CutoffSchedule standard() {
-        return new CutoffSchedule(SERVICE_ZONE);
+    public static TierSchedule standard() {
+        return new TierSchedule(SERVICE_ZONE);
     }
 
     /**
@@ -92,6 +95,33 @@ public final class CutoffSchedule {
     public Instant nextCutoffAfter(String tier, Instant cutoffAt) {
         Objects.requireNonNull(cutoffAt, "cutoffAt");
         return firstCutoffAfter(tier, cutoffAt, true);
+    }
+
+    /**
+     * 이 컷오프에 실린 주문의 약속 배송창 (§2.2).
+     *
+     * <p>컷오프 하나가 창 하나를 정한다 — 티어마다 관계가 다르다. {@code SAME_DAY} 는 컷오프에서
+     * 시작해 6시간, {@code DAWN} 은 컷오프(배송일 00:00)에서 07:00 까지, {@code NEXT_DAY} 는 그날
+     * 08:00–22:00 이다.
+     *
+     * <p>개정 경로가 이것을 쓴다. 다음 컷오프만 알고 창을 모르면 "다음 웨이브로 밀었다" 는 사실만
+     * 있고 <em>고객에게 무엇을 약속하는지</em>가 없다 — 그런데 ADR-020 결정 3 이 요구하는 것은
+     * 정확히 그 약속이다.
+     *
+     * @param tier     티어 이름
+     * @param cutoffAt 컷오프. 이 클래스가 돌려준 값이어야 한다
+     */
+    public TimeWindow windowFor(String tier, Instant cutoffAt) {
+        Objects.requireNonNull(cutoffAt, "cutoffAt");
+        cutoffsOf(tier);
+        LocalDate date = cutoffAt.atZone(zone).toLocalDate();
+        return switch (tier) {
+            case "DAWN" -> new TimeWindow(cutoffAt, atTime(date, LocalTime.of(7, 0)));
+            case "NEXT_DAY" -> new TimeWindow(atTime(date, LocalTime.of(8, 0)),
+                    atTime(date, LocalTime.of(22, 0)));
+            case "SAME_DAY" -> new TimeWindow(cutoffAt, cutoffAt.plus(Duration.ofHours(6)));
+            default -> throw new IllegalArgumentException("DESIGN.md §2.2 에 없는 티어입니다: " + tier);
+        };
     }
 
     /** 이 티어를 이 표가 아는가. 모르는 값은 계약이 깨진 것이므로 호출부가 알아야 한다. */
@@ -127,6 +157,11 @@ public final class CutoffSchedule {
         return Optional.ofNullable(CUTOFFS.get(Objects.requireNonNull(tier, "tier")))
                 .orElseThrow(() -> new IllegalArgumentException(
                         "DESIGN.md §2.2 에 없는 티어입니다: " + tier));
+    }
+
+    /** 그날의 벽시계 시각. {@link #at} 과 달리 자정을 다음 날로 밀지 않는다. */
+    private Instant atTime(LocalDate date, LocalTime time) {
+        return date.atTime(time).atZone(zone).toInstant();
     }
 
     private Instant at(LocalDate date, LocalTime time) {
