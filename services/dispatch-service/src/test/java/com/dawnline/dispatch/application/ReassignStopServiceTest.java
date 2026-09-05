@@ -9,6 +9,7 @@ import com.dawnline.common.TimeWindow;
 import com.dawnline.common.error.ConflictException;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
+import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
@@ -105,6 +106,26 @@ class ReassignStopServiceTest {
         @Override
         public int bumpRevision(UUID routeId) {
             return revisions.merge(routeId, 1, Integer::sum);
+        }
+
+        @Override
+        public Optional<AssignedStop> findAssignedStop(UUID orderId) {
+            throw new UnsupportedOperationException("이 페이크는 취소를 모른다 — CancelOrderServiceTest 를 보라");
+        }
+
+        @Override
+        public boolean cancelStopIfAllOrdersCancelled(UUID stopId) {
+            throw new UnsupportedOperationException("이 페이크는 취소를 모른다 — CancelOrderServiceTest 를 보라");
+        }
+
+        @Override
+        public void retime(UUID routeId, PlannedRoute route) {
+            throw new UnsupportedOperationException("재배정은 순번을 다시 매긴다 — rewrite 를 부른다");
+        }
+
+        @Override
+        public Optional<RouteSnapshot> snapshot(UUID routeId) {
+            throw new UnsupportedOperationException("이 페이크는 취소를 모른다 — CancelOrderServiceTest 를 보라");
         }
 
         private UUID route(UUID planId, UUID vehicleId, List<Stop> initial) {

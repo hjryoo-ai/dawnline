@@ -1144,6 +1144,20 @@ medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기
 없고, tracking 은 이 이벤트만으로 shipment 를 만들어야 하므로(불변규칙 4) 그 구별이 그쪽의 유일한
 정보원이다. `seq` 도 그대로 둔다.
 
+**통합된 stop 의 부분 취소**는 stop 의 상태로 말할 수 없다([ADR-026 후속 정정 — Phase 3-6]).
+§6.5 1단계의 `StopMerger` 가 같은 지점·같은 약속창의 주문을 묶으므로 세 주문이 실린 stop 에서
+하나만 취소되는 일이 일어나고, 그때 stop 은 여전히 방문해야 해서 `status` 는 `PLANNED` 다.
+그래서 `plannedStop` 에 **`cancelledOrderIds`**(optional, 기본 `[]`, `orderIds` 의 부분집합)를
+둔다 — `orderIds` 에서 빼지 않는 이유는 stop 을 배열에서 지우지 않는 이유와 같고, 그 값이 필요한
+곳은 `order_id` 가 PK 인 §5.4 의 `shipments` 다. 전부 취소되면 `status` 가 `CANCELLED` 가 되고
+두 배열이 같아진다. 화물·서비스 시간은 다시 계산하지 않는다(`PlanPruner` 와 같은 판단).
+
+**네 번째 행은 지금 발화할 수 없다.** `route_stops.status` 를 `ARRIVED`/`COMPLETED` 로 옮기는
+코드가 없기 때문이다 — §4.1 에서 `delivery.status` 의 소비자는 order 와 ops 이고 dispatch 가
+아니다. 그래서 `dawnline_cancel_too_late_total` 은 구조적으로 0 이고, 아래 "재검토 지점" 의
+판정이 지금은 아무것도 검사하지 않는다. 값을 채우려면 **dispatch 가 `delivery.status` 를
+소비하도록 §4.1 을 바꿔야 하고, 그것은 Phase 5 의 결정으로 남긴다.**
+
 네 번째 행이 발화한다는 것은 order-service 가 `order.dispatched` 를 배송 완료 시점까지 소비하지
 못했다는 뜻이다(정상이면 발행과 출발 사이가 분 단위 이상). 그래서 그 카운터는 이상이 아니라
 **창의 폭**을 재는 값이고, 물리적으로는 배송됐는데 주문은 `CANCELLED` 인 상태를 ops 가 보게 하는

@@ -17,14 +17,16 @@
     "revision": 2,
     "summary": {
       "stopCount": 3,
-      "distanceM": 7180,
-      "durationS": 1940,
-      "costKrw": 19400
+      "distanceM": 5900,
+      "durationS": 1600,
+      "costKrw": 17400
     },
     "stops": [
       {
         "seq": 1,
-        "orderIds": ["01a04dad-80da-7f6e-a63a-e91c103516b0"],
+        "orderIds": [
+          "01a04dad-80da-7f6e-a63a-e91c103516b0"
+        ],
         "lat": 37.4979,
         "lng": 127.0276,
         "plannedArrival": "2026-08-29T15:41:00Z",
@@ -33,12 +35,17 @@
       },
       {
         "seq": 2,
-        "orderIds": ["01a04dad-80da-7fa7-ad00-3d1829eed7c6"],
+        "orderIds": [
+          "01a04dad-80da-7fa7-ad00-3d1829eed7c6"
+        ],
         "lat": 37.5038,
         "lng": 127.0249,
         "plannedArrival": "2026-08-29T15:47:30Z",
         "serviceSeconds": 90,
-        "status": "CANCELLED"
+        "status": "CANCELLED",
+        "cancelledOrderIds": [
+          "01a04dad-80da-7fa7-ad00-3d1829eed7c6"
+        ]
       },
       {
         "seq": 3,
@@ -48,9 +55,12 @@
         ],
         "lat": 37.4921,
         "lng": 127.0365,
-        "plannedArrival": "2026-08-29T15:50:10Z",
+        "plannedArrival": "2026-08-29T15:45:20Z",
         "serviceSeconds": 180,
-        "status": "PLANNED"
+        "status": "PLANNED",
+        "cancelledOrderIds": [
+          "01a04dad-80da-7411-a096-70abfdde82ff"
+        ]
       }
     ]
   }

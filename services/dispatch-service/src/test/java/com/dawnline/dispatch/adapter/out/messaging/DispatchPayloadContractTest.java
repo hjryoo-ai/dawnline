@@ -6,6 +6,7 @@ import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.Money;
 import com.dawnline.common.TimeWindow;
+import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
@@ -70,6 +71,63 @@ class DispatchPayloadContractTest {
         var payload = RouteAssignedPayload.of(publishedPlan(), Ids.newId(), Ids.newId(), route(), 1);
 
         assertThat(payload.summary().stopCount()).isEqualTo(payload.stops().size());
+    }
+
+    /** 취소가 실린 개정 — 통합 stop 하나는 죽고, 하나는 일부만 죽었다 (§6.10). */
+    private static RouteSnapshot revisedSnapshot() {
+        UUID dead = Ids.newId();
+        UUID kept = Ids.newId();
+        UUID alsoDead = Ids.newId();
+        return new RouteSnapshot(Ids.newId(), Ids.newId(), 5_900, 1_600, 17_400, List.of(
+                new RouteSnapshot.StopSnapshot(1, List.of(dead), List.of(dead),
+                        37.4979, 127.0276, NOW.plusSeconds(600), 90, true),
+                new RouteSnapshot.StopSnapshot(2, List.of(kept, alsoDead), List.of(alsoDead),
+                        37.4921, 127.0365, NOW.plusSeconds(900), 180, false)));
+    }
+
+    @Test
+    void 개정_발행이_계약을_지킨다() {
+        var payload = RouteAssignedPayload.of(publishedPlan(), revisedSnapshot(), Ids.newId(), 2);
+
+        CONTRACTS.validatePayload(RouteAssignedPayload.EVENT_TYPE,
+                RouteAssignedPayload.SCHEMA_VERSION, CONTRACTS.json().toTree(payload));
+    }
+
+    @Test
+    void 개정_발행은_취소된_stop_을_지우지_않고_stopCount_에_센다() {
+        // 부재는 값이 아니다 (ADR-026 결정 4). 취소된 stop 이 배열에서 빠지면 summary 와
+        // 배열 길이가 어긋나거나 소비자가 "취소" 와 "이동" 을 구별하지 못하거나 둘 중 하나다.
+        var payload = RouteAssignedPayload.of(publishedPlan(), revisedSnapshot(), Ids.newId(), 2);
+
+        assertThat(payload.stops()).hasSize(2);
+        assertThat(payload.summary().stopCount()).isEqualTo(2);
+        assertThat(payload.stops().getFirst().status()).isEqualTo("CANCELLED");
+        assertThat(payload.stops().getFirst().cancelledOrderIds())
+                .isEqualTo(payload.stops().getFirst().orderIds());
+    }
+
+    @Test
+    void 일부만_취소된_stop_은_PLANNED_인_채로_죽은_주문을_이름으로_싣는다() {
+        // stop 의 status 만으로는 말할 수 없는 자리다 — tracking 의 shipments 는 order_id 가
+        // PK 라(§5.4) 주문 단위로 알아야 한다 (ADR-026 [후속 정정 — Phase 3-6]).
+        var payload = RouteAssignedPayload.of(publishedPlan(), revisedSnapshot(), Ids.newId(), 2);
+
+        var merged = payload.stops().getLast();
+        assertThat(merged.status()).isEqualTo("PLANNED");
+        assertThat(merged.orderIds()).hasSize(2);
+        assertThat(merged.cancelledOrderIds()).hasSize(1);
+        assertThat(merged.orderIds()).containsAll(merged.cancelledOrderIds());
+    }
+
+    @Test
+    void 계획_발행에는_취소된_주문이_없다() {
+        // PlanPruner 가 발행 직전에 이미 뺐다 (§6.5 6단계). 여기서 값이 생기면 그 단계가 뚫린 것이다.
+        var payload = RouteAssignedPayload.of(publishedPlan(), Ids.newId(), Ids.newId(), route(), 1);
+
+        assertThat(payload.stops()).allSatisfy(stop -> {
+            assertThat(stop.cancelledOrderIds()).isEmpty();
+            assertThat(stop.status()).isEqualTo("PLANNED");
+        });
     }
 
     @Test

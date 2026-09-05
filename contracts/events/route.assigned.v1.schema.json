@@ -108,6 +108,13 @@
           "minimum": 0,
           "description": "이 stop 에서 소요될 하차·전달 시간(초). 통합된 주문 수에 따라 커진다."
         },
+        "cancelledOrderIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "description": "이 stop 의 주문 중 취소된 것들. 반드시 orderIds 의 부분집합이다 (계약 테스트가 검사한다). 왜 stop 의 status 만으로 부족한가: StopMerger 가 같은 geohash7·같은 약속창의 주문을 하나의 stop 으로 묶으므로(§6.5 1단계), 세 주문이 실린 stop 에서 하나만 취소되는 일이 실제로 일어난다. 그때 stop 은 여전히 방문해야 하므로 status 는 PLANNED 인데, tracking 의 shipments 는 order_id 가 PK 라(§5.4) 어느 주문이 죽었는지를 주문 단위로 알아야 한다. orderIds 에서 그냥 빼면 소비자가 '취소' 와 '다른 라우트로 이동' 을 구별할 수 없다 — status 를 둔 이유와 같다. 부재는 값이 아니다 (ADR-026 [후속 정정 — Phase 3-6]). 모두 취소되면 status 가 CANCELLED 가 되고 이 배열은 orderIds 와 같아진다 (orderIds 는 minItems 1 이라 비울 수 없다). required 가 아닌 근거도 status 와 같다: v1 을 낸 생산자가 없어 '부재 = 취소 없음' 이 실제 사실과 일치한다. 취소로 줄어든 화물·서비스 시간은 다시 계산하지 않는다(PlanPruner 와 같은 판단) — 남는 값은 실제보다 조금 크고, 그 방향의 오차는 용량 판정에서 안전하다.",
+          "items": { "$ref": "#/$defs/uuid" }
+        },
         "status": {
           "type": "string",
           "enum": ["PLANNED", "CANCELLED"],

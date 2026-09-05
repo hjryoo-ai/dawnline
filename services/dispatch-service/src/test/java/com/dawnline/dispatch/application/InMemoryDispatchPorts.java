@@ -6,17 +6,23 @@ import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.DispatchEvents;
 import com.dawnline.dispatch.application.port.out.PlannedRouteRepository;
+import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
+import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
+import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.Explanation;
+import com.dawnline.dispatch.domain.optimizer.OrderId;
+import com.dawnline.dispatch.domain.optimizer.Parcel;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
+import com.dawnline.dispatch.domain.optimizer.Stop;
 import com.dawnline.dispatch.domain.optimizer.VehicleAttrs;
 import com.dawnline.dispatch.domain.optimizer.VehicleCost;
 import com.dawnline.dispatch.domain.optimizer.VehicleId;
@@ -159,17 +165,205 @@ final class InMemoryDispatchPorts {
         }
     }
 
+    /**
+     * 취소가 보이는 라우트 조작 흉내 (§6.10).
+     *
+     * <p>어느 주문이 죽었는지를 자기가 들지 않고 {@link Candidates} 를 본다 — 실제 SQL 도
+     * {@code dispatch_candidates.status} 를 조인해서 판단하고, 진실이 두 곳에 있으면 페이크가
+     * 실물과 다르게 굴어도 테스트는 통과한다.
+     */
+    static final class CancellableRoutes implements RouteMutations {
+
+        private final Candidates candidates;
+        private final Map<UUID, RouteHeader> headers = new LinkedHashMap<>();
+        private final Map<UUID, List<StopRow>> rows = new LinkedHashMap<>();
+        private final Map<UUID, Integer> revisions = new LinkedHashMap<>();
+        private final Map<UUID, PlannedRoute> summaries = new LinkedHashMap<>();
+
+        /** 시각을 다시 쓴 결과. {@code null} 이면 살아 있는 stop 이 하나도 없었다는 뜻이다. */
+        final Map<UUID, PlannedRoute> retimed = new LinkedHashMap<>();
+
+        CancellableRoutes(Candidates candidates) {
+            this.candidates = candidates;
+        }
+
+        /** {@code route_stops} 한 행. */
+        static final class StopRow {
+
+            final UUID id = Ids.newId();
+            final int seq;
+            final GeoPoint point;
+            final int serviceSeconds;
+            final List<UUID> orderIds;
+            Instant arrival;
+            String status = "PLANNED";
+
+            StopRow(int seq, GeoPoint point, int serviceSeconds, Instant arrival,
+                    List<UUID> orderIds) {
+                this.seq = seq;
+                this.point = point;
+                this.serviceSeconds = serviceSeconds;
+                this.arrival = arrival;
+                this.orderIds = List.copyOf(orderIds);
+            }
+
+            boolean cancelled() {
+                return "CANCELLED".equals(status);
+            }
+        }
+
+        UUID route(UUID planId, UUID vehicleId, List<StopRow> stops) {
+            UUID routeId = Ids.newId();
+            headers.put(routeId, new RouteHeader(routeId, planId, vehicleId));
+            rows.put(routeId, new ArrayList<>(stops));
+            revisions.put(routeId, 1);
+            return routeId;
+        }
+
+        StopRow row(UUID routeId, int seq) {
+            return rows.get(routeId).stream().filter(stop -> stop.seq == seq).findFirst()
+                    .orElseThrow();
+        }
+
+        @Override
+        public Optional<RouteHeader> findHeader(UUID routeId) {
+            return Optional.ofNullable(headers.get(routeId));
+        }
+
+        @Override
+        public List<Stop> loadStops(UUID routeId) {
+            List<Stop> live = new ArrayList<>();
+            for (StopRow row : rows.getOrDefault(routeId, List.of())) {
+                if (row.cancelled()) {
+                    continue;
+                }
+                List<DispatchCandidate> alive = row.orderIds.stream()
+                        .map(candidates::findById)
+                        .flatMap(Optional::stream)
+                        .filter(candidate -> candidate.status() != CandidateStatus.CANCELLED)
+                        .toList();
+                if (alive.isEmpty()) {
+                    continue;
+                }
+                Parcel parcel = alive.stream()
+                        .map(candidate -> new Parcel(candidate.weightG(), candidate.volumeCm3(),
+                                candidate.requiresCold(), candidate.hazmat()))
+                        .reduce(Parcel.EMPTY, Parcel::plus);
+                live.add(new Stop(row.point,
+                        alive.stream().map(candidate -> OrderId.of(candidate.orderId())).toList(),
+                        parcel, alive.getFirst().promised(), row.serviceSeconds,
+                        alive.stream().mapToInt(DispatchCandidate::priority).max().orElse(0)));
+            }
+            return live;
+        }
+
+        @Override
+        public Optional<AssignedStop> findAssignedStop(UUID orderId) {
+            return rows.entrySet().stream()
+                    .flatMap(entry -> entry.getValue().stream()
+                            .filter(row -> row.orderIds.contains(orderId))
+                            .map(row -> new AssignedStop(entry.getKey(), row.id, row.status)))
+                    .findFirst();
+        }
+
+        @Override
+        public boolean cancelStopIfAllOrdersCancelled(UUID stopId) {
+            StopRow row = rows.values().stream().flatMap(List::stream)
+                    .filter(stop -> stop.id.equals(stopId)).findFirst().orElseThrow();
+            if (!"PLANNED".equals(row.status)) {
+                return false;
+            }
+            boolean allDead = row.orderIds.stream().map(candidates::findById)
+                    .flatMap(Optional::stream)
+                    .allMatch(candidate -> candidate.status() == CandidateStatus.CANCELLED);
+            if (allDead) {
+                row.status = "CANCELLED";
+            }
+            return allDead;
+        }
+
+        @Override
+        public void retime(UUID routeId, PlannedRoute route) {
+            retimed.put(routeId, route);
+            summaries.put(routeId, route);
+            if (route == null) {
+                return;
+            }
+            // 순번은 건드리지 않고 시각만 다시 쓴다 — 실물 SQL 과 같다.
+            route.stops().forEach(planned -> rows.get(routeId).stream()
+                    .filter(row -> row.point.equals(planned.stop().point()))
+                    .forEach(row -> row.arrival = planned.arrival()));
+        }
+
+        @Override
+        public Optional<RouteSnapshot> snapshot(UUID routeId) {
+            RouteHeader header = headers.get(routeId);
+            if (header == null) {
+                return Optional.empty();
+            }
+            PlannedRoute summary = summaries.get(routeId);
+            List<RouteSnapshot.StopSnapshot> stops = rows.get(routeId).stream()
+                    .map(row -> new RouteSnapshot.StopSnapshot(row.seq, row.orderIds,
+                            row.orderIds.stream()
+                                    .filter(id -> candidates.findById(id)
+                                            .map(candidate -> candidate.status()
+                                                    == CandidateStatus.CANCELLED)
+                                            .orElse(false))
+                                    .toList(),
+                            row.point.lat(), row.point.lng(), row.arrival, row.serviceSeconds,
+                            row.cancelled()))
+                    .toList();
+            return Optional.of(new RouteSnapshot(routeId, header.vehicleId(),
+                    summary == null ? 0 : summary.distanceM(),
+                    summary == null ? 0 : summary.durationS(),
+                    summary == null ? 0L : summary.cost().krw(), stops));
+        }
+
+        @Override
+        public int bumpRevision(UUID routeId) {
+            return revisions.merge(routeId, 1, Integer::sum);
+        }
+
+        @Override
+        public Optional<UUID> findStopOf(UUID routeId, UUID orderId) {
+            throw new UnsupportedOperationException("재배정은 ReassignStopServiceTest 가 본다");
+        }
+
+        @Override
+        public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
+            throw new UnsupportedOperationException("재배정은 ReassignStopServiceTest 가 본다");
+        }
+
+        @Override
+        public void rewrite(UUID routeId, PlannedRoute route) {
+            throw new UnsupportedOperationException("취소는 rewrite 하지 않는다 — retime 이다 (§6.10)");
+        }
+
+        @Override
+        public void clear(UUID routeId) {
+            throw new UnsupportedOperationException("취소는 라우트를 비우지 않는다 (§6.10)");
+        }
+    }
+
     /** 발행 기록. */
     static final class Events implements DispatchEvents {
 
         final List<UUID> routesAssigned = new ArrayList<>();
         final List<UUID> ordersDispatched = new ArrayList<>();
+        final List<RouteSnapshot> revised = new ArrayList<>();
+        final List<Integer> revisions = new ArrayList<>();
         int completed;
         int failed;
 
         @Override
         public void routeAssigned(RoutePlan plan, UUID routeId, PlannedRoute route, int revision) {
             routesAssigned.add(routeId);
+        }
+
+        @Override
+        public void routeRevised(RoutePlan plan, RouteSnapshot snapshot, int revision) {
+            revised.add(snapshot);
+            revisions.add(revision);
         }
 
         @Override
