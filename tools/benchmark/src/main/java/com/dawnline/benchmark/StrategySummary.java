@@ -19,6 +19,15 @@ public record StrategySummary(String strategy, List<RunOutcome> runs) {
         }
     }
 
+    /**
+     * 가장 흔한 미배정 사유. 회차마다 같은 결과가 나오므로(결정적) 첫 회차의 것으로 충분하다.
+     *
+     * <p>"미배정 83건" 만으로는 알고리즘이 나쁜 것인지 용량이 모자란 것인지 알 수 없다.
+     */
+    public String dominantUnassignedReason() {
+        return runs.getFirst().dominantReason();
+    }
+
     /** 총비용 중앙값 (원). 회귀 게이트가 보는 값이다. */
     public long medianCostKrw() {
         return median(runs.stream().mapToLong(run -> run.totalCost().krw()).toArray());

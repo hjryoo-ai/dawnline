@@ -42,12 +42,13 @@ public final class MarkdownReport {
                 .append(" · 차량 ").append(dataset.vehicles()).append(") · seed `")
                 .append(seed).append("` · 전략당 ").append(repeats).append("회\n\n");
 
-        out.append("| 전략 | 총비용(중앙값) | 미배정 | 차량 | 총거리 | 계획시간 p50 | p95 | 지각 stop | 평균 지각(분) |\n");
-        out.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+        out.append("| 전략 | 총비용(중앙값) | 미배정 | 주된 사유 | 차량 | 총거리 | 계획시간 p50 | p95 | 지각 stop | 평균 지각(분) |\n");
+        out.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|\n");
         summaries.values().forEach(summary -> out
                 .append("| `").append(summary.strategy()).append("` | ")
                 .append(String.format("%,d", summary.medianCostKrw())).append(" | ")
                 .append(summary.medianUnassigned()).append(" | ")
+                .append(summary.dominantUnassignedReason()).append(" | ")
                 .append(summary.medianVehiclesUsed()).append(" | ")
                 .append(String.format("%,d m", summary.medianDistanceM())).append(" | ")
                 .append(summary.medianDurationMs()).append(" ms | ")
