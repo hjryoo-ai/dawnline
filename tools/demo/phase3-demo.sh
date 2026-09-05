@@ -71,6 +71,25 @@ curl -sf --max-time 3 -o /dev/null "$url" \
 
 [ -s "$WAVE_IDS_FILE" ] \
   || fail "웨이브 id 파일이 없다: $WAVE_IDS_FILE. phase2-demo.sh 를 먼저 돌려라(make demo)."
+
+# 전제: 지금이 차량 근무창 안이어야 한다.
+#
+# shift_start/end 는 벽시계 TIME 이고 어댑터가 *계획 날짜*에 붙인다(JdbcReferenceData).
+# §6.3 의 하드 룰은 "복귀 ≤ 근무 종료 − 30분 버퍼" 이므로, 근무 종료가 한 시간도 안 남았으면
+# 어떤 라우트도 실행 가능하지 않고 모든 계획이 NO_CANDIDATES 로 끝난다. 그때 아래 1단계는
+# "PUBLISHED 계획 0 (기대 29)" 라고만 말하는데, 그 문장은 원인을 가리키지 않는다.
+# 전제는 전제로 확인한다 (CLAUDE.md — 전제를 스스로 말한다).
+shift_window="$(dq "SELECT to_char(min(shift_start),'HH24:MI') || ' ' || to_char(max(shift_end),'HH24:MI') FROM vehicles WHERE active")"
+now_kst="$(TZ=Asia/Seoul date +%H:%M)"
+printf '  %-22s %s (지금 %s KST)\n' "차량 근무창" "$(echo $shift_window | tr ' ' '-')" "$now_kst"
+awk -v now="$now_kst" -v w="$shift_window" 'BEGIN {
+  split(now, n, ":"); split(w, p, " "); split(p[1], a, ":"); split(p[2], b, ":");
+  nm = n[1]*60 + n[2]; sm = a[1]*60 + a[2]; em = b[1]*60 + b[2];
+  exit (nm >= sm && nm <= em - 60) ? 0 : 1;
+}' || fail "지금($now_kst KST)은 차량 근무창($(echo $shift_window | tr ' ' '-') KST) 밖이거나 끝까지 한 시간이 안 남았다.
+  §6.3 은 복귀가 근무 종료 − 30분 버퍼 안이기를 요구하므로, 이 시각에는 실행 가능한 라우트가
+  없어 모든 계획이 NO_CANDIDATES 로 끝난다. 데모의 결함이 아니라 시드 근무창의 결과다.
+  근무창 안에서 다시 돌려라. (이 창은 CI 에도 걸린다 — IMPLEMENTATION_PLAN Phase 4-12)"
 wave_count="$(wc -l < "$WAVE_IDS_FILE" | tr -d ' ')"
 ids="$(sed "s/.*/'&'/" "$WAVE_IDS_FILE" | paste -sd, -)"
 printf '  %-22s %s\n' "이어받은 웨이브" "$wave_count"
