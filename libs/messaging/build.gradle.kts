@@ -19,13 +19,21 @@ dependencies {
     implementation(libs.micrometer.core)
     compileOnly(libs.spring.boot.starter.actuator)
 
+    // 릴레이 리더 락만 Redis 를 쓴다 (ADR-027). compileOnly 인 이유: 이벤트를 발행하지 않는
+    // 서비스(ops-api)가 이 라이브러리 때문에 Redis 를 끌고 오면 안 된다. 자동설정이
+    // @ConditionalOnClass 로 조건을 걸고, 없는 채로 락을 켜면 기동에서 실패한다.
+    compileOnly(libs.spring.boot.starter.data.redis)
+
     // 이벤트 계약 검증 픽스처 — 서비스들의 계약 테스트가 재사용한다 (CLAUDE.md 불변규칙 8).
     testFixturesApi(libs.json.schema.validator)
     testFixturesApi(libs.jackson.databind)
 
     testImplementation(libs.spring.boot.starter.test)
+    testImplementation(libs.spring.boot.starter.data.redis)
 
     integrationTestImplementation(libs.spring.boot.starter.test)
+    integrationTestImplementation(libs.spring.boot.starter.data.redis)
+    integrationTestImplementation(libs.testcontainers.redis)
     integrationTestImplementation(libs.spring.boot.testcontainers)
     integrationTestImplementation(libs.testcontainers.junit.jupiter)
     integrationTestImplementation(libs.testcontainers.postgresql)

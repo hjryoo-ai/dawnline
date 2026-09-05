@@ -2,6 +2,7 @@ package com.dawnline.messaging.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 
 import java.time.Duration;
 import java.util.Map;
@@ -93,8 +94,37 @@ class DawnlineMessagingPropertiesTest {
     void 바인딩_batchSize가_0이면_예외() {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> new DawnlineMessagingProperties.Outbox(true, 0, Duration.ofSeconds(10),
-                        Duration.ofDays(7), 100L, 5000L, 3_600_000L))
+                        Duration.ofDays(7), 100L, 5000L, 3_600_000L, leader(Duration.ofSeconds(30))))
                 .withMessageContaining("batch-size");
+    }
+
+    @Test
+    void 바인딩_리더_ttl이_전송_타임아웃보다_짧으면_예외() {
+        // 리더십은 배치 *전에* 확인하고 배치 *중에는* 확인하지 않는다. TTL 이 배치보다 짧으면
+        // 배치 도중 리더가 바뀔 수 있고, 그러면 락을 켠 채로 두 인스턴스가 동시에 발행한다.
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new DawnlineMessagingProperties.Outbox(true, 500, Duration.ofSeconds(10),
+                        Duration.ofDays(7), 100L, 5000L, 3_600_000L, leader(Duration.ofSeconds(10))))
+                .withMessageContaining("send-timeout");
+    }
+
+    @Test
+    void 바인딩_리더가_꺼져_있으면_ttl_관계를_보지_않는다() {
+        // 락이 없으면 지킬 관계도 없다. 여기서 막으면 단일 인스턴스 선언이 이유 없이 어려워진다.
+        assertThatNoException().isThrownBy(() -> new DawnlineMessagingProperties.Outbox(true, 500,
+                Duration.ofSeconds(10), Duration.ofDays(7), 100L, 5000L, 3_600_000L,
+                new DawnlineMessagingProperties.Leader(false, Duration.ofSeconds(1))));
+    }
+
+    @Test
+    void 바인딩_리더_ttl이_0이면_예외() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new DawnlineMessagingProperties.Leader(true, Duration.ZERO))
+                .withMessageContaining("leader.ttl");
+    }
+
+    private static DawnlineMessagingProperties.Leader leader(Duration ttl) {
+        return new DawnlineMessagingProperties.Leader(true, ttl);
     }
 
     @Test

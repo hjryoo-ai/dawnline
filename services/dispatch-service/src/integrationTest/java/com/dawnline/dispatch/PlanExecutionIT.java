@@ -14,6 +14,7 @@ import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.messaging.contract.EventContracts;
+import com.redis.testcontainers.RedisContainer;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -67,7 +68,11 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
 
     private static KafkaConsumer<String, String> consumer;
 
+    /** 릴레이 리더 락용 (ADR-027). 아래 {@link #relay} 의 설명 참고. */
+    private static final RedisContainer REDIS = new RedisContainer("redis:8.8.2");
+
     static {
+        REDIS.start();
         createTopics(ROUTE_ASSIGNED, ORDER_DISPATCHED, PLAN_COMPLETED, PLAN_FAILED);
     }
 
@@ -86,11 +91,24 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
-    /** 이 IT 만 릴레이를 켠다 — 발행이 브로커까지 가는 것이 검사 대상이다. */
+    /**
+     * 이 IT 만 릴레이를 켠다 — 발행이 브로커까지 가는 것이 검사 대상이다. 그리고 릴레이를 켜면
+     * <strong>Redis 도 붙여야 한다</strong>.
+     *
+     * <p>Redis 가 필요해진 것은 2026-09-05 부터다([ADR-027]). 릴레이는 리더가 아니면 발행하지
+     * 않고, 리더십을 판정할 수 없으면(Redis 없음) 리더가 아니다 — 발행 경로가 Redis 에 의존한다.
+     * 락을 끄는 대신 붙이는 이유: 이 클래스가 보는 것은 <em>운영의 발행 경로</em>이고, 운영의 그
+     * 경로에는 리더 락이 있다. 다른 dispatch IT 들은 Redis 없이 돈다 — 그쪽은 규칙 캐시의 DB
+     * 폴백(불변규칙 7)을 그대로 밟아야 하므로 기반에 Redis 를 두지 않는다.
+     *
+     * @param registry 동적 속성 레지스트리
+     */
     @DynamicPropertySource
     static void relay(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "true");
         registry.add("dawnline.messaging.outbox.poll-interval-ms", () -> "200");
+        registry.add("spring.data.redis.host", REDIS::getRedisHost);
+        registry.add("spring.data.redis.port", REDIS::getRedisPort);
     }
 
     @BeforeAll

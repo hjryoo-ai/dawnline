@@ -1,5 +1,6 @@
 package com.dawnline.messagingtest;
 
+import com.redis.testcontainers.RedisContainer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,7 +23,7 @@ import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
- * 통합 테스트 공통 기반 — PostgreSQL 18 + Kafka 4.3 컨테이너 (DESIGN.md §13).
+ * 통합 테스트 공통 기반 — PostgreSQL 18 + Kafka 4.3 + Redis 8 컨테이너 (DESIGN.md §13).
  *
  * <p>컨테이너는 정적 초기화 블록에서 시작한다. Spring 컨텍스트가 만들어지기 <em>전에</em>
  * Flyway 를 돌려 스키마를 만들어야 하기 때문이다({@code ddl-auto=validate} 가 기동 시 검증한다).
@@ -49,6 +50,9 @@ public abstract class MessagingIntegrationTestBase {
     /** deploy/compose/.env.example 의 {@code KAFKA_IMAGE} 와 같은 태그. */
     static final String KAFKA_IMAGE = "apache/kafka:4.3.1";
 
+    /** deploy/compose/.env.example 의 {@code REDIS_IMAGE} 와 같은 태그. */
+    static final String REDIS_IMAGE = "redis:8.8.2";
+
     /** 공통 Flyway 스크립트 위치. 서비스도 이 값을 spring.flyway.locations 에 넣어야 한다. */
     private static final String COMMON_MIGRATIONS = "classpath:db/migration/common";
 
@@ -65,8 +69,18 @@ public abstract class MessagingIntegrationTestBase {
     private static final KafkaContainer KAFKA = new KafkaContainer(KAFKA_IMAGE)
             .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false");
 
+    /**
+     * 릴레이 리더 락용 (§7.2 {@code lock:relay:{service}}, ADR-027).
+     *
+     * <p>여기에 두는 이유: 리더가 아니면 <strong>아무것도 발행되지 않으므로</strong>, 리더 락은
+     * 이 모듈의 모든 통합 테스트가 통과하기 위한 전제가 됐다. 테스트마다 끄면 그 전제가 실제로
+     * 성립하는지 아무도 확인하지 않는다 — 발행을 보는 테스트들이 곧 락의 회귀 테스트다.
+     */
+    private static final RedisContainer REDIS = new RedisContainer(REDIS_IMAGE);
+
     static {
         POSTGRES.start();
+        REDIS.start();
         KAFKA.start();
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
@@ -93,6 +107,8 @@ public abstract class MessagingIntegrationTestBase {
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+        registry.add("spring.data.redis.host", REDIS::getHost);
+        registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
         // Flyway 로 만든 스키마와 JPA 엔티티가 정확히 일치하는지 기동 시 검증한다 (§7.1).
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         // 봉투의 producer. 없으면 자동설정이 기동 시점에 예외를 던진다.
@@ -104,6 +120,16 @@ public abstract class MessagingIntegrationTestBase {
     /** 테스트 브로커 주소. */
     protected static String bootstrapServers() {
         return KAFKA.getBootstrapServers();
+    }
+
+    /** 리더 락을 직접 들여다보는 테스트용. */
+    protected static String redisHost() {
+        return REDIS.getHost();
+    }
+
+    /** 리더 락을 직접 들여다보는 테스트용. */
+    protected static int redisPort() {
+        return REDIS.getMappedPort(6379);
     }
 
     /**

@@ -32,6 +32,7 @@ public class OutboxMetrics {
     private final AtomicLong unpublished = new AtomicLong();
     private final AtomicLong lagMillis = new AtomicLong();
     private final AtomicLong failed = new AtomicLong();
+    private final AtomicLong leader = new AtomicLong();
 
     /**
      * @param registry Micrometer 레지스트리
@@ -53,6 +54,11 @@ public class OutboxMetrics {
 
         Gauge.builder(MessagingMetrics.OUTBOX_FAILED, failed, AtomicLong::doubleValue)
                 .description("결정적 실패로 격리된 outbox 행 수. 0 이 아니면 사람이 봐야 한다(RB-05).")
+                .tags(tags)
+                .register(registry);
+
+        Gauge.builder(MessagingMetrics.OUTBOX_LEADER, leader, AtomicLong::doubleValue)
+                .description("릴레이 리더십. 1 리더 · 0 팔로워(정상) · -1 판정 불가(Redis 장애).")
                 .tags(tags)
                 .register(registry);
     }
@@ -80,8 +86,29 @@ public class OutboxMetrics {
         return lagMillis.get() / 1000.0;
     }
 
+    /**
+     * 리더십 게이지를 갱신한다 (ADR-027).
+     *
+     * <p>{@link #refresh} 와 나눠 둔 이유: 저쪽은 5초마다 DB 를 읽어 갱신하고 이쪽은 100ms 마다
+     * 폴링이 판정한 값을 그대로 쓴다. 주기가 다르고 출처가 다르다.
+     *
+     * @param state 릴레이가 방금 판정한 리더십
+     */
+    public void leadership(RelayLeadership.State state) {
+        leader.set(switch (state) {
+            case LEADER -> 1L;
+            case FOLLOWER -> 0L;
+            case UNKNOWN -> -1L;
+        });
+    }
+
     /** 현재 게이지가 들고 있는 격리 행 수. 테스트용. */
     public long failedCount() {
         return failed.get();
+    }
+
+    /** 현재 게이지가 들고 있는 리더십 값. 테스트용. */
+    public long leaderValue() {
+        return leader.get();
     }
 }

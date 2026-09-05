@@ -7,17 +7,22 @@ import com.dawnline.messaging.outbox.OutboxMetrics;
 import com.dawnline.messaging.outbox.OutboxRelay;
 import com.dawnline.messaging.outbox.OutboxRepository;
 import com.dawnline.messaging.outbox.RecordPublisher;
+import com.dawnline.messaging.outbox.RelayLeadership;
+import com.dawnline.messaging.redis.RedisRelayLeadership;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -40,6 +45,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 @ConditionalOnBean({OutboxRepository.class, KafkaOperations.class, PlatformTransactionManager.class})
 @EnableScheduling
 public class OutboxRelayAutoConfiguration {
+
+    /** 락을 켜 뒀는데 조정자가 없을 때의 기동 실패 메시지. 두 자리에서 같은 문장을 쓴다. */
+    static final String MISSING_LEADER_COORDINATOR =
+            "릴레이 리더 락이 켜져 있는데 StringRedisTemplate 이 없습니다. "
+                    + "Redis 를 붙이거나, 인스턴스가 하나임을 "
+                    + "dawnline.messaging.outbox.leader.enabled=false 로 적어 주세요 "
+                    + "(DESIGN.md §4.4, ADR-027).";
 
     /**
      * outbox 게이지 (§9.1).
@@ -103,6 +115,7 @@ public class OutboxRelayAutoConfiguration {
      * @param publisher          배치 발행기
      * @param repository         outbox 저장소
      * @param metrics            게이지
+     * @param leadership         단일 활성 인스턴스 판정 (ADR-027)
      * @param transactionManager 유지보수 트랜잭션
      * @param clock              시각 출처
      * @param properties         {@code dawnline.messaging.*}
@@ -110,9 +123,71 @@ public class OutboxRelayAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public OutboxRelay dawnlineOutboxRelay(OutboxBatchPublisher publisher, OutboxRepository repository,
-            OutboxMetrics metrics, PlatformTransactionManager transactionManager, ObjectProvider<Clock> clock,
-            DawnlineMessagingProperties properties) {
-        return new OutboxRelay(publisher, repository, metrics, transactionManager,
+            OutboxMetrics metrics, RelayLeadership leadership, PlatformTransactionManager transactionManager,
+            ObjectProvider<Clock> clock, DawnlineMessagingProperties properties) {
+        return new OutboxRelay(publisher, repository, metrics, leadership, transactionManager,
                 clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock), properties.outbox().retention());
+    }
+
+    /**
+     * 리더 락이 <strong>꺼져 있을 때</strong>, 또는 Redis 가 클래스패스에 아예 없을 때의 배선.
+     *
+     * <p>꺼져 있으면 "이 배포는 인스턴스가 하나다" 라는 선언이다. 켜져 있는데 여기까지 오면 Redis 를
+     * 쓸 수 없다는 뜻이고, 그때는 <strong>기동에서 실패한다.</strong> 조용히 항상-리더로 떨어뜨리지
+     * 않는 이유: 없는 락을 있다고 믿는 것이 락이 없는 것보다 나쁘다. 스케일아웃한 날 아무 신호 없이
+     * §4.5 가 깨지고, 그때 깨진 것은 로그가 아니라 이벤트 순서다.
+     *
+     * <p>{@link RedisRelayLeadershipConfiguration} 은 중첩 클래스라 이 메서드보다 <em>먼저</em>
+     * 등록된다(스프링은 멤버 클래스를 바깥 {@code @Bean} 보다 먼저 처리한다). 그래서 Redis 가 있으면
+     * {@code @ConditionalOnMissingBean} 이 여기를 건너뛴다.
+     *
+     * @param properties {@code dawnline.messaging.*}
+     */
+    @Bean
+    @ConditionalOnMissingBean(RelayLeadership.class)
+    public RelayLeadership dawnlineRelayLeadership(DawnlineMessagingProperties properties) {
+        if (properties.outbox().leader().enabled()) {
+            throw new IllegalStateException(MISSING_LEADER_COORDINATOR);
+        }
+        return RelayLeadership.singleInstance();
+    }
+
+    /**
+     * Redis 리더 락 (§7.2 {@code lock:relay:{service}}, ADR-027).
+     *
+     * <p>{@code @ConditionalOnClass} 를 타입 자체에 건다 — Redis 를 쓰지 않는 서비스(ops-api)의
+     * 클래스패스에는 {@code StringRedisTemplate} 이 아예 없고, 그 경우 이 클래스는 로드되지 않는다.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(StringRedisTemplate.class)
+    @ConditionalOnProperty(prefix = "dawnline.messaging.outbox.leader", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
+    public static class RedisRelayLeadershipConfiguration {
+
+        /**
+         * 템플릿을 {@code ObjectProvider} 로 받는다 — <strong>{@code @ConditionalOnBean} 이
+         * 아니다.</strong>
+         *
+         * <p>조건은 <em>빈 정의가 등록되는 순서</em>에 의존한다. 이 자동설정은
+         * {@code RedisAutoConfiguration} 보다 먼저 평가될 수 있고, 그러면 템플릿이 곧 생길
+         * 것인데도 "없다" 로 판정해 바깥의 기동 실패로 떨어진다(2026-09-05에 실제로 그랬다).
+         * {@code ObjectProvider} 는 <em>빈을 만드는 시점</em>에 찾으므로 그 순서에서 자유롭다.
+         *
+         * @param redis       문자열 전용 템플릿 제공자
+         * @param properties  {@code dawnline.messaging.*}
+         * @param environment {@code spring.application.name} 조회용
+         */
+        @Bean
+        @ConditionalOnMissingBean(RelayLeadership.class)
+        public RelayLeadership dawnlineRedisRelayLeadership(ObjectProvider<StringRedisTemplate> redis,
+                DawnlineMessagingProperties properties, Environment environment) {
+            StringRedisTemplate template = redis.getIfAvailable();
+            if (template == null) {
+                throw new IllegalStateException(MISSING_LEADER_COORDINATOR);
+            }
+            return new RedisRelayLeadership(template,
+                    MessagingAutoConfiguration.resolveProducer(properties, environment),
+                    properties.outbox().leader().ttl());
+        }
     }
 }

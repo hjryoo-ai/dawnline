@@ -295,7 +295,10 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 
 ### 4.4 전달 보장: Outbox + at-least-once + 멱등 소비자 (ADR-006)
 
-- **발행**: 도메인 변경과 `outbox_events` INSERT를 같은 DB 트랜잭션에서 수행. 별도 릴레이(`OutboxRelay`, 폴링 100ms, 배치 500, `FOR UPDATE SKIP LOCKED`)가 Kafka로 발행 후 `published_at` 기록. SKIP LOCKED 는 다중 인스턴스에서의 중복 발행을 막지만, 같은 `partition_key` 의 행이 서로 다른 인스턴스에서 발행되면 §4.5의 키 단위 순서가 깨질 수 있다. 따라서 릴레이는 **서비스당 단일 활성 인스턴스**를 전제로 한다. 현 단계는 인스턴스 1개로 이 전제가 자동 충족되며, 스케일아웃(Phase 3) 전에 리더 락(Redis `SET NX` + 주기 갱신, 락 상실 시 발행 중단)을 도입한다 — 그 시점에 ADR 작성. SKIP LOCKED 는 리더 전환 경합의 안전망으로 유지한다.
+- **발행**: 도메인 변경과 `outbox_events` INSERT를 같은 DB 트랜잭션에서 수행. 별도 릴레이(`OutboxRelay`, 폴링 100ms, 배치 500, `FOR UPDATE SKIP LOCKED`)가 Kafka로 발행 후 `published_at` 기록. SKIP LOCKED 는 다중 인스턴스에서의 중복 발행을 막지만, 같은 `partition_key` 의 행이 서로 다른 인스턴스에서 발행되면 §4.5의 키 단위 순서가 깨질 수 있다. 따라서 릴레이는 **서비스당 단일 활성 인스턴스**여야 하고, 그것을 **리더 락이 강제한다**(2026-09-05, [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)). SKIP LOCKED 는 리더 전환 경합의 안전망으로 유지한다.
+- **릴레이 리더 락** (§7.2 `lock:relay:{service}`, ADR-027): 배치 <strong>전에</strong> 매번 Redis `SET NX` + 갱신을 한 번의 왕복(Lua)으로 확인하고, 리더가 아니면 발행하지 않는다. TTL 기본 30초 — 리더가 죽었을 때 교체까지의 상한이고 §9.4 의 "outbox 지연 > 30s" 알림과 같은 눈금이다. TTL 은 전송 타임아웃보다 길어야 하며(배치 도중에는 확인하지 않는다) 그 관계는 설정 바인딩이 기동 시 검증한다. 정상 종료는 리더십을 내려놓아 발행 공백을 TTL 이 아니라 폴링 주기로 만든다. **락이 거는 것은 발행뿐이다** — 메트릭 갱신과 정리는 리더가 아니어도 돈다(순서를 가진 것은 발행밖에 없다).
+- **판정 불가는 팔로워가 아니다.** 상태는 `LEADER`/`FOLLOWER`/`UNKNOWN` 셋이고 게이지 `dawnline_outbox_leader` 가 `1/0/-1` 로 노출한다(§9.1). 발행을 멈추는 결정은 뒤의 둘이 같지만 봐야 할 곳이 정반대다 — 팔로워는 정상이고 판정 불가는 Redis 장애다.
+- **Redis 장애는 fail-closed** — `lock:wave` 와 반대다(ADR-027 결정 4). 웨이브 락은 멈추면 컷오프 시각을 잃고 중복 마감은 DB 가 막으므로 진행한다. 여기서 락 없이 진행하면 **키 단위 순서**를 잃는데 DB 에는 그것을 지킬 수단이 없고, 멈춰서 잃는 것은 **지연뿐**이다(행은 남고 복구되면 이어서 나간다). 되돌릴 수 없는 손실과 되돌아오는 손실 중 후자를 고른다. 락을 켠 채로 Redis 가 없으면 **기동에서 실패한다** — 없는 락을 있다고 믿는 것이 락이 없는 것보다 나쁘다. 끄려면 `dawnline.messaging.outbox.leader.enabled=false` 로 <em>적는다</em>(ops-api 가 그 값을 쓴다 — 이벤트를 발행하지 않기 때문이다).
 - **소비**: 리스너는 `processed_events(event_id, consumer)`를 먼저 INSERT(같은 트랜잭션)한다. 이미 있으면 처리 생략. 비즈니스 로직 + processed 기록 + 자기 outbox 기록이 하나의 트랜잭션.
 - **`processed_events` 보존: 14일** (일 1회 배치 삭제, outbox 7일 정리와 같은 정리 스케줄러 — §7.1). 근거: 재전달 가능 창의 상한은 본 토픽 보존 7일(오프셋 리셋 포함)이며 14일은 그 2배 여유다. DLQ 보존 30일은 이 창과 무관하다 — DLQ 에 들어간 이벤트는 처리 트랜잭션이 롤백된 것이므로 `processed_events` 에 성공 기록이 없고, replay 의 안전성이 이 테이블에 의존하지 않는다. **경고: 이 논거는 "성공 처리된 이벤트는 DLQ 에 들어가지 않는다" 는 §4.6의 구조에 의존한다. DLQ 적재 경로를 바꾸는 변경은 이 보존 기간을 재검토해야 한다.**
 - Kafka 트랜잭션/EOS는 사용하지 않는다. 이유·대안은 ADR-006.
@@ -1155,7 +1158,10 @@ medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기
 바뀐다.
 
 그래서 **리포트의 신원은 커밋 SHA · 데이터셋 seed · 전략 이름 셋**이고, 세 값을 리포트 헤더에 박는다
-(`MarkdownReport`). 규칙: **다른 리포트끼리 절대 수치를 비교하기 전에 커밋이 같은지 먼저 본다.**
+(`MarkdownReport`). 규칙 둘: **다른 리포트끼리 절대 수치를 비교하기 전에 커밋이 같은지 먼저 본다**,
+그리고 **문서에 귀속을 적을 때는 `main` 의 커밋으로 적는다.** 후자는 2026-09-05 에 배웠다 — 브랜치
+커밋을 적었더니 squash 머지가 그 커밋을 갈아치우고 브랜치를 지우면서 참조가 하루 만에 죽었다.
+리포트를 낸 커밋과 그것이 `main` 에 들어간 커밋은 다르고, 나중까지 남는 것은 후자다.
 같지 않으면 비교 대상은 수치가 아니라 *같은 커밋에서 다시 낸 수치*다. 작업 트리가 더러운 채로 낸
 리포트는 어떤 커밋에도 귀속되지 않으므로 헤더가 그 사실을 함께 적는다.
 
@@ -1231,6 +1237,7 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `geo:fc`, `geo:camp` | GEO | fulfillment | 없음(기동 시 재적재) | DB 전체 조회 후 메모리 하버사인 |
 | `zone:geohash5:{p}` | STRING(`zoneId:campId`) | fulfillment | 10m | DB 조회 |
 | `lock:wave:{id}`, `lock:plan:{waveId}` | STRING NX | fulfillment, dispatch | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
+| `lock:relay:{service}` | STRING NX | 전 서비스(발행) | 30s | **없다 — 발행을 멈춘다**([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)) |
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
 | `route:{id}:progress` | HASH | dispatch/tracking | 2d | DB 조회 |
@@ -1238,6 +1245,13 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `route:{id}:atrisk:cooldown` | STRING NX | tracking | 5m | 중복 at-risk 허용(멱등 소비자가 흡수) |
 
 원칙: Redis는 **성능·조정(coordination)** 용도이며 **유일한 진실 저장소가 아니다**. 어떤 키가 사라져도 정확성은 DB로 회복된다.
+
+**`lock:relay` 만 예외이고, 예외인 이유가 원칙을 설명한다**(2026-09-05, ADR-027). 다른 모든 행은
+폴백 칸에 *DB 로 무엇을 하면 되는지*가 적혀 있다. 릴레이 리더 락에는 그 칸이 비어 있다 — 락 없이
+진행할 때 잃는 것이 **키 단위 순서**인데 `FOR UPDATE SKIP LOCKED` 는 중복 발행만 막고 순서는
+막지 못하기 때문이다. 회복 경로가 없는 자리에서 이 원칙이 요구하는 것은 없는 폴백을 지어내는
+것이 아니라 **멈추는 것**이다. 멈춰서 잃는 것은 지연뿐이고(행은 `outbox_events` 에 남는다),
+그 지연은 `dawnline_outbox_lag_seconds` 와 §9.4 알림이 그대로 잡는다.
 
 **레이트 리밋 버킷의 의미** (`rl:customer:{id}`): 용량 60, 초당 1개 리필. 정확히 "분당 60회" 가 아니라
 **분당 60을 넘는 지속 부하를 막되 짧은 버스트는 허용**한다는 뜻이다. 오래 쉰 고객은 가득 찬 버킷으로
@@ -1373,6 +1387,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_outbox_lag_seconds` | gauge | 전 서비스 | service |
 | `dawnline_outbox_unpublished` | gauge | 전 서비스 | service |
 | `dawnline_outbox_failed` | gauge | 전 서비스 | service — 격리된(미해결) outbox 행 수 (§4.6) |
+| `dawnline_outbox_leader` | gauge | 전 서비스 | service — 릴레이 리더십([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)). **1** 리더(발행 중) · **0** 팔로워(정상, 다른 인스턴스가 리더) · **-1** 판정 불가(Redis 장애). 0 과 -1 을 합치지 않는 이유는 발행을 멈추는 결정은 같아도 <em>봐야 할 곳</em>이 정반대이기 때문이다. 이 값에 별도 알림을 걸지 않는다 — 결과가 `dawnline_outbox_lag_seconds` 로 곧바로 나타나고 그 알림이 §9.4 에 이미 있다. 이 게이지는 <em>왜</em> 지연이 오르는지를 말한다 |
 | `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
 | `dawnline_event_rejected_total` | counter | 전 소비자 | **consumer, eventType, reason** — 비즈니스 규칙 위반으로 무시한 이벤트 (§4.6). `outcome=rejected` 가 "몇 번" 을 세고 이쪽이 "왜" 를 센다. 예약해 둔 라벨 확장을 Phase 2-8 에서 붙였다 — 거부하는 소비자가 order·fulfillment 둘이 되어 "누가 무엇을" 이 필요해졌다. **세 라벨은 이 카운터를 올리는 모든 곳이 같이 써야 한다**(`IdempotentConsumer`·두 리스너): Prometheus 는 같은 이름의 미터가 같은 라벨 키 집합을 갖기를 요구하므로 한쪽만 붙이면 다른 쪽 등록이 실패한다 |
 | `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
@@ -1548,7 +1563,7 @@ dawnline/
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트** | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다 |
-| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |
+| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다. **명시적 예외 하나**: `lock:relay` 는 폴백이 없어 fail-closed 다([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)) — 회복 경로가 없는 자리에서 이 규칙이 요구하는 것은 멈추는 것이다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |
 | 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
 | 10 | ID는 UUIDv7 | — | `Ids.newId()`, `IdsTest`(RFC 9562 비트 레이아웃·단조 증가) | ✅(생성기) |
@@ -1657,6 +1672,8 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 024 | 웨이브 계획 완료를 `plan.completed.v1` 로 알린다(+`PLAN_FAILED → PLANNED`, 마지막 두 전이에 축 규칙) | `route.assigned` 를 fulfillment 가 소비(첫 라우트면 계획 중인데 완료, 전부면 개수를 소비자가 모름), `route.assigned` 에 `routeCount`/`isLast` 추가(웨이브 사실이 라우트 수만큼 반복 + 재정렬 시 영영 미완료), dispatch 에 동기 조회(불변규칙 4), 수명주기에서 마지막 두 전이 삭제(ADR-023 정리 배치가 성립하지 않음) | [ADR-024](adr/ADR-024-plan-completed-event.md) |
 
 | 025 | 웨이브 편입은 `FOR SHARE`·마감만 `FOR UPDATE`, `order_count` 는 마감 시 집계 | 편입도 `FOR UPDATE`(§8.2 피크에서 웨이브 행이 처리량 상한), 락 없이 낙관적 락만(편입은 웨이브 행을 쓰지 않아 충돌로 안 잡힌다 — 마감된 웨이브에 주문이 샌다), 원자적 `order_count` 증감(배타 락을 이름만 바꾼 것 + 취소 경로 드리프트), advisory lock, 웨이브 샤딩(계획 단위가 쪼개진다) | [ADR-025](adr/ADR-025-wave-admission-share-lock.md) |
+| 026 | 취소는 최적화 트리거가 아니라 입력 변경 — stop 을 죽이고 순서는 두고 시간만 재전파 | 취소를 §6.8 재계획 트리거로(같은 판단을 하는 회로가 둘), 재시퀀싱(기사가 보고 있는 순번이 바뀐다), 취소된 stop 을 페이로드에서 삭제(부재는 값이 아니다 — 취소·이동·발행 누락이 구별되지 않는다), 부분 취소를 stop 상태로 표현(통합된 stop 은 여전히 방문한다) | [ADR-026](adr/ADR-026-dispatch-cancellation-window.md) |
+| 027 | outbox 릴레이 리더 락(Redis `SET NX` + 갱신), 리더를 모르면 발행 중단 | 그대로 두기(전제를 지키는 것이 배포자의 기억뿐), Redis 장애에 fail-open(락이 가장 필요한 순간에 락이 사라짐), `partition_key` 해시 분할(인스턴스 수가 바뀌는 전환 구간에 같은 문제), advisory lock(세션 수명이 커넥션 풀에 묶임), Kafka EOS(ADR-006 기각 + 두 프로듀서의 순서를 정해 주지 않는다), 리더 선출 라이브러리(의존 추가), 갱신 전용 스케줄(폴링은 도는데 갱신이 죽은 상태가 새로 생긴다) | [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md) |
 
 013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다. 024는 Phase 2-3 에서 `WaveStatus` 의 마지막 두 전이에 트리거가 없다는 것을 발견해 추가했다 — §5.2 의 수명주기와 §4.1 의 소비자 표가 어긋나 있었고, 그 어긋남이 ADR-023 의 정리 배치를 조용히 무한 보존으로 만들고 있었다.
 
