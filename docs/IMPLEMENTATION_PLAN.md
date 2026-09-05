@@ -133,8 +133,18 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    바로 이 규칙이다.
    편입 로직(UNIQUE + `FOR UPDATE` 짧은 트랜잭션), 컷오프 스케줄러(30초, Redis 락, Lua 언락),
    `CLOSING→CLOSED` 전이와 `wave.closed` outbox.
+4-3. **계획 결과 계약과 웨이브 축** ([ADR-024](adr/ADR-024-plan-completed-event.md)):
+   `contracts/events/plan.completed.v1.schema.json`·`plan.failed.v1.schema.json` 을 **소비자 주도**로
+   정의한다(Phase 1 의 `order.dispatched`·`delivery.status` 와 같은 방식). 웨이브의 계획 완료는
+   `route.assigned` 가 아니라 `plan.completed` 가 알린다 — 라우트 단위 이벤트는 "언제 웨이브가
+   `PLANNED` 인가" 에 답할 수 없고, 그 전이가 없으면 4-2 의 정리 배치가 `PLANNED` 주문 행을 영원히
+   지우지 못한다. `PLAN_FAILED → PLANNED`(운영자 재실행)를 열고, 마지막 두 전이에만 축 규칙을
+   적용한다 — 두 이벤트가 **다른 토픽**이라 재실행 시 순서가 뒤바뀌면 라우트가 나간 웨이브가
+   실패로 표시되기 때문이다.
 4-1. **`V2__fulfillment_orders.sql`**: `fulfillment_orders` 생성 + `wave_orders` 드롭 + 부분 인덱스
    `ix_fulfillment_orders_wave`. 인덱스는 불변규칙 11 대로 EXPLAIN 을 PR 에 첨부한다.
+   **EXPLAIN 은 CI 에서 돌려 옮겨도 되되, 리포트에 환경을 적는다** — CI 러너 사양(vCPU·메모리),
+   PostgreSQL 버전, 측정에 쓴 행 수. 환경 없는 수치는 나중에 비교 대상이 되지 못한다.
    V1 은 이미 `main` 에 있으므로 고치지 않는다(불변규칙 13, 예외 없음) — 방금 만든 빈 테이블을
    지우는 마이그레이션이 이력에 남고, 그것이 정직한 이력이다.
 4-2. **정리 배치** ([ADR-023](adr/ADR-023-fulfillment-retention.md)): `fulfillment_orders` 30일
@@ -155,6 +165,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    단 **`cutoffAt < now − 24h`(설정값)이면 다음 웨이브가 아니라 `UNSERVICEABLE`(`STALE_PLACED`)** 이다
    (ADR-020 후속 정정). 상한이 없으면 20일 묵은 `order.placed` 가 DLQ replay 로 들어와 오늘 날짜의
    새 배송 약속을 만든다 — 유령 배송이다.
+5-2. **계획 결과 리스너 둘**: `plan.completed` → `Wave.markPlanned()`, `plan.failed` →
+   `Wave.markPlanFailed()`. 발행자는 Phase 3 에 생기지만 계약이 있으므로 리스너와 통합 테스트는
+   예시 이벤트를 Testcontainers Kafka 에 직접 발행해 **지금 완결된다**(계약 README 1절).
+   그러지 않으면 두 전이가 Phase 3 까지 한 번도 검증되지 않고, 4-2 정리 배치도 그때 처음 돌아 본다.
+   이미 `PLANNED` 인 웨이브에 온 `plan.failed` 는 `WaveStatus.hasProgressedPast` 로 무시하고
+   `dawnline_event_rejected_total{reason="wave_already_planned"}` 를 올린다(ADR-024 결정 4).
 5-1. **order-service 쪽 대응** — `fulfillment.planned` 리스너: `outcome=UNSERVICEABLE` → 주문 `FAILED` + `reason` 기록(§5.2 6단계),
    `promiseRevised: true` → `Order.revisePromise(window, at)` 로 `promised_start/end` 갱신(세터가 아니라 메서드, 불변규칙 6).
    **원래 작업 목록에 없던 항목이다.** §4.1 은 `fulfillment.planned` 의 소비자로 order 를 적었고 §5.2 도
@@ -172,6 +188,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    `fc_fallback` 은 [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) 이 §5.2 5단계를 확정하며
    함께 정한 것으로, 대체 FC 선택이 조용히 일어나지 않게 한다 — 계속 오르는 캠프는 홈 FC 배정이
    잘못됐거나 그 FC 의 역량이 부족한 것이고, 그것이 §5.2 FC 선택 규칙이 드러내려던 사실이다.
+
+   `dawnline_event_rejected_total` 의 `reason` 은 이 Phase 에서 셋이 된다 —
+   `cancelled_before_placed`(6), `wave_already_planned`(5-2), 그리고 order-service 가 이미 쓰는 것.
+   **§9.1 이 적어 둔 라벨 확장 트리거가 여기서 켜진다**: "거부하는 소비자가 둘 이상 되면
+   `consumer`·`eventType` 을 붙인다". order 와 fulfillment 둘이 되므로 이 Phase 에서 붙이고,
+   Prometheus 는 같은 이름의 미터가 **같은 라벨 키 집합**을 갖기를 요구하므로(ADR-022 에서 jar 로
+   확인) 양쪽을 함께 고친다. 한쪽만 붙이면 다른 쪽 미터 등록이 실패한다.
 7. 테스트: 스케줄러 인스턴스 2개 동시 실행 시 `wave.closed` 정확히 1회(통합), 컷오프 이후 주문이 다음 웨이브로 가는지, GEO 폴백(Redis 중단).
 
 **DoD**
@@ -180,6 +203,9 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 - 순서 역전 두 방향(취소 선착·후착)과 웨이브 상태별 분기가 통합 테스트로 증명된다(ADR-022 표 전체).
 - 24시간 넘은 `order.placed` 가 `UNSERVICEABLE`(`STALE_PLACED`)로 종결되고 다음 웨이브에 들어가지 않는다.
 - 정리 배치가 종결 상태만 지우고 진행 중 주문을 건드리지 않는다(ADR-023).
+- `plan.completed`/`plan.failed` 예시 이벤트로 `CLOSED → PLANNED`·`CLOSED → PLAN_FAILED`·
+  `PLAN_FAILED → PLANNED`(재실행)가 통합 테스트로 증명되고, 이미 `PLANNED` 인 웨이브에 온
+  `plan.failed` 가 무시되고 카운트된다(ADR-024).
 - **게이트 — §8.3 Bulkhead 판정이 설계서에 기록되어 있지 않으면 Phase 2 를 닫지 않는다.**
   기록에는 Phase 1 k6 의 `POST /orders` p99, outbox 지연 p95, `hikaricp_connections_pending`
   최댓값, 그리고 판정(Phase 1 으로 당김 / Phase 7 유지)이 함께 들어간다. 자리는 DESIGN §8.3 의
@@ -211,15 +237,22 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 7. 메트릭: `dawnline_plan_*`.
 8. `tools/benchmark`: 데이터셋 생성기(seed), `small/medium/large` 생성, 전략 실행·비교, Markdown 리포트 출력. CI에 `small` 회귀 체크 연결.
 9. 테스트: 룰 평가기 단위(각 룰 위반/통과), 하드 룰 위반 라우트가 최종 산출에 없음(PlanValidator), seed 고정 결정론, 5,000 주문 통합 계획(시간 측정), wave.closed 중복 도착 멱등.
-9-1. **[결정 필요] §4.1 과 §5.2 가 어긋나 있다** — §5.2 의 웨이브 수명주기는
-   `CLOSED ──(route.assigned)──▶ PLANNED`, `──(plan.failed)──▶ PLAN_FAILED` 인데,
-   **§4.1 의 소비자 목록에 fulfillment 가 없다**(`route.assigned` → tracking·ops,
-   `plan.failed` → ops). 둘 중 하나를 고쳐야 한다.
-   그리고 `route.assigned` 는 라우트 단위(웨이브 하나에 라우트 여럿)라 "언제 웨이브가 PLANNED 가
-   되는가" 가 정의되지 않는다 — 첫 라우트인가, 전부인가.
-   **이것이 남기는 것**: 그 전이가 없으면 `fulfillment_orders` 정리 배치가 `PLANNED` 주문 행을
-   영원히 지우지 못한다(ADR-023 은 "소속 웨이브가 `PLANNED`/`PLAN_FAILED`" 를 조건으로 쓴다).
-   Phase 2 에서 발견해 `WaveStatus` javadoc 에 적어 두었다.
+9-1. **`plan.completed.v1` 발행** ([ADR-024](adr/ADR-024-plan-completed-event.md) — 2026-09-05 결정,
+   Phase 2 에서 발견한 §4.1↔§5.2 어긋남의 답이다). Plan 이 `PUBLISHED` 에 도달할 때
+   `route.assigned`·`order.dispatched` 와 **같은 outbox 트랜잭션**에 넣는다. 나눠 넣으면 "완료라는데
+   라우트가 없다" 가 생긴다. 계약은 소비자인 fulfillment 가 Phase 2 에 이미 정의해 두었으므로
+   (`contracts/events/plan.completed.v1.schema.json`) 여기서는 **만족시키기만** 한다 — 자기에게
+   필요한 필드는 같은 major 안에서 추가만(§4.7).
+   `plan.failed` 도 같은 계약이 이미 있다. 부분 재계획(§6.8)은 `plan.completed` 를 다시 내지 않는다.
+9-2. **[결정 필요] dispatch 는 `order.cancelled` 를 어떻게 처리하나** — §4.1 은 dispatch 를
+   `order.cancelled` 소비자로 적었지만 **무엇을 하는지가 없다.** 이것은 ADR-017 후속 정정이
+   드러낸 구멍이다: 취소는 `PLANNED` 에서 허용되고 `PLANNED` 는 웨이브 마감 뒤에도 유지되므로,
+   계획 발행과 order-service 의 `order.dispatched` 소비 사이에 **설계된 경합 창**이 있다.
+   order-service 가 그것을 무시 + 메트릭으로 남기는 것은 옳지만 그 메트릭은 창의 *크기*를 잴 뿐이고,
+   **창을 없애는 일은 dispatch 가 소유한다.**
+   방향(세 갈래): ① 후보가 아직 미계획이면 제거 ② 발행된 라우트의 **미출발** stop 이면 stop 취소 +
+   `revision` 증가 ③ 출발 뒤면 stop 을 `CANCELLED` 로 표시해 기사가 건너뛰게 하고 `revision` 발행.
+   세 갈래가 라우트·배송·주문 세 도메인에 걸쳐 있어 **별도 ADR 감**이다.
 
 10. **릴레이 리더 락 + ADR**: 서비스당 릴레이 단일 활성을 보장한다(Redis `SET NX` + 주기 갱신, 락 상실 시 발행 중단). 스케일아웃으로 인스턴스가 2개 이상이 되기 **전에** 들어가야 한다 — 그 전까지는 인스턴스 1개라는 사실이 §4.4의 전제를 충족시키고 있을 뿐이다.
 

@@ -37,6 +37,7 @@ class EventContractsTest {
             "fulfillment.planned", "orderId",
             "wave.closed", "campId",
             "route.assigned", "routeId",
+            "plan.completed", "waveId",
             "plan.failed", "waveId",
             "delivery.status", "routeId",
             "delivery.at-risk", "routeId");

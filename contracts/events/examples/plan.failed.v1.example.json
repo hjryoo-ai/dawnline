@@ -1,0 +1,17 @@
+{
+  "eventId": "01a04e09-8c77-7a13-84be-5e2d90c1f6ab",
+  "eventType": "plan.failed",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:00:33.118Z",
+  "producer": "dispatch-service",
+  "partitionKey": "01a04dad-80da-7602-a1c4-77b0e3f95d18",
+  "traceId": "3c9d47e0ab815f26c0d3e97b4a165802",
+  "payload": {
+    "planId": "01a04e09-8c77-7d40-9f2b-c6a81e4370df",
+    "waveId": "01a04dad-80da-7602-a1c4-77b0e3f95d18",
+    "campId": "01a04dad-80da-704e-b002-b9fbfbfdbe93",
+    "reason": "TIMEOUT",
+    "message": "planning budget 30000ms exceeded at improvement stage (clusters=9, improved=4)",
+    "failedAt": "2026-08-29T15:00:33.118Z"
+  }
+}

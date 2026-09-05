@@ -65,9 +65,22 @@ public enum OrderStatus {
      * <p>{@code PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)}.
      * 리스너가 "이 이벤트가 철 지난 것인가" 를 판단하는 축이다.
      *
-     * <p>{@code CANCELLED} 는 이 축 위에 없다({@code -1}). 취소된 주문에 배송 이벤트가 오는 것은
-     * 철 지난 중복이 아니라 <strong>실제로 잘못된 상황</strong>이라(취소된 소포가 차에 실려 있다)
-     * 조용히 버리지 않고 알림 가능한 메트릭으로 남겨야 하기 때문이다 (§4.6, §4.5).
+     * <p>{@code CANCELLED} 는 이 축 위에 없다({@code -1}). 다만 그 이유는 "잘못된 상황이라서" 가
+     * 아니라 <strong>설계된 경합 창</strong>이기 때문이다 (ADR-017 후속 정정, 2026-09-05).
+     *
+     * <p>취소는 {@code PLACED}·{@code PLANNED} 에서 허용되고, {@code PLANNED} 는 웨이브가 마감된
+     * 뒤에도 유지된다. 그래서 dispatch 가 계획을 발행한 순간부터 우리가 {@code order.dispatched}
+     * 를 소비하기까지의 몇 초 동안 취소가 <em>정상적으로</em> 성공한다. 뒤이어 도착하는
+     * {@code order.dispatched} 는 그 창의 산물이지 누가 잘못한 결과가 아니다.
+     *
+     * <p>그러므로 그때 올리는 {@code dawnline_event_rejected_total} 은 이상 징후가 아니라
+     * <strong>이 경합 창의 크기를 재는 값</strong>이다. 값이 오르면 여기를 고칠 것이 아니라 창이
+     * 넓어진 원인(계획 발행과 소비 사이의 지연)을 봐야 하고, 창을 없애는 일은 dispatch 가
+     * 소유한다({@code order.cancelled} 소비 시 후보 제거·stop 취소·revision — Phase 3
+     * {@code [결정 필요] 9-2}).
+     *
+     * <p>축 밖에 두는 것 자체는 그대로다. 축 위에 올려 stale 로 흡수하면 그 창의 크기를 볼 수
+     * 없게 되기 때문이다 (§4.6, §4.5).
      */
     public int progress() {
         return switch (this) {

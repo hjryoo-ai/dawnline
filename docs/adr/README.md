@@ -36,6 +36,7 @@
 | 021 | 권역 시드를 order-service 지오코더의 출력에서 파생 (권역 91개) | ✅ Accepted (2026-09-05) | [ADR-021](ADR-021-zone-seed-derived-from-geocoder.md) |
 | 022 | fulfillment 주문 단위 애그리거트 `fulfillment_orders`, `wave_orders` 드롭 | ✅ Accepted (2026-09-05) | [ADR-022](ADR-022-fulfillment-order-aggregate.md) |
 | 023 | `fulfillment_orders` 30일 · `waves` 90일, 파티션 대신 배치 삭제 | ✅ Accepted (2026-09-05) | [ADR-023](ADR-023-fulfillment-retention.md) |
+| 024 | 웨이브 계획 완료는 `plan.completed.v1` 이 알린다 (`route.assigned` 가 아니라) | ✅ Accepted (2026-09-05) | [ADR-024](ADR-024-plan-completed-event.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
@@ -51,6 +52,12 @@
 - **022는 §16 표에 없던 항목**이다. 스키마를 구현하다 §5.2 의 `wave_orders` 가 주문에 대해
   fulfillment 가 아는 것의 절반만 담는다는 것이 드러났다 — `UNSERVICEABLE` 사유도, 약속 개정도,
   취소도 갈 곳이 없어 "주문 X 는 왜 웨이브에 없나" 에 답할 수 없었다.
+- **024는 Phase 2-3 에서** `WaveStatus` 를 만들다 §5.2 의 웨이브 수명주기와 §4.1 의 소비자 표가
+  어긋나 있는 것을 발견해 추가했다. `route.assigned` 는 라우트 단위라 웨이브의 계획 완료를 말할 수
+  없고, 그 전이가 발화하지 않으면 **ADR-023 의 정리 배치가 `PLANNED` 주문 행을 영원히 지우지
+  못한다**(보존 정책이 조용히 무한 보존이 된다). 같은 작업에서 ADR-017 의 "`CANCELLED` 축 밖
+  판정이 정말 이상한 상황을 잡는다" 가 틀렸다는 것도 드러나 **ADR-017 에 후속 정정**을 붙였다 —
+  그것은 이상 상황이 아니라 설계된 경합 창이고, 해소는 dispatch 가 소유한다(Phase 3 `[결정 필요] 9-2`).
 - **020은 Phase 2 착수 시점에** 코드보다 먼저 확정했다. §5.2 가 "Phase 2 선결" 이라고 적어 둔 항목이며,
   구현하다 마주치면 "이미 나간 약속" 을 앞에 두고 급하게 정하게 되는 종류의 결정이기 때문이다.
 - **017·018은 Phase 1 구현 중에** 설계서를 코드로 옮기다 드러난 미정·모순을 확정한 것이다.

@@ -33,11 +33,17 @@ import java.util.Set;
  * 아니라 이미 있는 규칙의 결과다.
  *
  * <h2>order-service 와 다른 점 — {@code CANCELLED} 가 축 <em>위에</em> 있다</h2>
- * order-service 에서 {@code CANCELLED} 는 축 밖({@code -1})이다. 취소된 주문에 배송 이벤트가
- * 오는 것은 <em>실제로 잘못된 상황</em>(취소된 소포가 차에 실려 있다)이라 조용히 버리면 안 되기
- * 때문이다. 여기서는 반대다 — 취소된 주문에 {@code order.placed} 가 오는 것은 <strong>정상적인
- * 순서 뒤바뀜</strong>이고, 알림이 아니라 흡수의 대상이다. 같은 규칙을 쓰되 축 위의 자리가 다른
- * 이유는 <em>같은 사건 쌍이 두 서비스에서 다른 뜻</em>이기 때문이다.
+ * order-service 에서 {@code CANCELLED} 는 축 밖({@code -1})이다. 다만 그 이유는 "취소된 주문에
+ * 배송 이벤트가 오는 것이 잘못된 상황이라서" 가 아니다 — 그것은 <strong>설계된 경합 창</strong>
+ * 이다(ADR-017 후속 정정). 취소는 {@code PLANNED} 에서도 허용되고 {@code PLANNED} 는 웨이브가
+ * 마감된 뒤에도 유지되므로, 계획 발행과 {@code order.dispatched} 소비 사이의 몇 초 동안 취소가
+ * 정상적으로 성공한다. 저쪽이 그것을 축 밖에 두는 것은 <em>그 창의 크기를 재기 위해서</em>이고,
+ * 축 위에 올리면 stale 로 조용히 흡수되어 크기를 볼 수 없게 된다.
+ *
+ * <p>여기서는 반대다 — 취소된 주문에 {@code order.placed} 가 오는 것은 재야 할 창이 아니라
+ * <strong>그냥 흡수하면 되는 순서 뒤바뀜</strong>이다. 이 서비스에는 "그 사이에 무엇이 잘못될 수
+ * 있는가" 가 없기 때문이다. 같은 규칙을 쓰되 축 위의 자리가 다른 이유는 <em>같은 사건 쌍이 두
+ * 서비스에서 다른 뜻</em>이기 때문이다.
  */
 public enum FulfillmentOrderStatus {
 

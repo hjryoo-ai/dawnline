@@ -37,7 +37,8 @@ Phase 0 에서는 §4.3 에 페이로드 구조가 명시된 4종만 만들었�
 | `dawnline.order.cancelled.v1` | O | Phase 1 (order-service — 발행자) |
 | `dawnline.order.dispatched.v1` | O | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 3 |
 | `dawnline.delivery.status.v1` | O | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 5 |
-| `dawnline.plan.failed.v1` | X | Phase 3 (dispatch-service) |
+| `dawnline.plan.completed.v1` | O | Phase 2 (fulfillment-service — **소비자 주도**), 발행은 Phase 3 |
+| `dawnline.plan.failed.v1` | O | Phase 2 (fulfillment-service — **소비자 주도**), 발행은 Phase 3 |
 | `dawnline.delivery.at-risk.v1` | X | Phase 5 (tracking-service) |
 
 없는 스키마를 추측으로 미리 만들지 않는다. §4.3 에 페이로드가 정의되어 있지 않은 것을 지금 만들면
@@ -56,6 +57,15 @@ Phase 1 에서 검증되지 않는다.
 
 리스너 통합 테스트는 예시 이벤트를 Testcontainers Kafka 에 직접 발행해 돌린다. 발행자 서비스가
 없어도 완결되며, `make demo` 에서 이 리스너들이 실제로 발화하는 것은 Phase 3 이후다.
+
+`plan.completed` 와 `plan.failed` 도 같은 예외를 탄다(Phase 2, [ADR-024](../../docs/adr/ADR-024-plan-completed-event.md)).
+소비자는 fulfillment 이고 발행자는 Phase 3 의 dispatch 다. 둘을 **함께** 정의하는 이유는 웨이브
+수명주기의 마지막 두 전이(`CLOSED → PLANNED`, `CLOSED → PLAN_FAILED`)가 같은 리스너 쌍이기
+때문이다 — 한쪽만 계약이 있으면 다른 쪽 전이는 통합 테스트에서 예시 이벤트를 만들 수 없다.
+
+`plan.completed` 는 **새 토픽**이다(§4.1 이 10개에서 11개가 된다). `route.assigned` 가 라우트
+단위라 웨이브의 계획 완료를 말할 수 없어서 추가됐고, 그 전이가 없으면 ADR-023 의 정리 배치가
+`PLANNED` 주문 행을 영원히 지우지 못한다.
 
 ---
 

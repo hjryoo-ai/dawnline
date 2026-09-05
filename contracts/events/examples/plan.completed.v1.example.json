@@ -1,0 +1,21 @@
+{
+  "eventId": "01a04e09-3b12-70c4-9d31-2f8a6c0b41e7",
+  "eventType": "plan.completed",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:00:21.905Z",
+  "producer": "dispatch-service",
+  "partitionKey": "01a04dad-80da-7521-9af9-6d6c3fd38228",
+  "traceId": "b1f0c8d5a4e37629bd15aa0f3c8e7d42",
+  "payload": {
+    "planId": "01a04e09-3b12-7f0a-b6c8-1d9e5a73b204",
+    "waveId": "01a04dad-80da-7521-9af9-6d6c3fd38228",
+    "campId": "01a04dad-80da-704e-b002-b9fbfbfdbe93",
+    "strategy": "sweep-greedy-nn+ls",
+    "mode": "FULL",
+    "routeCount": 12,
+    "assignedCount": 4780,
+    "unassignedCount": 40,
+    "totalCostKrw": 1638000,
+    "planDurationMs": 18420
+  }
+}

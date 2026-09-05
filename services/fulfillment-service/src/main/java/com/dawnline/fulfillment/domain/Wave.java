@@ -125,12 +125,23 @@ public final class Wave {
         this.closedAt = at;
     }
 
-    /** 하류가 계획을 마쳤다 ({@code CLOSED → PLANNED}, Phase 3). */
+    /**
+     * 하류가 계획을 마쳤다 ({@code plan.completed} 수신, Phase 3).
+     *
+     * <p>{@code CLOSED} 에서도, 운영자 재실행이 성공한 {@code PLAN_FAILED} 에서도 온다
+     * (ADR-024 결정 3). 이미 {@code PLANNED} 인데 또 오면 그것은 철 지난 이벤트이고, 여기까지
+     * 오기 전에 리스너가 {@link WaveStatus#hasProgressedPast} 로 걸러 무시한다.
+     */
     public void markPlanned() {
         transitionTo(WaveStatus.PLANNED);
     }
 
-    /** 하류의 계획이 실패했다 ({@code CLOSED → PLAN_FAILED}, Phase 3). */
+    /**
+     * 하류의 계획이 실패했다 ({@code plan.failed} 수신, {@code CLOSED → PLAN_FAILED}, Phase 3).
+     *
+     * <p>이미 {@code PLANNED} 인 웨이브에 도착한 {@code plan.failed} 는 여기로 오지 않는다 —
+     * 재실행이 만드는 순서 뒤바뀜이라 리스너가 축 규칙으로 흡수한다 (ADR-024 결정 4).
+     */
     public void markPlanFailed() {
         transitionTo(WaveStatus.PLAN_FAILED);
     }

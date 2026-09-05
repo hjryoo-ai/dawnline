@@ -144,7 +144,7 @@
 |---|---|---|---|---|
 | order-service | 주문 접수·검증·취소, 멱등 처리, 주문 상태 조회 | orders, order_items | order.placed, order.cancelled | order.dispatched, delivery.status |
 | fulfillment-service | FC 선택, 캠프/권역 배정, 웨이브 수명주기·컷오프 | fulfillment_centers, camps, zones, inventory(stub), waves | fulfillment.planned, wave.closed | order.placed, order.cancelled |
-| dispatch-service | 룰 엔진, 최적화, 라우트/차량/기사 관리, 재계획 | vehicles, drivers, candidates, plans, routes, rules | route.assigned, order.dispatched, plan.failed | fulfillment.planned, wave.closed, delivery.at-risk |
+| dispatch-service | 룰 엔진, 최적화, 라우트/차량/기사 관리, 재계획 | vehicles, drivers, candidates, plans, routes, rules | route.assigned, order.dispatched, plan.completed, plan.failed | fulfillment.planned, wave.closed, delivery.at-risk |
 | tracking-service | 배송 진행 상태, ETA, 지연 위험 감지 | shipments, shipment_events | delivery.status, delivery.at-risk | route.assigned |
 | ops-api | CQRS 읽기 모델, KPI, 운영자 수동 개입 커맨드 | rm_* (프로젝션) | (없음, 커맨드는 REST로 각 서비스 호출) | 전체 |
 | sim-runner | 주문 생성 부하, 기사 이동·스캔 시뮬레이션, 시나리오 실행 | (없음) | (REST 호출만) | — |
@@ -194,7 +194,8 @@ com.dawnline.<service>
 | dawnline.wave.closed.v1 | campId | fulfillment | dispatch, ops | 컷오프 도달, 계획 시작 신호 |
 | dawnline.route.assigned.v1 | routeId | dispatch | tracking, ops | 라우트 확정 (stops 포함) |
 | dawnline.order.dispatched.v1 | orderId | dispatch | order, ops | 주문이 라우트에 배정됨 |
-| dawnline.plan.failed.v1 | waveId | dispatch | ops | 계획 실패/부분 실패 |
+| dawnline.plan.completed.v1 | waveId | dispatch | **fulfillment**, ops | 웨이브 계획 완료 (Plan `PUBLISHED` 도달) |
+| dawnline.plan.failed.v1 | waveId | dispatch | **fulfillment**, ops | 계획 실행 실패 (§5.3 Plan `FAILED` — 예외·시간초과) |
 | dawnline.delivery.status.v1 | routeId | tracking | order, ops | ARRIVED/COMPLETED/FAILED |
 | dawnline.delivery.at-risk.v1 | routeId | tracking | dispatch, ops | 지연 위험 감지 |
 | `<topic>.dlq` | 원본 키 | 각 소비자 | 운영자 | 재처리 실패 메시지 |
@@ -260,6 +261,22 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
   ]
 }
 ```
+
+**plan.completed.v1** ([ADR-024](adr/ADR-024-plan-completed-event.md))
+```json
+{
+  "planId": "…", "waveId": "…", "campId": "…",
+  "strategy": "sweep-greedy-nn+ls", "mode": "FULL",
+  "routeCount": 12, "assignedCount": 4780, "unassignedCount": 40,
+  "totalCostKrw": 1638000, "planDurationMs": 18420
+}
+```
+
+웨이브의 계획이 끝났다는 **웨이브 단위** 신호다. `route.assigned` 는 라우트 단위라 "웨이브가
+언제 계획됐는가" 에 답할 수 없다(첫 라우트인가 전부인가). 발행은 Plan 이 `PUBLISHED` 에 도달할
+때 라우트 발행과 **같은 outbox 트랜잭션**이다. §6.8 의 부분 재계획은 이 이벤트를 다시 내지
+않는다 — 의미는 「최초 전체 계획의 완료」로 고정된다. 계획은 성공했는데 일부 주문이 배정되지
+않은 것은 `unassignedCount` 가 나르며, 그것은 `plan.failed` 가 아니다.
 
 ### 4.4 전달 보장: Outbox + at-least-once + 멱등 소비자 (ADR-006)
 
@@ -392,9 +409,19 @@ stale 을 <em>세는</em> 이유는 알림이 아니라 관찰이다. 순서 뒤
 (§9.1).
 
 "진행 단계"는 `PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)` 순서다.
-`CANCELLED` 는 이 축에 있지 않다 — 취소된 주문에 배송 이벤트가 오는 것은 철 지난 중복이 아니라
-**실제로 잘못된 상황**(취소된 주문의 소포가 차에 실려 있다)이라, 조용히 삼키지 않고 알림 가능한
-메트릭으로 남긴다.
+`CANCELLED` 는 이 축에 있지 않다. 다만 그 이유는 "잘못된 상황이라서" 가 아니다 —
+**설계된 경합 창**이다(2026-09-05 정정, ADR-017 후속 정정).
+
+취소는 `PLACED`·`PLANNED` 에서 허용되고, `PLANNED` 는 웨이브가 `CLOSED` 된 뒤에도 유지된다.
+그래서 dispatch 가 계획을 발행한 순간부터 order-service 가 `order.dispatched` 를 소비하기까지의
+몇 초 동안, 취소가 **정상적으로 성공한다.** 그 뒤에 도착하는 `order.dispatched` 는 버그가 아니라
+그 창의 산물이다.
+
+order-service 가 무시하고 메트릭으로 남기는 처리는 그대로 옳다. 바뀌는 것은 그 메트릭의 뜻이다 —
+이상 징후가 아니라 **이 경합 창의 크기를 재는 값**이고, 창을 줄이거나 없애는 일은 dispatch 가
+소유한다(`order.cancelled` 소비 시 후보 제거·stop 취소·revision 발행, Phase 3
+[결정 필요] 9-2). 축 밖에 두는 이유는 그것이 stale 로 조용히 흡수되면 그 크기를 볼 수 없기
+때문이다.
 
 **테이블**
 
@@ -576,9 +603,20 @@ order-service 는 고객에게 한 약속만 정한다. 두 값이 어긋나면(
 **Wave 수명주기**
 
 ```
-OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발행 완료)──▶ CLOSED ──(route.assigned 수신)──▶ PLANNED
-                                                                        └──(plan.failed)──▶ PLAN_FAILED
+OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발행 완료)──▶ CLOSED ──(plan.completed)──▶ PLANNED
+                                                                        └──(plan.failed)──▶ PLAN_FAILED ──(plan.completed, 운영자 재실행)──▶ PLANNED
 ```
+계획 완료 신호는 `route.assigned` 가 아니라 **`plan.completed`** 다([ADR-024](adr/ADR-024-plan-completed-event.md)).
+`route.assigned` 는 라우트 단위라 웨이브의 완료를 말할 수 없고, 개수를 아는 것은 발행자뿐이다.
+`PLAN_FAILED` 는 종결 상태가 아니다 — 운영자 재실행(§5.3)이 성공하면 `PLANNED` 로 간다.
+
+마지막 두 전이는 **서로 다른 두 토픽**에서 오므로 순서가 뒤바뀔 수 있다(§4.5). 재실행이 있으면
+1회차 `plan.failed` 가 2회차 `plan.completed` 보다 늦게 도착할 수 있고, 그대로 두면 라우트가 이미
+나간 웨이브가 실패로 표시된다. 그래서 이 두 전이에만 [ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md)
+의 축 규칙을 적용한다 — `OPEN(0) → CLOSING(1) → CLOSED(2) → PLAN_FAILED(3) → PLANNED(4)`, `PLANNED`
+가 흡수 상태이고 그 뒤에 온 `plan.failed` 는 무시하고 센다
+(`dawnline_event_rejected_total{reason="wave_already_planned"}`, §4.6 — DLQ 아님).
+앞의 세 상태는 이 서비스가 스스로 옮기므로 건너뜀은 여전히 예외다.
 - 웨이브는 (campId, tier, cutoffAt)당 1개. 주문 편입 시 없으면 생성(`INSERT … ON CONFLICT DO NOTHING` 후 재조회).
 - 컷오프 스케줄러: 매 30초 `cutoff_at <= now() AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
 - 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가(낙관적 락으로 경합 차단).
@@ -701,9 +739,13 @@ CREATE INDEX ix_fulfillment_orders_wave ON fulfillment_orders (wave_id) WHERE st
 **Plan 상태 머신**
 
 ```
-REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED
+REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assigned·order.dispatched·plan.completed 발행)
                  └──(예외/시간초과)──▶ FAILED (plan.failed 발행, 운영자 재실행 가능)
 ```
+- `PUBLISHED` 도달 시 라우트별 `route.assigned`·주문별 `order.dispatched` 와 함께 웨이브 단위
+  `plan.completed` 를 **같은 outbox 트랜잭션**에 넣는다([ADR-024](adr/ADR-024-plan-completed-event.md)).
+  나눠 넣으면 "완료라는데 라우트가 없다" 가 생긴다. 재실행이 성공하면 `plan.completed` 가 다시
+  나가고, 그것이 웨이브를 `PLAN_FAILED → PLANNED` 로 되돌리는 유일한 경로다.
 - `route_plans.wave_id`는 UNIQUE. `wave.closed`가 중복 도착해도 두 번째는 기존 plan을 발견하고 종료(멱등).
 - 계획 중 인스턴스가 죽으면 `PLANNING` 상태로 남는다. 스타트업/스케줄러가 `PLANNING`이고 `started_at`이 10분 경과한 plan을 `REQUESTED`로 되돌려 재실행한다. 결과 쓰기는 plan 단위 트랜잭션이므로 부분 결과가 발행되지 않는다.
 
@@ -788,6 +830,15 @@ CREATE TABLE rm_kpi_hourly (camp_id UUID, bucket_hour TIMESTAMPTZ, orders INTEGE
 CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), target_type VARCHAR(24), target_id UUID,
   request JSONB, result VARCHAR(16), created_at TIMESTAMPTZ);
 ```
+
+`rm_waves` 의 `plan_id`·`plan_duration_ms`·`total_cost_krw`·`unassigned_count` 를 채우는 것은
+`plan.completed` 다([ADR-024](adr/ADR-024-plan-completed-event.md)). 이 네 칸은 웨이브 단위 값이라
+`route.assigned` 로는 채울 수 없다 — 그 이벤트가 없던 동안 이 칸들에는 출처가 없었다.
+
+**Phase 6 메모 — `plan.completed` 는 일부 `route.assigned` 보다 먼저 올 수 있다.** 같은 outbox
+트랜잭션에서 나가도 토픽과 파티션이 달라 순서가 보장되지 않는다(§4.5). `rm_waves` 는
+`route_count` 를 저장해 두고 뒤늦게 오는 라우트를 세는 식이어야 하며, **아직 다 오지 않았다고
+실패로 표시하지 않는다.** 축 규칙으로 흡수한다.
 
 **ops-web (React, 최소 범위)** — 화면 4개: ① 캠프 대시보드(웨이브 상태·정시율·미배정·계획 시간) ② 웨이브/계획 상세(라우트 목록, 비용, 설명 조회) ③ 라우트 지도(stop 순서 폴리라인, 진행 상태, at-risk 강조) ④ 룰 편집. 지도는 Leaflet + OpenStreetMap 타일 `[결정 필요: 타일 서버 정책상 데모 용도 확인]`.
 
@@ -952,6 +1003,8 @@ public interface DispatchStrategy {
 2. 같은 캠프에서 여유 용량이 있는 **진행 중 라우트**(현재 위치 기준)와 **미출발 차량**을 후보 차량으로 구성.
 3. 동일 파이프라인으로 계획하되 `relocate`만 허용(대규모 재편 금지, 기사 혼란 방지).
 4. 결과는 `route.assigned.v1`에 `revision` 증가로 발행. tracking·ops는 revision이 낮은 이벤트를 무시(멱등).
+   **`plan.completed` 는 다시 내지 않는다** — 그 이벤트의 의미는 「최초 전체 계획의 완료」이고,
+   재계획마다 다시 내면 웨이브 상태와 ops 화면이 무엇을 세는지 모르게 된다([ADR-024](adr/ADR-024-plan-completed-event.md)).
 5. 재계획도 라우트당 10분 쿨다운.
 
 ### 6.9 벤치마크 방법
@@ -1360,7 +1413,9 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 022 | fulfillment 에 주문 단위 애그리거트 `fulfillment_orders` 도입, `wave_orders` 드롭 | 취소 마커 테이블 + `wave_orders(order_id)` 인덱스(사실이 두 곳에 흩어지고 UNSERVICEABLE 은 여전히 답 못 함), `wave_orders` 에 컬럼 추가(복합 PK 라 웨이브 없는 상태를 표현 못 함), 상태를 이벤트로만 두기(재처리·운영 질의에서 답 못 함), `processed_events` 재사용(의미·보존 기간이 다름) | [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) |
 | 021 | 권역 시드를 order-service 지오코더의 출력 집합에서 파생(권역 91개) | 60개를 손으로 고르기(31개 셀이 조용히 UNSERVICEABLE), 지오코더의 지터 축소(머지된 동작 변경 + 최적화 비교 무의미), 권역 키를 geohash4 로(캠프 단위 병렬성 붕괴), 양쪽에 목록을 각자 보관(한쪽만 고치는 날이 온다) | [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) |
 
-013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다.
+| 024 | 웨이브 계획 완료를 `plan.completed.v1` 로 알린다(+`PLAN_FAILED → PLANNED`, 마지막 두 전이에 축 규칙) | `route.assigned` 를 fulfillment 가 소비(첫 라우트면 계획 중인데 완료, 전부면 개수를 소비자가 모름), `route.assigned` 에 `routeCount`/`isLast` 추가(웨이브 사실이 라우트 수만큼 반복 + 재정렬 시 영영 미완료), dispatch 에 동기 조회(불변규칙 4), 수명주기에서 마지막 두 전이 삭제(ADR-023 정리 배치가 성립하지 않음) | [ADR-024](adr/ADR-024-plan-completed-event.md) |
+
+013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다. 024는 Phase 2-3 에서 `WaveStatus` 의 마지막 두 전이에 트리거가 없다는 것을 발견해 추가했다 — §5.2 의 수명주기와 §4.1 의 소비자 표가 어긋나 있었고, 그 어긋남이 ADR-023 의 정리 배치를 조용히 무한 보존으로 만들고 있었다.
 
 ---
 

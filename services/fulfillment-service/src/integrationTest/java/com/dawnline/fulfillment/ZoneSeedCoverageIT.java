@@ -144,6 +144,29 @@ class ZoneSeedCoverageIT {
     }
 
     @Test
+    void 모든_캠프의_홈_FC_가_반경_50km_안에_있다() {
+        // FcSelection 은 홈 FC 에 반경을 걸지 않는다 — 홈은 캠프에 배정된 기본값이고, 반경 50 km 는
+        // §5.2 5단계가 *대체* FC 를 고를 때의 간선 상한이기 때문이다. 그래서 홈이 멀다는 것은
+        // 판정 함수가 잡을 문제가 아니라 **캠프-FC 배정 자체의 문제**이고, 데이터 쪽에서 잡는다.
+        Map<String, Fc> byId = new LinkedHashMap<>();
+        centers().forEach(fc -> byId.put(fc.id(), fc));
+
+        List<String> tooFar = new ArrayList<>();
+        for (Camp camp : camps()) {
+            Fc home = byId.get(camp.fcId());
+            double km = distanceKm(camp.lat(), camp.lng(), home.lat(), home.lng());
+            if (km > LINEHAUL_RADIUS_KM) {
+                tooFar.add("%s → %s : %.1f km".formatted(camp.code(), home.code(), km));
+            }
+        }
+
+        assertThat(tooFar)
+                .as("홈 FC 가 반경 %.0f km 밖인 캠프. 대체 FC 라면 후보에서 떨어졌을 거리를 홈이라는"
+                        + " 이유로 그냥 쓰게 된다 — 배정을 고쳐야 한다", LINEHAUL_RADIUS_KM)
+                .isEmpty();
+    }
+
+    @Test
     void 홈_FC_가_필터에서_떨어지는_경우가_실제로_있다() {
         // 없으면 §5.2 5단계 대체 선택과 dawnline_fc_fallback_total 이 영원히 발화하지 않는
         // 죽은 코드가 된다. 시드가 그 경로를 태우도록 되어 있는지 확인한다(ADR-021).
