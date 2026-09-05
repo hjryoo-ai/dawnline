@@ -4,6 +4,7 @@ import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
+import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
 import com.dawnline.dispatch.domain.optimizer.Parcel;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 
 /**
  * 라우트 조작 어댑터 (DESIGN.md §5.3 운영자 재배정).
@@ -58,7 +60,7 @@ public class JdbcRouteMutations implements RouteMutations {
                   FROM route_stops s
                   JOIN route_stop_orders o ON o.stop_id = s.id
                   JOIN dispatch_candidates c ON c.order_id = o.order_id
-                 WHERE s.route_id = ?
+                 WHERE s.route_id = ? AND s.status <> 'CANCELLED' AND c.status <> 'CANCELLED'
                  ORDER BY s.seq, o.order_id
                 """).setParameter(1, routeId).getResultList();
 
@@ -101,9 +103,12 @@ public class JdbcRouteMutations implements RouteMutations {
         BigDecimal lng = (BigDecimal) candidate.getFirst()[1];
 
         // 목적지에 같은 지점의 stop 이 있으면 거기 붙인다 — 없는데 새로 만들면 같은 건물을
-        // 두 번 방문하는 라우트가 된다.
+        // 두 번 방문하는 라우트가 된다. 취소된 stop 에는 붙이지 않는다 — 기사가 건너뛰는
+        // 지점에 살아 있는 주문을 얹으면 그 주문은 배송되지 않는다 (§6.10).
         List<UUID> existing = entityManager.createNativeQuery("""
-                SELECT id FROM route_stops WHERE route_id = ? AND lat = ? AND lng = ? LIMIT 1
+                SELECT id FROM route_stops
+                 WHERE route_id = ? AND lat = ? AND lng = ? AND status <> 'CANCELLED'
+                 LIMIT 1
                 """).setParameter(1, targetRouteId).setParameter(2, lat).setParameter(3, lng)
                 .getResultList();
 
@@ -146,24 +151,14 @@ public class JdbcRouteMutations implements RouteMutations {
     public void rewrite(UUID routeId, PlannedRoute route) {
         // 순번을 피신시키지 않는다. (route_id, seq) UNIQUE 는 V3 에서 지연 제약이 되었고
         // (DEFERRABLE INITIALLY DEFERRED), 검사는 커밋 시점에 한 번만 일어난다 — 중간에 두 행이
-        // 같은 순번을 갖는 순간은 애초에 지켜야 하는 불변식이 아니다. 최종 상태가 1..n 임은
-        // 아래 루프가 PlannedRoute 의 seq 를 그대로 쓰는 것으로 보장된다.
-        List<Object[]> stopIds = entityManager.createNativeQuery("""
-                SELECT s.id, s.lat, s.lng FROM route_stops s WHERE s.route_id = ?
-                """).setParameter(1, routeId).getResultList();
-        Map<String, UUID> byPoint = new LinkedHashMap<>();
-        for (Object[] row : stopIds) {
-            byPoint.put(key((BigDecimal) row[1], (BigDecimal) row[2]), (UUID) row[0]);
-        }
+        // 같은 순번을 갖는 순간은 애초에 지켜야 하는 불변식이 아니다.
+        Map<String, UUID> byPoint = livePointsOf(routeId);
 
         for (PlannedStop planned : route.stops()) {
             UUID stopId = byPoint.get(key(planned.stop().point()));
             if (stopId == null) {
                 throw new IllegalStateException("다시 쓸 stop 을 찾지 못했습니다: " + planned.seq());
             }
-            // 반대 방향(DB 에 있는데 계획에 없는 stop)은 여기서 걸리지 않고 커밋에서 걸린다 —
-            // 그 stop 의 옛 순번이 새로 부여된 것과 겹치기 때문이다. 지연 제약이 조용한
-            // 데이터 오염 대신 시끄러운 실패를 고른 자리다.
             entityManager.createNativeQuery("""
                     UPDATE route_stops SET seq = ?, planned_arrival = ?, planned_departure = ?,
                                            service_s = ?
@@ -176,15 +171,38 @@ public class JdbcRouteMutations implements RouteMutations {
                     .setParameter(5, stopId).executeUpdate();
         }
 
+        // 취소된 stop 은 계획에 없다(loadStops 가 뺐다). 순번을 주지 않으면 옛 번호가 위에서
+        // 새로 부여한 것과 겹쳐 커밋이 터진다. 뒤로 보내는 이유: 재배정은 이미 순번을 다시
+        // 매기는 조작이고, 방문하지 않는 지점의 순번은 기사에게 아무것도 지시하지 않는다.
+        // (취소 자체는 순번을 건드리지 않는다 — retime 을 보라.)
+        int next = route.stops().size() + 1;
+        for (UUID stopId : cancelledStopsBySeq(routeId)) {
+            entityManager.createNativeQuery("UPDATE route_stops SET seq = ? WHERE id = ?")
+                    .setParameter(1, (short) next++).setParameter(2, stopId).executeUpdate();
+        }
+
+        // stop_count 는 배열 길이여야 한다 — route.assigned 의 summary.stopCount 가 그것이고,
+        // 취소된 stop 도 페이로드에 실린다 (§6.10).
         entityManager.createNativeQuery("""
-                UPDATE routes SET stop_count = ?, distance_m = ?, duration_s = ?, cost_krw = ?
+                UPDATE routes SET stop_count = (
+                           SELECT count(*) FROM route_stops WHERE route_id = routes.id),
+                       distance_m = ?, duration_s = ?, cost_krw = ?
                  WHERE id = ?
                 """)
-                .setParameter(1, route.stops().size())
-                .setParameter(2, route.distanceM())
-                .setParameter(3, route.durationS())
-                .setParameter(4, route.cost().krw())
-                .setParameter(5, routeId).executeUpdate();
+                .setParameter(1, route.distanceM())
+                .setParameter(2, route.durationS())
+                .setParameter(3, route.cost().krw())
+                .setParameter(4, routeId).executeUpdate();
+    }
+
+    /** 취소된 stop 들, 지금 순번 순서대로. */
+    @SuppressWarnings("unchecked")
+    private List<UUID> cancelledStopsBySeq(UUID routeId) {
+        return entityManager.createNativeQuery("""
+                SELECT id FROM route_stops
+                 WHERE route_id = ? AND status = 'CANCELLED'
+                 ORDER BY seq
+                """).setParameter(1, routeId).getResultList();
     }
 
     @Override
@@ -208,6 +226,157 @@ public class JdbcRouteMutations implements RouteMutations {
         return ((Number) entityManager
                 .createNativeQuery("SELECT revision FROM routes WHERE id = ?")
                 .setParameter(1, routeId).getSingleResult()).intValue();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<AssignedStop> findAssignedStop(UUID orderId) {
+        // 같은 주문이 두 계획의 라우트에 남아 있을 수 있다(부분 재계획은 옛 라우트를 지우지
+        // 않는다). id 가 UUIDv7 이라 시간순이므로 가장 나중에 만들어진 stop 이 지금 유효한
+        // 것이다 — 불변규칙 10 이 여기서 정렬 기준으로 값을 한다.
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT s.route_id, s.id, s.status
+                  FROM route_stops s
+                  JOIN route_stop_orders o ON o.stop_id = s.id
+                 WHERE o.order_id = ?
+                 ORDER BY s.id DESC
+                 LIMIT 1
+                """).setParameter(1, orderId).getResultList();
+        return rows.isEmpty() ? Optional.empty()
+                : Optional.of(new AssignedStop((UUID) rows.getFirst()[0], (UUID) rows.getFirst()[1],
+                        (String) rows.getFirst()[2]));
+    }
+
+    @Override
+    public boolean cancelStopIfAllOrdersCancelled(UUID stopId) {
+        // 술어를 리터럴로 적는다 (CLAUDE.md 코딩 컨벤션). 여기서는 부분 인덱스 때문이 아니라
+        // 상태 문자열이 스키마의 값이고 파라미터로 받을 이유가 없기 때문이다.
+        return entityManager.createNativeQuery("""
+                UPDATE route_stops s SET status = 'CANCELLED'
+                 WHERE s.id = ? AND s.status = 'PLANNED'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM route_stop_orders o
+                         JOIN dispatch_candidates c ON c.order_id = o.order_id
+                        WHERE o.stop_id = s.id AND c.status <> 'CANCELLED')
+                """).setParameter(1, stopId).executeUpdate() == 1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void retime(UUID routeId, @Nullable PlannedRoute route) {
+        if (route == null) {
+            // 살아 있는 stop 이 하나도 없다. 라우트는 남지만 아무 데도 가지 않는다 —
+            // 요약을 0 으로 두지 않으면 운영 화면이 죽은 라우트를 비용과 함께 보여 준다.
+            entityManager.createNativeQuery("""
+                    UPDATE routes SET distance_m = 0, duration_s = 0, cost_krw = 0 WHERE id = ?
+                    """).setParameter(1, routeId).executeUpdate();
+            return;
+        }
+
+        Map<String, UUID> byPoint = livePointsOf(routeId);
+        for (PlannedStop planned : route.stops()) {
+            UUID stopId = byPoint.get(key(planned.stop().point()));
+            if (stopId == null) {
+                throw new IllegalStateException("시각을 다시 쓸 stop 을 찾지 못했습니다: " + planned.seq());
+            }
+            // seq 는 건드리지 않는다 — 기사가 보던 순번이다 (§6.10).
+            entityManager.createNativeQuery("""
+                    UPDATE route_stops SET planned_arrival = ?, planned_departure = ? WHERE id = ?
+                    """)
+                    .setParameter(1, planned.arrival()).setParameter(2, planned.departure())
+                    .setParameter(3, stopId).executeUpdate();
+        }
+        entityManager.createNativeQuery("""
+                UPDATE routes SET distance_m = ?, duration_s = ?, cost_krw = ? WHERE id = ?
+                """)
+                .setParameter(1, route.distanceM()).setParameter(2, route.durationS())
+                .setParameter(3, route.cost().krw()).setParameter(4, routeId).executeUpdate();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<RouteSnapshot> snapshot(UUID routeId) {
+        List<Object[]> header = entityManager.createNativeQuery("""
+                SELECT vehicle_id, distance_m, duration_s, cost_krw FROM routes WHERE id = ?
+                """).setParameter(1, routeId).getResultList();
+        if (header.isEmpty()) {
+            return Optional.empty();
+        }
+
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT s.id, s.seq, s.lat, s.lng, s.planned_arrival, s.service_s, s.status,
+                       o.order_id, c.status
+                  FROM route_stops s
+                  JOIN route_stop_orders o ON o.stop_id = s.id
+                  JOIN dispatch_candidates c ON c.order_id = o.order_id
+                 WHERE s.route_id = ?
+                 ORDER BY s.seq, o.order_id
+                """).setParameter(1, routeId).getResultList();
+
+        Map<UUID, SnapshotBuilder> byStop = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            SnapshotBuilder builder = byStop.computeIfAbsent((UUID) row[0], id -> new SnapshotBuilder(
+                    ((Number) row[1]).intValue(),
+                    ((BigDecimal) row[2]).doubleValue(), ((BigDecimal) row[3]).doubleValue(),
+                    (Instant) row[4], ((Number) row[5]).intValue(),
+                    "CANCELLED".equals((String) row[6])));
+            builder.add((UUID) row[7], "CANCELLED".equals((String) row[8]));
+        }
+
+        Object[] first = header.getFirst();
+        return Optional.of(new RouteSnapshot(routeId, (UUID) first[0],
+                ((Number) first[1]).intValue(), ((Number) first[2]).intValue(),
+                ((Number) first[3]).longValue(),
+                byStop.values().stream().map(SnapshotBuilder::build).toList()));
+    }
+
+    /** 라우트의 살아 있는 지점 → stop id. 취소된 stop 은 다시 쓸 대상이 아니다. */
+    @SuppressWarnings("unchecked")
+    private Map<String, UUID> livePointsOf(UUID routeId) {
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT s.id, s.lat, s.lng FROM route_stops s
+                 WHERE s.route_id = ? AND s.status <> 'CANCELLED'
+                """).setParameter(1, routeId).getResultList();
+        Map<String, UUID> byPoint = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            byPoint.put(key((BigDecimal) row[1], (BigDecimal) row[2]), (UUID) row[0]);
+        }
+        return byPoint;
+    }
+
+    /** 스냅샷의 stop 하나를 여러 행에서 모은다. */
+    private static final class SnapshotBuilder {
+
+        private final int seq;
+        private final double lat;
+        private final double lng;
+        private final Instant arrival;
+        private final int serviceSeconds;
+        private final boolean cancelled;
+        private final List<UUID> orderIds = new ArrayList<>();
+        private final List<UUID> cancelledOrderIds = new ArrayList<>();
+
+        private SnapshotBuilder(int seq, double lat, double lng, Instant arrival,
+                int serviceSeconds, boolean cancelled) {
+            this.seq = seq;
+            this.lat = lat;
+            this.lng = lng;
+            this.arrival = arrival;
+            this.serviceSeconds = serviceSeconds;
+            this.cancelled = cancelled;
+        }
+
+        private void add(UUID orderId, boolean orderCancelled) {
+            orderIds.add(orderId);
+            if (orderCancelled) {
+                cancelledOrderIds.add(orderId);
+            }
+        }
+
+        private RouteSnapshot.StopSnapshot build() {
+            return new RouteSnapshot.StopSnapshot(seq, orderIds, cancelledOrderIds, lat, lng,
+                    arrival, serviceSeconds, cancelled);
+        }
     }
 
     private static String key(GeoPoint point) {

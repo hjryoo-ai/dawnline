@@ -183,6 +183,59 @@ class EventContractsTest {
         }
     }
 
+    @Test
+    void route_assigned_취소된_주문은_stop_안에서도_이름으로_남는다() {
+        // §6.10 / ADR-026 [후속 정정 — Phase 3-6]. StopMerger 가 같은 지점·같은 약속창의 주문을
+        // 하나의 stop 으로 묶으므로, 세 주문이 실린 stop 에서 하나만 취소되는 일이 일어난다.
+        // 그때 stop 은 여전히 방문해야 해서 status 는 PLANNED 이고, 어느 주문이 죽었는지는
+        // stop 의 상태로 말할 수 없다 — tracking 의 shipments 는 order_id 가 PK 다 (§5.4).
+        JsonNode revised = readExample("route.assigned.v1.revised.example.json").get("payload");
+
+        boolean sawPartial = false;
+        boolean sawFull = false;
+        for (JsonNode stop : revised.get("stops")) {
+            List<String> orderIds = new ArrayList<>();
+            stop.get("orderIds").forEach(id -> orderIds.add(id.asString()));
+            List<String> cancelled = new ArrayList<>();
+            stop.path("cancelledOrderIds").forEach(id -> cancelled.add(id.asString()));
+
+            // 부분집합이 아니면 소비자는 자기 stop 에 없는 주문의 취소를 듣게 된다.
+            assertThat(orderIds).as("cancelledOrderIds 는 orderIds 의 부분집합이다")
+                    .containsAll(cancelled);
+
+            boolean stopCancelled = "CANCELLED".equals(stop.path("status").asString(""));
+            if (stopCancelled) {
+                // 전부 취소된 stop 은 orderIds 를 비우지 않는다 — minItems 1 이고, 무엇이
+                // 취소됐는지가 그 배열에만 있다.
+                assertThat(cancelled).as("전부 취소된 stop 은 두 배열이 같다")
+                        .containsExactlyElementsOf(orderIds);
+                sawFull = true;
+            } else if (!cancelled.isEmpty()) {
+                assertThat(cancelled).as("일부만 취소된 stop 은 여전히 방문한다")
+                        .hasSizeLessThan(orderIds.size());
+                sawPartial = true;
+            }
+        }
+        assertThat(sawFull).as("개정 예시에 전부 취소된 stop 이 있어야 뜻이 있다").isTrue();
+        assertThat(sawPartial).as("개정 예시에 일부만 취소된 stop 이 있어야 뜻이 있다").isTrue();
+    }
+
+    @Test
+    void route_assigned_취소는_이후_stop_의_도착을_당긴다() {
+        // 순서는 그대로 두고 시간만 당긴다 (§6.10, ADR-026 결정 1). 다시 풀지 않으므로 stop 의
+        // 좌표도 서비스 시간도 그대로이고, 건너뛴 stop 의 몫만큼 뒤가 앞으로 온다.
+        JsonNode base = readExample("route.assigned.v1.example.json").get("payload");
+        JsonNode revised = readExample("route.assigned.v1.revised.example.json").get("payload");
+
+        OffsetDateTime baseLast = OffsetDateTime.parse(
+                base.get("stops").get(2).get("plannedArrival").asString());
+        OffsetDateTime revisedLast = OffsetDateTime.parse(
+                revised.get("stops").get(2).get("plannedArrival").asString());
+        assertThat(revisedLast).isBefore(baseLast);
+        assertThat(revised.get("summary").get("durationS").intValue())
+                .isLessThan(base.get("summary").get("durationS").intValue());
+    }
+
     private static List<Integer> seqOf(JsonNode payload) {
         List<Integer> sequences = new ArrayList<>();
         payload.get("stops").forEach(stop -> sequences.add(stop.get("seq").intValue()));

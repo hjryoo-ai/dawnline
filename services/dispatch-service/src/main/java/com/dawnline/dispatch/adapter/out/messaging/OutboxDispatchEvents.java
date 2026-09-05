@@ -2,6 +2,7 @@ package com.dawnline.dispatch.adapter.out.messaging;
 
 import com.dawnline.dispatch.application.port.out.DispatchEvents;
 import com.dawnline.dispatch.application.port.out.DriverLookup;
+import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
@@ -52,6 +53,18 @@ public class OutboxDispatchEvents implements DispatchEvents {
                 RouteAssignedPayload.SCHEMA_VERSION,
                 routeId.toString(),
                 RouteAssignedPayload.of(plan, routeId, driverId, route, revision)));
+    }
+
+    @Override
+    public void routeRevised(RoutePlan plan, RouteSnapshot snapshot, int revision) {
+        UUID driverId = drivers.driverOf(snapshot.vehicleId()).orElse(snapshot.vehicleId());
+        outbox.append(OutboxMessage.of(
+                RouteAssignedPayload.AGGREGATE_TYPE,
+                snapshot.routeId(),
+                RouteAssignedPayload.EVENT_TYPE,
+                RouteAssignedPayload.SCHEMA_VERSION,
+                snapshot.routeId().toString(),
+                RouteAssignedPayload.of(plan, snapshot, driverId, revision)));
     }
 
     @Override

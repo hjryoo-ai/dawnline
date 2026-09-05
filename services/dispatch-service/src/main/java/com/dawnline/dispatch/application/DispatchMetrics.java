@@ -38,6 +38,9 @@ public class DispatchMetrics {
     /** 열화 모드로 돈 계획 수 (§6.7). */
     public static final String PLAN_DEGRADED = "dawnline.plan.degraded";
 
+    /** 배송이 끝난 뒤 도착해 거부한 취소 (§6.10, §9.4 알림). */
+    public static final String CANCEL_TOO_LATE = "dawnline.cancel.too_late";
+
     private final MeterRegistry registry;
     private final Map<UUID, AtomicLong> costByCamp = new ConcurrentHashMap<>();
     private final Map<UUID, AtomicLong> unassignedByCamp = new ConcurrentHashMap<>();
@@ -74,6 +77,21 @@ public class DispatchMetrics {
             // 열화가 보이지 않으면 "성수기에도 정시" 를 위해 무엇을 포기했는지 아무도 모른다.
             registry.counter(PLAN_DEGRADED, "camp", plan.campId().toString()).increment();
         }
+    }
+
+    /**
+     * 배송이 끝난 뒤 도착한 취소를 거부했다 (§6.10 넷째 분기, ADR-026 결정 3).
+     *
+     * <p>이 값이 오른다는 것은 order-service 가 {@code order.dispatched} 를 배송 완료 시점까지
+     * 소비하지 못했다는 뜻이다 — 정상이면 계획 발행과 기사 출발 사이가 분 단위 이상이다. 그래서
+     * 이것은 이상 신호가 아니라 <strong>경합 창의 폭</strong>이고, order-service 의 축 밖 거부
+     * 카운터와 한 쌍이다. 오르면 볼 곳은 dispatch 가 아니라 그쪽 컨슈머 랙이다.
+     *
+     * @param campId 캠프 id
+     */
+    public void cancelTooLate(UUID campId) {
+        Objects.requireNonNull(campId, "campId");
+        registry.counter(CANCEL_TOO_LATE, "camp", campId.toString()).increment();
     }
 
     private void gauge(Map<UUID, AtomicLong> holder, String name, UUID campId, long value) {

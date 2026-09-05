@@ -461,6 +461,21 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    "부재 = `PLANNED`" 가 실제 사실과 일치하기 때문이다. 취소된 stop 은 페이로드에서 **지우지 않는다**
    (부재는 값이 아니다). 예시 `route.assigned.v1.revised.example.json` 과 계약 테스트 2건이 그것을 고정한다.
 
+   **구현하며 두 가지가 더 나왔다** ([ADR-026 후속 정정 — Phase 3-6](adr/ADR-026-dispatch-cancellation-window.md)).
+
+   - **통합된 stop 의 부분 취소는 stop 의 상태로 말할 수 없다.** `StopMerger` 가 같은 지점·같은
+     약속창의 주문을 묶으므로(§6.5 1단계) 세 주문이 실린 stop 에서 하나만 취소되는 일이 일어나고,
+     그때 stop 은 여전히 방문하므로 `status` 는 `PLANNED` 다. 그래서 `plannedStop` 에
+     **`cancelledOrderIds`**(optional, 기본 `[]`, `orderIds` 의 부분집합)를 더했다 —
+     §5.4 의 `shipments` 가 `order_id` PK 라 주문 단위로 알아야 하고, `orderIds` 에서 빼면
+     "취소" 와 "다른 라우트로 이동" 을 구별할 수 없다.
+   - **네 번째 분기는 지금 발화할 수 없다.** `route_stops.status` 를 `ARRIVED`/`COMPLETED` 로
+     옮기는 코드가 없다 — §4.1 에서 `delivery.status` 의 소비자는 order 와 ops 이고 dispatch 가
+     아니다. 코드는 stop 상태로 자르는 형태 그대로 두고(판정이 옳다), 값을 채우는 쪽은
+     **Phase 5 의 결정**으로 남긴다(아래 Phase 5-5). 그때까지
+     `dawnline_cancel_too_late_total` 은 구조적으로 0 이고, ADR-026 의 "peak-day 에서 0 이
+     아니면" 재검토 조건은 아무것도 검사하지 않는다.
+
 7. **마감**: Phase 3 대조표(작업 항목 ↔ 실제 커밋, 빠진 항목은 "미구현" 으로 **표에 남긴다**),
    **5,000건 통합 계획**(DoD, 시간 측정), `docs/benchmarks/phase3-baseline.md` 에
    `baseline-nn` vs `sweep-greedy-nn` 비교표, **냉장 주문이 냉장 차량에만 배정됨을 설명 조회로 확인**(DoD).
@@ -521,6 +536,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 2. `sim-runner` 기사 시뮬레이터: `route.assigned` 구독 → stop 순회(이동 시간 = 계획 시간 × (1 + 지연 확률·크기)), 실패 확률, 위치 보고.
 3. dispatch 재계획(§6.8): `delivery.at-risk` 리스너, 미완료 stop 부분 재계획, `revision` 증가 발행, 쿨다운.
 4. 테스트: 역행 스캔 거부, at-risk 1회 발행(쿨다운), 재계획 후 tracking이 새 revision만 반영.
+5. **[결정 필요] dispatch 가 `delivery.status` 를 소비해 `route_stops.status` 를 옮길 것인가.**
+   지금 dispatch 는 자기 라우트의 배송이 어디까지 갔는지 모른다 — §4.1 에서 그 토픽의 소비자가
+   order 와 ops 뿐이기 때문이다. 그래서 §6.10 의 넷째 분기(배송 끝난 뒤 도착한 취소를 거부)와
+   `dawnline_cancel_too_late_total` 이 **구조적으로 발화하지 않는다**
+   ([ADR-026 후속 정정](adr/ADR-026-dispatch-cancellation-window.md)). 소비자 목록을 바꾸는
+   일이므로 §4.1 수정 + ADR 이 먼저다. 넣지 않기로 한다면 그 판단도 적어야 한다 — 적지 않으면
+   다음 사람은 카운터가 0 인 것을 보고 "경합 창이 좁다" 고 읽는다.
 
 **축소안**: 재계획(3번)을 "운영자 수동 재배정 API"로 대체.
 

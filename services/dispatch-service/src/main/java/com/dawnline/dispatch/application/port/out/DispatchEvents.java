@@ -27,6 +27,20 @@ public interface DispatchEvents {
     void routeAssigned(RoutePlan plan, UUID routeId, PlannedRoute route, int revision);
 
     /**
+     * 개정 발행 — 저장된 라우트를 그대로 싣는다 (§6.10, ADR-026).
+     *
+     * <p>{@link #routeAssigned} 와 같은 토픽·같은 키다. 다른 것은 <strong>입력</strong>뿐이다:
+     * 저쪽은 계획 결과({@code PlannedRoute})를 싣고 이쪽은 저장된 상태({@link RouteSnapshot})를
+     * 싣는다. 취소된 stop 은 계획 결과에 없지만 페이로드에는 남아야 하기 때문이다 —
+     * 부재는 값이 아니다.
+     *
+     * @param plan     계획
+     * @param snapshot 저장된 라우트 (취소된 stop 포함)
+     * @param revision 올라간 개정 번호
+     */
+    void routeRevised(RoutePlan plan, RouteSnapshot snapshot, int revision);
+
+    /**
      * 주문당 하나 (§4.1 키 {@code orderId}).
      *
      * @param routeId  라우트 id

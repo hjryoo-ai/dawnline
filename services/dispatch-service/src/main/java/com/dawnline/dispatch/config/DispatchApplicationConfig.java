@@ -1,6 +1,7 @@
 package com.dawnline.dispatch.config;
 
 import com.dawnline.dispatch.adapter.in.messaging.FulfillmentPlannedListener;
+import com.dawnline.dispatch.adapter.in.messaging.OrderCancelledListener;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
 import com.dawnline.dispatch.adapter.out.messaging.OutboxDispatchEvents;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcPlanQueries;
@@ -10,12 +11,14 @@ import com.dawnline.dispatch.adapter.out.persistence.JdbcRouteMutations;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcReferenceData;
 import com.dawnline.dispatch.adapter.out.persistence.JpaRoutePlanRepository;
 import com.dawnline.dispatch.adapter.out.persistence.JpaDispatchCandidateRepository;
+import com.dawnline.dispatch.application.CancelOrderService;
 import com.dawnline.dispatch.application.DispatchMetrics;
 import com.dawnline.dispatch.application.LoadCandidateService;
 import com.dawnline.dispatch.application.ManageResourcesService;
 import com.dawnline.dispatch.application.ReassignStopService;
 import com.dawnline.dispatch.application.RecoverStalePlansService;
 import com.dawnline.dispatch.application.RunPlanService;
+import com.dawnline.dispatch.application.port.in.CancelOrderUseCase;
 import com.dawnline.dispatch.application.port.in.LoadCandidateUseCase;
 import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
 import com.dawnline.dispatch.application.port.in.ReassignStopUseCase;
@@ -215,6 +218,36 @@ public class DispatchApplicationConfig {
     public ReassignStopUseCase reassignStopUseCase(RouteMutations routes, RoutePlanRepository plans,
             JdbcReferenceData reference, DispatchEvents events, DistanceProvider distance) {
         return new ReassignStopService(routes, plans, reference, reference, events, distance);
+    }
+
+    /**
+     * 취소 처리 (§6.10, ADR-026).
+     *
+     * @param candidates 후보 저장소
+     * @param routes     라우트 조작
+     * @param plans      계획 저장소
+     * @param reference  차량·룰
+     * @param events     발행
+     * @param distance   거리 제공자
+     * @param metrics    §9.1 메트릭
+     */
+    @Bean
+    public CancelOrderUseCase cancelOrderUseCase(DispatchCandidateRepository candidates,
+            RouteMutations routes, RoutePlanRepository plans, JdbcReferenceData reference,
+            DispatchEvents events, DistanceProvider distance, DispatchMetrics metrics) {
+        return new CancelOrderService(candidates, routes, plans, reference, reference, events,
+                distance, metrics);
+    }
+
+    /**
+     * @param consumer    멱등 게이트
+     * @param cancelOrder 취소 유스케이스
+     * @param json        봉투 역직렬화
+     */
+    @Bean
+    public OrderCancelledListener orderCancelledListener(IdempotentConsumer consumer,
+            CancelOrderUseCase cancelOrder, EventJson json) {
+        return new OrderCancelledListener(consumer, cancelOrder, json);
     }
 
     /**
