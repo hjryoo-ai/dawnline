@@ -44,7 +44,9 @@ class RunPlanServiceTest {
         return new RunPlanService(plans, candidates, routes, events,
                 InMemoryDispatchPorts.fleet(vehicleCount, NOW),
                 InMemoryDispatchPorts.rules(rules),
-                new HaversineDistance(1.3d, 25.0d), Clock.fixed(NOW, ZoneOffset.UTC),
+                new HaversineDistance(1.3d, 25.0d),
+                new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                Clock.fixed(NOW, ZoneOffset.UTC),
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)));
     }
 
@@ -142,7 +144,9 @@ class RunPlanServiceTest {
         RunPlanService service = new RunPlanService(plans, new CancellingCandidates(cancelled),
                 routes, events, InMemoryDispatchPorts.fleet(2, NOW),
                 InMemoryDispatchPorts.rules(RuleSet.empty()),
-                new HaversineDistance(1.3d, 25.0d), Clock.fixed(NOW, ZoneOffset.UTC),
+                new HaversineDistance(1.3d, 25.0d),
+                new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                Clock.fixed(NOW, ZoneOffset.UTC),
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)));
 
         assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
