@@ -29,13 +29,16 @@ class ImageTagsMatchComposeIT {
 
         assertThat(env)
                 .as("deploy/compose/.env.example 에 이미지 태그 키가 있어야 한다")
-                .containsKeys("POSTGRES_IMAGE", "KAFKA_IMAGE");
+                .containsKeys("POSTGRES_IMAGE", "KAFKA_IMAGE", "REDIS_IMAGE");
         assertThat(MessagingIntegrationTestBase.POSTGRES_IMAGE)
                 .as("Testcontainers 와 Compose 가 같은 PostgreSQL 을 써야 한다")
                 .isEqualTo(env.get("POSTGRES_IMAGE"));
         assertThat(MessagingIntegrationTestBase.KAFKA_IMAGE)
                 .as("Testcontainers 와 Compose 가 같은 Kafka 를 써야 한다")
                 .isEqualTo(env.get("KAFKA_IMAGE"));
+        assertThat(MessagingIntegrationTestBase.REDIS_IMAGE)
+                .as("Testcontainers 와 Compose 가 같은 Redis 를 써야 한다 — 릴레이 리더 락(ADR-027)")
+                .isEqualTo(env.get("REDIS_IMAGE"));
     }
 
     private static Map<String, String> readEnvExample() throws IOException {

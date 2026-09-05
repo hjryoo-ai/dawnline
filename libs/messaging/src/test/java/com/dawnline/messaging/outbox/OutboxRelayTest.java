@@ -40,6 +40,28 @@ class OutboxRelayTest {
     private final TestTransactionManager transactionManager = new TestTransactionManager();
     private final OutboxMetrics metrics = new OutboxMetrics(new SimpleMeterRegistry(), "order-service");
     private final RecordingRecordPublisher publisher = RecordingRecordPublisher.alwaysSucceeding();
+    private final FakeLeadership leadership = new FakeLeadership();
+
+    /** 리더십을 시험이 정한다. 실제 판정은 {@code RedisRelayLeadershipTest} 가 본다. */
+    static final class FakeLeadership implements RelayLeadership {
+
+        private RelayLeadership.State state = RelayLeadership.State.LEADER;
+        private RuntimeException failure;
+        private int stepDowns;
+
+        @Override
+        public RelayLeadership.State lead() {
+            if (failure != null) {
+                throw failure;
+            }
+            return state;
+        }
+
+        @Override
+        public void stepDown() {
+            stepDowns++;
+        }
+    }
 
     @Test
     void poll_배치를_발행한다() {
@@ -54,8 +76,8 @@ class OutboxRelayTest {
     @Test
     void poll_예외를_삼킨다() {
         // 100ms 마다 스택 트레이스가 쏟아지면 로그를 못 쓰게 된다. 장애는 게이지와 알림이 잡는다 (§9.4).
-        OutboxRelay relay = new OutboxRelay(explodingPublisher(), repository, metrics, transactionManager, clock,
-                Duration.ofDays(7));
+        OutboxRelay relay = new OutboxRelay(explodingPublisher(), repository, metrics, leadership,
+                transactionManager, clock, Duration.ofDays(7));
 
         assertThatNoException().isThrownBy(relay::poll);
     }
@@ -119,13 +141,84 @@ class OutboxRelayTest {
     }
 
     @Test
+    void poll_리더가_아니면_발행하지_않는다() {
+        // SKIP LOCKED 는 중복 발행만 막는다. 키 단위 순서(§4.5)를 지키는 것은 이 판정뿐이다.
+        append(2);
+        leadership.state = RelayLeadership.State.FOLLOWER;
+
+        relay().poll();
+
+        assertThat(publisher.sent()).isEmpty();
+        assertThat(repository.rows()).noneMatch(OutboxEvent::isPublished);
+    }
+
+    @Test
+    void poll_리더십을_판정할_수_없으면_발행하지_않는다() {
+        // fail-closed 다. 순서를 지킬 폴백이 DB 에 없으므로, 모를 때 발행하면 락이 없는 것과 같다.
+        append(2);
+        leadership.state = RelayLeadership.State.UNKNOWN;
+
+        relay().poll();
+
+        assertThat(publisher.sent()).isEmpty();
+    }
+
+    @Test
+    void poll_판정이_예외로_끝나도_발행하지_않는다() {
+        // 구현이 던지는 예외를 릴레이가 삼키고 발행으로 넘어가면 fail-open 이 된다.
+        append(2);
+        leadership.failure = new IllegalStateException("Redis 없음");
+
+        relay().poll();
+
+        assertThat(publisher.sent()).isEmpty();
+    }
+
+    @Test
+    void poll_리더십을_게이지에_남긴다() {
+        // 지연이 오르는 *이유*를 말하는 값이다. 0(정상 팔로워)과 -1(장애)을 합치지 않는다 (§9.1).
+        OutboxRelay relay = relay();
+
+        relay.poll();
+        assertThat(metrics.leaderValue()).isEqualTo(1);
+
+        leadership.state = RelayLeadership.State.FOLLOWER;
+        relay.poll();
+        assertThat(metrics.leaderValue()).isZero();
+
+        leadership.state = RelayLeadership.State.UNKNOWN;
+        relay.poll();
+        assertThat(metrics.leaderValue()).isEqualTo(-1);
+    }
+
+    @Test
+    void close_리더십을_내려놓는다() {
+        // TTL 을 기다리지 않고 다음 인스턴스가 이어받게 한다.
+        relay().close();
+
+        assertThat(leadership.stepDowns).isEqualTo(1);
+    }
+
+    @Test
+    void 리더가_아니어도_메트릭과_정리는_돈다() {
+        // 이 락이 지키는 것은 순서이고, 순서를 가진 것은 발행뿐이다. 팔로워의 지연도 보여야 한다.
+        append(2);
+        leadership.state = RelayLeadership.State.FOLLOWER;
+
+        relay().refreshMetrics();
+
+        assertThat(metrics.unpublishedCount()).isEqualTo(2);
+    }
+
+    @Test
     void 생성자_보관기간이_0이면_예외() {
         assertThatIllegalArgumentException().isThrownBy(() -> new OutboxRelay(batchPublisher(), repository, metrics,
-                transactionManager, clock, Duration.ZERO));
+                leadership, transactionManager, clock, Duration.ZERO));
     }
 
     private OutboxRelay relay() {
-        return new OutboxRelay(batchPublisher(), repository, metrics, transactionManager, clock, Duration.ofDays(7));
+        return new OutboxRelay(batchPublisher(), repository, metrics, leadership, transactionManager, clock,
+                Duration.ofDays(7));
     }
 
     private OutboxBatchPublisher batchPublisher() {

@@ -35,6 +35,19 @@ public final class MessagingMetrics {
     /** 격리된(미해결) outbox 행 수 (§9.1, §4.6). 0 이 아니면 알림 대상이다(§9.4, RB-05). */
     public static final String OUTBOX_FAILED = "dawnline.outbox.failed";
 
+    /**
+     * gauge — 이 인스턴스의 릴레이 리더십 (§9.1, ADR-027). 태그: service.
+     *
+     * <p>값은 셋이다: {@code 1} 리더(발행 중) · {@code 0} 팔로워(정상, 다른 인스턴스가 리더) ·
+     * {@code -1} 판정 불가(Redis 장애). <strong>0 과 -1 을 합치지 않는 이유</strong>는 발행을
+     * 멈추는 결정은 같아도 <em>봐야 할 곳</em>이 정반대이기 때문이다 — 0 은 정상이고 -1 은 장애다.
+     *
+     * <p>전 인스턴스 합이 0 이면 아무도 발행하지 않는 상태다. 그 상태 자체에 알림을 걸지 않는
+     * 이유는 결과가 {@code dawnline_outbox_lag_seconds} 로 곧바로 나타나고, 그 알림이 §9.4 에
+     * 이미 있기 때문이다. 이 게이지는 <em>왜</em> 지연이 오르는지를 말한다.
+     */
+    public static final String OUTBOX_LEADER = "dawnline.outbox.leader";
+
     /** counter — 이벤트 소비 결과. 태그: consumer, eventType, outcome. */
     public static final String EVENT_PROCESSED = "dawnline.event.processed";
 
