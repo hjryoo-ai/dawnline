@@ -127,6 +127,11 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
      * <p>{@link #clean()} 은 계획 산출물만 지운다 — 시드(룰·차량·기사)는 <em>픽스처</em>이고,
      * {@code DispatchSeedCoverageIT} 가 그것이 계약 파일과 정확히 같은지 본다. 이 클래스가
      * 만들거나 고친 것을 남겨 두면 그 IT 가 실행 순서에 따라 깨진다 — 실제로 그렇게 깨뜨렸다.
+     *
+     * <p><strong>이 되돌리기는 순차 실행에 기대고 있다.</strong> 통합 테스트가 병렬로 돌기
+     * 시작하면 두 테스트가 같은 시드 행을 동시에 보게 되고, 그때는 되돌려도 늦다. 옳은 형태는
+     * 시드를 고치는 대신 <em>자기 픽스처 행</em>을 만들어 쓰는 것이고, 그 전환은
+     * IMPLEMENTATION_PLAN Phase 4-9 에 적어 두었다.
      */
     @org.junit.jupiter.api.AfterEach
     void restoreReferenceData() {
@@ -295,6 +300,45 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
 
         assertThatThrownBy(() -> reassign.reassign(routes.fromRouteId(), routes.orderId(), missing))
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void 순번_UNIQUE_는_지연_제약이라_통째로_뒤집어도_커밋된다() {
+        // 전제를 먼저 말한다 — 제약이 즉시 검사면 아래 UPDATE 는 중간에서 터진다. V1 이 그랬고,
+        // 어댑터는 순번을 1000 만큼 피신시켜 우회하고 있었다(V3 가 그 트릭을 없앴다).
+        Object[] flags = tx().execute(status -> (Object[]) entityManager.createNativeQuery("""
+                SELECT condeferrable, condeferred FROM pg_constraint
+                 WHERE conname = 'route_stops_route_id_seq_key'
+                """).getSingleResult());
+        assertThat((Boolean) flags[0]).as("DEFERRABLE").isTrue();
+        assertThat((Boolean) flags[1]).as("INITIALLY DEFERRED").isTrue();
+
+        TwoRoutes routes = twoRoutes();
+        Map<UUID, Integer> before = seqByStop(routes.fromRouteId());
+        assertThat(before).as("뒤집을 것이 있어야 한다").hasSizeGreaterThan(1);
+        int last = before.size() + 1;
+
+        // 1..n → n..1. 한 문장이어도 PostgreSQL 은 행마다 유일성을 보므로, 지연 제약이 아니면
+        // 첫 행에서 duplicate key 가 난다.
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery(
+                        "UPDATE route_stops SET seq = ? - seq WHERE route_id = ?")
+                .setParameter(1, (short) last).setParameter(2, routes.fromRouteId())
+                .executeUpdate());
+
+        Map<UUID, Integer> after = seqByStop(routes.fromRouteId());
+        assertThat(after).allSatisfy((stopId, seq) ->
+                assertThat(seq).isEqualTo(last - before.get(stopId)));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<UUID, Integer> seqByStop(UUID routeId) {
+        List<Object[]> rows = tx().execute(status -> (List<Object[]>) entityManager
+                .createNativeQuery("SELECT id, seq FROM route_stops WHERE route_id = ?")
+                .setParameter(1, routeId).getResultList());
+        Map<UUID, Integer> byStop = new java.util.LinkedHashMap<>();
+        rows.forEach(row -> byStop.put((UUID) row[0], ((Number) row[1]).intValue()));
+        return byStop;
     }
 
     // ---------------------------------------------------------------- 참조 데이터
