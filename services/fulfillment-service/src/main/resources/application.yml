@@ -52,16 +52,18 @@ spring:
   #     ArrayList 라 중복 제거가 없어서 "Found more than one migration with version" 으로
   #     기동이 깨진다(jar 를 열어 확인).
 
-  # @Scheduled 작업 4개가 이 풀을 쓴다: OutboxRelay 의 폴링(100ms)·메트릭(5s)·outbox 정리(1h)와
-  # ProcessedEventCleaner 의 processed_events 정리(24h, §4.4 보존 14일).
+  # @Scheduled 작업 5개가 이 풀을 쓴다: OutboxRelay 의 폴링(100ms)·메트릭(5s)·outbox 정리(1h),
+  # ProcessedEventCleaner 의 processed_events 정리(24h, §4.4 보존 14일),
+  # FulfillmentRetentionCleaner 의 fulfillment_orders·waves 정리(24h, ADR-023 보존 30일·90일).
   # Boot 기본값 1이면 Kafka 장애로 폴링이 막히는 동안 메트릭 갱신이 함께 멈춰,
   # 그 장애를 알려 줄 유일한 지표(outbox 지연·격리 게이지)가 바로 그때 낡는다.
-  # 3으로 두는 이유: 두 정리 작업은 배치를 반복하느라 초 단위로 길어질 수 있어서, 둘이 겹치는
-  # 순간에도 폴링과 메트릭이 각자 자리를 갖도록 한다.
+  # 4로 두는 이유: 정리 작업 셋은 배치를 반복하느라 초 단위로 길어질 수 있다. 초기 지연을
+  # 5분·10분으로 어긋나게 두었지만(§ dawnline.fulfillment.retention.cleanup-initial-delay-ms)
+  # 24시간 주기가 언젠가는 겹치므로, 겹치는 순간에도 폴링과 메트릭이 각자 자리를 갖도록 한다.
   task:
     scheduling:
       pool:
-        size: 3
+        size: 4
 
   flyway:
     enabled: true
