@@ -1,5 +1,6 @@
 package com.dawnline.benchmark;
 
+import com.dawnline.dispatch.domain.optimizer.DispatchStrategies;
 import com.dawnline.dispatch.domain.optimizer.DispatchStrategy;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,10 +19,17 @@ public final class StrategyRegistry {
 
     private final Map<String, Supplier<DispatchStrategy>> factories = new LinkedHashMap<>();
 
-    /** 기본 등록: 지금은 비용 상한 하나뿐이고, Phase 3-3·3-4 에서 실제 전략이 붙는다. */
+    /**
+     * 기본 등록: dispatch 의 내장 전략 전부 + 이 도구만의 비용 상한.
+     *
+     * <p>내장 전략 목록을 여기서 다시 적지 않는다 — 두 목록이 되면 "벤치마크에서는 도는데
+     * 운영에는 없는 전략" 이 생긴다.
+     */
     public static StrategyRegistry standard() {
         StrategyRegistry registry = new StrategyRegistry();
         registry.register(UnassignAllStrategy.NAME, UnassignAllStrategy::new);
+        DispatchStrategies.names()
+                .forEach(name -> registry.register(name, () -> DispatchStrategies.create(name)));
         return registry;
     }
 

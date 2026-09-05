@@ -94,10 +94,22 @@ class DatasetGeneratorTest {
 
     @Test
     void 차종이_섞여_있다() {
+        // 자전거는 넣지 않는다 — 이 규모(차량당 약 100 stop)에서 30 kg 은 산술적으로 맞지 않는다.
+        // 근거와 검사는 DatasetFeasibilityTest 에 있다.
         Set<String> types = generate(Dataset.MEDIUM, 5L).vehicles().stream()
                 .map(vehicle -> vehicle.attrs().type()).collect(java.util.stream.Collectors.toSet());
 
-        assertThat(types).containsExactlyInAnyOrder("BIKE", "VAN", "TRUCK");
+        assertThat(types).containsExactlyInAnyOrder("VAN", "TRUCK");
+    }
+
+    @Test
+    void 선호하지_않는_차종이_섞여_있다() {
+        // 시드가 선호하는 것은 BIKE·VAN 이므로 TRUCK 이 VEHICLE_PREFERENCE 페널티를 받는다.
+        // 전부 선호 차종이면 그 소프트 룰이 한 번도 돌지 않는다.
+        long trucks = generate(Dataset.MEDIUM, 5L).vehicles().stream()
+                .filter(vehicle -> "TRUCK".equals(vehicle.attrs().type())).count();
+
+        assertThat(trucks).isPositive();
     }
 
     @Test

@@ -78,6 +78,10 @@ public final class BenchmarkRunner {
                     "%s 의 결과가 하드 룰을 어겼습니다 (%d건). 첫 위반: %s".formatted(
                             strategyName, violations.size(), violations.getFirst().feasibility()));
         }
-        return new RunOutcome(result.metrics(), result.totalCost(), elapsedMs);
+        Map<String, Long> reasons = result.unassigned().stream().collect(
+                java.util.stream.Collectors.groupingBy(
+                        com.dawnline.dispatch.domain.optimizer.Unassigned::ruleName,
+                        java.util.stream.Collectors.counting()));
+        return new RunOutcome(result.metrics(), result.totalCost(), elapsedMs, reasons);
     }
 }
