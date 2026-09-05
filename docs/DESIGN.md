@@ -893,11 +893,26 @@ cost(R) = Σ_r [ fixed(v_r) + dist_km(r)·perKm(v_r) + dur_min(r)·perMin(v_r) +
 record PlanningProblem(WaveRef wave, CampDepot depot, List<Candidate> candidates,
                        List<VehicleSpec> vehicles, RuleSet rules, CostModel cost, DistanceProvider distance) {}
 record Candidate(OrderId id, GeoPoint point, Parcel parcel, TimeWindow promised, int priority) {}
-record VehicleSpec(VehicleId id, Capacity capacity, VehicleAttrs attrs, ShiftWindow shift, VehicleCost cost) {}
-record PlanResult(List<PlannedRoute> routes, List<Unassigned> unassigned, long totalCostKrw,
+record VehicleSpec(VehicleId id, Capacity capacity, VehicleAttrs attrs, TimeWindow shift, VehicleCost cost) {}
+record Stop(GeoPoint point, List<OrderId> orderIds, Parcel parcel, TimeWindow promised,
+            int serviceSeconds, int priority) {}                    // §6.5 1단계 통합 결과
+record PlanResult(List<PlannedRoute> routes, List<Unassigned> unassigned, Money totalCost,
                   PlanMetrics metrics, List<Explanation> explanations) {}
-record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, int durationS, long costKrw) {}
+record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, int durationS, Money cost) {}
 ```
+
+**타입 선택 셋** (2026-09-05, Phase 3-1 구현 시 확정)
+
+- **금액은 `long` 이 아니라 `libs/common` 의 `Money`.** 불변규칙 9 가 요구하는 것은 정수 KRW 이고
+  `Money` 가 그 타입이다. `long` 으로 두면 거리(m)·시간(s)과 같은 `long` 이라 인자 순서가 바뀌어도
+  컴파일된다.
+- **근무창은 `ShiftWindow` 가 아니라 `TimeWindow`.** 반열린 구간의 의미와 연산이 이미 있고,
+  같은 뜻의 타입을 하나 더 두면 둘 중 하나에만 경계 규칙이 붙는다.
+- **`OrderId`·`VehicleId` 는 감싼다** — 저장소의 다른 곳은 raw `UUID` 를 쓰는데 여기만 다르다.
+  이유는 이 패키지가 **여러 종류의 id 가 한 함수 안에서 섞이는 유일한 곳**이기 때문이다.
+  `Map<OrderId, …>` 와 `Map<VehicleId, …>` 가 나란히 있고 `assign(orderId, vehicleId)` 같은 서명이
+  있는 자리에서 raw `UUID` 는 인자를 바꿔 넣어도 조용히 컴파일된다. 애그리거트 하나의 id 만
+  다루는 다른 서비스에서는 그 위험이 없으므로 그쪽은 그대로 둔다.
 
 `DistanceProvider`는 `(GeoPoint a, GeoPoint b) → (meters, seconds)`를 반환. 기본 구현 `HaversineDistance`(도로계수 1.3, 평균 속도 25 km/h, 캠프 설정값). 선택 구현 `OsrmDistance`(테이블 API, 캐시). 문제 생성 시 거리 행렬은 **stop 통합 후** 계산해 `O(n²)` 규모를 줄인다(§6.7).
 
@@ -909,9 +924,14 @@ record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, i
 sealed interface DispatchRule permits HardRule, SoftRule {
   String name(); int priority();
 }
-interface HardRule extends DispatchRule { Feasibility check(Candidate o, VehicleSpec v, RouteState r); }
-interface SoftRule extends DispatchRule { long penaltyKrw(Candidate o, VehicleSpec v, RouteState r); }
+interface HardRule extends DispatchRule { Feasibility check(Stop s, VehicleSpec v, RouteState r); }
+interface SoftRule extends DispatchRule { Money penalty(Stop s, VehicleSpec v, RouteState r); }
 ```
+
+평가 단위가 `Candidate` 가 아니라 **`Stop`** 인 것은 §6.5 의 1단계가 통합이기 때문이다 — 통합
+이후로는 주문 하나가 단독으로 배정되는 일이 없고, 용량·냉장·우선도는 전부 **합쳐진 값**으로 봐야
+한다(`Stop.parcel` 은 중량·부피의 합이고 냉장·위험물은 OR, `priority` 는 최댓값). 배정에 실패하면
+그 stop 의 주문이 **함께** 미배정이 되고, `Unassigned` 목록에서 다시 주문 단위로 펼친다.
 
 **룰 카탈로그 (초기 구현 범위)**
 
@@ -1038,7 +1058,18 @@ public interface DispatchStrategy {
 - 데이터셋: `tools/benchmark/datasets/` — `small`(500 주문/5 차량), `medium`(2,000/20), `large`(5,000/40), `peak`(15,000/60), 각각 seed 고정 생성. 좌표는 서울 근사 격자(캠프 중심 반경 8 km, 밀도 불균일).
 - 지표: 총비용, 총거리, 계획 시간, 미배정 수, 지각 stop 수·평균 지각분, 차량 사용 대수.
 - 각 전략 × 데이터셋을 5회 반복, 중앙값·p95 기록. 결과는 `docs/benchmarks/YYYY-MM-DD.md`에 표와 함께 커밋. README 상단에 최신 표를 링크.
-- 회귀 방지: CI에서 `small`을 1회 실행해 기본 전략 비용이 베이스라인보다 나쁘면 실패.
+- 회귀 방지: CI에서 `small`을 1회 실행해 기본 전략 **비용**이 베이스라인보다 나쁘면 실패.
+
+**게이트 규칙 둘** (2026-09-05 확정)
+
+1. **`baseline-nn` 은 게이트가 켜진 순간 동결된다.** 베이스라인이 좋아지면 그때까지의 비교가 전부
+   무효가 된다 — 기준선이 움직이면 "나아졌다" 가 무엇에 대한 말인지 사라지기 때문이다. 바꿔야 하면
+   `docs/benchmarks/` 에 **재기준(re-baseline) 기록**을 남기고 그때까지의 수치를 **새 기준으로 다시
+   낸다.** 기록 없이 바꾸면 다음 사람은 두 시점의 표를 같은 축에 놓을 수 없다.
+2. **게이트는 비용만 본다.** 두 전략을 **같은 실행 안에서** 돌려 비교하므로 비용 비교는 러너 사양에
+   독립이다. 반면 계획 시간은 CI 러너에 따라 흔들리므로(Phase 1 k6 가 0.75 CPU 에서 본 것과 같은
+   종류의 흔들림) **기록만 하고 게이트 조건에 넣지 않는다.** 환경 탓으로 빨개지는 게이트는 결국
+   꺼지고, 꺼진 게이트는 없는 것만 못하다 — 있다고 믿게 만들기 때문이다.
 
 ### 6.10 취소 처리 (`order.cancelled` 소비)
 
