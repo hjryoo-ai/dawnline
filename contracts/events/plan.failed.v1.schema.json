@@ -21,8 +21,8 @@
     },
     "reason": {
       "type": "string",
-      "enum": ["TIMEOUT", "NO_VEHICLE", "RULE_VIOLATION", "INTERNAL_ERROR"],
-      "description": "실패 사유. 소비자가 분기하는 값이 아니라 운영자가 읽는 값이지만, ops 의 집계가 자유 문자열을 세면 오타가 새 사유가 되므로 값 집합을 고정한다 (계약 README 4.4). 사유가 늘면 같은 major 안에서 enum 을 넓힌다."
+      "enum": ["TIMEOUT", "NO_VEHICLE", "RULE_VIOLATION", "INTERNAL_ERROR", "NO_CANDIDATES"],
+      "description": "실패 사유. 소비자가 분기하는 값이 아니라 운영자가 읽는 값이지만, ops 의 집계가 자유 문자열을 세면 오타가 새 사유가 되므로 값 집합을 고정한다 (계약 README 4.4). 사유가 늘면 같은 major 안에서 enum 을 넓힌다. NO_CANDIDATES 는 2026-09-05 (Phase 3-5b) 에 넓힌 값으로, 웨이브가 닫혔는데 계획할 후보가 하나도 없는 경우다 — 전부 취소됐거나 전부 배차 불가로 종결된 웨이브이고, 운영자가 그 사실을 봐야 한다."
     },
     "message": {
       "type": "string",
