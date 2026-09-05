@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.adapter.in.messaging;
 
+import com.dawnline.common.GeoPoint;
 import com.dawnline.dispatch.application.port.in.RunPlanCommand;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.messaging.EventEnvelope;
@@ -55,9 +56,13 @@ public class WaveClosedListener {
         JsonNode payload = envelope.payload();
         UUID waveId = UUID.fromString(payload.get("waveId").asString());
         UUID campId = UUID.fromString(payload.get("campId").asString());
+        // depot 은 required 다 (계약 README 4.4 예외 표, 2026-09-05). 없으면 계획이 성립하지
+        // 않으므로 "없을 때" 를 처리하는 죽은 분기를 두지 않는다 — 없으면 여기서 터진다.
+        JsonNode depot = payload.get("depot");
+        GeoPoint point = GeoPoint.of(depot.get("lat").doubleValue(), depot.get("lng").doubleValue());
 
         consumer.runOnce(envelope, CONSUMER, () -> {
-            RunPlanUseCase.Outcome outcome = runPlan.run(RunPlanCommand.of(waveId, campId));
+            RunPlanUseCase.Outcome outcome = runPlan.run(RunPlanCommand.of(waveId, campId, point));
             log.info("웨이브 계획: waveId={} 결과={}", waveId, outcome);
         });
     }

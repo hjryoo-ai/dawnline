@@ -748,6 +748,13 @@ CREATE INDEX ix_fulfillment_orders_cleanup ON fulfillment_orders (updated_at);
 REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assigned·order.dispatched·plan.completed 발행)
                  └──(예외/시간초과)──▶ FAILED (plan.failed 발행, 운영자 재실행 가능)
 ```
+- **캠프 좌표는 `wave.closed` 의 `depot` 스냅샷으로 들어온다**(2026-09-05 결정). 캠프는
+  fulfillment 의 참조 데이터인데 라우트의 출발·복귀 지점이라 계획에 반드시 필요하고, 불변규칙 4 가
+  코어 서비스 간 동기 호출을 금지한다 — 그래서 **계획을 촉발하는 이벤트가 싣는다**(`order.placed` 의
+  `cutoffAt` 과 같은 논리). `camp.registered` 같은 참조 데이터 동기화 이벤트를 두지 않는 이유는
+  10행짜리 데이터를 위해 초기 적재·갱신·순서라는 수명주기를 통째로 들여오게 되기 때문이다.
+  좌표는 `route_plans.depot_lat/lng` 에 저장한다 — 정체 회수·운영자 재실행·§6.8 부분 재계획은
+  `wave.closed` 를 다시 받지 않는다.
 - `PUBLISHED` 도달 시 라우트별 `route.assigned`·주문별 `order.dispatched` 와 함께 웨이브 단위
   `plan.completed` 를 **같은 outbox 트랜잭션**에 넣는다([ADR-024](adr/ADR-024-plan-completed-event.md)).
   나눠 넣으면 "완료라는데 라우트가 없다" 가 생긴다. 재실행이 성공하면 `plan.completed` 가 다시

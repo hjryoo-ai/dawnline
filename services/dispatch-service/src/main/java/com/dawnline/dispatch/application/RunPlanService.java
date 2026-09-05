@@ -14,6 +14,7 @@ import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
+import com.dawnline.common.GeoPoint;
 import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DispatchStrategies;
@@ -86,7 +87,6 @@ public class RunPlanService implements RunPlanUseCase {
     private final DispatchEvents events;
     private final VehicleCatalog vehicles;
     private final RuleCatalog rules;
-    private final CampLocator camps;
     private final DistanceProvider distance;
     private final PlanValidator validator = new PlanValidator();
     private final CostModel cost = new CostModel();
@@ -101,7 +101,6 @@ public class RunPlanService implements RunPlanUseCase {
      * @param events          발행 (Outbox)
      * @param vehicles        차량 카탈로그
      * @param rules           룰 카탈로그
-     * @param camps           캠프 좌표
      * @param distance        거리 제공자
      * @param clock           시각 출처 (불변규칙 12)
      * @param defaultStrategy 기본 전략 (§6.6)
@@ -109,7 +108,7 @@ public class RunPlanService implements RunPlanUseCase {
      */
     public RunPlanService(RoutePlanRepository plans, DispatchCandidateRepository candidates,
             PlannedRouteRepository routes, DispatchEvents events, VehicleCatalog vehicles,
-            RuleCatalog rules, CampLocator camps, DistanceProvider distance, Clock clock,
+            RuleCatalog rules, DistanceProvider distance, Clock clock,
             String defaultStrategy, PlanningBudget budget) {
 
         this.plans = Objects.requireNonNull(plans, "plans");
@@ -118,7 +117,6 @@ public class RunPlanService implements RunPlanUseCase {
         this.events = Objects.requireNonNull(events, "events");
         this.vehicles = Objects.requireNonNull(vehicles, "vehicles");
         this.rules = Objects.requireNonNull(rules, "rules");
-        this.camps = Objects.requireNonNull(camps, "camps");
         this.distance = Objects.requireNonNull(distance, "distance");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.defaultStrategy = Objects.requireNonNull(defaultStrategy, "defaultStrategy");
@@ -153,7 +151,7 @@ public class RunPlanService implements RunPlanUseCase {
                 ruleSet.version(), startedAt);
         plans.update(plan);
 
-        PlanningProblem problem = problemOf(command, plannable, ruleSet, startedAt);
+        PlanningProblem problem = problemOf(command, plan, plannable, ruleSet, startedAt);
         PlanResult result = DispatchStrategies.create(strategyOf(command)).plan(problem);
 
         List<PlanValidator.Violation> violations = validator.validate(problem, result);
@@ -262,7 +260,9 @@ public class RunPlanService implements RunPlanUseCase {
             }
             return plan;
         }
-        RoutePlan plan = RoutePlan.request(Ids.newId(), command.waveId(), command.campId());
+        GeoPoint depot = Objects.requireNonNull(command.depot(),
+                "새 계획에는 캠프 좌표가 필요합니다 — wave.closed 의 depot 스냅샷입니다");
+        RoutePlan plan = RoutePlan.request(Ids.newId(), command.waveId(), command.campId(), depot);
         if (!plans.insertIfAbsent(plan)) {
             return plans.findByWaveId(command.waveId()).orElseThrow(() ->
                     new IllegalStateException("계획을 넣지도 찾지도 못했습니다: " + command.waveId()));
@@ -270,8 +270,8 @@ public class RunPlanService implements RunPlanUseCase {
         return plan;
     }
 
-    private PlanningProblem problemOf(RunPlanCommand command, List<DispatchCandidate> plannable,
-            RuleSet ruleSet, Instant startedAt) {
+    private PlanningProblem problemOf(RunPlanCommand command, RoutePlan plan,
+            List<DispatchCandidate> plannable, RuleSet ruleSet, Instant startedAt) {
 
         List<VehicleSpec> fleet = vehicles.availableAt(command.campId(), startedAt);
         if (fleet.isEmpty()) {
@@ -285,11 +285,14 @@ public class RunPlanService implements RunPlanUseCase {
                             candidate.requiresCold(), candidate.hazmat()),
                     candidate.promised(), candidate.serviceSeconds(), candidate.priority()));
         }
-        CampDepot depot = camps.locate(command.campId());
+        // 좌표는 계획 행에 저장돼 있다 — 재실행·정체 회수·부분 재계획은 wave.closed 를 다시
+        // 받지 않는다(V2 마이그레이션 주석).
+        GeoPoint point = plan.depot().orElseThrow(() -> new IllegalStateException(
+                "캠프 좌표가 없는 계획은 다시 돌릴 수 없습니다: planId=" + plan.id()));
         return new PlanningProblem(
                 new WaveRef(command.waveId(), command.campId(), "SAME_DAY", startedAt),
-                depot, optimizerCandidates, fleet, ruleSet, cost, distance, budget, startedAt,
-                command.effectiveSeed());
+                new CampDepot(command.campId(), point), optimizerCandidates, fleet, ruleSet, cost,
+                distance, budget, startedAt, command.effectiveSeed());
     }
 
     private static List<UUID> orderIdsOf(PlannedRoute route) {

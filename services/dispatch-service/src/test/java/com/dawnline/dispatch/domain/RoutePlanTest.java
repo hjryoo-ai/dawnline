@@ -17,7 +17,7 @@ class RoutePlanTest {
     private static final Instant NOW = Instant.parse("2026-09-06T01:00:00Z");
 
     private static RoutePlan requested() {
-        return RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId());
+        return RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId(), com.dawnline.common.GeoPoint.of(37.5663, 126.9779));
     }
 
     @Test

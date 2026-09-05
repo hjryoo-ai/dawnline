@@ -1,6 +1,5 @@
 package com.dawnline.dispatch.config;
 
-import com.dawnline.common.GeoPoint;
 import com.dawnline.dispatch.adapter.in.messaging.FulfillmentPlannedListener;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
 import com.dawnline.dispatch.adapter.out.messaging.OutboxDispatchEvents;
@@ -25,8 +24,6 @@ import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.outbox.OutboxAppender;
 import jakarta.persistence.EntityManagerFactory;
 import java.time.Clock;
-import java.util.Map;
-import java.util.UUID;
 import org.springframework.context.annotation.Bean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
@@ -46,24 +43,6 @@ import org.springframework.orm.jpa.SharedEntityManagerCreator;
 @EnableScheduling
 public class DispatchApplicationConfig {
 
-    /**
-     * 캠프 좌표. fulfillment 의 {@code R__seed_fulfillment.sql} 과 같은 값이다.
-     *
-     * <p>여기 있는 이유는 {@link com.dawnline.dispatch.application.CampLocator} 주석에 적었다 —
-     * 캠프를 이벤트로 받아 자기 DB 에 투영하는 것이 §4 의 정석이지만 그 이벤트가 설계서에 없다.
-     * 시드가 갈라지면 {@code DispatchSeedCoverageIT} 가 잡는다.
-     */
-    private static final Map<UUID, GeoPoint> CAMP_POINTS = Map.ofEntries(
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000001"), GeoPoint.of(37.640000, 127.030000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000002"), GeoPoint.of(37.570000, 126.970000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000003"), GeoPoint.of(37.535000, 127.090000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000004"), GeoPoint.of(37.530000, 126.870000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000005"), GeoPoint.of(37.485000, 127.010000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000006"), GeoPoint.of(37.700000, 126.850000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000007"), GeoPoint.of(37.490000, 126.680000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000008"), GeoPoint.of(37.330000, 126.860000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000009"), GeoPoint.of(37.260000, 127.010000)),
-            Map.entry(UUID.fromString("01a06edd-6c00-7000-8001-000000000010"), GeoPoint.of(37.260000, 127.170000)));
 
     /**
      * {@code dispatch_candidates} 저장소.
@@ -109,8 +88,7 @@ public class DispatchApplicationConfig {
     @Bean
     public JdbcReferenceData referenceData(EntityManagerFactory entityManagerFactory) {
         return new JdbcReferenceData(
-                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory),
-                CAMP_POINTS);
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
     }
 
     /**
@@ -170,7 +148,7 @@ public class DispatchApplicationConfig {
             Clock clock, DispatchProperties properties) {
 
         return new RunPlanService(plans, candidates, routes, events, reference, reference,
-                reference, distance, clock, properties.plan().defaultStrategy(),
+                distance, clock, properties.plan().defaultStrategy(),
                 new PlanningBudget(properties.plan().budget(), properties.plan().perRouteBudget()));
     }
 

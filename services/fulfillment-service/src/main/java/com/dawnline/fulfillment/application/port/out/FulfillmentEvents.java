@@ -45,7 +45,14 @@ public interface FulfillmentEvents {
      * 웨이브 계획을 직렬화하기 위해서이고, 그 캠프 단위 병렬성이 계획 처리량의 상한이다(§6.7) —
      * 의도된 설계다.
      *
-     * @param wave 마감된 웨이브. {@code orderCount} 는 마감 시점의 집계값이다 (ADR-025)
+     * <p>{@code depot} 은 캠프 좌표 스냅샷이다. dispatch 의 계획이 이것 없이는 성립하지 않는데
+     * (라우트의 출발·복귀 지점이다, §6.2) 캠프는 <em>이 서비스의</em> 참조 데이터이고 불변규칙 4 가
+     * 코어 서비스 간 동기 호출을 금지한다 — 그래서 <strong>계획을 촉발하는 이벤트가 싣는다</strong>.
+     * {@code order.placed} 의 {@code cutoffAt} 과 같은 논리다.
+     *
+     * @param wave  마감된 웨이브. {@code orderCount} 는 마감 시점의 집계값이다 (ADR-025)
+     * @param depot 캠프 좌표
      */
-    void waveClosed(com.dawnline.fulfillment.domain.Wave wave);
+    void waveClosed(com.dawnline.fulfillment.domain.Wave wave,
+            com.dawnline.common.GeoPoint depot);
 }

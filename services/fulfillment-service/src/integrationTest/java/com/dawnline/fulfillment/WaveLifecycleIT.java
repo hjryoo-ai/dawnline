@@ -79,6 +79,13 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
     private static final EventContracts CONTRACTS = EventContracts.load();
 
     private static final Instant CUTOFF = Instant.parse("2026-09-06T01:00:00Z");
+
+    /**
+     * 시드된 캠프 (R__seed_fulfillment). 임의 UUID 를 쓰면 마감이 캠프를 찾지 못해 실패한다 —
+     * {@code wave.closed} 가 캠프 좌표를 실어야 하기 때문이다(하류의 라우트 출발 지점, §6.2).
+     */
+    private static final UUID SEEDED_CAMP =
+            UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
     private static final Duration GRACE = Duration.ofSeconds(90);
 
     private static KafkaConsumer<String, String> consumer;
@@ -158,7 +165,7 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
     private Wave dueWave(int orderCount) {
         Instant cutoffAt = Instant.now().minus(GRACE).minus(Duration.ofMinutes(5))
                 .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-        Wave wave = Wave.open(Ids.newId(), Ids.newId(), ServiceTier.SAME_DAY, cutoffAt);
+        Wave wave = Wave.open(Ids.newId(), SEEDED_CAMP, ServiceTier.SAME_DAY, cutoffAt);
         tx().executeWithoutResult(status -> waves.insertIfAbsent(wave));
         for (int i = 0; i < orderCount; i++) {
             tx().executeWithoutResult(status -> orders.insertIfAbsent(FulfillmentOrder.planned(
@@ -181,7 +188,7 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
         assertThat(closeDueWaves.closeDue()).isEqualTo(1);
         assertThat(statusOf(wave.id())).isEqualTo(WaveStatus.CLOSED);
 
-        ConsumerRecord<String, String> record = awaitClosed(wave.campId());
+        ConsumerRecord<String, String> record = awaitClosed(wave.id());
         CONTRACTS.validateRecord(record.value());
 
         JsonNode envelope = CONTRACTS.json().readTree(record.value());
@@ -228,7 +235,7 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
 
         assertThat(closed).as("둘 중 하나만 마감한다").containsExactlyInAnyOrder(1, 0);
         assertThat(statusOf(wave.id())).isEqualTo(WaveStatus.CLOSED);
-        assertThat(closedRecordsFor(wave.campId()))
+        assertThat(closedRecordsFor(wave.id()))
                 .as("같은 웨이브의 wave.closed 가 두 번 나가면 하류가 두 번 계획한다").hasSize(1);
     }
 
@@ -244,7 +251,7 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
 
         assertThat(closed).as("락이 아니라 DB 가 막는다").containsExactlyInAnyOrder(1, 0);
         assertThat(statusOf(wave.id())).isEqualTo(WaveStatus.CLOSED);
-        assertThat(closedRecordsFor(wave.campId())).hasSize(1);
+        assertThat(closedRecordsFor(wave.id())).hasSize(1);
     }
 
     /** 빈과 같은 협력자를 쓰되 락만 갈아 끼운 두 번째 인스턴스. */
@@ -284,22 +291,22 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
      * 이 캠프의 {@code wave.closed} 를 모두 모은다. "하나 있다" 가 아니라 <strong>"하나뿐이다"</strong>
      * 를 봐야 하므로, 하나를 본 뒤에도 3초 더 폴링해 두 번째가 오지 않는 것을 확인한다.
      */
-    private List<ConsumerRecord<String, String>> closedRecordsFor(UUID campId) {
+    private List<ConsumerRecord<String, String>> closedRecordsFor(UUID waveId) {
         List<ConsumerRecord<String, String>> seen = new ArrayList<>();
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
-            drainInto(seen, campId);
+            drainInto(seen, waveId);
             assertThat(seen).isNotEmpty();
         });
         await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            drainInto(seen, campId);
+            drainInto(seen, waveId);
             assertThat(seen).hasSizeLessThanOrEqualTo(1);
         });
         return seen;
     }
 
-    private void drainInto(List<ConsumerRecord<String, String>> seen, UUID campId) {
+    private void drainInto(List<ConsumerRecord<String, String>> seen, UUID waveId) {
         for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(200))) {
-            if (campId.toString().equals(record.key())) {
+            if (isFor(record, waveId)) {
                 seen.add(record);
             }
         }
@@ -382,14 +389,25 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
                 .untilAsserted(() -> assertThat(statusOf(waveId)).isEqualTo(expected));
     }
 
-    private ConsumerRecord<String, String> awaitClosed(UUID campId) {
+    /**
+     * 이 웨이브의 {@code wave.closed} 를 기다린다.
+     *
+     * <p><strong>키가 아니라 페이로드의 {@code waveId} 로 거른다.</strong> 키는 {@code campId}
+     * 이고(§4.1) 이 클래스의 모든 테스트가 같은 시드 캠프를 쓰므로, 키로 거르면 앞 테스트의
+     * 레코드가 섞인다 — {@code PlanExecutionIT} 에서 CI 가 잡은 것과 같은 함정이다.
+     */
+    private ConsumerRecord<String, String> awaitClosed(UUID waveId) {
         List<ConsumerRecord<String, String>> seen = new ArrayList<>();
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
             ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(200));
             polled.forEach(seen::add);
-            assertThat(seen).anyMatch(record -> campId.toString().equals(record.key()));
+            assertThat(seen).anyMatch(record -> isFor(record, waveId));
         });
-        return seen.stream().filter(record -> campId.toString().equals(record.key()))
-                .findFirst().orElseThrow();
+        return seen.stream().filter(record -> isFor(record, waveId)).findFirst().orElseThrow();
+    }
+
+    private static boolean isFor(ConsumerRecord<String, String> record, UUID waveId) {
+        return waveId.toString().equals(
+                CONTRACTS.json().readTree(record.value()).get("payload").get("waveId").asString());
     }
 }

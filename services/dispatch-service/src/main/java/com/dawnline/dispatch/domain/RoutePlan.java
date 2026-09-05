@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.domain;
 
+import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Money;
 import com.dawnline.common.error.ValidationException;
 import java.time.Instant;
@@ -22,6 +23,14 @@ public final class RoutePlan {
     private final UUID id;
     private final UUID waveId;
     private final UUID campId;
+    /**
+     * 캠프 좌표. {@code wave.closed} 의 스냅샷이다(불변규칙 4).
+     *
+     * <p>계획 행에 남기는 이유는 <strong>이벤트가 없는 자리에서도 다시 돌아야 하기</strong>
+     * 때문이다 — 정체 회수(§5.3), 운영자 재실행, 부분 재계획(§6.8)은 {@code wave.closed} 를
+     * 다시 받지 않는다.
+     */
+    private @Nullable GeoPoint depot;
 
     private PlanStatus status;
     private @Nullable String strategy;
@@ -50,9 +59,12 @@ public final class RoutePlan {
      * @param id     계획 id (UUIDv7)
      * @param waveId 대상 웨이브
      * @param campId 캠프
+     * @param depot  캠프 좌표 ({@code wave.closed} 의 스냅샷)
      */
-    public static RoutePlan request(UUID id, UUID waveId, UUID campId) {
-        return new RoutePlan(id, waveId, campId, PlanStatus.REQUESTED);
+    public static RoutePlan request(UUID id, UUID waveId, UUID campId, GeoPoint depot) {
+        RoutePlan plan = new RoutePlan(id, waveId, campId, PlanStatus.REQUESTED);
+        plan.depot = Objects.requireNonNull(depot, "depot");
+        return plan;
     }
 
     /** 저장된 상태에서 되살린다. */
@@ -61,9 +73,10 @@ public final class RoutePlan {
             @Nullable Integer ruleVersion, @Nullable Instant startedAt, @Nullable Instant finishedAt,
             @Nullable Money totalCost, @Nullable Integer assignedCount,
             @Nullable Integer unassignedCount, @Nullable Integer planDurationMs,
-            @Nullable String failureReason, long version) {
+            @Nullable String failureReason, @Nullable GeoPoint depot, long version) {
 
         RoutePlan plan = new RoutePlan(id, waveId, campId, status);
+        plan.depot = depot;
         plan.strategy = strategy;
         plan.mode = mode;
         plan.seed = seed;
@@ -168,6 +181,13 @@ public final class RoutePlan {
     /** 캠프. */
     public UUID campId() {
         return campId;
+    }
+
+    /**
+     * 캠프 좌표. 이 컬럼이 생기기 전의 행이면 비어 있고, 그 계획은 다시 돌릴 수 없다.
+     */
+    public Optional<GeoPoint> depot() {
+        return Optional.ofNullable(depot);
     }
 
     /** 현재 상태. */

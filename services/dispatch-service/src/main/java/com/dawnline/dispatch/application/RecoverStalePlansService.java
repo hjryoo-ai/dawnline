@@ -91,7 +91,8 @@ public class RecoverStalePlansService {
                 fresh.requeue(clock.instant());
                 plans.update(fresh);
             });
-            runPlan.run(RunPlanCommand.of(plan.waveId(), plan.campId()));
+            // 좌표는 계획 행에 있다 — 이 경로는 wave.closed 를 다시 받지 않는다.
+            runPlan.run(RunPlanCommand.rerun(plan.waveId(), plan.campId()));
             rerun++;
         }
         return rerun;

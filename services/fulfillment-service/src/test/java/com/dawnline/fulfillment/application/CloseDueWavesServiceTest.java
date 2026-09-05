@@ -44,6 +44,17 @@ class CloseDueWavesServiceTest {
     private static final UUID CAMP_ID = UUID.randomUUID();
 
     private final InMemoryFulfillmentRepositories repositories = new InMemoryFulfillmentRepositories();
+
+    /**
+     * 캠프를 등록해 둔다. {@code wave.closed} 가 캠프 좌표를 실어야 하고(dispatch 의 라우트
+     * 출발·복귀 지점이다), 캠프를 못 찾으면 마감이 실패한다 — 좌표 없는 이벤트는 하류가 계획할
+     * 수 없기 때문이다.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void 캠프를_등록한다() {
+        repositories.addCamp(new com.dawnline.fulfillment.domain.Camp(CAMP_ID, "CAMP-TEST",
+                Ids.newId(), com.dawnline.common.GeoPoint.of(37.5663, 126.9779), true));
+    }
     private final RecordingEvents events = new RecordingEvents();
     private final CountingLock lock = new CountingLock();
     private final io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
@@ -211,7 +222,7 @@ class CloseDueWavesServiceTest {
         }
 
         @Override
-        public void waveClosed(Wave wave) {
+        public void waveClosed(Wave wave, com.dawnline.common.GeoPoint depot) {
             if (fail) {
                 throw new IllegalStateException("발행 실패");
             }

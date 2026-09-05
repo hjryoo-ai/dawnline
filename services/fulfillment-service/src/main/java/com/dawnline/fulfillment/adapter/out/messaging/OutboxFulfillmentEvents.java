@@ -45,7 +45,8 @@ public class OutboxFulfillmentEvents implements FulfillmentEvents {
     }
 
     @Override
-    public void waveClosed(com.dawnline.fulfillment.domain.Wave wave) {
+    public void waveClosed(com.dawnline.fulfillment.domain.Wave wave,
+            com.dawnline.common.GeoPoint depot) {
         Objects.requireNonNull(wave, "wave");
         // 키가 campId 다 — 같은 캠프의 웨이브 계획을 직렬화한다 (§4.5).
         outbox.append(OutboxMessage.of(
@@ -54,7 +55,7 @@ public class OutboxFulfillmentEvents implements FulfillmentEvents {
                 WaveClosedPayload.EVENT_TYPE,
                 WaveClosedPayload.SCHEMA_VERSION,
                 wave.campId().toString(),
-                WaveClosedPayload.of(wave)));
+                WaveClosedPayload.of(wave, depot)));
     }
 
     private void append(PlacedOrderSnapshot snapshot, FulfillmentPlannedPayload payload) {
