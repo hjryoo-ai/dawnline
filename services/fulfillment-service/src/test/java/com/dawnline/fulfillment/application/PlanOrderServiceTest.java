@@ -306,7 +306,7 @@ class PlanOrderServiceTest {
         }
 
         @Override
-        public void waveClosed(Wave wave) {
+        public void waveClosed(Wave wave, com.dawnline.common.GeoPoint depot) {
             throw new UnsupportedOperationException("이 테스트의 관심이 아니다");
         }
     }

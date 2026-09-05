@@ -66,7 +66,7 @@ class RecoverStalePlansServiceTest {
     }
 
     private RoutePlan planning(Instant startedAt) {
-        RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId());
+        RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId(), com.dawnline.common.GeoPoint.of(37.5663, 126.9779));
         plans.insertIfAbsent(plan);
         plan.begin("baseline-nn", PlanMode.FULL, 1L, 1, startedAt);
         plans.update(plan);

@@ -1,12 +1,9 @@
 package com.dawnline.dispatch.adapter.out.persistence;
 
-import com.dawnline.common.GeoPoint;
 import com.dawnline.common.TimeWindow;
-import com.dawnline.dispatch.application.CampLocator;
 import com.dawnline.dispatch.application.port.out.DriverLookup;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
-import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.VehicleAttrs;
@@ -39,12 +36,11 @@ import tools.jackson.databind.ObjectMapper;
  * <p>네 포트를 한 클래스가 구현한다. 넷 다 같은 표들을 읽고 같은 트랜잭션에서 쓰이며, 나누면
  * 같은 SQL 이 네 파일에 흩어진다.
  *
- * <h2>캠프 좌표의 출처</h2>
- * 캠프는 fulfillment 의 참조 데이터다. dispatch 는 <strong>차량이 붙어 있는 캠프</strong>만
- * 알면 되고, 좌표는 지금 시드가 차량과 함께 넣은 값을 쓴다. 이벤트로 받아 자기 DB 에 투영하는
- * 것이 §4 의 정석이지만 그 이벤트가 설계서에 없다 — {@link CampLocator} 주석에 적어 두었다.
+ * <p>캠프 좌표는 여기 없다. {@code wave.closed} 의 {@code depot} 스냅샷으로 들어와
+ * {@code route_plans} 에 저장된다(불변규칙 4, V2 마이그레이션) — dispatch 는 캠프의
+ * <strong>참조 데이터를 갖지 않는다</strong>.
  */
-public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLookup, CampLocator {
+public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLookup {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -52,15 +48,12 @@ public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLoo
     private static final ZoneId ZONE = ZoneId.of("Asia/Seoul");
 
     private final EntityManager entityManager;
-    private final Map<UUID, GeoPoint> campPoints;
 
     /**
      * @param entityManager 공유 EntityManager 프록시
-     * @param campPoints    캠프 좌표. fulfillment 시드와 같은 값이다
      */
-    public JdbcReferenceData(EntityManager entityManager, Map<UUID, GeoPoint> campPoints) {
+    public JdbcReferenceData(EntityManager entityManager) {
         this.entityManager = Objects.requireNonNull(entityManager, "entityManager");
-        this.campPoints = Map.copyOf(Objects.requireNonNull(campPoints, "campPoints"));
     }
 
     @Override
@@ -116,15 +109,6 @@ public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLoo
         return found.isEmpty() ? Optional.empty() : Optional.of(found.getFirst());
     }
 
-    @Override
-    public CampDepot locate(UUID campId) {
-        GeoPoint point = campPoints.get(campId);
-        if (point == null) {
-            throw new IllegalStateException(
-                    "캠프 좌표를 모릅니다: %s (참조 데이터 시드를 확인하세요)".formatted(campId));
-        }
-        return new CampDepot(campId, point);
-    }
 
     @SuppressWarnings("unchecked")
     private List<RuleDefinition> readRules(UUID campId) {

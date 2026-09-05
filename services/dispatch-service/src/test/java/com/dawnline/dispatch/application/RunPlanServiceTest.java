@@ -43,7 +43,7 @@ class RunPlanServiceTest {
     private RunPlanService service(RuleSet rules, int vehicleCount) {
         return new RunPlanService(plans, candidates, routes, events,
                 InMemoryDispatchPorts.fleet(vehicleCount, NOW),
-                InMemoryDispatchPorts.rules(rules), InMemoryDispatchPorts.camps(CAMP_ID),
+                InMemoryDispatchPorts.rules(rules),
                 new HaversineDistance(1.3d, 25.0d), Clock.fixed(NOW, ZoneOffset.UTC),
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)));
     }
@@ -68,7 +68,7 @@ class RunPlanServiceTest {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seed(waveId, 5);
 
-        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID)))
+        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
 
         assertThat(events.routesAssigned).isNotEmpty();
@@ -82,7 +82,7 @@ class RunPlanServiceTest {
         UUID waveId = Ids.newId();
         seed(waveId, 3);
 
-        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID));
+        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
 
         assertThat(plans.findByWaveId(waveId)).hasValueSatisfying(plan -> {
             assertThat(plan.status()).isEqualTo(PlanStatus.PUBLISHED);
@@ -96,7 +96,7 @@ class RunPlanServiceTest {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seed(waveId, 3);
 
-        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID));
+        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
 
         assertThat(orderIds).allSatisfy(orderId ->
                 assertThat(candidates.findById(orderId).orElseThrow().status())
@@ -110,9 +110,9 @@ class RunPlanServiceTest {
         seed(waveId, 3);
         RunPlanService service = service(RuleSet.empty(), 2);
 
-        service.run(RunPlanCommand.of(waveId, CAMP_ID));
+        service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
 
-        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID)))
+        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
                 .isEqualTo(RunPlanUseCase.Outcome.ALREADY_PUBLISHED);
         assertThat(plans.size()).isEqualTo(1);
         assertThat(events.completed).as("두 번 발행하지 않는다").isEqualTo(1);
@@ -122,7 +122,7 @@ class RunPlanServiceTest {
     void 후보가_없으면_실패로_종결하고_plan_failed_를_낸다() {
         UUID waveId = Ids.newId();
 
-        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID)))
+        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
                 .isEqualTo(RunPlanUseCase.Outcome.NO_CANDIDATES);
 
         assertThat(events.failed).isEqualTo(1);
@@ -141,11 +141,11 @@ class RunPlanServiceTest {
 
         RunPlanService service = new RunPlanService(plans, new CancellingCandidates(cancelled),
                 routes, events, InMemoryDispatchPorts.fleet(2, NOW),
-                InMemoryDispatchPorts.rules(RuleSet.empty()), InMemoryDispatchPorts.camps(CAMP_ID),
+                InMemoryDispatchPorts.rules(RuleSet.empty()),
                 new HaversineDistance(1.3d, 25.0d), Clock.fixed(NOW, ZoneOffset.UTC),
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)));
 
-        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID)))
+        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
         assertThat(events.ordersDispatched)
                 .as("취소된 주문은 order.dispatched 를 받지 않는다").doesNotContain(cancelled);
@@ -157,8 +157,8 @@ class RunPlanServiceTest {
         // 시각에서 유도하면 "재실행했더니 달라졌다" 가 버그인지 정상인지 구별할 수 없다.
         UUID waveId = Ids.newId();
 
-        assertThat(RunPlanCommand.of(waveId, CAMP_ID).effectiveSeed())
-                .isEqualTo(RunPlanCommand.of(waveId, CAMP_ID).effectiveSeed());
+        assertThat(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP).effectiveSeed())
+                .isEqualTo(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP).effectiveSeed());
     }
 
     @Test
@@ -166,10 +166,10 @@ class RunPlanServiceTest {
         // §5.3 "운영자 재실행 가능", ADR-024 결정 3.
         UUID waveId = Ids.newId();
         RunPlanService service = service(RuleSet.empty(), 2);
-        service.run(RunPlanCommand.of(waveId, CAMP_ID));       // 후보 없음 → FAILED
+        service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));       // 후보 없음 → FAILED
         seed(waveId, 3);
 
-        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID)))
+        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
         assertThat(events.completed).isEqualTo(1);
     }
@@ -183,7 +183,7 @@ class RunPlanServiceTest {
                 RuleType.MAX_STOPS_PER_ROUTE, RuleSeverity.HARD, 20, Map.of("max", 1))), 1);
 
         RunPlanUseCase.Outcome outcome =
-                service(impossible, 1).run(RunPlanCommand.of(waveId, CAMP_ID));
+                service(impossible, 1).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
 
         // 차 한 대가 stop 하나만 실을 수 있으므로 나머지는 미배정이지만 계획 자체는 성립한다.
         assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);

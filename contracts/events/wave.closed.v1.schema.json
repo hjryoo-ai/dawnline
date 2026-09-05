@@ -4,7 +4,7 @@
   "title": "wave.closed v1 페이로드",
   "description": "컷오프 도달로 웨이브가 닫혔다는 계획 시작 신호 (DESIGN.md §4.3, §5.2). 토픽 dawnline.wave.closed.v1, 키 campId, 발행 fulfillment-service, 소비 dispatch-service·ops-api. 키가 waveId 가 아니라 campId 인 이유는 같은 캠프의 웨이브 계획을 직렬화하기 위해서다 (§4.5).",
   "type": "object",
-  "required": ["waveId", "campId", "serviceTier", "cutoffAt", "orderCount", "closedAt"],
+  "required": ["waveId", "campId", "serviceTier", "cutoffAt", "orderCount", "closedAt", "depot"],
   "additionalProperties": true,
   "properties": {
     "waveId": {
@@ -34,6 +34,16 @@
       "type": "string",
       "format": "date-time",
       "description": "CLOSING -> CLOSED 전이가 커밋된 시각. 컷오프 스케줄러 주기(30초) 때문에 cutoffAt 보다 늦다."
+    },
+    "depot": {
+      "type": "object",
+      "required": ["lat", "lng"],
+      "additionalProperties": true,
+      "description": "캠프의 좌표 스냅샷. 라우트의 출발·복귀 지점이고 dispatch 의 계획이 이것 없이는 성립하지 않는다 (DESIGN.md §6.2 CampDepot). 캠프는 fulfillment 의 참조 데이터인데 불변규칙 4 가 코어 서비스 간 동기 호출을 금지하므로, 필요한 사실을 계획을 촉발하는 이벤트가 싣는다 — order.placed 의 cutoffAt 과 같은 논리다. camp.registered 같은 참조 데이터 동기화 이벤트를 두지 않는 이유는 10행짜리 데이터를 위해 초기 적재·갱신·순서라는 수명주기를 통째로 들여오게 되기 때문이다.",
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90, "description": "위도. 불변규칙 9 대로 좌표는 double 이다." },
+        "lng": { "type": "number", "minimum": -180, "maximum": 180, "description": "경도." }
+      }
     }
   },
   "$defs": {

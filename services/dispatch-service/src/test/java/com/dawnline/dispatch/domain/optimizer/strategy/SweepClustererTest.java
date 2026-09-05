@@ -39,9 +39,13 @@ class SweepClustererTest {
     }
 
     private static List<Stop> ring(int count) {
+        return ring(count, Parcel.EMPTY);
+    }
+
+    private static List<Stop> ring(int count, Parcel parcel) {
         List<Stop> stops = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            stops.add(at(i * (360.0d / count), Parcel.EMPTY));
+            stops.add(at(i * (360.0d / count), parcel));
         }
         return stops;
     }
@@ -58,13 +62,35 @@ class SweepClustererTest {
     }
 
     @Test
-    void 클러스터_수가_차량_수에_맞춰진다() {
-        // 목표 크기는 차 한 대 몫이다. 이것이 없으면 큰 트럭 하나가 전부를 삼켜 스윕이
-        // 아무 일도 하지 않는다 — 측정에서 거리가 베이스라인의 두 배로 나왔다.
-        List<List<Stop>> clusters = clusterer.cluster(ring(40), DEPOT, HUGE, 4);
+    void 클러스터_수는_총수요와_용량에서_나온다() {
+        // 40 stop × 100 kg = 4 t, 차 한 대가 1 t → 최소 4 클러스터. 손으로 검산된다.
+        Capacity oneTon = new Capacity(1_000_000, 100_000_000);
+        List<Stop> stops = ring(40, new Parcel(100_000, 1, false, false));
+
+        List<List<Stop>> clusters = clusterer.cluster(stops, DEPOT, oneTon, 8);
 
         assertThat(clusters).hasSize(4);
         assertThat(clusters).allSatisfy(cluster -> assertThat(cluster).hasSize(10));
+    }
+
+    @Test
+    void 한_차가_다_실을_수_있으면_클러스터도_하나다() {
+        // 차 한 대 몫으로 자르던 규칙은 클러스터 수를 차량 수와 같게 만들었고, 뒤의 탐욕 배정이
+        // 클러스터마다 새 차를 열어 **언제나 전 차량을 굴렸다** — 고정비가 총비용 격차의
+        // 31~96% 였다 (docs/benchmarks/phase3-baseline.md).
+        List<List<Stop>> clusters = clusterer.cluster(ring(40), DEPOT, HUGE, 8);
+
+        assertThat(clusters).hasSize(1);
+    }
+
+    @Test
+    void 클러스터_수는_차량_수를_넘지_않는다() {
+        // 클러스터가 차보다 많으면 남는 것이 이미 실은 차에 얹혀 지그재그가 된다.
+        // 40 stop × 1 kg = 40 kg, 차 한 대가 15 kg → 3 클러스터, 차량도 3대.
+        Capacity fifteenKg = new Capacity(15_000, 100_000_000);
+        List<Stop> stops = ring(40, new Parcel(1_000, 1, false, false));
+
+        assertThat(clusterer.cluster(stops, DEPOT, fifteenKg, 3)).hasSizeLessThanOrEqualTo(3);
     }
 
     @Test
@@ -85,10 +111,10 @@ class SweepClustererTest {
     void 권역_경계는_목표_크기에_가까울_때만_자르는_이유가_된다() {
         // "경계에서 자르기 우선" 은 "자를 때가 됐으면 경계에서" 라는 뜻이다. 경계마다 자르면
         // 클러스터가 차량 수의 몇 배로 부서지고, 남는 것이 이미 실은 차에 얹혀 지그재그가 된다.
-        // 40개를 차량 2대(목표 20)로 자르면 경계가 여러 번 바뀌어도 2~3개여야 한다.
-        List<List<Stop>> clusters = clusterer.cluster(ring(40), DEPOT, HUGE, 2);
+        Capacity oneTon = new Capacity(1_000_000, 100_000_000);
+        List<Stop> stops = ring(40, new Parcel(100_000, 1, false, false));
 
-        assertThat(clusters).hasSizeLessThanOrEqualTo(3);
+        assertThat(clusterer.cluster(stops, DEPOT, oneTon, 8)).hasSizeLessThanOrEqualTo(5);
     }
 
     @Test

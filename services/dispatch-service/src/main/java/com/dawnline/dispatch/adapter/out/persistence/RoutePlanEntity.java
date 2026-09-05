@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.adapter.out.persistence;
 
+import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Money;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanStatus;
@@ -11,6 +12,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -68,6 +70,13 @@ public class RoutePlanEntity {
     @Column(name = "failure_reason", length = 32)
     private @Nullable String failureReason;
 
+    /** {@code wave.closed} 의 depot 스냅샷 (V2). 이벤트가 없는 재실행이 이 값을 쓴다. */
+    @Column(name = "depot_lat", precision = 9, scale = 6)
+    private @Nullable BigDecimal depotLat;
+
+    @Column(name = "depot_lng", precision = 9, scale = 6)
+    private @Nullable BigDecimal depotLng;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;
@@ -77,9 +86,11 @@ public class RoutePlanEntity {
 
     /** 도메인으로 되살린다. */
     public RoutePlan toDomain() {
+        GeoPoint depot = depotLat == null || depotLng == null ? null
+                : GeoPoint.of(depotLat.doubleValue(), depotLng.doubleValue());
         return RoutePlan.rehydrate(id, waveId, campId, status, strategy, mode, seed, ruleVersion,
                 startedAt, finishedAt, totalCostKrw == null ? null : Money.krw(totalCostKrw),
-                assignedCount, unassignedCount, planDurationMs, failureReason, version);
+                assignedCount, unassignedCount, planDurationMs, failureReason, depot, version);
     }
 
     /**
@@ -104,5 +115,13 @@ public class RoutePlanEntity {
         this.unassignedCount = plan.unassignedCount().orElse(null);
         this.planDurationMs = plan.planDurationMs().orElse(null);
         this.failureReason = plan.failureReason().orElse(null);
+        plan.depot().ifPresent(depot -> {
+            this.depotLat = coordinate(depot.lat());
+            this.depotLng = coordinate(depot.lng());
+        });
+    }
+
+    private static BigDecimal coordinate(double value) {
+        return BigDecimal.valueOf(value).setScale(6, java.math.RoundingMode.HALF_UP);
     }
 }

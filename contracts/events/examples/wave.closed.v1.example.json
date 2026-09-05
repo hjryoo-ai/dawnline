@@ -12,6 +12,10 @@
     "serviceTier": "DAWN",
     "cutoffAt": "2026-08-29T15:00:00Z",
     "orderCount": 4820,
-    "closedAt": "2026-08-29T15:00:03.204Z"
+    "closedAt": "2026-08-29T15:00:03.204Z",
+    "depot": {
+      "lat": 37.64,
+      "lng": 127.03
+    }
   }
 }

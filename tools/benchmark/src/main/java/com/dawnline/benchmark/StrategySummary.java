@@ -28,6 +28,16 @@ public record StrategySummary(String strategy, List<RunOutcome> runs) {
         return runs.getFirst().dominantReason();
     }
 
+    /**
+     * 비용 분해. 결과가 결정적이므로 첫 회차의 것으로 충분하다.
+     *
+     * <p>총비용만 보면 "왜 비싼가" 를 알 수 없다 — 고정비가 많은 것과 거리가 먼 것과 미배정이
+     * 많은 것은 고칠 곳이 서로 다르다.
+     */
+    public CostBreakdown breakdown() {
+        return runs.getFirst().breakdown();
+    }
+
     /** 총비용 중앙값 (원). 회귀 게이트가 보는 값이다. */
     public long medianCostKrw() {
         return median(runs.stream().mapToLong(run -> run.totalCost().krw()).toArray());

@@ -18,8 +18,8 @@ import java.util.UUID;
 public class JpaRoutePlanRepository implements RoutePlanRepository {
 
     private static final String INSERT_SQL = """
-            INSERT INTO route_plans (id, wave_id, camp_id, status, version)
-            VALUES (?, ?, ?, ?, 0)
+            INSERT INTO route_plans (id, wave_id, camp_id, status, depot_lat, depot_lng, version)
+            VALUES (?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT (wave_id) DO NOTHING
             """;
 
@@ -48,6 +48,8 @@ public class JpaRoutePlanRepository implements RoutePlanRepository {
                 .setParameter(2, plan.waveId())
                 .setParameter(3, plan.campId())
                 .setParameter(4, plan.status().name())
+                .setParameter(5, plan.depot().map(com.dawnline.common.GeoPoint::lat).orElse(null))
+                .setParameter(6, plan.depot().map(com.dawnline.common.GeoPoint::lng).orElse(null))
                 .executeUpdate() > 0;
     }
 

@@ -170,12 +170,6 @@ public class CloseDueWavesService {
      * <p>조회가 하나 붙지만 <em>웨이브 마감마다</em>이고 그것은 하루 40번이다(ADR-023 의 행 수).
      * 찾지 못하면 id 로 떨어진다 — 게이지 하나 때문에 마감을 실패시키지 않는다.
      */
-    private String campCodeOf(Wave wave) {
-        return referenceData.findCamp(wave.campId()).map(Camp::code).orElseGet(() -> {
-            log.warn("캠프를 찾지 못해 게이지 라벨에 id 를 씁니다. campId={}", wave.campId());
-            return wave.campId().toString();
-        });
-    }
 
     private boolean close(Wave candidate) {
         // 진행 중인 편입(공유 락)이 전부 커밋될 때까지 기다린 뒤 배타로 잡는다 (ADR-025).
@@ -191,11 +185,16 @@ public class CloseDueWavesService {
         int orderCount = orders.countPlannedInWave(wave.id());
         wave.close(clock.instant(), orderCount);
         waves.update(wave);
-        events.waveClosed(wave);
+        // 캠프 좌표를 이벤트에 싣는다 — dispatch 의 라우트 출발·복귀 지점이고, 되묻는 동기
+        // 호출은 불변규칙 4 가 금지한다. 캠프를 못 찾으면 이 웨이브만 실패시킨다(웨이브마다
+        // 트랜잭션이다) — 좌표 없는 wave.closed 는 dispatch 가 계획할 수 없는 이벤트다.
+        Camp camp = referenceData.findCamp(wave.campId()).orElseThrow(() -> new IllegalStateException(
+                "캠프를 찾지 못해 wave.closed 를 낼 수 없습니다: campId=" + wave.campId()));
+        events.waveClosed(wave, camp.location());
         // waves.order_count 는 마감 전에 0 이므로(ADR-025) 이 게이지가 편입량의 유일한 관측
         // 경로다. 마감 시점에 이미 센 값을 그대로 쓴다 — 스크레이프마다 집계하면 관측이
         // §8.2 피크에 부하가 된다.
-        metrics.waveClosed(campCodeOf(wave), wave.serviceTier(), orderCount);
+        metrics.waveClosed(camp.code(), wave.serviceTier(), orderCount);
         return true;
     }
 }

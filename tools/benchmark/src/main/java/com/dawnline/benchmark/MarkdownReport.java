@@ -56,6 +56,22 @@ public final class MarkdownReport {
                 .append(summary.medianLateStops()).append(" | ")
                 .append(String.format("%.1f", summary.medianAverageLateMinutes())).append(" |\n"));
 
+        out.append("\n### 비용 분해 (§6.1 목적함수의 항)\n\n");
+        out.append("| 전략 | 고정비 | 거리비 | 시간비 | 소프트 페널티 | 미배정 페널티 | 합 | 차량 | 미배정 |\n");
+        out.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+        summaries.values().forEach(summary -> {
+            CostBreakdown breakdown = summary.breakdown();
+            out.append("| `").append(summary.strategy()).append("` | ")
+                    .append(String.format("%,d", breakdown.fixedKrw())).append(" | ")
+                    .append(String.format("%,d", breakdown.distanceKrw())).append(" | ")
+                    .append(String.format("%,d", breakdown.timeKrw())).append(" | ")
+                    .append(String.format("%,d", breakdown.softPenaltyKrw())).append(" | ")
+                    .append(String.format("%,d", breakdown.unassignedKrw())).append(" | ")
+                    .append(String.format("%,d", breakdown.totalKrw())).append(" | ")
+                    .append(breakdown.vehiclesUsed()).append(" | ")
+                    .append(breakdown.unassignedOrders()).append(" |\n");
+        });
+
         out.append("\n비용은 §6.1 의 목적함수다 — 차량 비용 + 미배정 페널티 + 소프트 룰 페널티.\n");
         out.append("**계획 시간은 기록만 하고 게이트에 넣지 않는다**(§6.9): 두 전략을 같은 실행 안에서\n");
         out.append("돌리므로 비용 비교는 러너 사양에 독립이지만, 시간은 러너에 따라 흔들린다.\n\n");

@@ -12,7 +12,6 @@ import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
-import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.Explanation;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
@@ -44,10 +43,6 @@ final class InMemoryDispatchPorts {
 
     /** 캠프 기준 좌표. */
     static final GeoPoint CAMP = GeoPoint.of(37.5663, 126.9779);
-
-    static CampLocator camps(UUID campId) {
-        return id -> new CampDepot(campId, CAMP);
-    }
 
     static VehicleCatalog fleet(int count, Instant startedAt) {
         List<VehicleSpec> vehicles = new ArrayList<>(count);

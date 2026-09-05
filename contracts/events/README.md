@@ -235,6 +235,7 @@ fulfillment-service 구현 시 이 목록이 확정되면 enum 으로 좁히는 
 | 언제 | 무엇 | 근거 |
 |---|---|---|
 | 2026-09-03 | `order.placed.v1` 에 `cutoffAt` 추가 (required) | Phase 1 브랜치. order-service 는 배포된 적이 없고 토픽도 만들어진 적이 없다. 소비자(fulfillment-service)는 Phase 2 에 생기며, 그쪽 웨이브 키가 이 값을 **반드시** 필요로 한다(§5.2) — 선택으로 두면 "없으면 직접 계산" 이라는 두 번째 계산 지점이 생겨 이 필드를 넣은 이유 자체가 사라진다 |
+| 2026-09-05 | `wave.closed.v1` 에 `depot{lat,lng}` 추가 (required) | Phase 3-5b. 발행자(fulfillment-service)는 배포된 적이 없고 같은 커밋에서 함께 고친다. 소비자는 **지금 만드는 중**인 dispatch-service 하나이고(ops 는 Phase 6), 로컬 개발 볼륨에 토픽이 만들어진 적은 있으나 어떤 배포 환경에도 없다 — 그 볼륨은 재생성된다. 선택으로 두면 dispatch 가 "없을 때" 를 처리해야 하는데 그 분기의 답이 없다: **캠프 좌표 없이는 라우트의 출발·복귀 지점이 정해지지 않아 계획 자체가 성립하지 않는다.** 대안이던 상수 맵은 두 서비스의 시드가 갈라지는 순간 조용히 틀린 좌표로 계획하고, `camp.registered` 같은 동기화 이벤트는 10행짜리 참조 데이터를 위해 초기 적재·갱신·순서라는 수명주기를 들여온다 (CLAUDE.md 불변규칙 4 의 첫 번째 선택지 — 이벤트 페이로드 스냅샷) |
 | 2026-09-05 | `fulfillment.planned.v1` 에 `promiseRevised` 추가 (`outcome=PLANNED` 일 때 required) | Phase 2 착수 시점. 토픽 `dawnline.fulfillment.planned.v1` 은 어떤 환경에도 만들어진 적이 없고, 발행자(fulfillment-service)는 배포된 적이 없으며, 소비자(order-service·dispatch-service)는 같은 Phase 에서 함께 고친다. 선택으로 두면 소비자가 "없을 때" 를 처리하는 죽은 분기를 갖는데, 그 기본값 `false`("개정되지 않았다")는 이 필드가 막으려던 상황 — 조용한 약속 파기 — 과 구별되지 않는다 ([ADR-020](../../docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)) |
 
 ---

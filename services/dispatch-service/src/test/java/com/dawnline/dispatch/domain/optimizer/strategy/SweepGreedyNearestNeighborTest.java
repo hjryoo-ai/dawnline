@@ -85,8 +85,9 @@ class SweepGreedyNearestNeighborTest {
     }
 
     @Test
-    void 부챗살마다_다른_차가_간다() {
-        // 스윕이 하는 일이 이것이다 — 각도로 자르고 차 한 대에 한 부챗살을 준다.
+    void 한_차가_다_실을_수_있으면_한_라우트로_간다() {
+        // 클러스터 수는 총수요/용량에서 나온다. 차가 넉넉하다고 나눠 싣지 않는다 — 그러면
+        // 굴리지 않아도 될 차의 고정비를 문다(측정: 고정비가 총비용 격차의 31~96%였다).
         PlanningProblem problem = problem(fourSectors(5),
                 List.of(vehicle("VAN", 10_000_000, false), vehicle("VAN", 10_000_000, false),
                         vehicle("VAN", 10_000_000, false), vehicle("VAN", 10_000_000, false)),
@@ -94,7 +95,29 @@ class SweepGreedyNearestNeighborTest {
 
         PlanResult result = strategy.plan(problem);
 
-        assertThat(result.routes()).as("네 부챗살 → 네 라우트").hasSize(4);
+        assertThat(result.routes()).as("한 대가 20 stop 을 다 감당한다").hasSize(1);
+        assertThat(result.unassigned()).isEmpty();
+    }
+
+    @Test
+    void 용량이_모자라면_부챗살마다_다른_차가_간다() {
+        // 20 stop × 100 kg = 2 t, 차 한 대가 500 kg → 네 클러스터 → 네 라우트.
+        List<Candidate> orders = new ArrayList<>();
+        for (double angle : new double[] {0, 90, 180, 270}) {
+            for (int i = 0; i < 5; i++) {
+                orders.add(at(angle + i * 0.5d, 1.0d + i * 0.1d,
+                        new Parcel(100_000, 1, false, false)));
+            }
+        }
+        PlanningProblem problem = problem(orders,
+                List.of(vehicle("VAN", 500_000, false), vehicle("VAN", 500_000, false),
+                        vehicle("VAN", 500_000, false), vehicle("VAN", 500_000, false)),
+                DispatchRules.ruleSet(List.of(new RuleDefinition("capacity",
+                        RuleType.VEHICLE_CAPACITY, RuleSeverity.HARD, 15, Map.of())), 1));
+
+        PlanResult result = strategy.plan(problem);
+
+        assertThat(result.routes()).hasSize(4);
         assertThat(result.unassigned()).isEmpty();
     }
 
