@@ -22,9 +22,10 @@ import java.util.Objects;
  * @param budget     계획 시간 예산
  * @param rulesFile  룰 시드 JSON. {@code null} 이면 {@link RuleSeed#locate()} 가 찾는다
  * @param out        리포트 출력 경로. 없으면 표준 출력
+ * @param gate       회귀 게이트의 기준 전략. {@code null} 이면 게이트 없이 리포트만 낸다
  */
 public record BenchmarkOptions(Dataset dataset, List<String> strategies, int repeats, long seed,
-        Duration budget, Path rulesFile, Path out) {
+        Duration budget, Path rulesFile, Path out, String gate) {
 
     private static final Dataset DEFAULT_DATASET = Dataset.SMALL;
     private static final int DEFAULT_REPEATS = 5;
@@ -40,6 +41,15 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
         }
         if (repeats < 1) {
             throw new IllegalArgumentException("반복 횟수는 1 이상이어야 합니다: " + repeats);
+        }
+        if (gate != null && !strategies.contains(gate)) {
+            throw new IllegalArgumentException(
+                    "게이트 기준 전략이 비교 목록에 없습니다: %s (목록: %s)".formatted(gate, strategies));
+        }
+        if (gate != null && strategies.size() < 2) {
+            // 기준 하나만 돌면 게이트는 언제나 통과한다. 조용히 통과하는 게이트는 없는 것만
+            // 못하다 — 꺼진 줄 모르고 믿게 된다.
+            throw new IllegalArgumentException("게이트에는 기준 말고 비교할 전략이 필요합니다: " + strategies);
         }
     }
 
@@ -58,6 +68,7 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
         Duration budget = DEFAULT_BUDGET;
         Path rules = null;
         Path out = null;
+        String gate = null;
 
         for (int i = 0; i < args.length; i++) {
             String flag = args[i];
@@ -70,11 +81,12 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                         budget = Duration.ofSeconds(Long.parseLong(value(args, ++i, flag)));
                 case "--rules" -> rules = Path.of(value(args, ++i, flag));
                 case "--out" -> out = Path.of(value(args, ++i, flag));
+                case "--gate" -> gate = value(args, ++i, flag);
                 default -> throw new IllegalArgumentException(
                         "알 수 없는 인자: %s%n%s".formatted(flag, usage()));
             }
         }
-        return new BenchmarkOptions(dataset, strategies, repeats, seed, budget, rules, out);
+        return new BenchmarkOptions(dataset, strategies, repeats, seed, budget, rules, out, gate);
     }
 
     /** 사용법. */
@@ -87,7 +99,8 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                   --seed <n>                           기본 20260905
                   --budget-seconds <n>                 기본 30 (§6.7)
                   --rules <path>                       기본: 위로 올라가며 찾은 contracts/seed/dispatch-rules.json
-                  --out <path>                         없으면 표준 출력""";
+                  --out <path>                         없으면 표준 출력
+                  --gate <strategy>                    이 전략보다 비싼 전략이 있으면 종료 코드 1 (§6.9)""";
     }
 
     private static String value(String[] args, int index, String flag) {

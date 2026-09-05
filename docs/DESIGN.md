@@ -1097,14 +1097,24 @@ public interface DispatchStrategy {
 - 데이터셋: `tools/benchmark/datasets/` — `small`(500 주문/5 차량), `medium`(2,000/20), `large`(5,000/40), `peak`(15,000/60), 각각 seed 고정 생성. 좌표는 서울 근사 격자(캠프 중심 반경 8 km, 밀도 불균일).
 - 지표: 총비용, 총거리, 계획 시간, 미배정 수, 지각 stop 수·평균 지각분, 차량 사용 대수.
 - 각 전략 × 데이터셋을 5회 반복, 중앙값·p95 기록. 결과는 `docs/benchmarks/YYYY-MM-DD.md`에 표와 함께 커밋. README 상단에 최신 표를 링크.
-- 회귀 방지: CI에서 `small`을 1회 실행해 기본 전략 **비용**이 베이스라인보다 나쁘면 실패.
+- 회귀 방지: CI에서 **`medium`** 을 실행해 기본 전략 **비용**이 베이스라인보다 나쁘면 실패
+  (`--gate baseline-nn` → 종료 코드 1).
+
+**게이트 데이터셋이 `medium` 인 이유** (2026-09-05 결정, 처음에는 `small` 이었다). 근거는 결과가
+아니라 메커니즘이다 — 클러스터링은 "누구를 어느 차에 태울지" 의 자유도가 있을 때만 값을 만드는데,
+`small` 은 차량 5대 중 최소 4대가 필요해 그 자유도가 **구조적으로 없다**(유효 슬롯 여유 1.31 대
+medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기다. `small` 에서 기본 전략이
+베이스라인보다 **+8.8%** 비싼 것은 지워지는 결과가 아니라 **제품 사실**이므로
+`docs/benchmarks/phase3-baseline.md` §4-5 에 비용 분해와 함께, README 에 「알려진 레짐」으로 남긴다.
 
 **게이트 규칙 둘** (2026-09-05 확정)
 
 1. **`baseline-nn` 은 게이트가 켜진 순간 동결된다.** 베이스라인이 좋아지면 그때까지의 비교가 전부
    무효가 된다 — 기준선이 움직이면 "나아졌다" 가 무엇에 대한 말인지 사라지기 때문이다. 바꿔야 하면
    `docs/benchmarks/` 에 **재기준(re-baseline) 기록**을 남기고 그때까지의 수치를 **새 기준으로 다시
-   낸다.** 기록 없이 바꾸면 다음 사람은 두 시점의 표를 같은 축에 놓을 수 없다.
+   낸다.** 기록 없이 바꾸면 다음 사람은 두 시점의 표를 같은 축에 놓을 수 없다. 동결의 대상은
+   수치가 아니라 **클래스**다 — `BaselineFrozenTest` 가 `BaselineNearestNeighbor.java` 의
+   SHA-256 을 고정한다. 개선은 **새 전략으로 등록**한다(§6.6 레지스트리).
 2. **게이트는 비용만 본다.** 두 전략을 **같은 실행 안에서** 돌려 비교하므로 비용 비교는 러너 사양에
    독립이다. 반면 계획 시간은 CI 러너에 따라 흔들리므로(Phase 1 k6 가 0.75 CPU 에서 본 것과 같은
    종류의 흔들림) **기록만 하고 게이트 조건에 넣지 않는다.** 환경 탓으로 빨개지는 게이트는 결국
@@ -1516,7 +1526,7 @@ dawnline/
 
 ## 14. CI/CD와 배포
 
-**ci.yml (PR·main)**: checkout → JDK 25 → Gradle 캐시 → `./gradlew check`(단위+ArchUnit+계약+JaCoCo 게이트) → 통합 테스트(Testcontainers, Docker 서비스) → `benchmark small` 회귀 체크 → 이미지 빌드(Buildpacks, ADR-013) → Compose 스모크(주문 20건 E2E) → 결과 아티팩트(리포트, OpenAPI).
+**ci.yml (PR·main)**: checkout → JDK 25 → Gradle 캐시 → `./gradlew check`(단위+ArchUnit+계약+JaCoCo 게이트) → 통합 테스트(Testcontainers, Docker 서비스) → `benchmark medium` 회귀 게이트 → 이미지 빌드(Buildpacks, ADR-013) → Compose 스모크(주문 20건 E2E) → 결과 아티팩트(리포트, OpenAPI).
 
 **release.yml (태그 `v*`)**: 이미지 GHCR 푸시(태그·`latest`), SBOM 생성, GitHub Release 노트.
 

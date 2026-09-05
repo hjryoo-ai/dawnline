@@ -28,12 +28,6 @@ import java.util.UUID;
  */
 public class JdbcRouteMutations implements RouteMutations {
 
-    /**
-     * 순번을 다시 매기는 동안 기존 순번을 피신시킬 거리. max-stops 상한(120, §6.3)보다 크고
-     * {@code SMALLINT} 안이면 된다.
-     */
-    private static final int SEQ_PARK_OFFSET = 1000;
-
     private final EntityManager entityManager;
 
     /**
@@ -150,15 +144,10 @@ public class JdbcRouteMutations implements RouteMutations {
     @Override
     @SuppressWarnings("unchecked")
     public void rewrite(UUID routeId, PlannedRoute route) {
-        // 순번은 UNIQUE (route_id, seq) 다. 한 번에 옮기면 중간에 충돌하므로 잠시 피신시킨다.
-        // 음수로 보내면 안 된다 — 같은 컬럼에 CHECK (seq >= 1) 이 걸려 있다. 두 제약을 동시에
-        // 만족하는 자리는 "현재 순번보다 크고 SMALLINT 안" 이고, max-stops 가 120 이므로(§6.3)
-        // 1000 을 더하면 겹치지 않는다. DispatchAdminIT 가 이 자리에서 음수 버전을 잡았다.
-        entityManager.createNativeQuery(
-                        "UPDATE route_stops SET seq = seq + " + SEQ_PARK_OFFSET
-                                + " WHERE route_id = ?")
-                .setParameter(1, routeId).executeUpdate();
-
+        // 순번을 피신시키지 않는다. (route_id, seq) UNIQUE 는 V3 에서 지연 제약이 되었고
+        // (DEFERRABLE INITIALLY DEFERRED), 검사는 커밋 시점에 한 번만 일어난다 — 중간에 두 행이
+        // 같은 순번을 갖는 순간은 애초에 지켜야 하는 불변식이 아니다. 최종 상태가 1..n 임은
+        // 아래 루프가 PlannedRoute 의 seq 를 그대로 쓰는 것으로 보장된다.
         List<Object[]> stopIds = entityManager.createNativeQuery("""
                 SELECT s.id, s.lat, s.lng FROM route_stops s WHERE s.route_id = ?
                 """).setParameter(1, routeId).getResultList();
@@ -172,6 +161,9 @@ public class JdbcRouteMutations implements RouteMutations {
             if (stopId == null) {
                 throw new IllegalStateException("다시 쓸 stop 을 찾지 못했습니다: " + planned.seq());
             }
+            // 반대 방향(DB 에 있는데 계획에 없는 stop)은 여기서 걸리지 않고 커밋에서 걸린다 —
+            // 그 stop 의 옛 순번이 새로 부여된 것과 겹치기 때문이다. 지연 제약이 조용한
+            // 데이터 오염 대신 시끄러운 실패를 고른 자리다.
             entityManager.createNativeQuery("""
                     UPDATE route_stops SET seq = ?, planned_arrival = ?, planned_departure = ?,
                                            service_s = ?

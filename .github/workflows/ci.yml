@@ -3,12 +3,11 @@
 #
 # §14 가 정의한 전체 단계:
 #   checkout → JDK 25 → Gradle 캐시 → ./gradlew build → 통합 테스트(Testcontainers)
-#   → benchmark small 회귀 체크 → 이미지 빌드 → Compose 스모크 → 결과 아티팩트
+#   → benchmark 회귀 게이트 → 이미지 빌드 → Compose 스모크 → 결과 아티팩트
 #
-# 지금(Phase 0) 실제로 도는 것: 앞의 4단계 + 리포트 아티팩트.
+# 지금(Phase 3) 실제로 도는 것: 앞의 5단계 + 리포트 아티팩트.
 # 나머지는 산출물이 아직 없으므로 `if: false` 로 꺼 둔 자리(job 이름에 Phase 표기)다.
 # 활성화 방법은 각 job 의 `if: false` 줄 주석에 적어 두었다.
-#   - 벤치마크 회귀   : Phase 3 (`tools:benchmark` 모듈이 settings.gradle.kts 에 추가된 뒤)
 #   - 이미지 빌드     : Phase 7 (서비스에 main 클래스·release.yml 이 생긴 뒤)
 #   - Compose 스모크  : Phase 3 (order → dispatch E2E 가 동작한 뒤)
 #   - OpenAPI 아티팩트: Phase 1 (파일이 생기면 hashFiles 조건으로 자동 활성화)
@@ -201,13 +200,20 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # 3) 벤치마크 small 회귀 체크 — DESIGN.md §14, IMPLEMENTATION_PLAN Phase 3-8
-  #    tools:benchmark 모듈이 없으므로 지금은 꺼져 있다.
+  # 3) 벤치마크 회귀 게이트 — DESIGN.md §6.9, §14, IMPLEMENTATION_PLAN Phase 3-4
+  #
+  #    규칙 두 가지:
+  #      * 게이트는 **비용만** 본다. 두 전략을 같은 실행 안에서 돌리므로 비용 비교는 러너에
+  #        독립이지만 계획 시간은 아니다. 시간은 리포트에 기록만 한다.
+  #      * 기준 전략 `baseline-nn` 은 **코드 수준으로 동결**이다. BaselineFrozenTest 가 지킨다.
+  #
+  #    데이터셋이 medium 인 이유(2026-09-05 결정): small(차량 5대)은 클러스터링이 값을 만들
+  #    자유도가 구조적으로 없는 레짐이다 — 최소 필요 차량이 4대라 "누구를 어느 차에" 의 선택지가
+  #    사실상 없다. medium(20대)이 그 자유도가 처음 생기는 크기다. small 에서 스윕이 지는 것은
+  #    지워지지 않고 docs/benchmarks/phase3-baseline.md §4-5 에 수치로 남아 있다.
   # ---------------------------------------------------------------------------
   benchmark:
-    name: 벤치마크 small 회귀 (Phase 3)
-    # 활성화: tools:benchmark 를 settings.gradle.kts 에 추가한 뒤 이 줄을 삭제한다.
-    if: false
+    name: 벤치마크 medium 회귀 게이트 (Phase 3)
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -228,17 +234,18 @@ jobs:
           cache-read-only: true
 
       # seed 고정으로 결정론이 보장된다(CLAUDE.md 불변규칙 12).
-      # 회귀 임계값 옵션은 Phase 3/4 에서 benchmark 도구를 만들 때 정의한다.
-      - name: small 데이터셋 전략 비교
-        run: ./gradlew :tools:benchmark:run --args='--dataset small --strategies baseline-nn,sweep-greedy-nn+ls'
+      # --gate 는 기준보다 비싼 전략이 있으면 종료 코드 1 을 낸다. 리포트는 그 전에 쓰이므로
+      # 실패해도 아티팩트에 "왜" 가 남는다.
+      - name: medium 데이터셋 전략 비교 + 게이트
+        run: |
+          ./gradlew :tools:benchmark:run --args='--dataset medium --repeats 5 --strategies baseline-nn,sweep-greedy-nn --gate baseline-nn --out build/reports/benchmark/medium.md'
 
       - name: 벤치마크 리포트 아티팩트
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-small
-          # 출력 경로는 Phase 3 에서 benchmark 도구를 만들 때 실제 위치로 맞춘다.
-          path: tools/benchmark/build/reports/benchmark/**
+          name: benchmark-medium
+          path: build/reports/benchmark/**
           retention-days: 14
           if-no-files-found: ignore
 
