@@ -6,7 +6,11 @@ import static org.awaitility.Awaitility.await;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.fulfillment.application.CloseDueWavesService;
+import com.dawnline.fulfillment.application.FulfillmentMetrics;
+import com.dawnline.fulfillment.application.port.out.FulfillmentEvents;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
+import com.dawnline.fulfillment.application.port.out.ReferenceData;
+import com.dawnline.fulfillment.application.port.out.WaveLock;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import com.dawnline.fulfillment.domain.FulfillmentOrder;
 import com.dawnline.fulfillment.domain.ServiceTier;
@@ -14,12 +18,18 @@ import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.fulfillment.domain.WaveStatus;
 import com.dawnline.messaging.contract.EventContracts;
 import jakarta.persistence.EntityManager;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -52,6 +62,7 @@ import tools.jackson.databind.JsonNode;
  *   <li>{@code plan.completed} 소비 → {@code CLOSED → PLANNED}</li>
  *   <li>{@code plan.failed} 소비 → {@code CLOSED → PLAN_FAILED}, 재실행 → {@code PLANNED}</li>
  *   <li>이미 {@code PLANNED} 인 웨이브에 늦게 온 {@code plan.failed} 는 무시된다</li>
+ *   <li>스케줄러 인스턴스 둘이 동시에 돌아도 {@code wave.closed} 는 정확히 한 번 나간다</li>
  * </ol>
  *
  * <p>계획 결과 두 이벤트의 발행자는 Phase 3 의 dispatch-service 다. 계약을 소비자인 이쪽이 먼저
@@ -93,6 +104,21 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private FulfillmentEvents events;
+
+    @Autowired
+    private WaveLock lock;
+
+    @Autowired
+    private Clock clock;
+
+    @Autowired
+    private FulfillmentMetrics metrics;
+
+    @Autowired
+    private ReferenceData referenceData;
 
     @BeforeAll
     static void connect() {
@@ -184,6 +210,99 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
         Integer counted = tx().execute(status -> waves.findById(wave.id()).orElseThrow().orderCount());
         assertThat(counted)
                 .as("취소가 카운트를 건드리는 분기가 없어도 맞는다 (ADR-025)").isEqualTo(1);
+    }
+
+    // --- 이중 마감 (Phase 2 DoD) -----------------------------------------------
+    //
+    // 두 테스트는 서로 다른 방어를 증명한다. 세 번째 방어(FOR UPDATE + 상태 재확인)를
+    // 일부러 부숴 보면 아래쪽만 빨개진다 — 위쪽은 Redis 락이 두 번째 인스턴스를 DB 앞에서
+    // 돌려보내기 때문에 통과한다. 그래서 둘 다 필요하다: 위는 락이 실제로 도는 것을,
+    // 아래는 락이 없어도 정확성이 유지되는 것을(불변규칙 7) 말한다. 한쪽만 두면 "통과했는데
+    // 아무것도 증명하지 못하는 테스트" 가 하나 더 생긴다.
+
+    @Test
+    void 두_인스턴스가_동시에_돌아도_wave_closed_는_한_번만_나간다() {
+        Wave wave = dueWave(3);
+
+        List<Integer> closed = raceToClose(scheduler(lock), scheduler(lock));
+
+        assertThat(closed).as("둘 중 하나만 마감한다").containsExactlyInAnyOrder(1, 0);
+        assertThat(statusOf(wave.id())).isEqualTo(WaveStatus.CLOSED);
+        assertThat(closedRecordsFor(wave.campId()))
+                .as("같은 웨이브의 wave.closed 가 두 번 나가면 하류가 두 번 계획한다").hasSize(1);
+    }
+
+    @Test
+    void 락이_열려_있어도_이중_마감이_되지_않는다() {
+        // RedisWaveLock 은 Redis 장애 때 fail-open 이다(불변규칙 7) — 즉 "둘 다 락을 얻은"
+        // 이 상황은 가정이 아니라 Redis 가 죽은 날의 실제 모습이다. 정확성의 근거가 락이 아니라
+        // FOR UPDATE 와 상태 전이라는 것을 여기서 증명한다.
+        Wave wave = dueWave(3);
+        WaveLock alwaysGrants = waveId -> Optional.<WaveLock.Guard>of(() -> { });
+
+        List<Integer> closed = raceToClose(scheduler(alwaysGrants), scheduler(alwaysGrants));
+
+        assertThat(closed).as("락이 아니라 DB 가 막는다").containsExactlyInAnyOrder(1, 0);
+        assertThat(statusOf(wave.id())).isEqualTo(WaveStatus.CLOSED);
+        assertThat(closedRecordsFor(wave.campId())).hasSize(1);
+    }
+
+    /** 빈과 같은 협력자를 쓰되 락만 갈아 끼운 두 번째 인스턴스. */
+    private CloseDueWavesService scheduler(WaveLock waveLock) {
+        return new CloseDueWavesService(waves, orders, events, waveLock, transactionManager, clock,
+                GRACE, 10, metrics, referenceData);
+    }
+
+    /**
+     * 둘을 같은 순간에 출발시킨다. 순차로 부르면 경합이 없어 아무것도 증명하지 못한다.
+     *
+     * <p>공용 ForkJoin 풀을 쓰지 않는다 — 코어가 하나인 러너에서는 병렬도가 1 이라 장벽에서
+     * 서로를 기다리다 멎는다. 이 테스트가 필요로 하는 것은 <em>진짜 스레드 둘</em>이다.
+     */
+    private List<Integer> raceToClose(CloseDueWavesService first, CloseDueWavesService second) {
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            var left = CompletableFuture.supplyAsync(() -> closeAfter(start, first), pool);
+            var right = CompletableFuture.supplyAsync(() -> closeAfter(start, second), pool);
+            return List.of(left.join(), right.join());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static int closeAfter(CyclicBarrier start, CloseDueWavesService scheduler) {
+        try {
+            start.await();
+        } catch (Exception e) {
+            throw new IllegalStateException("동시 출발에 실패했습니다", e);
+        }
+        return scheduler.closeDue();
+    }
+
+    /**
+     * 이 캠프의 {@code wave.closed} 를 모두 모은다. "하나 있다" 가 아니라 <strong>"하나뿐이다"</strong>
+     * 를 봐야 하므로, 하나를 본 뒤에도 3초 더 폴링해 두 번째가 오지 않는 것을 확인한다.
+     */
+    private List<ConsumerRecord<String, String>> closedRecordsFor(UUID campId) {
+        List<ConsumerRecord<String, String>> seen = new ArrayList<>();
+        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
+            drainInto(seen, campId);
+            assertThat(seen).isNotEmpty();
+        });
+        await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            drainInto(seen, campId);
+            assertThat(seen).hasSizeLessThanOrEqualTo(1);
+        });
+        return seen;
+    }
+
+    private void drainInto(List<ConsumerRecord<String, String>> seen, UUID campId) {
+        for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(200))) {
+            if (campId.toString().equals(record.key())) {
+                seen.add(record);
+            }
+        }
     }
 
     // --- 계획 결과 -------------------------------------------------------------

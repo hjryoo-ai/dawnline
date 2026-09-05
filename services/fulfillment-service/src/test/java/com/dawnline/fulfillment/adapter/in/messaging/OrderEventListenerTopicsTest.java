@@ -26,6 +26,13 @@ class OrderEventListenerTopicsTest {
     }
 
     @Test
+    void 취소_선착_거부_사유의_이름이_설계서와_같다() {
+        // §4.6 표와 ADR-022 가 이 문자열을 적어 두었다. 메트릭 라벨이라 오타가 조용히 지나가고,
+        // 대시보드는 "그런 사유가 한 번도 없었다" 처럼 보인다.
+        assertThat(OrderEventListener.CANCELLED_BEFORE_PLACED).isEqualTo("cancelled_before_placed");
+    }
+
+    @Test
     void 소비자_이름이_서비스_이름이다() {
         // processed_events.consumer 값이다. 인스턴스마다 달라지면 멱등이 깨진다 (§8.5).
         assertThat(OrderEventListener.CONSUMER).isEqualTo("fulfillment-service");
