@@ -117,6 +117,10 @@ public class OrderEntity {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /** 배차 불가 사유 (§5.2 6단계). 배달을 시도했다 실패한 {@code FAILED} 에는 없다. */
+    @Column(name = "failure_reason", length = 24)
+    private @org.jspecify.annotations.Nullable String failureReason;
+
     /**
      * 품목. {@code EAGER} 인 이유: 주문을 읽는 모든 경로가 품목을 함께 쓴다(상태 조회 응답, 이벤트
      * 페이로드). {@code LAZY} 로 두면 트랜잭션 밖에서 열리는 순간
@@ -162,8 +166,11 @@ public class OrderEntity {
      * 도메인은 버전을 올리지 않으므로 읽은 시점의 값 그대로다 — 그 사이 다른 트랜잭션이 바꿔도
      * 충돌로 잡히지 않는다. 관리 인스턴스를 고치면 Hibernate 가 자기가 읽은 버전으로 UPDATE 한다.
      *
-     * <p>불변 필드(id·customerId·주소·약속창·소포·품목·placedAt)는 건드리지 않는다.
-     * 그것들이 바뀌는 유스케이스는 없으며, 있다면 새 주문이다.
+     * <p>불변 필드(id·customerId·주소·소포·품목·placedAt)는 건드리지 않는다. 그것들이 바뀌는
+     * 유스케이스는 없으며, 있다면 새 주문이다.
+     *
+     * <p><strong>약속창은 예외가 됐다.</strong> 하류가 못 지킨 약속을 개정하는 경로가 열렸고
+     * (ADR-020 결정 3, {@code Order#revisePromise}), 그것이 이 목록에서 빠진 유일한 필드다.
      *
      * @param order 변경된 도메인 주문
      */
@@ -174,6 +181,10 @@ public class OrderEntity {
         }
         this.status = order.status();
         this.updatedAt = order.updatedAt();
+        this.failureReason = order.failureReason().orElse(null);
+        // 약속창은 원래 불변이었으나 개정 경로 하나가 열렸다 (ADR-020 결정 3).
+        this.promisedStart = order.promisedWindow().start();
+        this.promisedEnd = order.promisedWindow().end();
     }
 
     /** 행을 도메인 애그리거트로 되살린다. */
@@ -187,7 +198,7 @@ public class OrderEntity {
         return Order.rehydrate(id, customerId, serviceTier, address,
                 new PromisedWindow(new com.dawnline.common.TimeWindow(promisedStart, promisedEnd)),
                 new Parcel(weightG, volumeCm3, requiresCold, hazmat),
-                domainItems, status, placedAt, updatedAt, version);
+                domainItems, status, placedAt, updatedAt, version, failureReason);
     }
 
     /** 주문 id. */

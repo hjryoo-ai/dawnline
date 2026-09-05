@@ -43,6 +43,7 @@ class OrderProgressListenerTest {
     private static final UUID ROUTE_ID = Ids.newId();
 
     private AdvanceOrderUseCase advanceOrder;
+    private com.dawnline.order.application.port.in.ApplyFulfillmentPlanUseCase applyPlan;
     private MeterRegistry meters;
     private OrderProgressListener listener;
 
@@ -60,8 +61,10 @@ class OrderProgressListenerTest {
     @BeforeEach
     void setUp() {
         advanceOrder = mock(AdvanceOrderUseCase.class);
+        applyPlan = mock(com.dawnline.order.application.port.in.ApplyFulfillmentPlanUseCase.class);
         meters = new SimpleMeterRegistry();
-        listener = new OrderProgressListener(passThroughConsumer(), advanceOrder, EventJson.standard(), meters);
+        listener = new OrderProgressListener(passThroughConsumer(), advanceOrder, applyPlan,
+                EventJson.standard(), meters);
     }
 
     private static ConsumerRecord<String, String> record(String topic, String value) {
@@ -243,9 +246,9 @@ class OrderProgressListenerTest {
 
     @Test
     void null_인자는_거부한다() {
-        assertThatThrownBy(() -> new OrderProgressListener(null, advanceOrder, EventJson.standard(), meters))
+        assertThatThrownBy(() -> new OrderProgressListener(null, advanceOrder, applyPlan, EventJson.standard(), meters))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new OrderProgressListener(passThroughConsumer(), null, EventJson.standard(), meters))
+        assertThatThrownBy(() -> new OrderProgressListener(passThroughConsumer(), null, applyPlan, EventJson.standard(), meters))
                 .isInstanceOf(NullPointerException.class);
     }
 }

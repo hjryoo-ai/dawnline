@@ -2,8 +2,10 @@ package com.dawnline.fulfillment.application;
 
 import com.dawnline.fulfillment.application.port.out.FulfillmentEvents;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
+import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import com.dawnline.fulfillment.application.port.out.WaveLock;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
+import com.dawnline.fulfillment.domain.Camp;
 import com.dawnline.fulfillment.domain.Wave;
 import java.time.Clock;
 import java.time.Duration;
@@ -52,6 +54,8 @@ public class CloseDueWavesService {
     private final Clock clock;
     private final Duration grace;
     private final int batchSize;
+    private final FulfillmentMetrics metrics;
+    private final ReferenceData referenceData;
 
     /**
      * @param waves              웨이브 저장소
@@ -62,10 +66,13 @@ public class CloseDueWavesService {
      * @param clock              시각 출처 (불변규칙 12)
      * @param grace              마감 여유 (ADR-020 기본 90초)
      * @param batchSize          한 번의 실행에서 닫을 최대 웨이브 수
+     * @param metrics            §9.1 의 웨이브 편입량 게이지
+     * @param referenceData      게이지 라벨용 캠프 코드 조회
      */
     public CloseDueWavesService(WaveRepository waves, FulfillmentOrderRepository orders,
             FulfillmentEvents events, WaveLock lock, PlatformTransactionManager transactionManager,
-            Clock clock, Duration grace, int batchSize) {
+            Clock clock, Duration grace, int batchSize, FulfillmentMetrics metrics,
+            ReferenceData referenceData) {
 
         this.waves = Objects.requireNonNull(waves, "waves");
         this.orders = Objects.requireNonNull(orders, "orders");
@@ -81,6 +88,8 @@ public class CloseDueWavesService {
             throw new IllegalArgumentException("batchSize 는 1 이상이어야 합니다: " + batchSize);
         }
         this.batchSize = batchSize;
+        this.metrics = Objects.requireNonNull(metrics, "metrics");
+        this.referenceData = Objects.requireNonNull(referenceData, "referenceData");
     }
 
     /**
@@ -151,6 +160,23 @@ public class CloseDueWavesService {
         }
     }
 
+    /**
+     * 게이지 라벨용 캠프 코드.
+     *
+     * <p>id 가 아니라 코드다. 같은 {@code camp} 라벨을 쓰는 다른 메트릭
+     * ({@code promise_revised}·{@code fc_fallback})이 코드를 쓰므로 여기만 UUID 면 대시보드에서
+     * 두 값을 나란히 볼 수 없다 — <strong>라벨은 메트릭마다가 아니라 라벨마다 일관해야 한다.</strong>
+     *
+     * <p>조회가 하나 붙지만 <em>웨이브 마감마다</em>이고 그것은 하루 40번이다(ADR-023 의 행 수).
+     * 찾지 못하면 id 로 떨어진다 — 게이지 하나 때문에 마감을 실패시키지 않는다.
+     */
+    private String campCodeOf(Wave wave) {
+        return referenceData.findCamp(wave.campId()).map(Camp::code).orElseGet(() -> {
+            log.warn("캠프를 찾지 못해 게이지 라벨에 id 를 씁니다. campId={}", wave.campId());
+            return wave.campId().toString();
+        });
+    }
+
     private boolean close(Wave candidate) {
         // 진행 중인 편입(공유 락)이 전부 커밋될 때까지 기다린 뒤 배타로 잡는다 (ADR-025).
         Optional<Wave> locked = waves.findByIdForUpdate(candidate.id());
@@ -166,6 +192,10 @@ public class CloseDueWavesService {
         wave.close(clock.instant(), orderCount);
         waves.update(wave);
         events.waveClosed(wave);
+        // waves.order_count 는 마감 전에 0 이므로(ADR-025) 이 게이지가 편입량의 유일한 관측
+        // 경로다. 마감 시점에 이미 센 값을 그대로 쓴다 — 스크레이프마다 집계하면 관측이
+        // §8.2 피크에 부하가 된다.
+        metrics.waveClosed(campCodeOf(wave), wave.serviceTier(), orderCount);
         return true;
     }
 }

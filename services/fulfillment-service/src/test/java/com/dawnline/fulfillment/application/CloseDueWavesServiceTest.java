@@ -46,11 +46,14 @@ class CloseDueWavesServiceTest {
     private final InMemoryFulfillmentRepositories repositories = new InMemoryFulfillmentRepositories();
     private final RecordingEvents events = new RecordingEvents();
     private final CountingLock lock = new CountingLock();
+    private final io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+    private final FulfillmentMetrics metrics = new FulfillmentMetrics(registry);
 
     private CloseDueWavesService service(Instant now) {
         return new CloseDueWavesService(repositories.waveRepository(), repositories.orderRepository(),
                 events, lock, new NoOpTransactionManager(), Clock.fixed(now, ZoneOffset.UTC),
-                GRACE, 200);
+                GRACE, 200, metrics, repositories.referenceData());
     }
 
     private Wave openWave(Instant cutoffAt) {

@@ -55,6 +55,9 @@ class PlanOrderServiceTest {
     private final InMemoryFulfillmentRepositories repositories = new InMemoryFulfillmentRepositories();
     private final RecordingEvents events = new RecordingEvents();
     private final TierSchedule schedule = TierSchedule.standard();
+    private final io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+            new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+    private final FulfillmentMetrics metrics = new FulfillmentMetrics(registry);
 
     private PlanOrderService service;
 
@@ -84,7 +87,8 @@ class PlanOrderServiceTest {
                 events,
                 schedule,
                 ids(),
-                clock);
+                clock,
+                metrics);
     }
 
     private static PlacedOrderSnapshot snapshot(Instant cutoffAt) {
@@ -145,6 +149,29 @@ class PlanOrderServiceTest {
     }
 
     // --- 약속 개정 (ADR-020 결정 3) --------------------------------------------
+
+    @Test
+    void 개정과_대체는_메트릭으로_센다() {
+        // §9.1 — 개정이 실제로 일어났는지를 보는 유일한 값이다(ADR-020 결정 3). 이것이 없으면
+        // §8.1 의 정시율 두 기준을 나중에 맞출 수 없다.
+        Wave closed = Wave.open(ids().newUuid(), CAMP_ID, ServiceTier.SAME_DAY, CUTOFF_10);
+        closed.beginClosing();
+        repositories.waveRepository().insertIfAbsent(closed);
+        repositories.waveRepository().update(closed);
+
+        service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
+
+        assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED)
+                .tag("camp", "CAMP-A").tag("tier", "SAME_DAY").counter().count()).isEqualTo(1);
+    }
+
+    @Test
+    void 대체가_없으면_fallback_을_세지_않는다() {
+        // 홈 FC 가 필터를 통과했다. 세면 "대체가 일어났다" 가 거짓이 된다.
+        service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
+
+        assertThat(registry.find(FulfillmentMetrics.FC_FALLBACK).counter()).isNull();
+    }
 
     @Test
     void 마감된_웨이브의_컷오프를_가진_주문은_다음_웨이브로_밀리고_개정된다() {

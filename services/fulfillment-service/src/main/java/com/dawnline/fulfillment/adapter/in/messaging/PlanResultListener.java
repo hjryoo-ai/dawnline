@@ -92,7 +92,7 @@ public class PlanResultListener {
         consumer.consumeOnce(envelope, OrderEventListener.CONSUMER, () -> {
             RecordPlanResultUseCase.PlanResultOutcome outcome = recordResult.failed(payload.waveId());
             if (outcome == RecordPlanResultUseCase.PlanResultOutcome.STALE) {
-                countRejected();
+                countRejected(envelope.eventType());
             }
             countStale(envelope.eventType(), outcome);
             log.debug("계획 실패 수신. waveId={}, reason={}, outcome={}",
@@ -112,9 +112,15 @@ public class PlanResultListener {
                 .increment();
     }
 
-    private void countRejected() {
+    /**
+     * 라벨 셋은 {@code IdempotentConsumer} 가 올리는 것과 <strong>같아야 한다</strong> —
+     * Prometheus 는 같은 이름의 미터가 같은 라벨 키 집합을 갖기를 요구한다(§9.1).
+     */
+    private void countRejected(String eventType) {
         Counter.builder(MessagingMetrics.EVENT_REJECTED)
                 .description("계획된 웨이브에 늦게 도착한 plan.failed (ADR-024 결정 4)")
+                .tag(MessagingMetrics.TAG_CONSUMER, OrderEventListener.CONSUMER)
+                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
                 .tag(MessagingMetrics.TAG_REASON, WAVE_ALREADY_PLANNED)
                 .register(meters)
                 .increment();

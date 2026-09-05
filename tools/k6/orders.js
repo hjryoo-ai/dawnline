@@ -34,6 +34,10 @@ const DURATION = __ENV.DURATION || '60s';
 const CUSTOMERS = Number(__ENV.CUSTOMERS || 10000);
 const WARMUP_RATE = Number(__ENV.WARMUP_RATE || 50);
 const WARMUP_DURATION = __ENV.WARMUP_DURATION || '20s';
+// VU 상한. 필요한 VU 수는 rate × 응답시간이라 서비스가 느려질수록 커진다 — 1차 측정에서
+// p99 가 2초로 나오자 500 rps 에 1,000 VU 가 필요해졌고, 상한에 닿아 반복이 버려졌다.
+// 그러면 실제 부하가 500 rps 밑으로 내려가 그 회차의 p99 는 500 rps 의 값이 아니게 된다.
+const MAX_VUS = Number(__ENV.MAX_VUS || 1000);
 
 // 이 실행을 구분하는 접두어. 멱등 키가 실행 간에 겹치면 두 번째 실행이 전부 200 재생이 되어
 // **아무것도 새로 접수하지 않은 채** 빠른 응답만 측정하게 된다.
@@ -82,7 +86,7 @@ export const options = {
       // (dropped_iterations) 실제 부하가 500 rps 밑으로 내려간다 — 그러면 서비스가 느려질수록
       // 부하가 가벼워져서, 측정이 스스로를 구해 주는 꼴이 된다.
       preAllocatedVUs: 200,
-      maxVUs: 1000,
+      maxVUs: MAX_VUS,
       tags: { phase: 'measure' },
     },
   },

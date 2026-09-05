@@ -51,13 +51,14 @@ class OrderProgressListenerIT extends OrderIntegrationTestBase {
 
     private static final String ORDER_DISPATCHED_TOPIC = "dawnline.order.dispatched.v1";
     private static final String DELIVERY_STATUS_TOPIC = "dawnline.delivery.status.v1";
+    private static final String FULFILLMENT_PLANNED_TOPIC = "dawnline.fulfillment.planned.v1";
     private static final Instant PLACED_AT = Instant.parse("2026-09-03T00:00:00Z");
     private static final EventContracts CONTRACTS = EventContracts.load();
     private static final EventJson JSON = EventJson.standard();
 
     static {
         // 리스너가 붙기 전에 만들어야 한다. 브로커는 자동 토픽 생성을 꺼 두었다.
-        createTopics(ORDER_DISPATCHED_TOPIC, DELIVERY_STATUS_TOPIC);
+        createTopics(ORDER_DISPATCHED_TOPIC, DELIVERY_STATUS_TOPIC, FULFILLMENT_PLANNED_TOPIC);
     }
 
     @Autowired
@@ -144,6 +145,69 @@ class OrderProgressListenerIT extends OrderIntegrationTestBase {
         }
         String routeId = payload.get("routeId").asString();
         kafka.send(DELIVERY_STATUS_TOPIC, routeId, JSON.write(envelope));
+    }
+
+    /**
+     * {@code fulfillment.planned} 를 예시 파일에서 만들어 보낸다.
+     *
+     * <p>예시를 기반으로 하는 이유는 <strong>계약을 지나온 값</strong>이어야 하기 때문이다.
+     * 손으로 JSON 을 쓰면 계약이 바뀌어도 이 테스트는 통과한다.
+     */
+    @Test
+    void fulfillment_planned_를_받으면_PLANNED_가_된다() {
+        UUID orderId = seedOrder(OrderStatus.PLACED);
+
+        publishPlanned("fulfillment.planned.v1.example.json", orderId, null, null);
+
+        awaitStatus(orderId, OrderStatus.PLANNED);
+    }
+
+    @Test
+    void 개정된_약속이_오면_promised_window_가_갱신된다() {
+        // ADR-020 결정 3 — 하류가 못 지킨 약속을 되돌려 알리는 경로다. 조용히 밀지 않는 것이
+        // 이 경로의 요점이고, order-service 가 그 값을 받아 고객의 약속을 갱신한다.
+        UUID orderId = seedOrder(OrderStatus.PLACED);
+        // 예시가 SAME_DAY 라 창은 6시간 이하여야 한다(§2.2). 개정된 창도 그 상한을 지켜야 하고,
+        // 지키지 못하면 접수 때와 같은 검증에 걸린다 — 처음에 7시간으로 적었다가 그 검증에
+        // 막혔고, 파티션이 하나라 그 실패가 뒤 메시지까지 함께 세웠다.
+        Instant start = PLACED_AT.plus(Duration.ofHours(38));
+        Instant end = PLACED_AT.plus(Duration.ofHours(44));
+
+        publishPlanned("fulfillment.planned.v1.revised.example.json", orderId, start, end);
+
+        await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> assertThat(orderOf(orderId).promisedWindow().start())
+                        .isEqualTo(start));
+        assertThat(orderOf(orderId).promisedWindow().end()).isEqualTo(end);
+    }
+
+    @Test
+    void 배차_불가가_오면_FAILED_와_사유가_남는다() {
+        // §5.2 6단계 — "주문 서비스는 이를 받아 상태 FAILED, 사유 기록". 상태만으로는 배달을
+        // 시도했다 실패한 것과 구별되지 않는다.
+        UUID orderId = seedOrder(OrderStatus.PLACED);
+
+        publishPlanned("fulfillment.planned.v1.unserviceable.example.json", orderId, null, null);
+
+        awaitStatus(orderId, OrderStatus.FAILED);
+        assertThat(orderOf(orderId).failureReason()).contains("NO_COLD_FC");
+    }
+
+    private void publishPlanned(String exampleFile, UUID orderId, Instant window0, Instant window1) {
+        ObjectNode envelope = exampleOf(exampleFile);
+        envelope.put("partitionKey", orderId.toString());
+        ObjectNode payload = (ObjectNode) envelope.get("payload");
+        payload.put("orderId", orderId.toString());
+        if (window0 != null) {
+            ObjectNode promised = (ObjectNode) payload.get("promisedWindow");
+            promised.put("start", window0.toString());
+            promised.put("end", window1.toString());
+        }
+        kafka.send(FULFILLMENT_PLANNED_TOPIC, orderId.toString(), JSON.write(envelope));
+    }
+
+    private Order orderOf(UUID orderId) {
+        return transactions().execute(tx -> orders.findById(orderId).orElseThrow());
     }
 
     private OrderStatus statusOf(UUID orderId) {

@@ -9,12 +9,14 @@ import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.order.adapter.in.messaging.OrderProgressListener;
 import com.dawnline.order.application.AdvanceOrderService;
+import com.dawnline.order.application.ApplyFulfillmentPlanService;
 import com.dawnline.order.application.CancelOrderService;
 import com.dawnline.order.application.IdempotencyKeyCleaner;
 import com.dawnline.order.application.OrderQueryService;
 import com.dawnline.order.application.PlaceOrderService;
 import com.dawnline.order.application.PlaceOrderTransaction;
 import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
+import com.dawnline.order.application.port.in.ApplyFulfillmentPlanUseCase;
 import com.dawnline.order.application.port.in.CancelOrderUseCase;
 import com.dawnline.order.application.port.in.GetOrderUseCase;
 import com.dawnline.order.application.port.in.ListOrdersUseCase;
@@ -162,19 +164,35 @@ public class OrderApplicationConfig {
     }
 
     /**
-     * {@code order.dispatched}·{@code delivery.status} 리스너 (§4.1).
+     * {@code fulfillment.planned} 반영 (§5.2 6단계, ADR-017 경고, ADR-020 결정 3).
+     *
+     * <p>{@link AdvanceOrderUseCase} 와 나누는 이유는 ADR-017 이 미리 적어 두었다 — 이 이벤트는
+     * 상태만 나르지 않고, 상태 전이가 stale 로 버려져도 함께 온 약속 개정은 사실이다.
+     *
+     * @param orders 주문 저장소
+     */
+    @Bean
+    public ApplyFulfillmentPlanUseCase applyFulfillmentPlanUseCase(OrderRepository orders) {
+        return new ApplyFulfillmentPlanService(orders);
+    }
+
+    /**
+     * 주문 이벤트 리스너 (§4.1) — {@code order.dispatched}·{@code delivery.status}·
+     * {@code fulfillment.planned}.
      *
      * <p>{@code IdempotentConsumer}·{@code EventJson} 은 {@code libs/messaging} 의 자동설정이 준다.
      *
      * @param consumer     멱등 게이트
      * @param advanceOrder 상태 전이 유스케이스
+     * @param applyPlan    계획 반영 유스케이스 (전이 + 데이터 부착, ADR-017 경고)
      * @param json         이벤트 JSON 코덱
      * @param meters       Micrometer 레지스트리
      */
     @Bean
     public OrderProgressListener orderProgressListener(IdempotentConsumer consumer,
-            AdvanceOrderUseCase advanceOrder, EventJson json, MeterRegistry meters) {
-        return new OrderProgressListener(consumer, advanceOrder, json, meters);
+            AdvanceOrderUseCase advanceOrder, ApplyFulfillmentPlanUseCase applyPlan,
+            EventJson json, MeterRegistry meters) {
+        return new OrderProgressListener(consumer, advanceOrder, applyPlan, json, meters);
     }
 
     /**

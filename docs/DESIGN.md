@@ -442,6 +442,7 @@ CREATE TABLE orders (
   volume_cm3       INTEGER NOT NULL,
   requires_cold    BOOLEAN NOT NULL DEFAULT FALSE,
   hazmat           BOOLEAN NOT NULL DEFAULT FALSE,
+  failure_reason   VARCHAR(24),                      -- 배차 불가 사유 (§5.2 6단계). 배달 실패에는 없다
   version          BIGINT NOT NULL DEFAULT 0,        -- 낙관적 락
   placed_at        TIMESTAMPTZ NOT NULL,
   updated_at       TIMESTAMPTZ NOT NULL
@@ -834,6 +835,15 @@ CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), targ
   request JSONB, result VARCHAR(16), created_at TIMESTAMPTZ);
 ```
 
+**Phase 6 메모 — `rm_orders` 는 약속을 <em>두 개</em> 들어야 한다.** §8.1 의 정시율은 "고객이 처음
+받은 약속" 기준으로 재는데, order-service 의 `promised_start/end` 는 개정 경로에서 **덮인다**
+([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 3 — 덮는 것이 맞다,
+고객에게 보여 줄 값은 지금 유효한 약속이다). 그러면 원 약속을 아는 곳은 `order.placed` 이벤트뿐이고,
+그것을 보관해 두 기준을 모두 낼 수 있는 곳은 **여기**다. 위 DDL 의 `promised_end` 한 칸으로는
+`dawnline_delivery_on_time_ratio{basis}`(§9.1)의 두 값을 낼 수 없다 — 그 SLO 는 개정으로 정시율을
+세탁할 수 없게 하려고 두 값으로 낸 것인데, 한 칸만 두면 정확히 그 세탁이 가능해진다.
+Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
+
 `rm_waves` 의 `plan_id`·`plan_duration_ms`·`total_cost_krw`·`unassigned_count` 를 채우는 것은
 `plan.completed` 다([ADR-024](adr/ADR-024-plan-completed-event.md)). 이 네 칸은 웨이브 단위 값이라
 `route.assigned` 로는 채울 수 없다 — 그 이벤트가 없던 동안 이 칸들에는 출처가 없었다.
@@ -1120,11 +1130,16 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 
 | 항목 | 값 |
 |---|---|
-| 측정 커밋 · 일시 | —(미측정) |
-| `POST /orders` p99 (500 rps × 60초) | —(미측정) · 목표 ≤ 200 ms |
-| Outbox 지연 p95 | —(미측정) · 목표 ≤ 2초 |
-| `hikaricp_connections_pending` 최댓값 | —(미측정) |
-| 판정 | —(미판정) · `pending` 이 0 을 넘어 유지되면 Phase 1 으로 당기고, 계속 0 이면 Phase 7 유지 |
+| 측정 커밋 · 일시 | `f7c860d` · 2026-09-05 |
+| `POST /orders` p99 (500 rps × 60초) | **웜 4.8~48.0 ms** / **콜드 1,972~4,005 ms** · 목표 ≤ 200 ms |
+| Outbox 지연 p95 | **웜 0.09~0.12초** / 콜드 1.61초 · 목표 ≤ 2초 ✅ |
+| `hikaricp_connections_pending` 최댓값 | **웜 0** / **콜드 191** (풀 상한 10, `active` 는 10 에 붙음) |
+| 판정 | **Phase 7 유지.** 조건(`pending` > 0)은 콜드에서 켜졌으나, 원인이 풀 분리로 완화되는 종류가 아니다 — 0.75 CPU 에서 SerialGC 가 선택되어 full GC 166회·17.11초가 발생했고, 그 때문에 요청이 커넥션을 3.07초까지 쥐었다. 웜에서는 같은 풀 10 개가 500 rps 를 `pending=0` 으로 처리한다. **대신 「콜드 스타트」를 Phase 7 항목으로 새로 연다** |
+
+> **이 판정은 미리 적어 둔 「다음 행동」과 다르다.** 판정표(벤치마크 문서 4절)는 "포화가
+> 관측되면 당긴다" 였고 포화는 관측됐다. 벗어난 이유는 증거가 그 조건문의 <em>전제</em>를
+> 부정했기 때문이며(포화가 풀 분리로 완화되지 않는다), **벗어났다는 사실과 함께** 남긴다.
+> 되돌리려면 위 표의 판정 칸만 바꾸면 된다.
 
 원자료는 `docs/benchmarks/phase1-orders-k6.md` 3·5·6절이고 여기에는 결론만 옮긴다.
 **두 번 요청되고도 오지 않은 항목은 기억이 아니라 게이트로 처리한다** — 이 프로젝트에서 레이트
@@ -1182,9 +1197,9 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_outbox_unpublished` | gauge | 전 서비스 | service |
 | `dawnline_outbox_failed` | gauge | 전 서비스 | service — 격리된(미해결) outbox 행 수 (§4.6) |
 | `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
-| `dawnline_event_rejected_total` | counter | 전 소비자 | reason — 비즈니스 규칙 위반으로 무시한 이벤트 (§4.6). `outcome=rejected` 가 "몇 번" 을 세고 이쪽이 "왜" 를 센다. **어느 소비자인지는 아직 라벨에 없다** — 거부하는 소비자가 둘 이상 되면 `consumer`·`eventType` 을 붙인다(ADR-022) |
+| `dawnline_event_rejected_total` | counter | 전 소비자 | **consumer, eventType, reason** — 비즈니스 규칙 위반으로 무시한 이벤트 (§4.6). `outcome=rejected` 가 "몇 번" 을 세고 이쪽이 "왜" 를 센다. 예약해 둔 라벨 확장을 Phase 2-8 에서 붙였다 — 거부하는 소비자가 order·fulfillment 둘이 되어 "누가 무엇을" 이 필요해졌다. **세 라벨은 이 카운터를 올리는 모든 곳이 같이 써야 한다**(`IdempotentConsumer`·두 리스너): Prometheus 는 같은 이름의 미터가 같은 라벨 키 집합을 갖기를 요구하므로 한쪽만 붙이면 다른 쪽 등록이 실패한다 |
 | `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
-| `dawnline_wave_orders` | gauge | fulfillment | camp, tier |
+| `dawnline_wave_orders` | gauge | fulfillment | camp, tier — 마감 시점의 편입 주문 수. `waves.order_count` 는 마감 전 0 이므로([ADR-025](adr/ADR-025-wave-admission-share-lock.md)) 이 값이 편입량의 유일한 관측 경로다. 스크레이프마다 집계하지 않고 **마감할 때 이미 센 값**을 남긴다 — 관측이 §8.2 피크에 부하가 되면 안 된다 |
 | `dawnline_fc_fallback_total` | counter | fulfillment | camp, reason(tier/cold/inventory) — 캠프의 홈 FC 가 §5.2 1~3단계 필터에서 떨어져 대체 FC 를 고른 횟수. 계속 오르는 캠프는 홈 FC 배정이 잘못됐거나 그 FC 의 역량이 부족한 것이다 |
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_geo_index_loaded` | gauge | fulfillment | index(fc/camp) — Redis GEO 적재 성공 여부 0/1. **레디니스가 아니라 이 게이지가 GEO 상태를 말한다**(§8.6, ADR-016 후속 정정). 0 이어도 서비스는 폴백으로 정상 동작한다 |

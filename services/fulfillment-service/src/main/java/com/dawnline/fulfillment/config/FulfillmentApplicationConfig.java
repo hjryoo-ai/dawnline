@@ -7,6 +7,7 @@ import com.dawnline.fulfillment.adapter.in.messaging.PlanResultListener;
 import com.dawnline.fulfillment.adapter.out.messaging.OutboxFulfillmentEvents;
 import com.dawnline.fulfillment.application.CancelFulfillmentOrderService;
 import com.dawnline.fulfillment.application.FcCandidateAssembler;
+import com.dawnline.fulfillment.application.FulfillmentMetrics;
 import com.dawnline.fulfillment.application.CloseDueWavesService;
 import com.dawnline.fulfillment.application.PlanOrderService;
 import com.dawnline.fulfillment.application.RecordPlanResultService;
@@ -72,6 +73,16 @@ public class FulfillmentApplicationConfig {
     }
 
     /**
+     * §9.1 의 fulfillment 고유 메트릭 셋.
+     *
+     * @param registry 미터 레지스트리
+     */
+    @Bean
+    public FulfillmentMetrics fulfillmentMetrics(MeterRegistry registry) {
+        return new FulfillmentMetrics(registry);
+    }
+
+    /**
      * §2.2 컷오프·배송창 표 — order-service 와 <strong>같은 구현</strong>이다
      * (ADR-020 후속 정정 2). 개정 경로가 다음 컷오프와 그 창을 물을 때 쓴다.
      */
@@ -106,9 +117,10 @@ public class FulfillmentApplicationConfig {
     @Bean
     public PlanOrderUseCase planOrderUseCase(ReferenceData referenceData, FcCandidateAssembler candidates,
             FcSelection selection, WaveRepository waves, FulfillmentOrderRepository orders,
-            FulfillmentEvents events, TierSchedule schedule, Ids ids, Clock clock) {
+            FulfillmentEvents events, TierSchedule schedule, Ids ids, Clock clock,
+            FulfillmentMetrics metrics) {
         return new PlanOrderService(referenceData, candidates, selection, waves, orders, events,
-                schedule, ids, clock);
+                schedule, ids, clock, metrics);
     }
 
     /**
@@ -151,10 +163,10 @@ public class FulfillmentApplicationConfig {
     public CloseDueWavesService closeDueWavesService(WaveRepository waves,
             FulfillmentOrderRepository orders, FulfillmentEvents events, WaveLock lock,
             PlatformTransactionManager transactionManager, Clock clock,
-            FulfillmentProperties properties) {
+            FulfillmentProperties properties, FulfillmentMetrics metrics, ReferenceData referenceData) {
 
         return new CloseDueWavesService(waves, orders, events, lock, transactionManager, clock,
-                properties.wave().grace(), properties.wave().closeBatchSize());
+                properties.wave().grace(), properties.wave().closeBatchSize(), metrics, referenceData);
     }
 
     /**
