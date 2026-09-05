@@ -893,11 +893,26 @@ cost(R) = Σ_r [ fixed(v_r) + dist_km(r)·perKm(v_r) + dur_min(r)·perMin(v_r) +
 record PlanningProblem(WaveRef wave, CampDepot depot, List<Candidate> candidates,
                        List<VehicleSpec> vehicles, RuleSet rules, CostModel cost, DistanceProvider distance) {}
 record Candidate(OrderId id, GeoPoint point, Parcel parcel, TimeWindow promised, int priority) {}
-record VehicleSpec(VehicleId id, Capacity capacity, VehicleAttrs attrs, ShiftWindow shift, VehicleCost cost) {}
-record PlanResult(List<PlannedRoute> routes, List<Unassigned> unassigned, long totalCostKrw,
+record VehicleSpec(VehicleId id, Capacity capacity, VehicleAttrs attrs, TimeWindow shift, VehicleCost cost) {}
+record Stop(GeoPoint point, List<OrderId> orderIds, Parcel parcel, TimeWindow promised,
+            int serviceSeconds, int priority) {}                    // §6.5 1단계 통합 결과
+record PlanResult(List<PlannedRoute> routes, List<Unassigned> unassigned, Money totalCost,
                   PlanMetrics metrics, List<Explanation> explanations) {}
-record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, int durationS, long costKrw) {}
+record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, int durationS, Money cost) {}
 ```
+
+**타입 선택 셋** (2026-09-05, Phase 3-1 구현 시 확정)
+
+- **금액은 `long` 이 아니라 `libs/common` 의 `Money`.** 불변규칙 9 가 요구하는 것은 정수 KRW 이고
+  `Money` 가 그 타입이다. `long` 으로 두면 거리(m)·시간(s)과 같은 `long` 이라 인자 순서가 바뀌어도
+  컴파일된다.
+- **근무창은 `ShiftWindow` 가 아니라 `TimeWindow`.** 반열린 구간의 의미와 연산이 이미 있고,
+  같은 뜻의 타입을 하나 더 두면 둘 중 하나에만 경계 규칙이 붙는다.
+- **`OrderId`·`VehicleId` 는 감싼다** — 저장소의 다른 곳은 raw `UUID` 를 쓰는데 여기만 다르다.
+  이유는 이 패키지가 **여러 종류의 id 가 한 함수 안에서 섞이는 유일한 곳**이기 때문이다.
+  `Map<OrderId, …>` 와 `Map<VehicleId, …>` 가 나란히 있고 `assign(orderId, vehicleId)` 같은 서명이
+  있는 자리에서 raw `UUID` 는 인자를 바꿔 넣어도 조용히 컴파일된다. 애그리거트 하나의 id 만
+  다루는 다른 서비스에서는 그 위험이 없으므로 그쪽은 그대로 둔다.
 
 `DistanceProvider`는 `(GeoPoint a, GeoPoint b) → (meters, seconds)`를 반환. 기본 구현 `HaversineDistance`(도로계수 1.3, 평균 속도 25 km/h, 캠프 설정값). 선택 구현 `OsrmDistance`(테이블 API, 캐시). 문제 생성 시 거리 행렬은 **stop 통합 후** 계산해 `O(n²)` 규모를 줄인다(§6.7).
 
@@ -909,9 +924,14 @@ record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, i
 sealed interface DispatchRule permits HardRule, SoftRule {
   String name(); int priority();
 }
-interface HardRule extends DispatchRule { Feasibility check(Candidate o, VehicleSpec v, RouteState r); }
-interface SoftRule extends DispatchRule { long penaltyKrw(Candidate o, VehicleSpec v, RouteState r); }
+interface HardRule extends DispatchRule { Feasibility check(Stop s, VehicleSpec v, RouteState r); }
+interface SoftRule extends DispatchRule { Money penalty(Stop s, VehicleSpec v, RouteState r); }
 ```
+
+평가 단위가 `Candidate` 가 아니라 **`Stop`** 인 것은 §6.5 의 1단계가 통합이기 때문이다 — 통합
+이후로는 주문 하나가 단독으로 배정되는 일이 없고, 용량·냉장·우선도는 전부 **합쳐진 값**으로 봐야
+한다(`Stop.parcel` 은 중량·부피의 합이고 냉장·위험물은 OR, `priority` 는 최댓값). 배정에 실패하면
+그 stop 의 주문이 **함께** 미배정이 되고, `Unassigned` 목록에서 다시 주문 단위로 펼친다.
 
 **룰 카탈로그 (초기 구현 범위)**
 
