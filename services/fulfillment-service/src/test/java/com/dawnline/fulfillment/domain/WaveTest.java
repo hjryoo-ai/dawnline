@@ -22,6 +22,13 @@ class WaveTest {
         return Wave.open(UUID.randomUUID(), UUID.randomUUID(), ServiceTier.DAWN, CUTOFF);
     }
 
+    private static Wave closed() {
+        Wave wave = open();
+        wave.beginClosing();
+        wave.close(CUTOFF.plusSeconds(120));
+        return wave;
+    }
+
     @Test
     void 새_웨이브는_비어_있고_열려_있다() {
         Wave wave = open();
@@ -98,14 +105,37 @@ class WaveTest {
 
     @Test
     void 계획_실패도_CLOSED_에서만_간다() {
-        Wave wave = open();
-        wave.beginClosing();
-        wave.close(CUTOFF.plusSeconds(120));
+        Wave wave = closed();
 
         wave.markPlanFailed();
 
         assertThat(wave.status()).isEqualTo(WaveStatus.PLAN_FAILED);
+        // 종결이 아니다 — 운영자 재실행이 돌아올 자리다 (ADR-024 결정 3).
+        assertThat(wave.status().isTerminal()).isFalse();
+    }
+
+    @Test
+    void 계획_실패한_웨이브는_재실행_성공으로_되살아난다() {
+        // §5.3 은 "운영자 재실행 가능" 이라고 적어 두었는데 웨이브 쪽에는 그 경로가 없었다.
+        // 되살리는 것은 다시 나온 plan.completed 다 (ADR-024).
+        Wave wave = closed();
+        wave.markPlanFailed();
+
+        wave.markPlanned();
+
+        assertThat(wave.status()).isEqualTo(WaveStatus.PLANNED);
         assertThat(wave.status().isTerminal()).isTrue();
+    }
+
+    @Test
+    void 계획된_웨이브를_다시_실패로_되돌리지_않는다() {
+        // 늦게 온 1회차 plan.failed 다. 애그리거트는 예외로 막고, 리스너는 그 앞에서
+        // hasProgressedPast 로 걸러 무시하고 커밋한다 (ADR-024 결정 4).
+        Wave wave = closed();
+        wave.markPlanned();
+
+        assertThatThrownBy(wave::markPlanFailed).isInstanceOf(IllegalStateTransitionException.class);
+        assertThat(WaveStatus.PLANNED.hasProgressedPast(WaveStatus.PLAN_FAILED)).isTrue();
     }
 
     @Test
