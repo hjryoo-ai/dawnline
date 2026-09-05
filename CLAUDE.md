@@ -76,6 +76,7 @@ make down
 
 - 값 객체·이벤트 페이로드·명령은 `record`. 분기 가능한 타입은 `sealed interface` + 패턴 매칭.
 - 널 가능성은 JSpecify 어노테이션(`@Nullable`)으로 명시. `Optional`은 반환 타입에만.
+- **부분 인덱스의 술어 컬럼은 쿼리에서 리터럴로 적는다.** `WHERE status = 'OPEN'` 부분 인덱스는 값이 바인드 파라미터로 들어오면 플래너가 일반 계획(generic plan)에서 술어를 만족한다고 증명하지 못해 인덱스를 못 탄다. 상수는 상수로 적어야 그 인덱스가 값을 한다 — 그리고 그 사실을 EXPLAIN 으로 확인하는 통합 테스트를 함께 둔다(`FulfillmentPersistenceIT`). 같은 이유로 **FK 대상 컬럼에는 부분 인덱스를 쓰지 않는다**(참조 무결성 검사가 못 쓴다, `docs/DESIGN.md` §7.1).
 - 로그: 구조화 JSON, MDC에 `orderId/waveId/routeId/eventId`. 전체 주소·고객 식별 정보는 로그 금지.
 - 예외: 도메인 예외(`DomainException` 하위) → HTTP 매핑은 `adapter.in.web`의 단일 `@ControllerAdvice`. 응답은 RFC 9457 Problem Details.
 - 테스트 이름: `메서드_상황_기대결과` 한국어 가능. 통합 테스트는 `*IT.java`, `integrationTest` 소스셋.

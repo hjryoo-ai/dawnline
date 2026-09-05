@@ -116,7 +116,22 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    전용으로 남아 남의 서비스 DB 에 쓰지 않고, Testcontainers 통합 테스트가 시드를 자동으로 얻는다).
    권역이 60이 아니라 91인 이유와 셀→캠프 배정 규칙은 [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md).
    `contracts/seed/order-service-geohash5.txt` 를 생성물로 커밋하고 양쪽 서비스가 각자 검사한다.
-2. Redis GEO 적재(기동 시), `GEOSEARCH` 기반 최근접 FC 선택, geohash5 → zone 캐시.
+2. Redis GEO 적재, `GEOSEARCH` 기반 최근접 FC 선택, geohash5 → zone 캐시. **그리고 각각의 DB 폴백**(불변규칙 7).
+   - **레디니스에 넣지 않는다.** 적재는 best-effort + 주기 재시도이고, 상태는
+     `dawnline_geo_index_loaded{index}` 게이지(0/1), 폴백 사용은
+     `dawnline_geo_lookups_total{index,outcome="bypassed"}` 로 본다
+     ([ADR-016](adr/ADR-016-readiness-excludes-kafka.md) 후속 정정, §8.6).
+     폴백이 있는 의존성을 레디니스에 넣으면 Redis 장애가 곧 서비스 차단이 되어 폴백을 만든
+     이유가 사라진다.
+   - **폴백은 같은 답을 내야 한다.** ADR-020 의 "멱등 소비자가 막는 것은 중복이지 다른 결과가
+     아니다" 가 여기서 그대로 적용된다 — Redis 가 죽었다는 이유로 같은 주문이 다른 FC 를 받으면
+     안 된다. 그러려면 **순위 결정과 동률 처리(FC code 순)는 순수 판정 함수 안**에 두고, Redis
+     어댑터와 DB 어댑터는 **거리만** 넘긴다(작업 3 의 `FcSelection` 이 이미 그 모양이다).
+   - **동등성 테스트**: 시드 전체(캠프 10 × FC 3)에서 두 경로가 **같은 순위**를 내는지 본다.
+     Redis GEO 의 거리 계산과 하버사인은 미세하게 다를 수 있으므로 **순위는 정확히, 거리는 허용
+     오차로** 비교한다.
+   - **폴백 강제 IT**: `PlaceOrderIT` 처럼 죽은 Redis 주소로 컨텍스트를 띄워 GEO 없이도 FC 선택이
+     성립함을 보인다(§13 매핑표 불변규칙 7 의 강제 수단을 fulfillment 쪽으로 넓힌다).
 3. FC 선택 규칙(§5.2 1~6단계), `UNSERVICEABLE` 경로.
    **순수 함수로 만든다**: `(주문, 캠프, FC 목록, Clock) → 결과(FC | UNSERVICEABLE 사유 | fallback 사유)`.
    Redis GEO·DB 는 어댑터가 **FC 목록과 거리를 준비해 넘기고**, 판정 자체는 Spring 없이 단위

@@ -1026,6 +1026,8 @@ public interface DispatchStrategy {
 - ID: UUIDv7 (애플리케이션 생성, 시간순 → 인덱스 지역성). PostgreSQL 18의 `uuidv7()`은 사용하지 않는다(ID를 DB 왕복 전에 알아야 outbox·이벤트에 쓸 수 있음).
 - 인덱스는 위 DDL 명시분 외에 추가 금지(추가 시 EXPLAIN 근거를 PR에 첨부). **넣지 않기로 한 판단도 행 수와 함께 남긴다** — 예: `waves` 는 90일치가 4,000행 남짓이라 정리 배치가 순차 스캔으로 충분하다([ADR-023](adr/ADR-023-fulfillment-retention.md)). 그 문장이 있어야 규모가 바뀌었을 때 재검토 지점이 생긴다.
 - 파티셔닝: `shipment_events`(일 단위), `outbox_events`는 발행 후 7일 지난 행을 배치 삭제(파티션 대신 삭제, 규모가 작음). `processed_events` 는 14일 보존(§4.4) — 같은 정리 스케줄러가 일 1회 처리한다. 두 삭제 모두 `LIMIT` 배치를 반복해 긴 락을 잡지 않는다.
+- **FK 대상 컬럼은 전체 인덱스로 만든다. 부분 인덱스는 참조 무결성(RI) 검사에 쓰이지 않는다** — 플래너가 부분 인덱스의 술어로 RI 검사(모든 상태)를 덮을 수 있음을 증명하지 못하기 때문이다. 부모 행을 지울 때마다 자식 테이블 전수 스캔이 된다.
+- **부분 인덱스는 걸러내는 비율이 클 때만 쓴다.** 2% 를 거르려고 술어를 다는 것은 크기를 거의 줄이지 못하면서 위 RI 경로에서는 *인덱스가 없는 것과 같은 결과*를 낳을 수 있다. 두 규칙 모두 [측정](benchmarks/phase2-fulfillment-orders-indexes.md) §3 에서 나왔다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - `fulfillment_orders` 의 두 인덱스는 [EXPLAIN 근거](benchmarks/phase2-fulfillment-orders-indexes.md)를 갖는다. `wave_id` 는 **부분 인덱스가 아니다** — 부분 조건이 거르는 행이 2% 뿐이고(정상 상태의 98% 가 `PLANNED`), 무엇보다 부분 인덱스는 FK 검사에 쓰이지 못해 `waves` 삭제가 웨이브당 전수 스캔이 된다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 웨이브 편입의 `waves` 행 `SELECT … FOR UPDATE`(짧은 트랜잭션)에만 허용.
@@ -1147,7 +1149,8 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 
 ### 8.6 기동·종료
 
-- 레디니스: DB 마이그레이션 완료 + (fulfillment) GEO 적재 완료. Kafka 브로커 연결은 레디니스 조건에 넣지 않는다 — 브로커 장애 시에도 쓰기 경로는 outbox로 정상 동작해야 하기 때문이다(§8.4, ADR-016). 브로커 상태는 레디니스가 아니라 outbox 지연·랙 알림으로 감시한다.
+- 레디니스: **DB 마이그레이션 완료만**. Kafka 브로커 연결은 넣지 않는다 — 브로커 장애 시에도 쓰기 경로는 outbox로 정상 동작해야 하기 때문이다(§8.4, [ADR-016](adr/ADR-016-readiness-excludes-kafka.md)). 브로커 상태는 레디니스가 아니라 outbox 지연·랙 알림으로 감시한다.
+- **Redis GEO 적재도 넣지 않는다**(2026-09-05 정정, ADR-016 후속 정정). 이전 판은 "(fulfillment) GEO 적재 완료"를 조건으로 적었는데, 그것은 §7.2 가 `geo:fc`·`geo:camp` 에 폴백(DB 전체 조회 + 메모리 하버사인)을 둔 것과 모순이다. **폴백이 있는 의존성을 레디니스에 넣으면 Redis 장애가 곧 서비스 차단이 되어 폴백을 만든 이유가 사라진다.** 적재는 best-effort 로 하고 주기적으로 재시도하며, 상태는 `dawnline_geo_index_loaded{index}` 게이지(0/1)와 폴백 사용 카운터로 관측한다(§9.1) — 레이트 리밋의 `bypassed` 와 같은 방식이다.
 - 그레이스풀 셧다운: HTTP 드레인 30초, Kafka 소비자 커밋 후 종료, 진행 중 계획은 `PLANNING` 유지(재실행 경로가 회수).
 
 ---
@@ -1175,6 +1178,8 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_wave_orders` | gauge | fulfillment | camp, tier |
 | `dawnline_fc_fallback_total` | counter | fulfillment | camp, reason(tier/cold/inventory) — 캠프의 홈 FC 가 §5.2 1~3단계 필터에서 떨어져 대체 FC 를 고른 횟수. 계속 오르는 캠프는 홈 FC 배정이 잘못됐거나 그 FC 의 역량이 부족한 것이다 |
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
+| `dawnline_geo_index_loaded` | gauge | fulfillment | index(fc/camp) — Redis GEO 적재 성공 여부 0/1. **레디니스가 아니라 이 게이지가 GEO 상태를 말한다**(§8.6, ADR-016 후속 정정). 0 이어도 서비스는 폴백으로 정상 동작한다 |
+| `dawnline_geo_lookups_total` | counter | fulfillment | index, outcome(redis/bypassed) — `bypassed` 는 Redis 를 건너뛰고 DB 전체 조회 + 메모리 하버사인으로 답한 것이다(§7.2). 레이트 리밋의 `bypassed` 와 같은 어휘를 쓴다 — **폴백은 조용히 일어나면 안 된다** |
 | `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode |
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |
 | `dawnline_plan_unassigned` | gauge | dispatch | camp |
@@ -1340,7 +1345,7 @@ dawnline/
 | 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✅(양방향) / DB 권한 ✅(컨테이너에서 거부 확인) |
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
-| 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰 | — |
+| 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트** | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다 |
 | 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등만) — `PlaceOrderIT` 가 죽은 Redis 주소로 컨텍스트를 띄워 멱등이 DB만으로 성립함을 보인다 |
 | 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
@@ -1349,7 +1354,20 @@ dawnline/
 | 12 | 시간·난수는 주입 | 규칙 7 — 시계 쪽은 온전히 강제된다. 난수(`RandomGenerator`)는 아직 아니다 | 생성자 시그니처, seed 재현성 테스트, `libs/messaging` 이 저장 정밀도로 자른 `Clock` 빈을 제공 | 규칙 7 ✅(양방향) |
 | 13 | 머지된 마이그레이션 불변 | — | CI 「마이그레이션 불변 검사」 job — PR 에서 기존 `V*.sql` 이 수정·삭제·이동되면 실패 | ✅(CI) |
 
+**손으로 옮기는 매핑은 단위 테스트가 잡는다.** 애그리거트와 엔티티를 분리하면(ADR-007) 필드를
+양방향으로 옮기는 코드가 생기고, 거기서 **하나를 빠뜨리면 그 값은 예외 없이 조용히 사라진다.**
+그것을 잡는 데는 DB 가 필요 없다 — 도메인→행→도메인 왕복이 손실 없는지만 보면 되고, 그래서
+`FulfillmentOrderEntityTest`(16개 필드)·`WaveEntityTest` 는 단위 테스트다. DB 가 필요한 것은
+<em>스키마가 엔티티와 맞는가</em>이고 그쪽은 `ddl-auto=validate` + 통합 테스트가 본다. 둘을 한
+곳에서 하려 들면 느린 테스트가 느슨해진다.
+
 **결정론**: 최적화 테스트는 seed 고정. 시간은 `Clock` 주입으로 제어. Testcontainers 재사용(`testcontainers.reuse.enable=true`)으로 로컬 실행 시간 단축.
+
+**시계는 하나다**(불변규칙 12). 도메인 전이가 `Clock` 에서 받은 시각으로 `updated_at` 을 옮기면,
+어댑터에 두 번째 시계를 두지 않는다 — JPA `@PreUpdate`·`@UpdateTimestamp` 도, DB `DEFAULT now()`
+도 쓰지 않는다. 시계가 둘이면 "그 주문에 마지막으로 무슨 일이 있었나" 의 답이 저장 시각으로
+덮이고, 그것을 기준으로 도는 보존 정리([ADR-023](adr/ADR-023-fulfillment-retention.md))가 주입된
+시계로는 재현되지 않는다.
 
 ---
 
