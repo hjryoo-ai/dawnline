@@ -16,6 +16,16 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>상태 전이는 {@link WaveStatus} 의 표가 정하고, 이 클래스는 그 표를 지키며 부수 효과
  * ({@code closedAt}, {@code orderCount})를 함께 다룬다. 세터로 상태를 바꾸지 않는다(불변규칙 6).
+ *
+ * <h2>편입은 이 애그리거트를 바꾸지 않는다 (ADR-025)</h2>
+ * 주문이 웨이브에 들어가는 것은 {@code fulfillment_orders} 에 행이 생기는 일이고, 웨이브 행은
+ * <strong>읽기만</strong> 한다(상태가 {@code OPEN} 인지). 그래서 편입 경로는 {@code FOR SHARE} 로
+ * 충분하고, 같은 웨이브로 몰리는 주문들이 서로를 막지 않는다 — 편입마다 {@code order_count} 를
+ * 올리던 이전 설계는 배타 락을 요구했고, §8.2 피크에서 <em>웨이브 행 하나가 처리량 상한</em>이
+ * 되었다.
+ *
+ * <p>{@code orderCount} 는 마감 시 한 번 세어 {@link #close(Instant, int)} 로 들어온다. 그래서
+ * 취소가 카운트를 건드리는 분기가 없고, 카운터 드리프트도 구조적으로 불가능하다.
  */
 public final class Wave {
 
@@ -88,25 +98,14 @@ public final class Wave {
         return status == WaveStatus.OPEN && !cutoffAt.plus(grace).isAfter(now);
     }
 
-    /** 주문 하나를 편입한다. */
-    public void addOrder() {
-        requireOpen("주문 편입");
-        orderCount++;
-    }
-
     /**
-     * 주문 하나를 뺀다 (취소).
+     * 새 주문을 받을 수 있는가.
      *
-     * <p><strong>{@code OPEN} 일 때만 부른다.</strong> 마감 이후의 취소는 카운트를 건드리지 않는다 —
-     * {@code wave.closed} 가 이미 그 {@code orderCount} 로 나갔고, 지금 줄이면 "그때 몇 건이
-     * 있었나" 에 답이 둘이 된다 (ADR-022). 그 분기는 호출부가 {@link #status()} 로 판단한다.
+     * <p>편입 경로가 {@code FOR SHARE} 로 행을 잡은 뒤 이것을 확인한다(ADR-025). 거짓이면 그
+     * 주문은 다음 웨이브로 간다 — 예외가 아니라 정상 분기다.
      */
-    public void removeOrder() {
-        requireOpen("주문 제거");
-        if (orderCount == 0) {
-            throw new IllegalStateException("편입된 주문이 없는 웨이브에서 뺄 수 없습니다: " + id);
-        }
-        orderCount--;
+    public boolean acceptsOrders() {
+        return status.acceptsOrders();
     }
 
     /** 마감을 시작한다 ({@code OPEN → CLOSING}). */
@@ -117,12 +116,21 @@ public final class Wave {
     /**
      * 마감을 마친다 ({@code CLOSING → CLOSED}).
      *
-     * @param at {@code wave.closed} 를 outbox 에 넣고 커밋하는 시각
+     * <p>{@code orderCount} 를 <strong>여기서</strong> 받는다. 호출부가 마감 직전에
+     * {@code fulfillment_orders} 를 세어 넘긴 값이고(ADR-025), 그 시점에는 배타 락을 들고 있어
+     * 새 편입이 없다. 이 값이 그대로 {@code wave.closed} 로 나간다(§4.3).
+     *
+     * @param at         {@code wave.closed} 를 outbox 에 넣고 커밋하는 시각
+     * @param orderCount 마감 시점에 이 웨이브에 편입되어 있던 주문 수
      */
-    public void close(Instant at) {
+    public void close(Instant at, int orderCount) {
         Objects.requireNonNull(at, "at");
+        if (orderCount < 0) {
+            throw new IllegalArgumentException("orderCount 는 0 이상이어야 합니다: " + orderCount);
+        }
         transitionTo(WaveStatus.CLOSED);
         this.closedAt = at;
+        this.orderCount = orderCount;
     }
 
     /**
@@ -153,12 +161,6 @@ public final class Wave {
         status = next;
     }
 
-    private void requireOpen(String what) {
-        if (!status.acceptsOrders()) {
-            throw new IllegalStateTransitionException("Wave(" + what + ")", status, WaveStatus.OPEN);
-        }
-    }
-
     /** 웨이브 id. */
     public UUID id() {
         return id;
@@ -184,7 +186,12 @@ public final class Wave {
         return status;
     }
 
-    /** 편입된 주문 수. */
+    /**
+     * 편입된 주문 수. <strong>마감 전에는 0 이다</strong> (ADR-025).
+     *
+     * <p>진행 중 웨이브의 편입량은 이 값이 아니라 {@code dawnline_wave_orders} 게이지가 본다 —
+     * 그쪽은 {@code fulfillment_orders} 를 직접 센다(§9.1).
+     */
     public int orderCount() {
         return orderCount;
     }

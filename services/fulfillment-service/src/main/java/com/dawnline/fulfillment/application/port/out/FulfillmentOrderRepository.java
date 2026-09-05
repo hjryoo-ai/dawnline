@@ -43,6 +43,20 @@ public interface FulfillmentOrderRepository {
     List<FulfillmentOrder> findPlannedInWave(UUID waveId);
 
     /**
+     * 웨이브에 편입된 주문 수 (ADR-025).
+     *
+     * <p>마감 시 한 번 부른다. 이 값이 {@code waves.order_count} 가 되고 {@code wave.closed} 로
+     * 나간다(§4.3). 편입마다 카운터를 올리지 않는 이유는 그것이 웨이브 행에 배타 락을 요구해
+     * §8.2 피크에서 병목이 되기 때문이다. <strong>세는 방식은 매번 사실에서 다시 만든다</strong> —
+     * 증감 방식은 한 번 새면 그 웨이브의 숫자가 영원히 틀리고 틀렸다는 사실조차 드러나지 않는다.
+     *
+     * <p>{@code ix_fulfillment_orders_wave} 가 이 집계를 받는다.
+     *
+     * @param waveId 웨이브 id
+     */
+    int countPlannedInWave(UUID waveId);
+
+    /**
      * 변경을 반영한다 (낙관적 락).
      *
      * @param order 변경된 주문

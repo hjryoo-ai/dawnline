@@ -28,7 +28,8 @@ import java.util.function.Predicate;
  *       중간에 비면 <em>그 단계의 사유</em>로 끝낸다. 순서가 곧 사유의 우선순위다.</li>
  *   <li>홈 FC 가 적격 집합에 있으면 그대로 쓴다(fallback 없음).</li>
  *   <li>없으면 <strong>캠프 반경 50 km 안</strong>의 적격 FC 중 가장 가까운 것을 고르고,
- *       홈 FC 가 떨어진 필터를 fallback 사유로 남긴다 (ADR-021 결정 3).</li>
+ *       홈 FC 가 떨어진 필터를 fallback 사유로 남긴다 (ADR-021 결정 3).
+ *       동률이면 FC 코드 순 — 그 이유는 {@code NEAREST_THEN_CODE} 에 적었다.</li>
  *   <li>반경 안에 적격 FC 가 없으면 {@code NO_ELIGIBLE_FC}.</li>
  * </ol>
  *
@@ -48,6 +49,22 @@ public final class FcSelection {
 
     /** ADR-020 후속 정정의 기본 상한. */
     public static final Duration DEFAULT_STALE_PLACED_AFTER = Duration.ofHours(24);
+
+    /**
+     * 대체 FC 의 순위 — 가까운 것 먼저, <strong>동률이면 FC 코드 순</strong>.
+     *
+     * <p>동률 처리가 이 순수 함수 안에 있어야 하는 이유는 <em>폴백 때문</em>이다. 거리는 Redis
+     * {@code GEOSEARCH} 가 줄 수도, DB 폴백의 하버사인이 줄 수도 있다(§7.2). 그 둘은 좌표
+     * 양자화 때문에 수 m 어긋날 수 있는데, 동률에서 "먼저 온 것" 을 고르면 <strong>Redis 가
+     * 죽었다는 이유로 같은 주문이 다른 FC 를 받는다.</strong>
+     *
+     * <p>멱등 소비자가 막는 것은 중복이지 다른 결과가 아니다(ADR-020). 같은 논리로, 폴백이
+     * 막아야 하는 것은 중단이지 <em>다른 답</em>이 아니다. 그래서 어댑터는 거리만 넘기고 순위는
+     * 여기서 정한다.
+     */
+    private static final Comparator<CandidateFc> NEAREST_THEN_CODE =
+            Comparator.comparingDouble(CandidateFc::distanceFromCampKm)
+                    .thenComparing(CandidateFc::code);
 
     private final Clock clock;
     private final Duration stalePlacedAfter;
@@ -119,7 +136,7 @@ public final class FcSelection {
         // 5단계 — 대체 FC. 여기서만 반경이 걸린다.
         Optional<CandidateFc> nearest = eligible.stream()
                 .filter(fc -> fc.distanceFromCampKm() <= LINEHAUL_RADIUS_KM)
-                .min(Comparator.comparingDouble(CandidateFc::distanceFromCampKm));
+                .min(NEAREST_THEN_CODE);
         if (nearest.isEmpty()) {
             return new FcSelectionResult.Unserviceable(UnserviceableReason.NO_ELIGIBLE_FC);
         }

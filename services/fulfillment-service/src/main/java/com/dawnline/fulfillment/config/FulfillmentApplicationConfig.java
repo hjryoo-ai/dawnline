@@ -1,7 +1,10 @@
 package com.dawnline.fulfillment.config;
 
+import com.dawnline.fulfillment.application.FcCandidateAssembler;
 import com.dawnline.fulfillment.application.FulfillmentRetentionCleaner;
+import com.dawnline.fulfillment.application.port.out.FcDistances;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
+import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -25,6 +28,29 @@ import org.springframework.transaction.PlatformTransactionManager;
 @EnableConfigurationProperties(FulfillmentProperties.class)
 @EnableScheduling
 public class FulfillmentApplicationConfig {
+
+    /**
+     * FC 선택의 순수 함수 (§5.2 1~6단계, ADR-021).
+     *
+     * @param clock      시각 출처 (불변규칙 12)
+     * @param properties {@code dawnline.fulfillment.wave.stale-placed-after}
+     */
+    @Bean
+    public com.dawnline.fulfillment.domain.FcSelection fcSelection(Clock clock,
+            FulfillmentProperties properties) {
+        return new com.dawnline.fulfillment.domain.FcSelection(clock, properties.wave().stalePlacedAfter());
+    }
+
+    /**
+     * 판정에 넘길 후보 조립 — 카탈로그 + 거리 + 재고.
+     *
+     * @param referenceData 참조 데이터
+     * @param distances     캠프 기준 거리
+     */
+    @Bean
+    public FcCandidateAssembler fcCandidateAssembler(ReferenceData referenceData, FcDistances distances) {
+        return new FcCandidateAssembler(referenceData, distances);
+    }
 
     /**
      * 보존 정리 (ADR-023). {@code dawnline.fulfillment.retention.enabled=false} 로 끌 수 있다.

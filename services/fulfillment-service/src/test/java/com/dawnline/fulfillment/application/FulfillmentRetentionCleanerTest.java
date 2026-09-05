@@ -143,6 +143,11 @@ class FulfillmentRetentionCleanerTest {
                 }
 
                 @Override
+                public int countPlannedInWave(UUID waveId) {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
                 public void update(FulfillmentOrder order) {
                     throw new UnsupportedOperationException();
                 }
@@ -177,6 +182,11 @@ class FulfillmentRetentionCleanerTest {
 
                 @Override
                 public Optional<Wave> findById(UUID id) {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
+                public Optional<Wave> findByIdForShare(UUID id) {
                     throw new UnsupportedOperationException();
                 }
 

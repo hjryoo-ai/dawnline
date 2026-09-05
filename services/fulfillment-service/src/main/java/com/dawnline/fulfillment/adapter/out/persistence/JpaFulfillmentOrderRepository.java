@@ -118,6 +118,17 @@ public class JpaFulfillmentOrderRepository implements FulfillmentOrderRepository
     }
 
     @Override
+    public int countPlannedInWave(UUID waveId) {
+        Objects.requireNonNull(waveId, "waveId");
+        Number count = (Number) entityManager.createNativeQuery("""
+            SELECT count(*) FROM fulfillment_orders WHERE wave_id = :waveId AND status = 'PLANNED'
+            """)
+                .setParameter("waveId", waveId)
+                .getSingleResult();
+        return count.intValue();
+    }
+
+    @Override
     public void update(FulfillmentOrder order) {
         Objects.requireNonNull(order, "order");
         FulfillmentOrderEntity entity = entityManager.find(FulfillmentOrderEntity.class, order.orderId());

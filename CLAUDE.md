@@ -76,9 +76,11 @@ make down
 
 - 값 객체·이벤트 페이로드·명령은 `record`. 분기 가능한 타입은 `sealed interface` + 패턴 매칭.
 - 널 가능성은 JSpecify 어노테이션(`@Nullable`)으로 명시. `Optional`은 반환 타입에만.
+- **부분 인덱스의 술어 컬럼은 쿼리에서 리터럴로 적는다.** `WHERE status = 'OPEN'` 부분 인덱스는 값이 바인드 파라미터로 들어오면 플래너가 일반 계획(generic plan)에서 술어를 만족한다고 증명하지 못해 인덱스를 못 탄다. 상수는 상수로 적어야 그 인덱스가 값을 한다 — 그리고 그 사실을 EXPLAIN 으로 확인하는 통합 테스트를 함께 둔다(`FulfillmentPersistenceIT`). 같은 이유로 **FK 대상 컬럼에는 부분 인덱스를 쓰지 않는다**(참조 무결성 검사가 못 쓴다, `docs/DESIGN.md` §7.1).
 - 로그: 구조화 JSON, MDC에 `orderId/waveId/routeId/eventId`. 전체 주소·고객 식별 정보는 로그 금지.
 - 예외: 도메인 예외(`DomainException` 하위) → HTTP 매핑은 `adapter.in.web`의 단일 `@ControllerAdvice`. 응답은 RFC 9457 Problem Details.
 - 테스트 이름: `메서드_상황_기대결과` 한국어 가능. 통합 테스트는 `*IT.java`, `integrationTest` 소스셋.
+- **폴백 테스트는 전제를 첫 어설션으로 스스로 말한다.** "의존성 없이도 성립한다" 를 보는 테스트는 그 의존성이 <em>실제로 불가하다</em>는 것을 먼저 확인한다(`@BeforeEach` 또는 첫 줄). 전제가 조용히 무너지면 테스트는 계속 통과하면서 아무것도 검사하지 않는다 — 이 저장소에서 세 번 있었다: `PlaceOrderIT` 의 주소 고정, `OrderApiIT` 의 `tryLock`→`UNAVAILABLE` 확인, 그리고 `GeoFallbackIT` 가 살아 있는 Redis 를 보고 통과한 일(2026-09-05). 표준은 `OrderApiIT` 의 형태다.
 - 커밋: Conventional Commits (`feat(dispatch): …`, `test(order): …`, `docs(adr): …`). 한 커밋은 한 관심사.
 - PR 템플릿의 체크리스트(설계서 반영, 계약 갱신, 테스트, 메트릭, 런북)를 채운다.
 

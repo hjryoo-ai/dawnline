@@ -37,11 +37,15 @@
 | 022 | fulfillment 주문 단위 애그리거트 `fulfillment_orders`, `wave_orders` 드롭 | ✅ Accepted (2026-09-05) | [ADR-022](ADR-022-fulfillment-order-aggregate.md) |
 | 023 | `fulfillment_orders` 30일 · `waves` 90일, 파티션 대신 배치 삭제 | ✅ Accepted (2026-09-05) | [ADR-023](ADR-023-fulfillment-retention.md) |
 | 024 | 웨이브 계획 완료는 `plan.completed.v1` 이 알린다 (`route.assigned` 가 아니라) | ✅ Accepted (2026-09-05) | [ADR-024](ADR-024-plan-completed-event.md) |
+| 025 | 웨이브 편입은 `FOR SHARE`, 마감만 `FOR UPDATE`. `order_count` 는 마감 시 집계 | ✅ Accepted (2026-09-05) | [ADR-025](ADR-025-wave-admission-share-lock.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
 - **015·016은 Phase 0 마감 감사에서** 드러난 결함·설계서 내부 모순을 확정한 것이다.
   015는 릴레이의 head-of-line blocking(실제 도달 가능한 결함), 016은 §8.6과 §8.4의 모순을 해소한다.
+  **016 에는 Phase 2-4 에 후속 정정을 붙였다** — §8.6 이 레디니스 조건으로 남겨 둔 "(fulfillment)
+  GEO 적재 완료" 가 같은 종류의 모순이었다. `geo:fc`·`geo:camp` 에는 §7.2 가 폴백을 정해 두었는데,
+  적재 완료를 레디니스에 넣으면 Redis 장애가 곧 트래픽 차단이 되어 폴백을 만든 이유가 사라진다.
 - **021은 §16 표에 없던 항목**이다. 부록 A 의 "권역 60개" 가 order-service 지오코더의 출력을 덮지
   못한다는 것을 세어 보고(91개) 알게 되어 추가했다. 덮지 못하면 그 주소의 주문이 전부
   `UNSERVICEABLE` 이 되는데, 그것이 설계된 실패 경로와 구별되지 않는다.
@@ -52,6 +56,10 @@
 - **022는 §16 표에 없던 항목**이다. 스키마를 구현하다 §5.2 의 `wave_orders` 가 주문에 대해
   fulfillment 가 아는 것의 절반만 담는다는 것이 드러났다 — `UNSERVICEABLE` 사유도, 약속 개정도,
   취소도 갈 곳이 없어 "주문 X 는 왜 웨이브에 없나" 에 답할 수 없었다.
+- **025는 Phase 2-5 착수 전에** 설계자가 §5.2·§7.1 의 편입 락을 되짚어 확정했다. 편입에 배타
+  락을 쓰면 §8.2 피크(컷오프 직전 600 rps 가 소수 웨이브에 몰림)에서 웨이브 행 하나가 처리량
+  상한이 된다. 같은 검토에서 **ADR-020 에 후속 정정 2** 를 붙였다 — 약속 개정 경로에서
+  fulfillment 가 "다음 웨이브" 의 컷오프를 알아야 하는데 ADR-020 에 그 답이 없었다.
 - **024는 Phase 2-3 에서** `WaveStatus` 를 만들다 §5.2 의 웨이브 수명주기와 §4.1 의 소비자 표가
   어긋나 있는 것을 발견해 추가했다. `route.assigned` 는 라우트 단위라 웨이브의 계획 완료를 말할 수
   없고, 그 전이가 발화하지 않으면 **ADR-023 의 정리 배치가 `PLANNED` 주문 행을 영원히 지우지
