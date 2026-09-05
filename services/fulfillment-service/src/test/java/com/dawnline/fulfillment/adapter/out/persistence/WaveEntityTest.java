@@ -41,11 +41,9 @@ class WaveEntityTest {
     @Test
     void 마감된_웨이브의_카운트와_마감_시각이_왕복한다() {
         Wave wave = open();
-        wave.addOrder();
-        wave.addOrder();
         wave.beginClosing();
         Instant closedAt = CUTOFF.plusSeconds(120);
-        wave.close(closedAt);
+        wave.close(closedAt, 2);
 
         Wave restored = WaveEntity.from(wave).toDomain();
 
@@ -59,14 +57,13 @@ class WaveEntityTest {
         // (campId, tier, cutoffAt) 이 바뀌면 그것은 다른 웨이브다.
         Wave wave = open();
         WaveEntity entity = WaveEntity.from(wave);
-        wave.addOrder();
         wave.beginClosing();
 
         entity.applyStateOf(wave);
 
         Wave restored = entity.toDomain();
         assertThat(restored.status()).isEqualTo(WaveStatus.CLOSING);
-        assertThat(restored.orderCount()).isEqualTo(1);
+        assertThat(restored.orderCount()).as("마감 전에는 0 이다 (ADR-025)").isZero();
         assertThat(restored.campId()).isEqualTo(CAMP_ID);
         assertThat(restored.cutoffAt()).isEqualTo(CUTOFF);
     }

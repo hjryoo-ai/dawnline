@@ -179,7 +179,23 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
    측정 결과는 [`docs/benchmarks/phase2-fulfillment-orders-indexes.md`](benchmarks/phase2-fulfillment-orders-indexes.md)
    에 환경(호스트 사양·PG 버전·행 수)과 함께 남긴다.
-5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 웨이브에서 제거(OPEN일 때만).
+5. 리스너: `order.placed` → 계획·편입·`fulfillment.planned` 발행. `order.cancelled` → 주문 상태만 `CANCELLED`
+   (**웨이브 카운트는 건드리지 않는다** — [ADR-025](adr/ADR-025-wave-admission-share-lock.md) 이후
+   `order_count` 는 마감 시 집계라 취소가 자동으로 빠진다).
+   편입은 웨이브 행 **`SELECT … FOR SHARE`** 로 상태를 확인한 뒤 `fulfillment_orders` INSERT,
+   마감은 **`FOR UPDATE`** (ADR-025). 다음 컷오프가 필요하면 `libs/common` 의 `CutoffSchedule` 을
+   부른다 — 표를 여기에 다시 적지 않는다(ADR-020 후속 정정 2).
+
+   **마감 대조표에 반드시 열로 들어갈 것** (기억이 아니라 표로 확인한다):
+
+   | 항목 | 어떻게 증명하나 |
+   |---|---|
+   | `fulfillment.planned` 브로커 도착 | outbox → 릴레이 → **실제 브로커** → 계약 검증 IT (Phase 1 8단계의 `OrderPublishIT` 와 같은 형태). "outbox 에 들어갔다" 까지만 보면 릴레이·봉투 조립이 검증되지 않는다 |
+   | `wave.closed` 브로커 도착 | 〃. 키가 `campId` 인 것과 `orderCount` 가 마감 시 집계값인 것까지 확인 |
+   | `plan.completed` 소비 | 예시 이벤트 발행 → 웨이브 `CLOSED → PLANNED` ([ADR-024](adr/ADR-024-plan-completed-event.md)) |
+   | `plan.failed` 소비 | 〃 `CLOSED → PLAN_FAILED`, 그리고 재실행 경로 `PLAN_FAILED → PLANNED` |
+   | 이미 `PLANNED` 인 웨이브의 늦은 `plan.failed` | 무시 + `dawnline_event_rejected_total{reason="wave_already_planned"}` (축 규칙, ADR-024 결정 4) |
+   | 편입 동시성 | 같은 웨이브에 동시 편입이 서로 막지 않고, 마감이 그것을 기다린 뒤 `CLOSING` 으로 간다 (ADR-025) |
    마감은 `cutoffAt + grace`(기본 90초)이고, grace 를 넘긴 주문은 다음 웨이브 + `promiseRevised: true` ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)).
    단 **`cutoffAt < now − 24h`(설정값)이면 다음 웨이브가 아니라 `UNSERVICEABLE`(`STALE_PLACED`)** 이다
    (ADR-020 후속 정정). 상한이 없으면 20일 묵은 `order.placed` 가 DLQ replay 로 들어와 오늘 날짜의

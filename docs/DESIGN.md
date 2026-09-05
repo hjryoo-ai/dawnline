@@ -618,8 +618,9 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 (`dawnline_event_rejected_total{reason="wave_already_planned"}`, §4.6 — DLQ 아님).
 앞의 세 상태는 이 서비스가 스스로 옮기므로 건너뜀은 여전히 예외다.
 - 웨이브는 (campId, tier, cutoffAt)당 1개. 주문 편입 시 없으면 생성(`INSERT … ON CONFLICT DO NOTHING` 후 재조회).
-- 컷오프 스케줄러: 매 30초 `cutoff_at <= now() AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
-- 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가(낙관적 락으로 경합 차단).
+- 컷오프 스케줄러: 매 30초 `cutoff_at <= now() - grace AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → **`SELECT … FOR UPDATE`** → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
+- 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가 — **편입이 웨이브 행을 `SELECT … FOR SHARE` 로 잡고 상태를 확인한 뒤 INSERT** 하므로, 그 트랜잭션이 끝나기 전에는 마감이 끼어들 수 없다([ADR-025](adr/ADR-025-wave-admission-share-lock.md)). 공유 락끼리는 막지 않아 같은 웨이브로 몰리는 편입은 병렬이다.
+- **`waves.order_count` 는 편입마다 증감하지 않는다.** 마감 시 `SELECT count(*) FROM fulfillment_orders WHERE wave_id = ? AND status='PLANNED'` 로 한 번 센다(ADR-025). 그래서 취소가 카운트를 건드리는 분기가 없고, 카운터 드리프트도 구조적으로 불가능하다. 진행 중 웨이브의 편입량은 §9.1 의 `dawnline_wave_orders` 게이지가 같은 집계로 본다.
 
 **주문 단위 상태와 취소 ([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md))**
 
@@ -629,8 +630,7 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 | 순서 | 웨이브 상태 | 처리 |
 |---|---|---|
 | 취소 선착 | — | `status=CANCELLED`, `placed_event_id=NULL` 행 생성. 뒤에 온 `order.placed` 는 무시하고 `dawnline_event_rejected_total{reason="cancelled_before_placed"}` (§4.6, DLQ 아님) |
-| 취소 후착 | `OPEN` | `CANCELLED` 전이 + `waves.order_count` 감소 (`FOR UPDATE` 짧은 트랜잭션) |
-| 취소 후착 | `CLOSING`/`CLOSED` 이후 | 상태만 `CANCELLED`. **카운트는 건드리지 않는다** — `wave.closed` 가 이미 그 `orderCount` 로 나갔다. 후보 제거는 §4.1 대로 dispatch 가 자기 `order.cancelled` 소비로 한다 |
+| 취소 후착 | 웨이브 상태와 무관 | 상태만 `CANCELLED`. **카운트를 건드리지 않는다** — `order_count` 는 마감 시 `status='PLANNED'` 만 세므로(ADR-025) 마감 전 취소는 자동으로 빠지고, 마감 후 취소는 이미 나간 `wave.closed` 의 숫자를 바꾸지 않는다. 후보 제거는 §4.1 대로 dispatch 가 자기 `order.cancelled` 소비로 한다 |
 
 두 리스너가 같은 `order_id` 로 동시에 INSERT 하면 PK 에서 한쪽이 대기한다.
 `INSERT … ON CONFLICT DO NOTHING` 후 재조회하고 상태 머신을 적용한다 — ADR-018 과 같은 패턴이다.
@@ -1032,7 +1032,7 @@ public interface DispatchStrategy {
 - **부분 인덱스는 걸러내는 비율이 클 때만 쓴다.** 2% 를 거르려고 술어를 다는 것은 크기를 거의 줄이지 못하면서 위 RI 경로에서는 *인덱스가 없는 것과 같은 결과*를 낳을 수 있다. 두 규칙 모두 [측정](benchmarks/phase2-fulfillment-orders-indexes.md) §3 에서 나왔다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - `fulfillment_orders` 의 두 인덱스는 [EXPLAIN 근거](benchmarks/phase2-fulfillment-orders-indexes.md)를 갖는다. `wave_id` 는 **부분 인덱스가 아니다** — 부분 조건이 거르는 행이 2% 뿐이고(정상 상태의 98% 가 `PLANNED`), 무엇보다 부분 인덱스는 FK 검사에 쓰이지 못해 `waves` 삭제가 웨이브당 전수 스캔이 된다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
-- 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 웨이브 편입의 `waves` 행 `SELECT … FOR UPDATE`(짧은 트랜잭션)에만 허용.
+- 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 `waves` 행 두 자리뿐이고 둘 다 짧은 트랜잭션이다 — **편입은 `SELECT … FOR SHARE`, 마감은 `SELECT … FOR UPDATE`**([ADR-025](adr/ADR-025-wave-admission-share-lock.md)). 편입에 배타 락을 쓰면 §8.2 피크에서 웨이브 행 하나가 처리량 상한이 된다. 공유 락끼리는 막지 않고, 마감의 배타 락이 진행 중인 편입을 기다렸다가 `CLOSING` 으로 바꾸므로 "마감된 웨이브에 주문이 새는" 창도 함께 닫힌다.
 - N+1 방지: 컬렉션 로딩은 `@EntityGraph` 또는 명시 fetch join. 테스트에서 Hibernate statement 카운터로 쿼리 수 상한 검증.
 
 ### 7.2 Redis 사용 카탈로그
@@ -1442,6 +1442,8 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 021 | 권역 시드를 order-service 지오코더의 출력 집합에서 파생(권역 91개) | 60개를 손으로 고르기(31개 셀이 조용히 UNSERVICEABLE), 지오코더의 지터 축소(머지된 동작 변경 + 최적화 비교 무의미), 권역 키를 geohash4 로(캠프 단위 병렬성 붕괴), 양쪽에 목록을 각자 보관(한쪽만 고치는 날이 온다) | [ADR-021](adr/ADR-021-zone-seed-derived-from-geocoder.md) |
 
 | 024 | 웨이브 계획 완료를 `plan.completed.v1` 로 알린다(+`PLAN_FAILED → PLANNED`, 마지막 두 전이에 축 규칙) | `route.assigned` 를 fulfillment 가 소비(첫 라우트면 계획 중인데 완료, 전부면 개수를 소비자가 모름), `route.assigned` 에 `routeCount`/`isLast` 추가(웨이브 사실이 라우트 수만큼 반복 + 재정렬 시 영영 미완료), dispatch 에 동기 조회(불변규칙 4), 수명주기에서 마지막 두 전이 삭제(ADR-023 정리 배치가 성립하지 않음) | [ADR-024](adr/ADR-024-plan-completed-event.md) |
+
+| 025 | 웨이브 편입은 `FOR SHARE`·마감만 `FOR UPDATE`, `order_count` 는 마감 시 집계 | 편입도 `FOR UPDATE`(§8.2 피크에서 웨이브 행이 처리량 상한), 락 없이 낙관적 락만(편입은 웨이브 행을 쓰지 않아 충돌로 안 잡힌다 — 마감된 웨이브에 주문이 샌다), 원자적 `order_count` 증감(배타 락을 이름만 바꾼 것 + 취소 경로 드리프트), advisory lock, 웨이브 샤딩(계획 단위가 쪼개진다) | [ADR-025](adr/ADR-025-wave-admission-share-lock.md) |
 
 013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다. 024는 Phase 2-3 에서 `WaveStatus` 의 마지막 두 전이에 트리거가 없다는 것을 발견해 추가했다 — §5.2 의 수명주기와 §4.1 의 소비자 표가 어긋나 있었고, 그 어긋남이 ADR-023 의 정리 배치를 조용히 무한 보존으로 만들고 있었다.
 

@@ -107,23 +107,121 @@ class FulfillmentPersistenceIT extends FulfillmentIntegrationTestBase {
         Instant closedAt = CUTOFF.plusSeconds(120);
 
         tx().executeWithoutResult(status -> {
-            Wave loaded = waves.findByIdForUpdate(wave.id()).orElseThrow();
-            loaded.addOrder();
-            loaded.addOrder();
+            Wave loaded = waves.findById(wave.id()).orElseThrow();
+            loaded.beginClosing();
             waves.update(loaded);
         });
         tx().executeWithoutResult(status -> {
-            Wave loaded = waves.findById(wave.id()).orElseThrow();
-            loaded.beginClosing();
-            loaded.close(closedAt);
+            // 마감은 배타 락으로 잡는다 (ADR-025). 이 시점에는 진행 중인 편입이 없다.
+            Wave loaded = waves.findByIdForUpdate(wave.id()).orElseThrow();
+            loaded.close(closedAt, 4820);
             waves.update(loaded);
         });
 
         Wave reloaded = tx().execute(status -> waves.findById(wave.id()).orElseThrow());
         assertThat(reloaded.status()).isEqualTo(WaveStatus.CLOSED);
-        assertThat(reloaded.orderCount()).isEqualTo(2);
+        assertThat(reloaded.orderCount()).isEqualTo(4820);
         assertThat(reloaded.closedAt()).isEqualTo(closedAt);
         assertThat(reloaded.version()).as("두 번 갱신했으므로 버전이 올라간다").isEqualTo(2);
+    }
+
+    @Test
+    void 편입_후보를_세는_것과_저장된_카운트가_같다() {
+        // ADR-025 — 마감 시 세는 값이 wave.closed 로 나간다. 취소된 주문은 빠진다.
+        Wave wave = openWave(Ids.newId(), CUTOFF);
+        UUID kept = Ids.newId();
+        UUID cancelled = Ids.newId();
+        tx().executeWithoutResult(status -> {
+            orders.insertIfAbsent(FulfillmentOrder.planned(kept, Ids.newId(), wave.id(), wave.campId(),
+                    Ids.newId(), Ids.newId(), CUTOFF, WINDOW, false, null, CUTOFF));
+            orders.insertIfAbsent(FulfillmentOrder.planned(cancelled, Ids.newId(), wave.id(), wave.campId(),
+                    Ids.newId(), Ids.newId(), CUTOFF, WINDOW, false, null, CUTOFF));
+        });
+        tx().executeWithoutResult(status -> {
+            FulfillmentOrder loaded = orders.findById(cancelled).orElseThrow();
+            loaded.cancel(CUTOFF.plusSeconds(10));
+            orders.update(loaded);
+        });
+
+        Integer counted = tx().execute(status -> orders.countPlannedInWave(wave.id()));
+
+        assertThat(counted).as("취소는 카운트를 건드리는 분기 없이 자동으로 빠진다").isEqualTo(1);
+    }
+
+    @Test
+    void 편입의_공유_락은_서로_막지_않고_마감의_배타_락은_기다린다() {
+        // ADR-025 의 핵심 주장이다. 이것이 성립하지 않으면 §8.2 피크에서 웨이브 행 하나가
+        // 처리량 상한이 되거나(둘 다 배타), 마감된 웨이브에 주문이 샌다(락 없음).
+        Wave wave = openWave(Ids.newId(), CUTOFF);
+
+        java.util.concurrent.CountDownLatch firstHolds = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        boolean secondShareAcquired;
+        boolean updateAcquiredWhileShared;
+
+        Thread holder = Thread.ofPlatform().start(() -> tx().executeWithoutResult(status -> {
+            waves.findByIdForShare(wave.id()).orElseThrow();
+            firstHolds.countDown();
+            await(release);
+        }));
+
+        try {
+            await(firstHolds);
+
+            // 다른 편입은 막히지 않는다.
+            tx().executeWithoutResult(status -> waves.findByIdForShare(wave.id()).orElseThrow());
+            secondShareAcquired = true;
+
+            // 마감은 막힌다. NOWAIT 로 확인한다 — "기다렸다" 를 시간으로 재면 느린 CI 에서
+            // 흔들리므로, 즉시 실패하는 형태로 바꿔 본다.
+            //
+            // 트랜잭션 <em>밖</em>에서 잡는다. 안에서 삼키면 그 트랜잭션은 이미 rollback-only 라
+            // 커밋에서 UnexpectedRollbackException 이 난다(실제로 그렇게 실패했다).
+            updateAcquiredWhileShared = tryLockForUpdateNoWait(wave.id());
+        } finally {
+            release.countDown();
+            join(holder);
+        }
+
+        assertThat(secondShareAcquired).as("공유 락끼리는 서로 막지 않는다").isTrue();
+        assertThat(updateAcquiredWhileShared)
+                .as("마감의 배타 락은 진행 중인 편입이 끝날 때까지 기다린다").isFalse();
+
+        // 편입이 끝나면 마감은 곧바로 잡힌다.
+        assertThat(tryLockForUpdateNoWait(wave.id())).isTrue();
+    }
+
+    /** 배타 락을 즉시 잡을 수 있으면 {@code true}. 잡을 수 없으면 PostgreSQL 이 바로 실패시킨다. */
+    private boolean tryLockForUpdateNoWait(UUID waveId) {
+        try {
+            tx().executeWithoutResult(status -> entityManager
+                    .createNativeQuery("SELECT id FROM waves WHERE id = :id FOR UPDATE NOWAIT")
+                    .setParameter("id", waveId)
+                    .getSingleResult());
+            return true;
+        } catch (RuntimeException blocked) {
+            return false;
+        }
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            if (!latch.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new IllegalStateException("래치 대기 시간 초과");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void join(Thread thread) {
+        try {
+            thread.join(java.time.Duration.ofSeconds(10));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

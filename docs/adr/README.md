@@ -37,6 +37,7 @@
 | 022 | fulfillment 주문 단위 애그리거트 `fulfillment_orders`, `wave_orders` 드롭 | ✅ Accepted (2026-09-05) | [ADR-022](ADR-022-fulfillment-order-aggregate.md) |
 | 023 | `fulfillment_orders` 30일 · `waves` 90일, 파티션 대신 배치 삭제 | ✅ Accepted (2026-09-05) | [ADR-023](ADR-023-fulfillment-retention.md) |
 | 024 | 웨이브 계획 완료는 `plan.completed.v1` 이 알린다 (`route.assigned` 가 아니라) | ✅ Accepted (2026-09-05) | [ADR-024](ADR-024-plan-completed-event.md) |
+| 025 | 웨이브 편입은 `FOR SHARE`, 마감만 `FOR UPDATE`. `order_count` 는 마감 시 집계 | ✅ Accepted (2026-09-05) | [ADR-025](ADR-025-wave-admission-share-lock.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
@@ -55,6 +56,10 @@
 - **022는 §16 표에 없던 항목**이다. 스키마를 구현하다 §5.2 의 `wave_orders` 가 주문에 대해
   fulfillment 가 아는 것의 절반만 담는다는 것이 드러났다 — `UNSERVICEABLE` 사유도, 약속 개정도,
   취소도 갈 곳이 없어 "주문 X 는 왜 웨이브에 없나" 에 답할 수 없었다.
+- **025는 Phase 2-5 착수 전에** 설계자가 §5.2·§7.1 의 편입 락을 되짚어 확정했다. 편입에 배타
+  락을 쓰면 §8.2 피크(컷오프 직전 600 rps 가 소수 웨이브에 몰림)에서 웨이브 행 하나가 처리량
+  상한이 된다. 같은 검토에서 **ADR-020 에 후속 정정 2** 를 붙였다 — 약속 개정 경로에서
+  fulfillment 가 "다음 웨이브" 의 컷오프를 알아야 하는데 ADR-020 에 그 답이 없었다.
 - **024는 Phase 2-3 에서** `WaveStatus` 를 만들다 §5.2 의 웨이브 수명주기와 §4.1 의 소비자 표가
   어긋나 있는 것을 발견해 추가했다. `route.assigned` 는 라우트 단위라 웨이브의 계획 완료를 말할 수
   없고, 그 전이가 발화하지 않으면 **ADR-023 의 정리 배치가 `PLANNED` 주문 행을 영원히 지우지

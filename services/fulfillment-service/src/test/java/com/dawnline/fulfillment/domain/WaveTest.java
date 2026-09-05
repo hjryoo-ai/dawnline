@@ -23,9 +23,13 @@ class WaveTest {
     }
 
     private static Wave closed() {
+        return closedWith(0);
+    }
+
+    private static Wave closedWith(int orderCount) {
         Wave wave = open();
         wave.beginClosing();
-        wave.close(CUTOFF.plusSeconds(120));
+        wave.close(CUTOFF.plusSeconds(120), orderCount);
         return wave;
     }
 
@@ -40,41 +44,41 @@ class WaveTest {
     }
 
     @Test
-    void 주문을_넣고_뺀다() {
+    void 편입은_이_애그리거트를_바꾸지_않는다() {
+        // ADR-025. 주문이 들어가는 것은 fulfillment_orders 에 행이 생기는 일이고, 웨이브 행은
+        // 상태를 읽기만 한다 — 그래서 편입 경로가 FOR SHARE 로 충분하다.
         Wave wave = open();
 
-        wave.addOrder();
-        wave.addOrder();
-        wave.removeOrder();
-
-        assertThat(wave.orderCount()).isEqualTo(1);
+        assertThat(wave.acceptsOrders()).isTrue();
+        assertThat(wave.orderCount()).as("마감 전에는 0 이다").isZero();
+        assertThat(wave.version()).isZero();
     }
 
     @Test
-    void 비어_있는_웨이브에서는_뺄_수_없다() {
-        assertThatThrownBy(open()::removeOrder).isInstanceOf(IllegalStateException.class);
-    }
-
-    @Test
-    void 마감_중이면_주문을_넣을_수_없다() {
+    void 마감_중이면_주문을_받지_않는다() {
+        // 예외가 아니라 정상 분기다 — 그 주문은 다음 웨이브로 간다.
         Wave wave = open();
         wave.beginClosing();
 
-        assertThatThrownBy(wave::addOrder).isInstanceOf(IllegalStateTransitionException.class);
-        assertThatThrownBy(wave::removeOrder).isInstanceOf(IllegalStateTransitionException.class);
+        assertThat(wave.acceptsOrders()).isFalse();
     }
 
     @Test
-    void 마감_뒤에는_카운트를_건드릴_수_없다() {
-        // ADR-022 — wave.closed 가 이미 그 orderCount 로 나갔다. 지금 줄이면 "그때 몇 건이
-        // 있었나" 에 답이 둘이 된다. 그래서 애그리거트가 아예 막는다.
-        Wave wave = open();
-        wave.addOrder();
-        wave.beginClosing();
-        wave.close(CUTOFF.plusSeconds(120));
+    void 카운트는_마감할_때_한_번_들어온다() {
+        // 호출부가 fulfillment_orders 를 세어 넘긴 값이고, 그 시점에는 배타 락을 들고 있어
+        // 새 편입이 없다. 이 값이 그대로 wave.closed 로 나간다.
+        Wave wave = closedWith(4820);
 
-        assertThatThrownBy(wave::removeOrder).isInstanceOf(IllegalStateTransitionException.class);
-        assertThat(wave.orderCount()).isEqualTo(1);
+        assertThat(wave.orderCount()).isEqualTo(4820);
+    }
+
+    @Test
+    void 음수_카운트로는_마감할_수_없다() {
+        Wave wave = open();
+        wave.beginClosing();
+
+        assertThatThrownBy(() -> wave.close(CUTOFF.plusSeconds(120), -1))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -85,7 +89,7 @@ class WaveTest {
         wave.beginClosing();
         assertThat(wave.status()).isEqualTo(WaveStatus.CLOSING);
 
-        wave.close(closedAt);
+        wave.close(closedAt, 3);
         assertThat(wave.status()).isEqualTo(WaveStatus.CLOSED);
         assertThat(wave.closedAt()).isEqualTo(closedAt);
 
@@ -99,7 +103,7 @@ class WaveTest {
         // 주문 상태와 달리 건너뜀을 수용할 이유가 없다.
         Wave wave = open();
 
-        assertThatThrownBy(() -> wave.close(CUTOFF)).isInstanceOf(IllegalStateTransitionException.class);
+        assertThatThrownBy(() -> wave.close(CUTOFF, 0)).isInstanceOf(IllegalStateTransitionException.class);
         assertThatThrownBy(wave::markPlanned).isInstanceOf(IllegalStateTransitionException.class);
     }
 

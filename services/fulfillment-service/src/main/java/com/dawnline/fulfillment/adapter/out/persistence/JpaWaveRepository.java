@@ -5,7 +5,6 @@ import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,6 +21,18 @@ import java.util.UUID;
  * ({@code ctid} 배치)가 그렇다.
  */
 public class JpaWaveRepository implements WaveRepository {
+
+    /**
+     * 편입용 공유 잠금 (ADR-025).
+     *
+     * <p><strong>네이티브 SQL 로 적는다.</strong> JPA 의 {@code PESSIMISTIC_READ} 가 어느 SQL 로
+     * 번역되는지는 방언에 달려 있는데, 이 자리는 <em>어떤 락이 걸리는가가 곧 정확성</em>이다.
+     * 배타 락으로 번역되면 조용히 §8.2 의 병목이 돌아오고, 아무 테스트도 그것을 잡지 못한다.
+     */
+    private static final String FIND_FOR_SHARE_SQL = "SELECT * FROM waves WHERE id = :id FOR SHARE";
+
+    /** 마감용 배타 잠금. 진행 중인 편입(공유 락)이 전부 커밋될 때까지 기다린다 (ADR-025). */
+    private static final String FIND_FOR_UPDATE_SQL = "SELECT * FROM waves WHERE id = :id FOR UPDATE";
 
     private static final String INSERT_SQL = """
             INSERT INTO waves (id, camp_id, service_tier, cutoff_at, status, order_count, closed_at, version)
@@ -117,10 +128,22 @@ public class JpaWaveRepository implements WaveRepository {
     }
 
     @Override
+    public Optional<Wave> findByIdForShare(UUID id) {
+        return findLocked(id, FIND_FOR_SHARE_SQL);
+    }
+
+    @Override
     public Optional<Wave> findByIdForUpdate(UUID id) {
+        return findLocked(id, FIND_FOR_UPDATE_SQL);
+    }
+
+    private Optional<Wave> findLocked(UUID id, String sql) {
         Objects.requireNonNull(id, "id");
-        return Optional.ofNullable(entityManager.find(WaveEntity.class, id, LockModeType.PESSIMISTIC_WRITE))
-                .map(WaveEntity::toDomain);
+        @SuppressWarnings("unchecked")
+        List<WaveEntity> rows = entityManager.createNativeQuery(sql, WaveEntity.class)
+                .setParameter("id", id)
+                .getResultList();
+        return rows.stream().findFirst().map(WaveEntity::toDomain);
     }
 
     @Override
