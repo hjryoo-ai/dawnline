@@ -6,8 +6,10 @@ import com.dawnline.fulfillment.adapter.out.redis.CachingReferenceData;
 import com.dawnline.fulfillment.adapter.out.redis.GeoIndexLoader;
 import com.dawnline.fulfillment.adapter.out.redis.GeoMetrics;
 import com.dawnline.fulfillment.adapter.out.redis.RedisFcDistances;
+import com.dawnline.fulfillment.adapter.out.redis.RedisWaveLock;
 import com.dawnline.fulfillment.application.port.out.FcDistances;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
+import com.dawnline.fulfillment.application.port.out.WaveLock;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails;
@@ -91,6 +93,24 @@ public class RedisConfig {
 
         return new RedisFcDistances(redis, new HaversineFcDistances(referenceData), metrics,
                 properties.geo().catalogRadiusKm());
+    }
+
+    /**
+     * 웨이브 마감 락 (§5.2, §7.2 {@code lock:wave:{id}}).
+     *
+     * <p>이 락은 정확성의 근거가 아니라 <strong>낭비를 줄이는 방어</strong>다. 중복 마감을 실제로
+     * 막는 것은 {@code FOR UPDATE} 와 상태 전이이므로, Redis 장애 때는 스킵이 아니라 진행한다
+     * (불변규칙 7) — 스킵하면 Redis 장애가 곧 마감 중단이 되고, 마감이 멈추면 계획이 시작되지
+     * 않는다.
+     *
+     * @param redis      문자열 전용 템플릿
+     * @param metrics    fail-open 을 세는 메트릭
+     * @param properties {@code dawnline.fulfillment.wave.lock-ttl}
+     */
+    @Bean
+    public WaveLock waveLock(StringRedisTemplate redis, GeoMetrics metrics,
+            FulfillmentProperties properties) {
+        return new RedisWaveLock(redis, metrics, properties.wave().lockTtl());
     }
 
     /**

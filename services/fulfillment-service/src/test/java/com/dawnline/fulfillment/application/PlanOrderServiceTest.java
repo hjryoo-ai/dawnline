@@ -277,6 +277,11 @@ class PlanOrderServiceTest {
         public void unserviceable(PlacedOrderSnapshot snapshot, UnserviceableReason reason) {
             unserviceable.add(new Rejected(snapshot.orderId(), reason));
         }
+
+        @Override
+        public void waveClosed(Wave wave) {
+            throw new UnsupportedOperationException("이 테스트의 관심이 아니다");
+        }
     }
 
     private record Planned(UUID orderId, UUID fcId, UUID waveId, Instant waveCutoffAt,

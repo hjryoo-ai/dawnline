@@ -44,6 +44,19 @@ public class OutboxFulfillmentEvents implements FulfillmentEvents {
         append(snapshot, FulfillmentPlannedPayload.unserviceable(snapshot, reason));
     }
 
+    @Override
+    public void waveClosed(com.dawnline.fulfillment.domain.Wave wave) {
+        Objects.requireNonNull(wave, "wave");
+        // 키가 campId 다 — 같은 캠프의 웨이브 계획을 직렬화한다 (§4.5).
+        outbox.append(OutboxMessage.of(
+                WaveClosedPayload.AGGREGATE_TYPE,
+                wave.id(),
+                WaveClosedPayload.EVENT_TYPE,
+                WaveClosedPayload.SCHEMA_VERSION,
+                wave.campId().toString(),
+                WaveClosedPayload.of(wave)));
+    }
+
     private void append(PlacedOrderSnapshot snapshot, FulfillmentPlannedPayload payload) {
         outbox.append(OutboxMessage.of(
                 FulfillmentPlannedPayload.AGGREGATE_TYPE,

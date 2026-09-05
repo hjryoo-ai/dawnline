@@ -172,7 +172,9 @@ class FulfillmentPublishIT extends FulfillmentIntegrationTestBase {
     }
 
     private static PlacedOrderSnapshot snapshot(String geohash7) {
-        Instant cutoffAt = Instant.now().plus(Duration.ofHours(1));
+        // 나노초를 일부러 섞는다. 저장 정밀도로 잘리지 않으면 웨이브 자연키 조회가 어긋나고
+        // 모든 주문이 promiseRevised=true 로 나간다 — CI(Linux)에서만 드러났던 결함이다.
+        Instant cutoffAt = Instant.now().plus(Duration.ofHours(1)).plusNanos(123);
         return new PlacedOrderSnapshot(Ids.newId(), Ids.newId(), "SAME_DAY",
                 new PlacedOrderSnapshot.Address("서울 강남구 테헤란로 1", "06236",
                         new GeoPoint(37.4979, 127.0276), geohash7),

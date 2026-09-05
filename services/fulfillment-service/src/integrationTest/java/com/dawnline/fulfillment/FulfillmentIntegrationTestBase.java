@@ -93,6 +93,9 @@ public abstract class FulfillmentIntegrationTestBase {
         registry.add("dawnline.fulfillment.retention.cleanup-initial-delay-ms", () -> "3600000");
         // GEO 적재는 테스트가 직접 부른다. 스케줄러가 끼어들면 "적재 전" 상태를 볼 수 없다.
         registry.add("dawnline.fulfillment.geo.initial-delay-ms", () -> "3600000");
+        // 컷오프 마감도 마찬가지다. 스케줄러가 먼저 닫으면 테스트의 closeDue() 가 0 을 돌려주고,
+        // 그 실패는 실행 순서에 따라 나타났다 사라진다 — 가장 나쁜 종류다.
+        registry.add("dawnline.fulfillment.wave.close-initial-delay-ms", () -> "3600000");
     }
 
     /** 테스트가 직접 psql 스타일 SQL 을 돌릴 때 쓰는 접속 정보. */
@@ -110,23 +113,42 @@ public abstract class FulfillmentIntegrationTestBase {
      *
      * <p>리스너가 붙기 <em>전에</em> 만들어야 한다 — 호출하는 쪽은 정적 초기화 블록에서 부른다.
      *
+     * <p><strong>이미 있는 토픽은 무시한다.</strong> 컨테이너를 공유하는 IT 여럿이 겹치는 토픽을
+     * 필요로 하고, 두 번째 호출이 {@code TopicExistsException} 으로 터지면 <em>정적 초기화 실패</em>
+     * 라 그 클래스의 모든 테스트가 {@code initializationError} 하나로 뭉개진다(실제로 그랬다).
+     * 만드는 것이 목적이지 <em>내가</em> 만드는 것이 목적이 아니다.
+     *
      * @param names 만들 토픽 이름들
      */
     protected static void createTopics(String... names) {
         try (org.apache.kafka.clients.admin.Admin admin = org.apache.kafka.clients.admin.Admin.create(
                 java.util.Map.of(org.apache.kafka.clients.admin.AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
                         KAFKA.getBootstrapServers()))) {
-            admin.createTopics(java.util.Arrays.stream(names)
-                            .map(name -> new org.apache.kafka.clients.admin.NewTopic(name, 1, (short) 1))
-                            .toList())
-                    .all()
-                    .get(30, java.util.concurrent.TimeUnit.SECONDS);
+            java.util.Map<String, org.apache.kafka.common.KafkaFuture<Void>> created =
+                    admin.createTopics(java.util.Arrays.stream(names)
+                                    .map(name -> new org.apache.kafka.clients.admin.NewTopic(name, 1, (short) 1))
+                                    .toList())
+                            .values();
+            for (java.util.Map.Entry<String, org.apache.kafka.common.KafkaFuture<Void>> entry
+                    : created.entrySet()) {
+                awaitTopic(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
+    private static void awaitTopic(String name, org.apache.kafka.common.KafkaFuture<Void> future) {
+        try {
+            future.get(30, java.util.concurrent.TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
-        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
-            throw new IllegalStateException("테스트 토픽을 만들지 못했습니다: "
-                    + java.util.Arrays.toString(names), e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            if (e.getCause() instanceof org.apache.kafka.common.errors.TopicExistsException) {
+                return;
+            }
+            throw new IllegalStateException("테스트 토픽을 만들지 못했습니다: " + name, e);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new IllegalStateException("테스트 토픽을 만들지 못했습니다: " + name, e);
         }
     }
 

@@ -52,6 +52,23 @@ class OrderPlacedPayloadTest {
     }
 
     @Test
+    void 컷오프는_저장_정밀도로_잘린다() {
+        // cutoffAt 은 웨이브의 자연키다. 나노초를 그대로 두면 PostgreSQL 이 잘라 저장하고,
+        // 그 뒤 조회가 어긋나 모든 주문이 promiseRevised=true 로 나간다 — 거짓 약속 개정이다.
+        // Linux 의 Instant.now() 는 나노초, macOS 는 마이크로초라 CI 에서만 드러났던 결함이다.
+        Instant nanos = Instant.parse("2026-09-06T01:00:00Z").plusNanos(123_456);
+        OrderPlacedPayload payload = new OrderPlacedPayload(UUID.randomUUID(), UUID.randomUUID(), "DAWN",
+                new OrderPlacedPayload.Address("서울 강남구 테헤란로 1", "06236", 37.4979, 127.0276, "wydm7bc"),
+                new OrderPlacedPayload.Window(nanos, nanos.plusSeconds(25200)),
+                new OrderPlacedPayload.Parcel(1200, 8000, true, false),
+                List.of(new OrderPlacedPayload.Item("SKU-00001", 2)),
+                nanos.minusSeconds(3600), nanos);
+
+        assertThat(payload.toSnapshot().cutoffAt())
+                .isEqualTo(Instant.parse("2026-09-06T01:00:00Z").plusNanos(123_000));
+    }
+
+    @Test
     void geohash7_이_일곱_자가_아니면_거절한다() {
         // 계약이 CHAR(7) 이다. 짧으면 권역 키가 조용히 달라진다.
         assertThatThrownBy(() -> payload("wydm7").toSnapshot())

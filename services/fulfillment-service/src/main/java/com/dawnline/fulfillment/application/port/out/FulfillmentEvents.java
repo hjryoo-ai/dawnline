@@ -37,4 +37,15 @@ public interface FulfillmentEvents {
      * @param reason   사유
      */
     void unserviceable(PlacedOrderSnapshot snapshot, UnserviceableReason reason);
+
+    /**
+     * {@code wave.closed} — 컷오프 도달, 계획 시작 신호 (§4.3).
+     *
+     * <p>키가 {@code waveId} 가 아니라 <strong>{@code campId}</strong> 다(§4.1). 같은 캠프의
+     * 웨이브 계획을 직렬화하기 위해서이고, 그 캠프 단위 병렬성이 계획 처리량의 상한이다(§6.7) —
+     * 의도된 설계다.
+     *
+     * @param wave 마감된 웨이브. {@code orderCount} 는 마감 시점의 집계값이다 (ADR-025)
+     */
+    void waveClosed(com.dawnline.fulfillment.domain.Wave wave);
 }

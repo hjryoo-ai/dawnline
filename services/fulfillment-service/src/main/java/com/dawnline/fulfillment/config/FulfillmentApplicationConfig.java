@@ -3,15 +3,20 @@ package com.dawnline.fulfillment.config;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TierSchedule;
 import com.dawnline.fulfillment.adapter.in.messaging.OrderEventListener;
+import com.dawnline.fulfillment.adapter.in.messaging.PlanResultListener;
 import com.dawnline.fulfillment.adapter.out.messaging.OutboxFulfillmentEvents;
 import com.dawnline.fulfillment.application.CancelFulfillmentOrderService;
 import com.dawnline.fulfillment.application.FcCandidateAssembler;
+import com.dawnline.fulfillment.application.CloseDueWavesService;
 import com.dawnline.fulfillment.application.PlanOrderService;
+import com.dawnline.fulfillment.application.RecordPlanResultService;
 import com.dawnline.fulfillment.application.FulfillmentRetentionCleaner;
 import com.dawnline.fulfillment.application.port.in.CancelFulfillmentOrderUseCase;
 import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
+import com.dawnline.fulfillment.application.port.in.RecordPlanResultUseCase;
 import com.dawnline.fulfillment.application.port.out.FcDistances;
 import com.dawnline.fulfillment.application.port.out.FulfillmentEvents;
+import com.dawnline.fulfillment.application.port.out.WaveLock;
 import com.dawnline.fulfillment.domain.FcSelection;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
@@ -129,6 +134,51 @@ public class FulfillmentApplicationConfig {
     public OrderEventListener orderEventListener(IdempotentConsumer consumer, PlanOrderUseCase planOrder,
             CancelFulfillmentOrderUseCase cancelOrder, EventJson json, MeterRegistry meters) {
         return new OrderEventListener(consumer, planOrder, cancelOrder, json, meters);
+    }
+
+    /**
+     * 컷오프 스케줄러 (§5.2, ADR-020 결정 2, ADR-025).
+     *
+     * @param waves              웨이브 저장소
+     * @param orders             주문 저장소 (마감 시 집계)
+     * @param events             outbox 발행
+     * @param lock               분산 락
+     * @param transactionManager 웨이브마다 트랜잭션을 여는 데 쓴다
+     * @param clock              시각 출처
+     * @param properties         {@code dawnline.fulfillment.wave.*}
+     */
+    @Bean
+    public CloseDueWavesService closeDueWavesService(WaveRepository waves,
+            FulfillmentOrderRepository orders, FulfillmentEvents events, WaveLock lock,
+            PlatformTransactionManager transactionManager, Clock clock,
+            FulfillmentProperties properties) {
+
+        return new CloseDueWavesService(waves, orders, events, lock, transactionManager, clock,
+                properties.wave().grace(), properties.wave().closeBatchSize());
+    }
+
+    /**
+     * 계획 결과 기록 (ADR-024).
+     *
+     * @param waves 웨이브 저장소
+     */
+    @Bean
+    public RecordPlanResultUseCase recordPlanResultUseCase(WaveRepository waves) {
+        return new RecordPlanResultService(waves);
+    }
+
+    /**
+     * 계획 결과 리스너 (ADR-024). 이 전이가 발화해야 ADR-023 의 정리 배치가 성립한다.
+     *
+     * @param consumer     멱등 게이트
+     * @param recordResult 계획 결과 기록 유스케이스
+     * @param json         이벤트 JSON 코덱
+     * @param meters       Micrometer 레지스트리
+     */
+    @Bean
+    public PlanResultListener planResultListener(IdempotentConsumer consumer,
+            RecordPlanResultUseCase recordResult, EventJson json, MeterRegistry meters) {
+        return new PlanResultListener(consumer, recordResult, json, meters);
     }
 
     /**

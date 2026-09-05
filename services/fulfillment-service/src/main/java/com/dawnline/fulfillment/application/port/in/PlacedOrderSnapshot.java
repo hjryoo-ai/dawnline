@@ -47,7 +47,19 @@ public record PlacedOrderSnapshot(
         Objects.requireNonNull(parcel, "parcel");
         items = List.copyOf(Objects.requireNonNull(items, "items"));
         Objects.requireNonNull(placedAt, "placedAt");
-        Objects.requireNonNull(cutoffAt, "cutoffAt");
+        // 저장 정밀도(마이크로초)로 자른다. libs/messaging 이 Clock 빈에 하는 것과 같은 이유이고,
+        // 여기서는 더 날카롭다 — cutoffAt 은 웨이브의 **자연키**다.
+        //
+        // 자르지 않으면 나노초 값이 PostgreSQL TIMESTAMPTZ 에 들어가며 잘리고, 그 뒤
+        //   * findByNaturalKey(나노초) 가 저장된 행을 못 찾아 INSERT 를 시도하고,
+        //   * UNIQUE 에 걸려 재조회해도 여전히 못 찾아 예외가 되거나,
+        //   * 운 좋게 찾아도 wave.cutoffAt() != snapshot.cutoffAt() 이라
+        //     **모든 주문이 promiseRevised=true 로 나간다** — 거짓 약속 개정이다.
+        //
+        // 저장할 수 없는 정밀도의 키는 조회할 수도 없다. 그래서 받는 자리에서 자른다.
+        // (Linux 의 Instant.now() 는 나노초, macOS 는 마이크로초라 이 결함은 CI 에서만 드러났다.)
+        cutoffAt = Objects.requireNonNull(cutoffAt, "cutoffAt")
+                .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     }
 
     /**
