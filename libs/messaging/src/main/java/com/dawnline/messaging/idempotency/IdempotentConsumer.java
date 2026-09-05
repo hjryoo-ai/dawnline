@@ -89,7 +89,7 @@ public class IdempotentConsumer {
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(work, "work");
 
-        ConsumeOutcome outcome = transactions.execute(status -> runInTransaction(eventId, consumer, work));
+        ConsumeOutcome outcome = transactions.execute(status -> runInTransaction(eventId, eventType, consumer, work));
         ConsumeOutcome resolved = outcome == null ? ConsumeOutcome.DUPLICATE : outcome;
         count(consumer, eventType, resolved);
         return resolved;
@@ -119,7 +119,7 @@ public class IdempotentConsumer {
         return consumeOnce(eventId, eventType, consumer, work) == ConsumeOutcome.PROCESSED;
     }
 
-    private ConsumeOutcome runInTransaction(UUID eventId, String consumer, Runnable work) {
+    private ConsumeOutcome runInTransaction(UUID eventId, String eventType, String consumer, Runnable work) {
         if (!repository.markProcessed(eventId, consumer, clock.instant())) {
             // 이미 처리한 이벤트. 커밋해서 오프셋을 진행시킨다.
             return ConsumeOutcome.DUPLICATE;
@@ -131,8 +131,16 @@ public class IdempotentConsumer {
             // 그래서 이 예외는 상태를 바꾸기 "전에" 던져야 한다(EventRejectedException Javadoc 참고).
             log.warn("이벤트를 거부했습니다. eventId={}, consumer={}, reason={}: {}",
                     eventId, consumer, e.reason(), e.getMessage());
+            // 라벨 셋(consumer·eventType·reason)은 §9.1 이 예약해 둔 확장이다. 거부하는 소비자가
+            // 둘 이상이 되면 "어느 소비자의 어떤 이벤트인가" 를 알 수 없어서 붙였다.
+            //
+            // **세 라벨을 여기서만 붙이면 안 된다.** Prometheus 는 같은 이름의 미터가 같은 라벨
+            // 키 집합을 갖기를 요구하므로(ADR-022 에서 jar 로 확인), 이 카운터를 직접 올리는
+            // 리스너들도 같은 셋을 써야 한다. 한쪽만 고치면 다른 쪽 등록이 실패한다.
             Counter.builder(MessagingMetrics.EVENT_REJECTED)
                     .description("비즈니스 규칙 위반으로 무시한 이벤트 (DLQ 아님)")
+                    .tag(MessagingMetrics.TAG_CONSUMER, consumer)
+                    .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
                     .tag(MessagingMetrics.TAG_REASON, e.reason())
                     .register(meters)
                     .increment();

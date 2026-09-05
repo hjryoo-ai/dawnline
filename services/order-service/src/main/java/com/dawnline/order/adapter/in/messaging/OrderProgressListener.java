@@ -203,7 +203,7 @@ public class OrderProgressListener {
             countStale(eventType, progress);
             if (progress.isRejected()) {
                 // 한 stop 의 다른 주문들은 정상일 수 있다. 여기서 던지면 그것들까지 함께 멈춘다.
-                countRejected(progress);
+                countRejected(eventType, progress);
             }
         }
 
@@ -240,9 +240,11 @@ public class OrderProgressListener {
      * 주문별 거부를 센다. {@code IdempotentConsumer} 가 예외를 잡아 세는 것과 <em>같은 메트릭</em>이며,
      * stop 안의 일부만 거부된 경우에는 예외를 던지지 않으므로 여기서 직접 올린다.
      */
-    private void countRejected(OrderProgress progress) {
+    private void countRejected(String eventType, OrderProgress progress) {
         Counter.builder(MessagingMetrics.EVENT_REJECTED)
                 .description("비즈니스 규칙 위반으로 무시한 이벤트 (DLQ 아님)")
+                .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
+                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
                 .tag(MessagingMetrics.TAG_REASON, progress.name())
                 .register(meters)
                 .increment();

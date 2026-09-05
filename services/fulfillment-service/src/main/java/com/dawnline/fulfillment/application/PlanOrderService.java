@@ -68,6 +68,7 @@ public class PlanOrderService implements PlanOrderUseCase {
     private final TierSchedule schedule;
     private final Ids ids;
     private final Clock clock;
+    private final FulfillmentMetrics metrics;
 
     /**
      * @param referenceData 권역·캠프 조회
@@ -79,10 +80,12 @@ public class PlanOrderService implements PlanOrderUseCase {
      * @param schedule      §2.2 컷오프·배송창 표 (공유)
      * @param ids           UUIDv7 생성기 (불변규칙 10)
      * @param clock         시각 출처 (불변규칙 12)
+     * @param metrics       §9.1 의 개정·대체 카운터
      */
     public PlanOrderService(ReferenceData referenceData, FcCandidateAssembler candidates,
             FcSelection selection, WaveRepository waves, FulfillmentOrderRepository orders,
-            FulfillmentEvents events, TierSchedule schedule, Ids ids, Clock clock) {
+            FulfillmentEvents events, TierSchedule schedule, Ids ids, Clock clock,
+            FulfillmentMetrics metrics) {
         this.referenceData = Objects.requireNonNull(referenceData, "referenceData");
         this.candidates = Objects.requireNonNull(candidates, "candidates");
         this.selection = Objects.requireNonNull(selection, "selection");
@@ -92,6 +95,7 @@ public class PlanOrderService implements PlanOrderUseCase {
         this.schedule = Objects.requireNonNull(schedule, "schedule");
         this.ids = Objects.requireNonNull(ids, "ids");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.metrics = Objects.requireNonNull(metrics, "metrics");
     }
 
     @Override
@@ -159,6 +163,16 @@ public class PlanOrderService implements PlanOrderUseCase {
 
         events.planned(snapshot, selected.fc().id(), camp.id(), zone.id(), wave.id(),
                 wave.cutoffAt(), window, revised);
+
+        // 세는 자리는 발행 뒤다. 롤백되면 이벤트도 사라지므로 "발행됐다" 와 "셌다" 가 어긋나지
+        // 않는다 — 다만 메트릭은 트랜잭션에 참여하지 않으므로 롤백 시 카운터만 남는다.
+        // 그 편차는 관측값의 성격상 받아들인다(정확성이 아니라 추세를 보는 값이다).
+        if (revised) {
+            metrics.promiseRevised(camp.code(), tier);
+        }
+        if (selected.fallbackReason() != null) {
+            metrics.fcFallback(camp.code(), selected.fallbackReason());
+        }
         return PlanOutcome.planned(wave.id(), camp.id(), revised);
     }
 
