@@ -10,6 +10,13 @@ import java.util.Objects;
  *
  * <p><strong>환경 없는 수치는 나중에 비교 대상이 되지 못한다.</strong> Phase 1 k6 와 Phase 2
  * EXPLAIN 리포트가 같은 규칙을 따랐고, 그 덕에 "그때 그 수치는 어떤 기계였나" 를 되물을 필요가 없다.
+ *
+ * <h2>리포트의 신원은 커밋 · seed · 전략 이름 셋이다</h2>
+ * 세 값을 헤더 첫 줄에 박는다(2026-09-05, §6.9). 동결({@code BaselineFrozenTest})이 지키는 것은
+ * <strong>같은 실행 안의 비교</strong>이지 절대 수치가 아니다 — 두 전략이 공유하는
+ * {@code StopMerger}·{@code CostModel}·거리 함수가 바뀌면 같은 전략이 다른 수를 낸다. 그래서
+ * <strong>리포트끼리 절대 수치를 비교하기 전에 커밋이 같은지 먼저 봐야 하고</strong>, 그 규칙은
+ * 헤더에 값이 있어야 지킬 수 있다. 자세한 것은 {@link SourceVersion}.
  */
 public final class MarkdownReport {
 
@@ -17,18 +24,22 @@ public final class MarkdownReport {
     private final long seed;
     private final int repeats;
     private final Instant generatedAt;
+    private final SourceVersion source;
 
     /**
      * @param dataset     데이터셋
      * @param seed        문제 생성 seed
      * @param repeats     전략당 반복 횟수
      * @param generatedAt 생성 시각
+     * @param source      이 리포트를 낸 소스의 커밋 (§6.9)
      */
-    public MarkdownReport(Dataset dataset, long seed, int repeats, Instant generatedAt) {
+    public MarkdownReport(Dataset dataset, long seed, int repeats, Instant generatedAt,
+            SourceVersion source) {
         this.dataset = Objects.requireNonNull(dataset, "dataset");
         this.seed = seed;
         this.repeats = repeats;
         this.generatedAt = Objects.requireNonNull(generatedAt, "generatedAt");
+        this.source = Objects.requireNonNull(source, "source");
     }
 
     /**
@@ -37,10 +48,17 @@ public final class MarkdownReport {
     public String render(Map<String, StrategySummary> summaries) {
         StringBuilder out = new StringBuilder();
         out.append("# 전략 비교 — ").append(dataset.cliName()).append("\n\n");
-        out.append("생성 ").append(generatedAt).append(" · 데이터셋 **")
+        out.append("생성 ").append(generatedAt).append(" · ").append(source.describe())
+                .append(" · 데이터셋 **")
                 .append(dataset.cliName()).append("**(주문 ").append(dataset.orders())
                 .append(" · 차량 ").append(dataset.vehicles()).append(") · seed `")
-                .append(seed).append("` · 전략당 ").append(repeats).append("회\n\n");
+                .append(seed).append("` · 전략 ")
+                .append(summaries.keySet().stream().map(name -> "`" + name + "`")
+                        .collect(java.util.stream.Collectors.joining(", ")))
+                .append(" · 전략당 ").append(repeats).append("회\n\n");
+        out.append("> 이 셋(커밋 · seed · 전략 이름)이 리포트의 신원이다. **다른 리포트의 절대 수치와\n");
+        out.append("> 비교하기 전에 커밋이 같은지 먼저 본다** — 동결되는 것은 `baseline-nn` 클래스이지\n");
+        out.append("> 그것이 쓰는 `StopMerger`·`CostModel`·거리 함수가 아니다 (§6.9).\n\n");
 
         out.append("| 전략 | 총비용(중앙값) | 미배정 | 주된 사유 | 차량 | 총거리 | 계획시간 p50 | p95 | 지각 stop | 평균 지각(분) |\n");
         out.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|\n");

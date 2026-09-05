@@ -18,12 +18,16 @@ class MarkdownReportTest {
     private static final Instant AT = Instant.parse("2026-09-06T01:00:00Z");
 
     private String render() {
+        return render(new SourceVersion("abc1234", true));
+    }
+
+    private String render(SourceVersion source) {
         Map<String, StrategySummary> summaries = new LinkedHashMap<>();
         summaries.put("baseline", new StrategySummary("baseline",
                 List.of(new RunOutcome(
                         new PlanMetrics(4, 480, 20, 4, 123_456, 7_200, 3, 45, 900),
                         Money.krw(1_234_567), 900))));
-        return new MarkdownReport(Dataset.SMALL, 42L, 5, AT).render(summaries);
+        return new MarkdownReport(Dataset.SMALL, 42L, 5, AT, source).render(summaries);
     }
 
     @Test
@@ -43,6 +47,30 @@ class MarkdownReportTest {
                 .contains("차량 5")
                 .contains("seed `42`")
                 .contains("5회");
+    }
+
+    @Test
+    void 헤더에_커밋과_전략_이름이_들어간다() {
+        // 리포트의 신원은 커밋·seed·전략 이름 셋이다 (§6.9). seed 는 위 테스트가 본다.
+        assertThat(render())
+                .contains("커밋 `abc1234`")
+                .contains("전략 `baseline`")
+                .contains("커밋이 같은지 먼저 본다");
+    }
+
+    @Test
+    void 더러운_작업_트리는_재현할_수_없다고_적는다() {
+        // 커밋만 적으면 "그 커밋에서 나온 수치" 로 읽힌다. 수정된 트리의 수치는 어떤 커밋에도
+        // 귀속되지 않으므로, 비교 대상으로 쓰이기 전에 그 사실이 보여야 한다.
+        assertThat(render(new SourceVersion("abc1234", false)))
+                .contains("커밋되지 않은 수정")
+                .contains("재현할 수 없다");
+    }
+
+    @Test
+    void git_을_쓸_수_없으면_부재를_값으로_적는다() {
+        // 헤더에서 조용히 빠지면 다음 사람은 "적는 걸 잊었다" 와 "알 수 없었다" 를 구별할 수 없다.
+        assertThat(render(SourceVersion.UNKNOWN)).contains("커밋 `unknown`(git 없음)");
     }
 
     @Test

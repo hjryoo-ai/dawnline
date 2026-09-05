@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dawnline.internal/contracts/events/delivery.status.v1.schema.json",
   "title": "delivery.status v1 페이로드",
-  "description": "배송 진행 상태 (DESIGN.md §4.1: ARRIVED/COMPLETED/FAILED). 토픽 dawnline.delivery.status.v1, 키 routeId, 발행 tracking-service(Phase 5), 소비 order-service(Phase 1)·ops-api. **소비자 주도 계약**: 소비자인 order-service 가 Phase 1 에 먼저 정의했다(contracts/events/README.md 참조).",
+  "description": "배송 진행 상태 (DESIGN.md §4.1: ARRIVED/COMPLETED/FAILED). 토픽 dawnline.delivery.status.v1, 키 routeId, 발행 tracking-service(Phase 5), 소비 order-service(Phase 1)·dispatch-service(Phase 5)·ops-api. dispatch 가 2026-09-05 에 소비자로 추가됐다 — 자기 라우트의 배송이 어디까지 갔는지를 모르면 §6.8 부분 재계획의 '미완료 stop 만' 이 성립하지 않고, §6.10 넷째 분기가 발화하지 않는다(DESIGN.md §4.1). 이 스키마는 그대로다 — routeId·stopSeq·orderIds 가 이미 required 라 stop 을 지목할 수 있다. **소비자 주도 계약**: 소비자인 order-service 가 Phase 1 에 먼저 정의했다(contracts/events/README.md 참조).",
   "type": "object",
   "required": [
     "routeId",
