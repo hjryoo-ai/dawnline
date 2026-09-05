@@ -41,6 +41,21 @@ public record Stop(GeoPoint point, List<OrderId> orderIds, Parcel parcel, TimeWi
         }
     }
 
+    /**
+     * 후보 하나를 그대로 stop 으로 (통합 없음).
+     *
+     * <p>§6.5 1단계의 통합은 <em>선택적 최적화</em>다 — 통합하지 않아도 계획은 성립한다.
+     * {@code StopMerger} 가 묶은 결과와 묶지 않은 결과의 비용을 비교할 수 있어야 통합의 값어치를
+     * 말할 수 있고, 그 비교의 한쪽이 이 팩터리다.
+     *
+     * @param candidate 후보
+     */
+    public static Stop of(Candidate candidate) {
+        Objects.requireNonNull(candidate, "candidate");
+        return new Stop(candidate.point(), List.of(candidate.id()), candidate.parcel(),
+                candidate.promised(), candidate.serviceSeconds(), candidate.priority());
+    }
+
     /** 이 stop 이 속한 권역 (geohash5, ADR-021). {@code ZONE_AFFINITY} 소프트 룰이 본다. */
     public String zone() {
         return point.geohash5();
