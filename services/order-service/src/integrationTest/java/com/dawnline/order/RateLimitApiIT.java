@@ -44,6 +44,31 @@ class RateLimitApiIT extends OrderIntegrationTestBase {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private io.micrometer.core.instrument.MeterRegistry meters;
+
+    /**
+     * <strong>전제: 레이트 리밋이 켜져 있다.</strong>
+     *
+     * <p>Redis 장애·지연이면 레이트 리밋은 fail-open 으로 통과시킨다(§7.2). 그 상태에서 이
+     * 클래스의 어설션은 "429 가 안 온다" 로 <em>실패</em>하는데, 실패 메시지는 레이트 리밋이
+     * 잘못된 것처럼 보인다 — 실제로는 검사 대상이 꺼져 있던 것이다.
+     *
+     * <p>그래서 매 테스트 뒤 우회가 없었는지 확인한다. CLAUDE.md 의 「폴백 테스트는 전제를 첫
+     * 어설션으로 스스로 말한다」와 같은 규칙이고, 방향만 반대다 — 저쪽은 <em>폴백이 도는지</em>,
+     * 이쪽은 <em>폴백이 돌지 않는지</em>를 말한다.
+     */
+    @org.junit.jupiter.api.AfterEach
+    void 전제_레이트_리밋이_우회되지_않았다() {
+        io.micrometer.core.instrument.Counter bypassed = meters
+                .find(com.dawnline.order.OrderMetrics.RATE_LIMIT_DECISIONS).tag("outcome", "bypassed").counter();
+        if (bypassed != null) {
+            org.assertj.core.api.Assertions.assertThat(bypassed.count())
+                    .as("Redis 지연으로 레이트 리밋이 fail-open 되면 이 클래스가 검사하려는 것이 사라진다")
+                    .isZero();
+        }
+    }
+
     @DynamicPropertySource
     static void liveRedis(DynamicPropertyRegistry registry) {
         registry.add("spring.data.redis.host", REDIS::getRedisHost);
@@ -52,6 +77,14 @@ class RateLimitApiIT extends OrderIntegrationTestBase {
         // 리필이 테스트 도중 끼어들지 않게 느리게 둔다. 리필 자체는 RateLimitIT 가 본다.
         registry.add("dawnline.order.rate-limit.refill-per-second", () -> 1);
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
+        // Redis 명령 타임아웃을 넉넉하게 준다. 50 ms 는 **운영 핫패스의 SLO 예산**이고(§7.2),
+        // 이 테스트가 보는 것은 그 예산이 아니라 레이트 리밋의 *의미*(429·Retry-After·토큰 소모)다.
+        //
+        // 느린 러너에서는 그 예산이 먼저 걸려 차단기가 열리고, 그러면 레이트 리밋이 fail-open 으로
+        // 통과시켜 429 대신 201 이 온다 — 실제로 CI 에서 그렇게 깨졌다. 테스트가 검사하려던 것이
+        // 사라진 채 실패하는 형태이므로, 예산이 아니라 의미를 보도록 늘린다.
+        // 예산 자체가 지켜지는지는 k6 실측(docs/benchmarks/phase1-orders-k6.md)이 본다.
+        registry.add("dawnline.order.redis.command-timeout-ms", () -> 2000);
     }
 
     private static String body(UUID customerId) {
