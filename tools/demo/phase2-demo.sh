@@ -188,8 +188,16 @@ ids="$(sed "s/.*/'&'/" "$WORK/wave-ids.txt" | paste -sd, -)"
 # -----------------------------------------------------------------------------
 # 마감은 스케줄러가 한다 — 데모가 직접 닫지 않는다. 여기서 지나는 경로가
 # Redis 락 → FOR UPDATE → OPEN→CLOSING→CLOSED → outbox → 릴레이로, 운영과 같다.
+# 상태를 CLOSED 로 못 박지 않는다 (2026-09-05 정정). Phase 3 에서 dispatch 가 wave.closed 를
+# 소비해 계획을 돌리고, 그 결과 plan.completed 가 웨이브를 CLOSED → PLANNED 로 옮긴다
+# (ADR-024). 즉 "CLOSED 인 웨이브가 29개" 는 **dispatch 가 없을 때만** 참인 문장이었고,
+# 이 데모는 그 사실에 기대고 있었다 — Phase 3 이 붙자마자 조용히 깨졌다.
+#
+# 마감이 이뤄졌다는 사실은 "OPEN·CLOSING 을 벗어났다" 로 말한다. 그 뒤로 얼마나 더 갔는지는
+# 다음 단계(phase3-demo.sh)가 본다.
 step "7. 마감 대기 (CloseDueWavesService, 30초 주기 + grace)"
-await "CLOSED 웨이브" "$pushed" "SELECT count(*) FROM waves WHERE status = 'CLOSED' AND id IN ($ids)"
+await "마감된 웨이브 (OPEN·CLOSING 을 벗어남)" "$pushed" \
+      "SELECT count(*) FROM waves WHERE status NOT IN ('OPEN','CLOSING') AND id IN ($ids)"
 await "미발행 outbox"  "0"       "SELECT count(*) FROM outbox_events WHERE published_at IS NULL"
 
 ftable "SELECT c.code || ' / ' || w.service_tier AS wave, w.status, w.order_count
@@ -233,6 +241,13 @@ mismatch="$(fq "SELECT count(*) FROM waves w
                    AND w.order_count <> (SELECT count(*) FROM fulfillment_orders o WHERE o.wave_id = w.id)" | tr -d '[:space:]')"
 printf '  %-46s %s\n' "order_count 가 실제 편입 수와 다른 웨이브" "$mismatch"
 [ "$mismatch" = "0" ] || fail "order_count 가 마감 시 집계값이 아니다 (ADR-025)."
+
+# -----------------------------------------------------------------------------
+# 다음 단계(phase3-demo.sh)가 이어받는다. $WORK 는 종료 시 지워지므로 저장소 안에 남긴다 —
+# 두 스크립트를 하나로 합치지 않는 이유는 Phase 경계가 곧 "무엇까지 되는가" 의 경계이고,
+# Phase 3 이 깨졌을 때 Phase 2 데모는 여전히 돌아야 하기 때문이다.
+mkdir -p build/demo
+cp "$WORK/wave-ids.txt" build/demo/wave-ids.txt
 
 # -----------------------------------------------------------------------------
 step "9. 메트릭 (§9.1)"

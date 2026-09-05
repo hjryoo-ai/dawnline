@@ -5,11 +5,12 @@
 #   checkout → JDK 25 → Gradle 캐시 → ./gradlew build → 통합 테스트(Testcontainers)
 #   → benchmark 회귀 게이트 → 이미지 빌드 → Compose 스모크 → 결과 아티팩트
 #
-# 지금(Phase 3) 실제로 도는 것: 앞의 5단계 + 리포트 아티팩트.
+# 지금(Phase 3 마감) 실제로 도는 것: 위 전부 + Compose 스모크 + 리포트 아티팩트.
 # 나머지는 산출물이 아직 없으므로 `if: false` 로 꺼 둔 자리(job 이름에 Phase 표기)다.
 # 활성화 방법은 각 job 의 `if: false` 줄 주석에 적어 두었다.
-#   - 이미지 빌드     : Phase 7 (서비스에 main 클래스·release.yml 이 생긴 뒤)
-#   - Compose 스모크  : Phase 3 (order → dispatch E2E 가 동작한 뒤)
+#   - 이미지 빌드     : Phase 7 (release.yml 의 GHCR 푸시가 생긴 뒤. 지금은 compose-smoke 가
+#                       같은 빌드를 하므로 켜면 같은 일을 두 번 한다)
+#   - Compose 스모크  : 2026-09-05 활성화 (Phase 3-7)
 #   - OpenAPI 아티팩트: Phase 1 (파일이 생기면 hashFiles 조건으로 자동 활성화)
 # 없는 것을 실행해 CI 를 빨갛게 만들지 않는다 — 이 워크플로는 지금 상태에서 녹색이어야 한다.
 #
@@ -285,24 +286,45 @@ jobs:
   # 5) Compose 스모크 (주문 20건 E2E) — DESIGN.md §13 "시스템" 계층, §14
   #    sim-runner 의 smoke 시나리오가 Phase 3 에서 완성된다.
   # ---------------------------------------------------------------------------
+  # 2026-09-05 활성화 (Phase 3-7 마감). 켜면서 두 가지를 고쳤다.
+  #   * needs 에서 image 를 뺐다. 그 job 은 **다른 러너**에서 빌드하므로 이미지가 여기
+  #     로컬 데몬에 없고, make up 의 check-images 가 바로 실패한다. 아티팩트로 옮기는 것은
+  #     이미지 5개 × 수백 MB 라 빌드보다 비싸다 — 여기서 직접 빌드한다.
+  #   * 그래서 `make images` 단계를 앞에 둔다. image job 은 Phase 7 에 GHCR 푸시를 얻으면
+  #     그때 제 몫이 생긴다(지금은 이 job 과 같은 일을 한 번 더 하는 것뿐이라 꺼 둔다).
   compose-smoke:
     name: Compose 스모크 (Phase 3)
-    # 활성화: order → wave → dispatch E2E 가 동작하면 이 줄을 삭제한다.
-    if: false
-    needs: [build, image]
+    needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: 체크아웃
         uses: actions/checkout@v7
 
+      - name: JDK ${{ env.JAVA_VERSION }} 설치 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle 설정 · 캐시
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
       - name: 환경 파일 준비
         run: cp deploy/compose/.env.example deploy/compose/.env
+
+      - name: 서비스 이미지 빌드 (Buildpacks)
+        run: make images
 
       - name: 스택 기동
         run: make up
 
-      - name: 스모크 시나리오 (주문 20건 E2E)
+      # phase2-demo.sh + phase3-demo.sh — 주문 200건 → 웨이브 마감 → 계획 → 라우트 →
+      # GET /api/v1/plans/{id} 까지를 DB 와 브로커 양쪽에서 확인한다 (Phase 2·3 DoD).
+      - name: 스모크 시나리오 (주문 → 라우트 E2E)
         run: make demo
 
       - name: 컨테이너 로그 수집

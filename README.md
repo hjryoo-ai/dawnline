@@ -219,11 +219,11 @@ make down                # 종료
 
 | Phase | 내용 | 상태 |
 |---|---|---|
-| **0** | 모노레포·컨벤션 플러그인, `libs/*`, Compose 스택, ArchUnit, CI 골격, 이벤트 계약, ADR | 🔨 진행 중 |
-| 1 | `order-service` — 주문 접수·취소, 멱등 POST, Outbox 발행, k6 부하 측정 | ⬜ 예정 |
-| 2 | `fulfillment-service` — FC 선택, 권역, 웨이브·컷오프 스케줄러(분산 락) | ⬜ 예정 |
-| 3 | `dispatch-service` 코어 — 룰 엔진, 비용 모델, `sweep-greedy-nn`, 설명, 벤치마크 하네스 | ⬜ 예정 |
-| 4 | 최적화 고도화 — Local Search, `savings-cw+ls`, FAST 열화 모드, 전략 비교 리포트 | ⬜ 예정 |
+| 0 | 모노레포·컨벤션 플러그인, `libs/*`, Compose 스택, ArchUnit, CI 골격, 이벤트 계약, ADR | ✅ 완료 |
+| 1 | `order-service` — 주문 접수·취소, 멱등 POST, Outbox 발행, k6 부하 측정 | ✅ 완료 |
+| 2 | `fulfillment-service` — FC 선택, 권역, 웨이브·컷오프 스케줄러(분산 락) | ✅ 완료 |
+| **3** | `dispatch-service` 코어 — 룰 엔진, 비용 모델, `sweep-greedy-nn`, 설명, 벤치마크 하네스 | ✅ 완료 |
+| 4 | 최적화 고도화 — Local Search, `savings-cw+ls`, FAST 열화 모드, 전략 비교 리포트 | 🔨 다음 |
 | 5 | `tracking-service` + 기사 시뮬레이터 + 지연 위험 감지·부분 재계획 | ⬜ 예정 |
 | 6 | 백오피스 — `ops-api` 읽기 모델·커맨드, `ops-web` 대시보드·라우트 지도 | ⬜ 예정 |
 | 7 | 신뢰성·관측성 마감 — Grafana 대시보드, 카오스 스크립트, 피크 측정, 런북·포스트모템 | ⬜ 예정 |
@@ -237,8 +237,8 @@ Phase 3까지가 데모 가능한 MVP다. 각 Phase의 작업 목록과 완료 �
 
 | 항목 | 채우는 시점 |
 |---|---|
-| 주문 API p50/p95/p99, 오류율 (k6, 500 rps) | Phase 1 → `docs/benchmarks/` |
-| 전략별 총비용·계획 시간 비교표 | Phase 3–4 → `docs/benchmarks/` |
+| ~~주문 API p50/p95/p99, 오류율 (k6, 500 rps)~~ | ✅ [phase1-orders-k6.md](docs/benchmarks/phase1-orders-k6.md) (2026-09-05) |
+| ~~전략별 총비용·계획 시간 비교표~~ | ✅ [phase3-baseline.md](docs/benchmarks/phase3-baseline.md) (2026-09-05). Phase 4 에서 `+ls`·`savings-cw+ls` 가 붙는다 |
 | 피크 시나리오 실측 vs SLO 표 | Phase 7 → `docs/benchmarks/` |
 | 카오스 검증 결과 (Kafka/Redis 중단, 인스턴스 강제 종료) | Phase 7 |
 | 아키텍처 다이어그램 이미지, 데모 GIF, Tempo 트레이스 스크린샷 | Phase 7 |

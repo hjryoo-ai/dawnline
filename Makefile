@@ -240,15 +240,20 @@ smoke:
 # -----------------------------------------------------------------------------
 # 아직 구현되지 않은 시나리오 타깃.
 # 성공한 척하지 않는다 — 명확히 실패해서 스크립트가 오인하지 않게 한다.
-# make demo — Phase 2 DoD. 주문 → 웨이브 편입 → 컷오프 → wave.closed 까지를
-# DB 와 브로커 양쪽에서 확인한다. 로직은 tools/demo/phase2-demo.sh 에 있다
-# (Makefile 은 래퍼다 — DESIGN.md §14).
+# make demo — Phase 2·3 DoD. 주문 → 웨이브 편입 → 컷오프 → wave.closed → 계획 → 라우트 →
+# GET /api/v1/plans/{id} 까지를 DB 와 브로커 양쪽에서 확인한다. 로직은
+# tools/demo/phase2-demo.sh 와 phase3-demo.sh 에 있다 (Makefile 은 래퍼다 — DESIGN.md §14).
+#
+# 둘로 나눠 둔 이유: Phase 경계가 곧 "무엇까지 되는가" 의 경계다. Phase 3 이 깨져도
+# Phase 2 데모는 그대로 돌아야 하고, 그때 어디까지 됐는지가 출력으로 보인다.
+# 앞 스크립트가 build/demo/wave-ids.txt 로 웨이브 id 를 넘긴다.
 #
 #   make demo DEMO_TIMEOUT=180 SCENARIO=tiny
 DEMO_TIMEOUT ?= 120
 
 demo: env
 	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) SCENARIO=$(SCENARIO) bash tools/demo/phase2-demo.sh
+	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) bash tools/demo/phase3-demo.sh
 
 peak:
 	@echo ""
