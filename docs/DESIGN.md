@@ -1407,7 +1407,20 @@ dawnline/
 
 **release.yml (태그 `v*`)**: 이미지 GHCR 푸시(태그·`latest`), SBOM 생성, GitHub Release 노트.
 
-**로컬 실행**: `make up`(전체 스택), `make demo`(시드 + smoke 시나리오 + Grafana URL 출력), `make peak`(피크 시나리오), `make down`. Makefile은 Compose 명령 래퍼다.
+**로컬 실행**: `make up`(전체 스택), `make demo`, `make peak`(피크 시나리오), `make down`. Makefile은 Compose 명령 래퍼다.
+
+`make demo` 는 시드 확인 → 주문 200건(sim-runner smoke) → 웨이브 편입 → 컷오프 → `wave.closed` 까지를
+**DB 와 브로커 양쪽에서** 확인하고 URL 을 출력한다(`tools/demo/phase2-demo.sh`). 두 곳을 다 보는 이유는
+§4.3 과 같다 — outbox 에 행이 있는 것과 브로커에 레코드가 있는 것은 다른 사실이고, 그 사이에 릴레이와
+봉투 조립이 있다. 확인하는 것은 캠프별 `wave.closed` 정확히 1회(이중 마감 없음), 파티션 키 = `campId`,
+`orderCount` 가 마감 시 집계값과 일치(ADR-025), 그리고 **시드 부족으로 인한** `UNSERVICEABLE` 0건이다.
+`OUT_OF_STOCK` 은 세지 않는다 — 시드가 §5.2 3단계를 보이려고 일부러 넣은 결손이라(ADR-021) 그 둘을 한
+숫자로 합치면 "시드가 덜 됐다" 와 "시드가 의도대로 됐다" 가 구별되지 않는다.
+
+컷오프는 기다리지 않고 **웨이브의 `cutoff_at` 을 과거로 민다**. §2.2 의 컷오프 표는 `libs/common` 의
+`TierSchedule` 하나뿐이고(ADR-020 후속 정정 2), "데모용 짧은 컷오프 표" 를 만들면 그 ADR 이 없애려던
+두 번째 복사본이 바로 그것이 된다. 표가 아니라 시각을 밀면 마감 판정·Redis 락·`FOR UPDATE`·outbox 는
+운영과 같은 경로를 그대로 지난다 — 데모가 건드리는 것은 "언제" 뿐이다.
 
 **배포 전략 문서(구현 아님)**: k8s 매니페스트(Deployment·HPA·PDB·readiness)와 롤링 배포 시 소비자 리밸런스 최소화(`static membership`, `group.instance.id`) 방법을 `docs/adr/ADR-011`에 기술.
 
