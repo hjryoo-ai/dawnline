@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -59,6 +60,19 @@ public final class BenchmarkMain {
         String report = new MarkdownReport(options.dataset(), options.seed(), options.repeats(),
                 startedAt).render(summaries);
         write(report, options.out());
+
+        if (options.gate() != null) {
+            // 리포트를 먼저 쓴다. 게이트가 실패해도 CI 아티팩트에는 <em>왜</em> 실패했는지가
+            // 남아야 한다 — 종료 코드만 남기면 다음 사람이 다시 돌려야 한다.
+            List<RegressionGate.Failure> failures =
+                    new RegressionGate(options.gate()).evaluate(summaries);
+            failures.forEach(failure -> System.err.println("게이트 실패: " + failure.describe()));
+            if (!failures.isEmpty()) {
+                System.exit(1);
+                return;
+            }
+            System.err.printf("게이트 통과: 기준 %s 보다 비싼 전략이 없습니다%n", options.gate());
+        }
     }
 
     private static Duration maxOneTenth(Duration total) {

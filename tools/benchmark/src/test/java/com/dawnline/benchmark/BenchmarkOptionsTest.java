@@ -74,6 +74,36 @@ class BenchmarkOptionsTest {
     }
 
     @Test
+    void 게이트_기준_전략을_읽는다() {
+        BenchmarkOptions options = BenchmarkOptions.parse(new String[] {
+                "--strategies", "baseline-nn,sweep-greedy-nn", "--gate", "baseline-nn"},
+                REGISTERED);
+
+        assertThat(options.gate()).isEqualTo("baseline-nn");
+    }
+
+    @Test
+    void 게이트_기준이_비교_목록에_없으면_거부한다() {
+        assertThatThrownBy(() -> BenchmarkOptions.parse(new String[] {
+                "--strategies", "sweep-greedy-nn", "--gate", "baseline-nn"}, REGISTERED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("baseline-nn");
+    }
+
+    @Test
+    void 비교할_전략이_없는_게이트는_거부한다() {
+        // 기준 하나만 돌면 게이트는 언제나 통과한다. 꺼진 줄 모르고 믿게 되는 것이 가장 나쁘다.
+        assertThatThrownBy(() -> BenchmarkOptions.parse(new String[] {
+                "--strategies", "baseline-nn", "--gate", "baseline-nn"}, REGISTERED))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void 게이트를_주지_않으면_리포트만_낸다() {
+        assertThat(BenchmarkOptions.parse(new String[0], REGISTERED).gate()).isNull();
+    }
+
+    @Test
     void 반복이_0_이면_거부한다() {
         assertThatThrownBy(() ->
                 BenchmarkOptions.parse(new String[] {"--repeats", "0"}, REGISTERED))
