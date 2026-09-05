@@ -358,10 +358,17 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    운영 룰이 다르다" 가 된다. 드리프트 검사는 `contracts/seed/order-service-geohash5.txt` 와 같은
    방식(양쪽이 각자 검사)으로 둔다.
 
-2.5. **벤치마크 하네스 + 데이터셋 생성기** (`tools/benchmark`): seed 고정 생성기로
+2.5. **벤치마크 하네스 + 데이터셋 생성기** (`tools/benchmark`, 2026-09-05 완료): seed 고정 생성기로
    `small`(500/5) · `medium`(2,000/20) · `large`(5,000/40) 를 만들고, 전략 실행기와 Markdown 리포트
    출력까지. §6.9 의 지표(총비용·총거리·계획 시간·미배정·지각 stop·차량 사용 대수)를 낸다.
    **Spring 없이 `domain.optimizer` 를 그대로 실행한다** — 못 하면 불변규칙 5 가 깨진 것이다.
+   그 사실은 `BenchmarkArchitectureTest` 가 지킨다(Spring·JPA·dispatch 어댑터 의존 금지).
+
+   전략이 아직 없으므로 하네스 안에 **비용 상한 전략 `unassign-all`** 을 둔다 — 아무것도 배정하지
+   않고 미배정 페널티만 합산한다. 둘을 한다: 결과를 <em>손으로 계산할 수 있어</em> 하네스 자신을
+   검증하고(전략 없이 만든 도구는 스스로 도는지 알 수 없다), §6.9 표에서 **어떤 전략도 넘어서는 안
+   되는 상한**이 된다. 이것은 `baseline-nn` 이 아니다 — 베이스라인은 "가장 단순한 <em>진짜</em>
+   계획" 이고 이것은 "계획하지 않음" 이라, 서비스가 아니라 도구에 둔다.
 
 3. **`baseline-nn`** + `StopMerger` + 거리 행렬. `DispatchStrategy` 인터페이스·레지스트리.
    여기서 나온 수치가 `docs/benchmarks/phase3-baseline.md` 의 첫 표가 된다.

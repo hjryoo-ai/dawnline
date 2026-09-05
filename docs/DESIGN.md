@@ -1020,9 +1020,13 @@ plan(problem, budget):
 ```java
 public interface DispatchStrategy {
   String name();
-  PlanResult plan(PlanningProblem problem, PlanningBudget budget);
+  PlanResult plan(PlanningProblem problem);      // 예산은 problem 안에 있다
 }
 ```
+
+예산을 인자로 또 받지 않는 이유(2026-09-05, Phase 3-2.5): `PlanningProblem` 이 이미
+`PlanningBudget` 을 들고 있다(§6.2). 인자를 둘로 두면 **서로 다른 예산 두 개**를 넘길 수 있고,
+그러면 어느 쪽이 이기는지가 구현마다 달라진다.
 
 | 전략 | 구성 | 용도 |
 |---|---|---|

@@ -41,3 +41,10 @@ include(
 include(
     "tools:sim-runner",
 )
+
+// benchmark 는 Spring 을 쓰지 않는 순수 자바 CLI 다. dispatch-service 의 domain.optimizer 를
+// **서비스를 띄우지 않고 그대로** 실행하는 것이 이 모듈의 존재 이유이고(DESIGN.md §6.9),
+// 그렇게 되는지가 불변규칙 5 가 지켜지고 있다는 증거다.
+include(
+    "tools:benchmark",
+)
