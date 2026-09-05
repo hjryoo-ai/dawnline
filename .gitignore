@@ -74,3 +74,11 @@ tmp/
 secrets/
 *.pem
 *.key
+
+# k6 실행 산출물 (tools/k6 의 handleSummary 가 작업 디렉터리에 쓴다).
+# 결과는 docs/benchmarks/ 의 리포트로 옮겨 적고, 원본 파일은 커밋하지 않는다 —
+# 회차마다 덮어써서 어느 회차의 값인지 파일만 봐서는 알 수 없기 때문이다.
+/summary.md
+/summary.json
+/rate-limit-summary.md
+/rate-limit-summary.json
