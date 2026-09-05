@@ -58,7 +58,7 @@ public final class BenchmarkMain {
                 .run(problem, options.strategies(), options.repeats());
 
         String report = new MarkdownReport(options.dataset(), options.seed(), options.repeats(),
-                startedAt).render(summaries);
+                startedAt, SourceVersion.detect()).render(summaries);
         write(report, options.out());
 
         if (options.gate() != null) {

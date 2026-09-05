@@ -107,7 +107,7 @@
                                                                 ├──route.assigned──▶ [tracking-service]
                                                                 └──order.dispatched─▶ [order-service] (상태 갱신)
 시뮬레이터 ──기사 스캔(arrived/completed/failed)──▶ [tracking-service]
-                                                      ├──delivery.status──▶ [order-service], [ops-api]
+                                                      ├──delivery.status──▶ [order-service], [ops-api], [dispatch-service]
                                                       └──delivery.at-risk─▶ [dispatch-service] (부분 재계획)
 모든 이벤트 ──▶ [ops-api] 읽기 모델(프로젝션) ──▶ [ops-web] 운영 콘솔
 ```
@@ -144,7 +144,7 @@
 |---|---|---|---|---|
 | order-service | 주문 접수·검증·취소, 멱등 처리, 주문 상태 조회 | orders, order_items | order.placed, order.cancelled | order.dispatched, delivery.status |
 | fulfillment-service | FC 선택, 캠프/권역 배정, 웨이브 수명주기·컷오프 | fulfillment_centers, camps, zones, inventory(stub), waves | fulfillment.planned, wave.closed | order.placed, order.cancelled |
-| dispatch-service | 룰 엔진, 최적화, 라우트/차량/기사 관리, 재계획 | vehicles, drivers, candidates, plans, routes, rules | route.assigned, order.dispatched, plan.completed, plan.failed | fulfillment.planned, wave.closed, delivery.at-risk |
+| dispatch-service | 룰 엔진, 최적화, 라우트/차량/기사 관리, 재계획 | vehicles, drivers, candidates, plans, routes, rules | route.assigned, order.dispatched, plan.completed, plan.failed | fulfillment.planned, wave.closed, order.cancelled, delivery.status, delivery.at-risk |
 | tracking-service | 배송 진행 상태, ETA, 지연 위험 감지 | shipments, shipment_events | delivery.status, delivery.at-risk | route.assigned |
 | ops-api | CQRS 읽기 모델, KPI, 운영자 수동 개입 커맨드 | rm_* (프로젝션) | (없음, 커맨드는 REST로 각 서비스 호출) | 전체 |
 | sim-runner | 주문 생성 부하, 기사 이동·스캔 시뮬레이션, 시나리오 실행 | (없음) | (REST 호출만) | — |
@@ -196,9 +196,24 @@ com.dawnline.<service>
 | dawnline.order.dispatched.v1 | orderId | dispatch | order, ops | 주문이 라우트에 배정됨 |
 | dawnline.plan.completed.v1 | waveId | dispatch | **fulfillment**, ops | 웨이브 계획 완료 (Plan `PUBLISHED` 도달) |
 | dawnline.plan.failed.v1 | waveId | dispatch | **fulfillment**, ops | 계획 실행 실패 (§5.3 Plan `FAILED` — 예외·시간초과) |
-| dawnline.delivery.status.v1 | routeId | tracking | order, ops | ARRIVED/COMPLETED/FAILED |
+| dawnline.delivery.status.v1 | routeId | tracking | order, **dispatch**, ops | ARRIVED/COMPLETED/FAILED |
 | dawnline.delivery.at-risk.v1 | routeId | tracking | dispatch, ops | 지연 위험 감지 |
 | `<topic>.dlq` | 원본 키 | 각 소비자 | 운영자 | 재처리 실패 메시지 |
+
+**dispatch 가 `delivery.status` 를 소비한다** (2026-09-05 결정). 처음에는 소비자가 order 와 ops 뿐이었고, 그
+결과 dispatch 는 **자기 라우트의 배송이 어디까지 갔는지 모른다.** 그것이 막고 있는 것이 셋이다.
+
+- §6.8 부분 재계획은 "미완료 stop 만" 다시 푼다. 어디까지 완료됐는지를 모르면 그 문장이 성립하지 않는다.
+- §7.2 의 `route:{id}:progress`(HASH: nextSeq, completed, failed)는 소유자가 dispatch/tracking 인데,
+  dispatch 쪽 값을 채울 입력이 없었다.
+- §6.10 넷째 분기(배송이 끝난 뒤 도착한 취소를 거부)와 `dawnline_cancel_too_late_total` 이
+  **구조적으로 발화하지 않는다** — `route_stops.status` 를 옮기는 코드가 없기 때문이다.
+
+셋 다 같은 결손의 증상이라 취소 분기만의 문제가 아니고, 그래서 Phase 5 까지 미루지 않고 여기서
+소비자 목록을 바꾼다. **계약은 그대로 쓸 수 있다** — `delivery.status.v1` 은 이미
+`routeId`·`stopSeq`·`orderIds` 를 required 로 들고 있어서 stop 을 지목할 수 있다(확인 2026-09-05).
+추가 필드가 필요 없으므로 additive 변경도 없다. 구현은 tracking 이 이 이벤트를 실제로 내는
+Phase 5 이고(§5.4), 그때 dispatch 리스너 + `route_stops.status` 전이 + ADR 을 함께 쓴다.
 
 ### 4.2 이벤트 봉투 (Envelope)
 
@@ -1008,6 +1023,8 @@ plan(problem, budget):
      - 클러스터를 가장 이른 promised_end 순으로 정렬
      - 각 클러스터에 대해 실행 가능한 차량 중 marginalCost 최소 차량 선택
      - 실행 가능 차량이 없으면 클러스터를 분할(절반)해 재시도, 그래도 없으면 미배정 + 설명
+     - **무엇을 미배정으로 남길지는 페널티 최소로 고른다** — 용량이 모자라면 `UNASSIGNED_PENALTY`
+       가 싼 것(우선순위가 낮은 것)부터 뺀다
   4. 시퀀싱 (Nearest Neighbor with Time Windows)
      - 캠프에서 출발, 다음 stop = (이동비 + 지각페널티)가 최소인 stop
   5. 개선 (Local Search, 시간 예산 내)
@@ -1032,6 +1049,17 @@ plan(problem, budget):
 대기를 진짜 비용으로 만들려면 먼저 라우트 모델이 그것을 표현해야 한다(도착을 창 시작으로 미루고 그
 시간을 근무창 판정에 넣는 것). 그건 **조기 배송을 금지하겠다는 정책 결정**이라 §2.2 를 먼저 고쳐야
 하고, 최적화 안에서 조용히 할 일이 아니다.
+
+**3단계에서 미배정을 고르는 규칙** (2026-09-05 결정, Phase 4 구현 예정). 원래 문장은 "그래도 없으면
+미배정" 이었고 **어느 주문을 남길지는 말하지 않았다.** 말하지 않으면 아무도 안 정한 것이 아니라
+*우연이 정한다* — 지금은 마지막 클러스터에 남은 주문이 그대로 떨어진다. 측정이 그것을 드러냈다:
+`small` 에서 두 전략의 미배정 건수가 **9 로 같은데 페널티는 20,000원 다르다**(§6.9 리포트). 건수가
+같고 값이 다르면 남긴 대상이 다르다는 뜻이고, 그 차이를 만든 것은 알고리즘이 아니라 부재하는 규칙이다.
+
+규칙은 목적함수를 그대로 따른다 — **`UNASSIGNED_PENALTY` 가 싼 것부터 뺀다**(§6.3 의 티어별 차등이
+곧 우선순위다). 값싼 그리디이고 최적이 아니지만, 최적일 필요가 없다: 이 자리에서 재는 것은 "용량이
+모자랄 때 누가 남는가" 이고 그 답이 **재현 가능하다는 것**이 지금 없는 성질이다. 구현은 Phase 4 다
+(`GreedyAssigner` — 3단계 안에서 끝나므로 파이프라인 형태는 바뀌지 않는다).
 
 **2단계의 "권역 경계에서 자르기 우선" 은 "자를 때가 됐으면 경계에서" 라는 뜻이다** (같은 측정).
 경계마다 자르면 클러스터가 차량 수의 6~10배로 부서지고, 남는 클러스터가 이미 실은 차에 얹혀
@@ -1120,6 +1148,17 @@ medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기
    종류의 흔들림) **기록만 하고 게이트 조건에 넣지 않는다.** 환경 탓으로 빨개지는 게이트는 결국
    꺼지고, 꺼진 게이트는 없는 것만 못하다 — 있다고 믿게 만들기 때문이다.
 
+**동결이 보장하는 것과 보장하지 않는 것** (2026-09-05). `BaselineFrozenTest` 가 얼리는 것은
+`BaselineNearestNeighbor` **클래스**다. 그래서 동결은 **비교의 공정성**을 지킨다 — 두 전략이 같은
+`StopMerger`·`CostModel`·거리 함수를 쓰므로, 그 공용 부품이 바뀌어도 같은 실행 안의 두 수는 여전히
+대등하다. 지키지 **못하는** 것은 **절대 수치**다. 공용 부품이 바뀌면 `baseline-nn` 의 1,510,366원도
+바뀐다.
+
+그래서 **리포트의 신원은 커밋 SHA · 데이터셋 seed · 전략 이름 셋**이고, 세 값을 리포트 헤더에 박는다
+(`MarkdownReport`). 규칙: **다른 리포트끼리 절대 수치를 비교하기 전에 커밋이 같은지 먼저 본다.**
+같지 않으면 비교 대상은 수치가 아니라 *같은 커밋에서 다시 낸 수치*다. 작업 트리가 더러운 채로 낸
+리포트는 어떤 커밋에도 귀속되지 않으므로 헤더가 그 사실을 함께 적는다.
+
 ### 6.10 취소 처리 (`order.cancelled` 소비)
 
 [ADR-017 후속 정정](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md)이 §5.1 에
@@ -1152,11 +1191,13 @@ medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기
 곳은 `order_id` 가 PK 인 §5.4 의 `shipments` 다. 전부 취소되면 `status` 가 `CANCELLED` 가 되고
 두 배열이 같아진다. 화물·서비스 시간은 다시 계산하지 않는다(`PlanPruner` 와 같은 판단).
 
-**네 번째 행은 지금 발화할 수 없다.** `route_stops.status` 를 `ARRIVED`/`COMPLETED` 로 옮기는
-코드가 없기 때문이다 — §4.1 에서 `delivery.status` 의 소비자는 order 와 ops 이고 dispatch 가
-아니다. 그래서 `dawnline_cancel_too_late_total` 은 구조적으로 0 이고, 아래 "재검토 지점" 의
-판정이 지금은 아무것도 검사하지 않는다. 값을 채우려면 **dispatch 가 `delivery.status` 를
-소비하도록 §4.1 을 바꿔야 하고, 그것은 Phase 5 의 결정으로 남긴다.**
+**네 번째 행은 Phase 5 까지 발화하지 않는다.** `route_stops.status` 를 `ARRIVED`/`COMPLETED` 로
+옮기는 코드가 아직 없기 때문이다. 원인은 소비자 목록이었고 **그것은 2026-09-05 에 고쳤다** —
+§4.1 에서 dispatch 가 `delivery.status` 의 소비자가 됐다(그 표 아래 문단에 근거가 있다: §6.8 의
+"미완료 stop 만" 과 §7.2 의 `route:{id}:progress` 도 같은 결손을 겪고 있었다). 남은 것은 발행자다.
+tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 들어가고, 그때까지
+`dawnline_cancel_too_late_total` 은 구조적으로 0 이며 아래 "재검토 지점" 의 판정은 아무것도
+검사하지 않는다. **0 을 "경합 창이 좁다" 로 읽으면 안 되는 기간이 여기다.**
 
 네 번째 행이 발화한다는 것은 order-service 가 `order.dispatched` 를 배송 완료 시점까지 소비하지
 못했다는 뜻이다(정상이면 발행과 출발 사이가 분 단위 이상). 그래서 그 카운터는 이상이 아니라
