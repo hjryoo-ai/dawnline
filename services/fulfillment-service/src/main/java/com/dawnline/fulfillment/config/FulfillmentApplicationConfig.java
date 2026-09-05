@@ -1,11 +1,25 @@
 package com.dawnline.fulfillment.config;
 
+import com.dawnline.common.Ids;
+import com.dawnline.common.TierSchedule;
+import com.dawnline.fulfillment.adapter.in.messaging.OrderEventListener;
+import com.dawnline.fulfillment.adapter.out.messaging.OutboxFulfillmentEvents;
+import com.dawnline.fulfillment.application.CancelFulfillmentOrderService;
 import com.dawnline.fulfillment.application.FcCandidateAssembler;
+import com.dawnline.fulfillment.application.PlanOrderService;
 import com.dawnline.fulfillment.application.FulfillmentRetentionCleaner;
+import com.dawnline.fulfillment.application.port.in.CancelFulfillmentOrderUseCase;
+import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
 import com.dawnline.fulfillment.application.port.out.FcDistances;
+import com.dawnline.fulfillment.application.port.out.FulfillmentEvents;
+import com.dawnline.fulfillment.domain.FcSelection;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
+import com.dawnline.messaging.idempotency.IdempotentConsumer;
+import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.outbox.OutboxAppender;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -50,6 +64,71 @@ public class FulfillmentApplicationConfig {
     @Bean
     public FcCandidateAssembler fcCandidateAssembler(ReferenceData referenceData, FcDistances distances) {
         return new FcCandidateAssembler(referenceData, distances);
+    }
+
+    /**
+     * §2.2 컷오프·배송창 표 — order-service 와 <strong>같은 구현</strong>이다
+     * (ADR-020 후속 정정 2). 개정 경로가 다음 컷오프와 그 창을 물을 때 쓴다.
+     */
+    @Bean
+    public TierSchedule tierSchedule() {
+        return TierSchedule.standard();
+    }
+
+    /**
+     * {@code fulfillment.planned} 발행 — outbox 뿐이다 (불변규칙 1).
+     *
+     * @param outbox 이벤트 발행의 유일한 진입점
+     */
+    @Bean
+    public FulfillmentEvents fulfillmentEvents(OutboxAppender outbox) {
+        return new OutboxFulfillmentEvents(outbox);
+    }
+
+    /**
+     * {@code order.placed} 처리 (§5.2).
+     *
+     * @param referenceData 권역·캠프 조회
+     * @param candidates    후보 조립
+     * @param selection     판정 순수 함수
+     * @param waves         웨이브 저장소
+     * @param orders        주문 저장소
+     * @param events        outbox 발행
+     * @param schedule      §2.2 표
+     * @param ids           UUIDv7 생성기
+     * @param clock         시각 출처
+     */
+    @Bean
+    public PlanOrderUseCase planOrderUseCase(ReferenceData referenceData, FcCandidateAssembler candidates,
+            FcSelection selection, WaveRepository waves, FulfillmentOrderRepository orders,
+            FulfillmentEvents events, TierSchedule schedule, Ids ids, Clock clock) {
+        return new PlanOrderService(referenceData, candidates, selection, waves, orders, events,
+                schedule, ids, clock);
+    }
+
+    /**
+     * {@code order.cancelled} 처리 (ADR-022).
+     *
+     * @param orders 주문 저장소
+     */
+    @Bean
+    public CancelFulfillmentOrderUseCase cancelFulfillmentOrderUseCase(FulfillmentOrderRepository orders) {
+        return new CancelFulfillmentOrderService(orders);
+    }
+
+    /**
+     * 주문 이벤트 리스너 (§4.1).
+     *
+     * @param consumer    멱등 게이트
+     * @param planOrder   계획 유스케이스
+     * @param cancelOrder 취소 유스케이스
+     * @param json        이벤트 JSON 코덱
+     * @param meters      Micrometer 레지스트리
+     */
+    @Bean
+    public OrderEventListener orderEventListener(IdempotentConsumer consumer, PlanOrderUseCase planOrder,
+            CancelFulfillmentOrderUseCase cancelOrder, EventJson json, MeterRegistry meters) {
+        return new OrderEventListener(consumer, planOrder, cancelOrder, json, meters);
     }
 
     /**
