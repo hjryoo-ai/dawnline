@@ -38,7 +38,7 @@ final class OptimizerFixtures {
     }
 
     /** 여유로운 창 — 시간 관련 룰이 우연히 걸리지 않게 넉넉히 잡는다. */
-    static TimeWindow window() {
+    static com.dawnline.common.TimeWindow window() {
         return new TimeWindow(START, START.plus(Duration.ofHours(6)));
     }
 

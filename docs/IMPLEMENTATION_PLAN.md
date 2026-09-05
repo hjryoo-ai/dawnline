@@ -393,7 +393,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    생성기가 값을 준다). `serviceTier` 로 유추하면 "DAWN 이 곧 VIP" 라는 정책을 코드가 몰래
    정하는 셈이라 하지 않았다. 우선도의 출처를 정하는 것은 **계약 변경**이다.
 
-5b. **계획 실행**: `wave.closed` 리스너 → `RunPlan` 유스케이스 → Plan 상태 머신(§5.3,
+5b. **계획 실행** (2026-09-05 완료): `wave.closed` 리스너 → `RunPlan` 유스케이스 → Plan 상태 머신(§5.3,
    `route_plans.wave_id` UNIQUE 로 중복 도착 멱등) → 발행 3종. `PLANNING` 정체 회수 스케줄러
    (10분 경과 → `REQUESTED`).
 
@@ -408,6 +408,11 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    - **브로커 도착 IT 3건**: `route.assigned`·`order.dispatched`·`plan.completed` 가 실제 브로커까지
      가서 봉투까지 계약을 지키는지. Phase 1 `OrderPublishIT`·Phase 2 `FulfillmentPublishIT` 와 같은
      형태다 — "outbox 에 들어갔다" 까지만 보면 릴레이와 봉투 조립이 검증되지 않는다.
+
+   **계약 enum 을 하나 넓혔다** — `plan.failed.reason` 에 `NO_CANDIDATES` 를 더했다. 웨이브가
+   닫혔는데 계획할 후보가 하나도 없는 경우(전부 취소됐거나 전부 배차 불가로 종결)이고, 스키마가
+   "사유가 늘면 같은 major 안에서 enum 을 넓힌다" 고 적어 둔 그대로다(§4.7). 소비자는 이 값을
+   문자열로 받아 기록만 하므로 깨지지 않는다.
 
 5c. **REST + 메트릭**: §5.3 표의 6종(plans·routes·reassign·rules·vehicles·drivers). 룰 수정 시
    `rule_version` 증가·이력 보관. `dawnline_plan_duration_seconds`·`plan_cost_krw`·`plan_unassigned`·
