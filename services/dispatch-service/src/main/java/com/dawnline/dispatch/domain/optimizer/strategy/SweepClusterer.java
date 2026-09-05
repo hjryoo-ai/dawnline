@@ -23,10 +23,16 @@ import java.util.Objects;
  * 룰 인터페이스로 읽을 수 없다(§6.3 — 룰은 데이터다). 대신 <strong>차 한 대 몫</strong>을 목표
  * 크기로 쓴다({@code ceil(stop 수 / 차량 수)}).
  *
- * <p>처음엔 용량으로만 잘랐는데 <strong>그러면 스윕이 아무 일도 하지 않는다</strong>. 1.2 t 트럭은
- * 평균 2.85 kg 화물을 420곳까지 실을 수 있어서, small(458 stop)이 클러스터 한두 개가 됐다.
- * 클러스터 하나가 전체와 같으면 부챗살로 자른 것이 아니고, 실제로 측정에서 거리가 베이스라인의
- * 두 배로 나왔다(669,892 m vs 336,758 m).
+ * <p><strong>목표 클러스터 수는 총수요/용량에서 나온다</strong>(2026-09-05 정정). 한동안
+ * {@code ceil(stop수 / 차량수)} 로 잡았는데, 그러면 클러스터 수가 <em>차량 수와 같아지고</em>
+ * 뒤의 탐욕 배정이 클러스터마다 새 차를 열어 <strong>언제나 전 차량을 굴린다</strong>.
+ * 측정이 그것을 보여 줬다 — sweep 이 5/5 · 20/20 · 40/40 을 쓸 때 baseline 은 4/5 · 14/20 · 31/40
+ * 이었고, 고정비 차이가 총비용 격차의 31~96%였다(`docs/benchmarks/phase3-baseline.md`).
+ *
+ * <p>차 한 대가 실을 수 있는 양은 <em>용량</em>이지 "전체를 차량 수로 나눈 값" 이 아니다.
+ * 그래서 총수요를 가장 큰 차량의 용량으로 나눠 필요한 최소 클러스터 수를 구하고, 그보다 잘게
+ * 자르지 않는다. {@code max-stops} 같은 룰이 더 잘라야 한다고 말하면 {@code GreedyAssigner} 가
+ * 반으로 쪼개 다시 시도한다(§6.5 3단계) — 클러스터러가 룰의 속을 들여다보지 않아도 되는 이유다.
  *
  * <h2>권역 경계에서 "우선" 자른다는 것의 뜻</h2>
  * §6.5 2단계는 "권역 경계를 넘을 때는 {@code ZONE_AFFINITY} 페널티를 고려해 자르기 우선" 이다.
@@ -74,7 +80,8 @@ public final class SweepClusterer {
         if (vehicleCount < 1) {
             throw new IllegalArgumentException("차량 수는 1 이상이어야 합니다: " + vehicleCount);
         }
-        int targetSize = Math.max(1, Math.ceilDiv(stops.size(), vehicleCount));
+        int targetClusters = targetClusters(stops, capacity, vehicleCount);
+        int targetSize = Math.max(1, Math.ceilDiv(stops.size(), targetClusters));
 
         List<Stop> swept = sweep(stops, depot.point());
         List<List<Stop>> clusters = new ArrayList<>();
@@ -85,8 +92,12 @@ public final class SweepClusterer {
         for (Stop stop : swept) {
             Parcel next = load.plus(stop.parcel());
             boolean overCapacity = !capacity.admits(next);
-            boolean overTarget = current.size() >= targetSize;
-            boolean zoneChanged = zone != null && !zone.equals(stop.zone())
+            // 목표 개수의 마지막 하나를 만들기 시작하면 더 자르지 않는다. 크기·경계로 계속
+            // 자르면 클러스터가 목표(=차량 수 이하)를 넘고, 남는 것이 이미 실은 차에 얹혀
+            // 지그재그가 된다 — 용량 초과만은 예외다(어떤 차도 실을 수 없는 클러스터가 된다).
+            boolean mayCut = clusters.size() < targetClusters - 1;
+            boolean overTarget = mayCut && current.size() >= targetSize;
+            boolean zoneChanged = mayCut && zone != null && !zone.equals(stop.zone())
                     && current.size() >= minStopsBeforeZoneCut
                     && current.size() >= targetSize * ZONE_CUT_THRESHOLD;
 
@@ -104,6 +115,19 @@ public final class SweepClusterer {
             clusters.add(List.copyOf(current));
         }
         return List.copyOf(clusters);
+    }
+
+    /**
+     * 필요한 클러스터 수. <strong>총수요 ÷ 가장 큰 차량의 용량</strong>이다 — 중량과 부피 중
+     * 더 많이 요구하는 쪽을 쓴다. 차량 수를 상한으로 두는 이유는 클러스터가 차보다 많으면 남는
+     * 것이 이미 실은 차에 얹혀 부챗살 여럿을 오가는 지그재그가 되기 때문이다.
+     */
+    private static int targetClusters(List<Stop> stops, Capacity capacity, int vehicleCount) {
+        long weight = stops.stream().mapToLong(stop -> stop.parcel().weightG()).sum();
+        long volume = stops.stream().mapToLong(stop -> stop.parcel().volumeCm3()).sum();
+        long byWeight = Math.ceilDiv(weight, Math.max(1L, capacity.maxWeightG()));
+        long byVolume = Math.ceilDiv(volume, Math.max(1L, capacity.maxVolumeCm3()));
+        return (int) Math.min(vehicleCount, Math.max(1L, Math.max(byWeight, byVolume)));
     }
 
     /**

@@ -82,6 +82,7 @@ public final class BenchmarkRunner {
                 java.util.stream.Collectors.groupingBy(
                         com.dawnline.dispatch.domain.optimizer.Unassigned::ruleName,
                         java.util.stream.Collectors.counting()));
-        return new RunOutcome(result.metrics(), result.totalCost(), elapsedMs, reasons);
+        return new RunOutcome(result.metrics(), result.totalCost(), elapsedMs, reasons,
+                CostBreakdown.of(problem, result));
     }
 }
