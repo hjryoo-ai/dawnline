@@ -90,6 +90,7 @@ public class RunPlanService implements RunPlanUseCase {
     private final DistanceProvider distance;
     private final PlanValidator validator = new PlanValidator();
     private final CostModel cost = new CostModel();
+    private final DispatchMetrics metrics;
     private final Clock clock;
     private final String defaultStrategy;
     private final PlanningBudget budget;
@@ -102,13 +103,14 @@ public class RunPlanService implements RunPlanUseCase {
      * @param vehicles        차량 카탈로그
      * @param rules           룰 카탈로그
      * @param distance        거리 제공자
+     * @param metrics         §9.1 계획 메트릭
      * @param clock           시각 출처 (불변규칙 12)
      * @param defaultStrategy 기본 전략 (§6.6)
      * @param budget          시간 예산 (§6.7)
      */
     public RunPlanService(RoutePlanRepository plans, DispatchCandidateRepository candidates,
             PlannedRouteRepository routes, DispatchEvents events, VehicleCatalog vehicles,
-            RuleCatalog rules, DistanceProvider distance, Clock clock,
+            RuleCatalog rules, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
             String defaultStrategy, PlanningBudget budget) {
 
         this.plans = Objects.requireNonNull(plans, "plans");
@@ -118,6 +120,7 @@ public class RunPlanService implements RunPlanUseCase {
         this.vehicles = Objects.requireNonNull(vehicles, "vehicles");
         this.rules = Objects.requireNonNull(rules, "rules");
         this.distance = Objects.requireNonNull(distance, "distance");
+        this.metrics = Objects.requireNonNull(metrics, "metrics");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.defaultStrategy = Objects.requireNonNull(defaultStrategy, "defaultStrategy");
         this.budget = Objects.requireNonNull(budget, "budget");
@@ -205,6 +208,9 @@ public class RunPlanService implements RunPlanUseCase {
         plan.publish(finishedAt);
         plans.update(plan);
         events.planCompleted(plan, result);
+        // 메트릭은 트랜잭션에 참여하지 않는다 — 계획이 롤백되면 이 수치는 남지만, 그것이
+        // 발행을 막는 것보다 낫다 (fulfillment 와 같은 판단).
+        metrics.planPublished(plan);
         return Outcome.PUBLISHED;
     }
 

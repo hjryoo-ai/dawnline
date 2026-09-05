@@ -40,6 +40,10 @@ dependencies {
     // libs/messaging 의 이벤트 계약 픽스처 (불변규칙 8). 소비자는 examples 로 검증한다
     // (계약 README §3) — 페이로드 매핑이 계약 예시에서 그대로 돌아야 한다.
     testImplementation(testFixtures(project(":libs:messaging")))
+    // Boot 4 모듈화: @WebMvcTest·@AutoConfigureMockMvc 는 spring-boot-starter-test 가 아니라
+    // 이 모듈에 있다. order-service 는 integrationTest 에 걸었지만 여기서는 **단위** 소스셋이다 —
+    // MockMvc 슬라이스는 Docker 없이 돌고, JaCoCo 게이트는 test 소스셋만 보기 때문이다.
+    testImplementation(libs.spring.boot.webmvc.test)
 
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)

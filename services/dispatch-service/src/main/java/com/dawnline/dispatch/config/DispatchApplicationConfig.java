@@ -3,18 +3,29 @@ package com.dawnline.dispatch.config;
 import com.dawnline.dispatch.adapter.in.messaging.FulfillmentPlannedListener;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
 import com.dawnline.dispatch.adapter.out.messaging.OutboxDispatchEvents;
+import com.dawnline.dispatch.adapter.out.persistence.JdbcPlanQueries;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcPlannedRouteRepository;
+import com.dawnline.dispatch.adapter.out.persistence.JdbcReferenceAdmin;
+import com.dawnline.dispatch.adapter.out.persistence.JdbcRouteMutations;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcReferenceData;
 import com.dawnline.dispatch.adapter.out.persistence.JpaRoutePlanRepository;
 import com.dawnline.dispatch.adapter.out.persistence.JpaDispatchCandidateRepository;
+import com.dawnline.dispatch.application.DispatchMetrics;
 import com.dawnline.dispatch.application.LoadCandidateService;
+import com.dawnline.dispatch.application.ManageResourcesService;
+import com.dawnline.dispatch.application.ReassignStopService;
 import com.dawnline.dispatch.application.RecoverStalePlansService;
 import com.dawnline.dispatch.application.RunPlanService;
 import com.dawnline.dispatch.application.port.in.LoadCandidateUseCase;
+import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
+import com.dawnline.dispatch.application.port.in.ReassignStopUseCase;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.DispatchEvents;
+import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.application.port.out.PlannedRouteRepository;
+import com.dawnline.dispatch.application.port.out.ReferenceAdmin;
+import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
@@ -145,11 +156,75 @@ public class DispatchApplicationConfig {
     public RunPlanUseCase runPlanUseCase(RoutePlanRepository plans,
             DispatchCandidateRepository candidates, PlannedRouteRepository routes,
             DispatchEvents events, JdbcReferenceData reference, DistanceProvider distance,
-            Clock clock, DispatchProperties properties) {
+            DispatchMetrics metrics, Clock clock, DispatchProperties properties) {
 
         return new RunPlanService(plans, candidates, routes, events, reference, reference,
-                distance, clock, properties.plan().defaultStrategy(),
+                distance, metrics, clock, properties.plan().defaultStrategy(),
                 new PlanningBudget(properties.plan().budget(), properties.plan().perRouteBudget()));
+    }
+
+    /**
+     * 조회 전용 어댑터.
+     *
+     * @param entityManagerFactory EMF
+     */
+    @Bean
+    public PlanQueries planQueries(EntityManagerFactory entityManagerFactory) {
+        return new JdbcPlanQueries(
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+    }
+
+    /**
+     * @param entityManagerFactory EMF
+     */
+    @Bean
+    public RouteMutations routeMutations(EntityManagerFactory entityManagerFactory) {
+        return new JdbcRouteMutations(
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+    }
+
+    /**
+     * @param entityManagerFactory EMF
+     */
+    @Bean
+    public ReferenceAdmin referenceAdmin(EntityManagerFactory entityManagerFactory) {
+        return new JdbcReferenceAdmin(
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+    }
+
+    /**
+     * 자원·룰 관리 (§5.3). 트랜잭션 경계가 여기 있다 — 어댑터가 아니다(불변규칙 1).
+     *
+     * @param admin 참조 데이터 관리
+     */
+    @Bean
+    public ManageResourcesUseCase manageResourcesUseCase(ReferenceAdmin admin) {
+        return new ManageResourcesService(admin);
+    }
+
+    /**
+     * 운영자 재배정 (§5.3).
+     *
+     * @param routes    라우트 조작
+     * @param plans     계획 저장소
+     * @param reference 차량·룰
+     * @param events    발행
+     * @param distance  거리 제공자
+     */
+    @Bean
+    public ReassignStopUseCase reassignStopUseCase(RouteMutations routes, RoutePlanRepository plans,
+            JdbcReferenceData reference, DispatchEvents events, DistanceProvider distance) {
+        return new ReassignStopService(routes, plans, reference, reference, events, distance);
+    }
+
+    /**
+     * §9.1 계획 메트릭.
+     *
+     * @param registry 미터 레지스트리
+     */
+    @Bean
+    public DispatchMetrics dispatchMetrics(io.micrometer.core.instrument.MeterRegistry registry) {
+        return new DispatchMetrics(registry);
     }
 
     /**
