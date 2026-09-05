@@ -335,28 +335,76 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 ## Phase 3 — dispatch-service 코어 (룰 엔진 + 기본 최적화)
 
-**작업**
-1. `domain.optimizer` (순수 Java): §6.2 모델, `DistanceProvider`(하버사인), `StopMerger`, `SweepClusterer`, `GreedyAssigner`, `NearestNeighborSequencer`, `PlanValidator`, `CostModel`.
-2. 룰 엔진: `DispatchRule` sealed 계층, §6.3 카탈로그 10종 평가기, `RuleSet` 로딩(DB → 캠프 오버라이드 병합 → 캐시), `Explanation` 수집.
-3. 전략: `baseline-nn`, `sweep-greedy-nn`. `DispatchStrategy` 인터페이스·레지스트리.
-4. 애플리케이션: `RunPlan` 유스케이스(Plan 상태 머신 §5.3, wave_id UNIQUE 멱등, PLANNING 정체 회수 스케줄러), 후보 적재(`fulfillment.planned` 리스너), `wave.closed` 리스너 → 계획 실행 → `route.assigned`(라우트당) + `order.dispatched`(주문당) outbox.
-5. REST: plans/routes/rules/vehicles/drivers(§5.3 표). 룰 수정 시 `rule_version` 증가·이력.
-6. Flyway V1: §5.3 DDL. 시드: 차량 200·기사 200·기본 룰셋 JSON.
-7. 메트릭: `dawnline_plan_*`.
-8. `tools/benchmark`: 데이터셋 생성기(seed), `small/medium/large` 생성, 전략 실행·비교, Markdown 리포트 출력. CI에 `small` 회귀 체크 연결.
-9. 테스트: 룰 평가기 단위(각 룰 위반/통과), 하드 룰 위반 라우트가 최종 산출에 없음(PlanValidator), seed 고정 결정론, 5,000 주문 통합 계획(시간 측정), wave.closed 중복 도착 멱등.
-9-1. **`plan.completed.v1` 발행** ([ADR-024](adr/ADR-024-plan-completed-event.md) — 2026-09-05 결정,
-   Phase 2 에서 발견한 §4.1↔§5.2 어긋남의 답이다). Plan 이 `PUBLISHED` 에 도달할 때
-   `route.assigned`·`order.dispatched` 와 **같은 outbox 트랜잭션**에 넣는다. 나눠 넣으면 "완료라는데
-   라우트가 없다" 가 생긴다. 계약은 소비자인 fulfillment 가 Phase 2 에 이미 정의해 두었으므로
-   (`contracts/events/plan.completed.v1.schema.json`) 여기서는 **만족시키기만** 한다 — 자기에게
-   필요한 필드는 같은 major 안에서 추가만(§4.7).
-   `plan.failed` 도 같은 계약이 이미 있다. 부분 재계획(§6.8)은 `plan.completed` 를 다시 내지 않는다.
-9-2. **`order.cancelled` 소비 — 취소는 최적화 트리거가 아니라 입력 변경이다**
+**작업 순서** (2026-09-05 확정 — 순서 자체가 결정이므로 번호를 그대로 따른다)
+
+`1 → 2 → 2.5 → 3 → 4 → 5a → 5b → 5c → 6 → 7`, 그리고 순서와 무관한 8(릴레이 리더 락).
+
+두 자리가 순서 때문에 존재한다.
+
+- **2.5 가 3 보다 앞**인 이유: 3 의 베이스라인이 "먼저" 인 까닭은 **수치를 남기기 위해서**인데,
+  남길 도구가 없으면 3 은 코드만 있고 기록이 없다. 그리고 하네스가 `domain.optimizer` 를 Spring
+  없이 그대로 실행한다는 것이 **불변규칙 5 의 존재 이유**이고, 그 사실이 여기서 처음 증명된다.
+- **3 이 4 보다 앞**인 이유: §6.9 의 회귀 게이트가 "기본 전략 비용이 베이스라인보다 나쁘면 실패" 다.
+  게이트를 켠 뒤에 베이스라인을 만들면 **"그때 무엇과 비교했나" 가 사라진다.**
+
+1. **`domain.optimizer`** (순수 Java, Spring·JPA import 금지 — 불변규칙 5): §6.2 모델
+   (`PlanningProblem`·`PlanResult`·`PlanningBudget`), `DistanceProvider`(하버사인), `CostModel`(§6.4),
+   `PlanValidator`. 시간·난수는 주입한다(불변규칙 12) — seed 가 같으면 결과가 같아야 한다.
+
+2. **룰 엔진**: `DispatchRule` sealed 계층, §6.3 카탈로그 10종 평가기, `RuleSet` 병합(기본 → 캠프
+   오버라이드), `Explanation` 수집.
+   이 시점에는 DB 가 없으므로 **룰셋은 테이블이 아니라 픽스처 JSON** 이다. 그 파일을 5a 의
+   `R__seed_dispatch` 가 **같이 읽는다** — 두 벌로 두면 갈라지고, 갈라진 날 "테스트는 통과하는데
+   운영 룰이 다르다" 가 된다. 드리프트 검사는 `contracts/seed/order-service-geohash5.txt` 와 같은
+   방식(양쪽이 각자 검사)으로 둔다.
+
+2.5. **벤치마크 하네스 + 데이터셋 생성기** (`tools/benchmark`): seed 고정 생성기로
+   `small`(500/5) · `medium`(2,000/20) · `large`(5,000/40) 를 만들고, 전략 실행기와 Markdown 리포트
+   출력까지. §6.9 의 지표(총비용·총거리·계획 시간·미배정·지각 stop·차량 사용 대수)를 낸다.
+   **Spring 없이 `domain.optimizer` 를 그대로 실행한다** — 못 하면 불변규칙 5 가 깨진 것이다.
+
+3. **`baseline-nn`** + `StopMerger` + 거리 행렬. `DispatchStrategy` 인터페이스·레지스트리.
+   여기서 나온 수치가 `docs/benchmarks/phase3-baseline.md` 의 첫 표가 된다.
+
+4. **`sweep-greedy-nn`** (§6.5 1~4단계: `SweepClusterer`·`GreedyAssigner`·`NearestNeighborSequencer`)
+   → CI `small` 회귀 게이트를 켠다.
+
+   **게이트 규칙 두 가지** (2026-09-05 확정):
+   - **`baseline-nn` 은 게이트가 켜진 순간 동결된다.** 베이스라인이 좋아지면 그때까지의 비교가 전부
+     무효가 된다. 바꿔야 하면 `docs/benchmarks/` 에 **재기준(re-baseline) 기록**을 남기고 그때까지의
+     수치를 새 기준으로 **다시 낸다.**
+   - **게이트는 비용만 본다.** 같은 실행 안에서 두 전략을 돌려 비교하므로 환경에 독립이지만, 계획
+     시간은 CI 러너에 따라 흔들린다. 시간은 **기록만 하고 게이트 조건에 넣지 않는다** — 환경 탓으로
+     빨개지는 게이트는 결국 꺼진다.
+
+5a. **영속성**: Flyway V1(§5.3 DDL), 시드 `R__seed_dispatch`(차량 200 · 기사 200 · 기본 룰셋 —
+   2 의 픽스처와 같은 파일), `fulfillment.planned` 리스너로 `dispatch_candidates` 적재.
+
+5b. **계획 실행**: `wave.closed` 리스너 → `RunPlan` 유스케이스 → Plan 상태 머신(§5.3,
+   `route_plans.wave_id` UNIQUE 로 중복 도착 멱등) → 발행 3종. `PLANNING` 정체 회수 스케줄러
+   (10분 경과 → `REQUESTED`).
+
+   - **발행 3종은 같은 outbox 트랜잭션**: `route.assigned`(라우트당) · `order.dispatched`(주문당) ·
+     `plan.completed`(웨이브당). 나눠 넣으면 "완료라는데 라우트가 없다" 가 생긴다
+     ([ADR-024](adr/ADR-024-plan-completed-event.md)). `plan.failed` 도 같은 계약이 이미 있다.
+     두 계약 모두 소비자인 fulfillment 가 Phase 2 에 정의해 두었으므로 여기서는 **만족시키기만** 한다.
+     부분 재계획(§6.8)은 `plan.completed` 를 다시 내지 않는다.
+   - **발행 직전 재검증**([ADR-026](adr/ADR-026-dispatch-cancellation-window.md) 분기 2, §6.5 6단계):
+     후보 상태를 다시 읽어 계획 중에 취소된 주문을 stop 에서 뺀다. 6번이 아니라 여기 있는 이유는
+     이것이 취소 처리가 아니라 **발행 경로의 일부**이기 때문이다 — revision 을 쓰지 않고 닫는 자리다.
+   - **브로커 도착 IT 3건**: `route.assigned`·`order.dispatched`·`plan.completed` 가 실제 브로커까지
+     가서 봉투까지 계약을 지키는지. Phase 1 `OrderPublishIT`·Phase 2 `FulfillmentPublishIT` 와 같은
+     형태다 — "outbox 에 들어갔다" 까지만 보면 릴레이와 봉투 조립이 검증되지 않는다.
+
+5c. **REST + 메트릭**: §5.3 표의 6종(plans·routes·reassign·rules·vehicles·drivers). 룰 수정 시
+   `rule_version` 증가·이력 보관. `dawnline_plan_duration_seconds`·`plan_cost_krw`·`plan_unassigned`·
+   `plan_degraded_total`(§9.1).
+
+6. **`order.cancelled` 소비 — 취소는 최적화 트리거가 아니라 입력 변경이다**
    (2026-09-05 결정, [ADR-026](adr/ADR-026-dispatch-cancellation-window.md), §6.10).
    ADR-017 후속 정정이 **정의한** 경합 창 — 취소는 `PLANNED` 에서 허용되고 `PLANNED` 는 웨이브
    마감 뒤에도 유지되므로 계획 발행과 order-service 의 `order.dispatched` 소비 사이가 그 창이다 —
-   을 **닫는 쪽이 여기다.**
+   을 **닫는 쪽이 여기다.** 5b 뒤에 오는 이유는 취소가 죽일 stop 이 그때 생기기 때문이다.
 
    dispatch 는 stop 을 죽이고 **이후 stop 의 시간만 재전파**한다. 남은 경로를 다시 풀지 않고
    **순서도 재시퀀싱하지 않는다.** §6.8 재계획 트리거(`delivery.at-risk`, 운영자)는 그대로 둔다 —
@@ -384,7 +432,19 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    "부재 = `PLANNED`" 가 실제 사실과 일치하기 때문이다. 취소된 stop 은 페이로드에서 **지우지 않는다**
    (부재는 값이 아니다). 예시 `route.assigned.v1.revised.example.json` 과 계약 테스트 2건이 그것을 고정한다.
 
-10. **릴레이 리더 락 + ADR**: 서비스당 릴레이 단일 활성을 보장한다(Redis `SET NX` + 주기 갱신, 락 상실 시 발행 중단). 스케일아웃으로 인스턴스가 2개 이상이 되기 **전에** 들어가야 한다 — 그 전까지는 인스턴스 1개라는 사실이 §4.4의 전제를 충족시키고 있을 뿐이다.
+7. **마감**: Phase 3 대조표(작업 항목 ↔ 실제 커밋, 빠진 항목은 "미구현" 으로 **표에 남긴다**),
+   **5,000건 통합 계획**(DoD, 시간 측정), `docs/benchmarks/phase3-baseline.md` 에
+   `baseline-nn` vs `sweep-greedy-nn` 비교표, **냉장 주문이 냉장 차량에만 배정됨을 설명 조회로 확인**(DoD).
+   대조표를 목록에 넣는 이유는 Phase 1·2 에서 **매번 무언가를 잡았기** 때문이다 — Phase 1 은 빈 칸
+   5개와 레이트 리밋을, Phase 2 는 이중 마감 IT 부재와 고정되지 않은 메트릭 사유 문자열을 잡았다.
+
+8. **릴레이 리더 락 + ADR** (순서 무관): 서비스당 릴레이 단일 활성을 보장한다(Redis `SET NX` +
+   주기 갱신, 락 상실 시 발행 중단). 스케일아웃으로 인스턴스가 2개 이상이 되기 **전에** 들어가야
+   한다 — 그 전까지는 인스턴스 1개라는 사실이 §4.4 의 전제를 충족시키고 있을 뿐이다.
+
+**테스트** (각 단계에 붙는다): 룰 평가기 단위(각 룰 위반/통과), 하드 룰 위반 라우트가 최종 산출에
+없음(`PlanValidator`), **seed 고정 결정론**(같은 seed → 같은 결과, 불변규칙 12), 5,000 주문 통합
+계획(시간 측정), `wave.closed` 중복 도착 멱등.
 
 **DoD**
 - `make demo`: 주문 → 웨이브 마감 → 라우트 생성 → `GET /api/v1/plans/{id}`에서 비용·미배정·설명 조회.
