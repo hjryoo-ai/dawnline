@@ -16,11 +16,14 @@ public final class RuleSet {
 
     private final List<HardRule> hard;
     private final List<SoftRule> soft;
+    private final List<UnassignedRule> unassigned;
     private final int version;
 
-    private RuleSet(List<HardRule> hard, List<SoftRule> soft, int version) {
+    private RuleSet(List<HardRule> hard, List<SoftRule> soft, List<UnassignedRule> unassigned,
+            int version) {
         this.hard = hard;
         this.soft = soft;
+        this.unassigned = unassigned;
         this.version = version;
     }
 
@@ -39,12 +42,14 @@ public final class RuleSet {
                         .sorted(byPriority).toList(),
                 rules.stream().filter(SoftRule.class::isInstance).map(SoftRule.class::cast)
                         .sorted(byPriority).toList(),
+                rules.stream().filter(UnassignedRule.class::isInstance).map(UnassignedRule.class::cast)
+                        .sorted(byPriority).toList(),
                 version);
     }
 
     /** 룰이 하나도 없는 묶음. 베이스라인 전략 비교와 단위 테스트가 쓴다. */
     public static RuleSet empty() {
-        return new RuleSet(List.of(), List.of(), 0);
+        return new RuleSet(List.of(), List.of(), List.of(), 0);
     }
 
     /**
@@ -77,6 +82,26 @@ public final class RuleSet {
             total = total.plus(rule.penalty(stop, vehicle, state));
         }
         return total;
+    }
+
+    /**
+     * 배정하지 못한 stop 의 비용 (§6.1 의 {@code unassignedPenalty}).
+     *
+     * <p>이 값이 없으면 "아무것도 배정하지 않는 계획" 의 비용이 0 이라 언제나 최적이 된다.
+     *
+     * @param stop 배정하지 못한 stop
+     */
+    public Money unassignedPenalty(Stop stop) {
+        Money total = Money.ZERO;
+        for (UnassignedRule rule : unassigned) {
+            total = total.plus(rule.penalty(stop));
+        }
+        return total;
+    }
+
+    /** 미배정 룰들 (우선순위 순). */
+    public List<UnassignedRule> unassignedRules() {
+        return unassigned;
     }
 
     /** 하드 룰들 (우선순위 순). {@link PlanValidator} 가 최종 라우트에 다시 돌린다. */

@@ -60,9 +60,9 @@ class PlanValidatorTest {
     }
 
     private PlannedRoute routeOf(VehicleSpec vehicle, CampDepot depot, List<Stop> stops) {
-        RouteState state = RouteState.empty(vehicle, depot, START);
+        RouteState state = RouteState.empty(vehicle, depot, distance, START);
         for (Stop stop : stops) {
-            state = state.append(stop, distance.between(state.at(), stop.point()));
+            state = state.append(stop);
         }
         return new PlannedRoute(vehicle.id(), state.stops(), state.distanceM(), 0, Money.ZERO);
     }

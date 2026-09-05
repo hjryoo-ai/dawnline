@@ -7,11 +7,12 @@ package com.dawnline.dispatch.domain.optimizer;
  * 룰 <em>정의</em>는 {@code dispatch_rules} 테이블에 있고 타입별 <em>평가기</em>만 코드로 제공한다.
  * 그래서 새 룰을 켜는 데 배포가 필요 없고, 룰을 바꾼 사실이 {@code rule_version} 으로 남는다.
  *
- * <p>{@code sealed} 인 이유는 하드와 소프트의 처리가 <strong>완전히 다르기</strong> 때문이다 —
- * 하드는 첫 위반에서 중단하고 소프트는 전부 합산한다. 제3의 심각도가 생기면 그 분기를 처리하지
- * 않은 자리가 컴파일 에러로 드러나야 한다.
+ * <p>{@code sealed} 인 이유는 세 종류의 처리가 <strong>완전히 다르기</strong> 때문이다 —
+ * {@link HardRule} 은 첫 위반에서 중단하고, {@link SoftRule} 은 전부 합산하며,
+ * {@link UnassignedRule} 은 배정에 <em>실패했을 때</em>만 평가된다. 새 종류가 생기면 그 분기를
+ * 처리하지 않은 자리가 컴파일 에러로 드러나야 한다.
  */
-public sealed interface DispatchRule permits HardRule, SoftRule {
+public sealed interface DispatchRule permits HardRule, SoftRule, UnassignedRule {
 
     /** 룰 이름. {@code dispatch_rules.name} 이고 {@link Explanation} 에 그대로 실린다. */
     String name();
