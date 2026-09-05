@@ -7,8 +7,11 @@ import static org.assertj.core.api.Assertions.assertThatNoException;
 import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 /**
  * 설정 기본값이 설계서 숫자와 같은지 확인한다.
@@ -94,37 +97,48 @@ class DawnlineMessagingPropertiesTest {
     void 바인딩_batchSize가_0이면_예외() {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> new DawnlineMessagingProperties.Outbox(true, 0, Duration.ofSeconds(10),
-                        Duration.ofDays(7), 100L, 5000L, 3_600_000L, leader(Duration.ofSeconds(30))))
+                        Duration.ofDays(7), 100L, 5000L, 3_600_000L))
                 .withMessageContaining("batch-size");
     }
 
     @Test
-    void 바인딩_리더_ttl이_전송_타임아웃보다_짧으면_예외() {
-        // 리더십은 배치 *전에* 확인하고 배치 *중에는* 확인하지 않는다. TTL 이 배치보다 짧으면
-        // 배치 도중 리더가 바뀔 수 있고, 그러면 락을 켠 채로 두 인스턴스가 동시에 발행한다.
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> new DawnlineMessagingProperties.Outbox(true, 500, Duration.ofSeconds(10),
-                        Duration.ofDays(7), 100L, 5000L, 3_600_000L, leader(Duration.ofSeconds(10))))
-                .withMessageContaining("send-timeout");
+    void 바인딩_사라진_leader_키가_남아_있으면_기동에서_실패한다() {
+        // ADR-027 후속 정정으로 dawnline.messaging.outbox.leader.* 가 사라졌다. 남은 설정
+        // 파일에 그 키가 있으면 *조용히 무시되는* 것이 아니라 기동에서 실패해야 한다 —
+        // 없어진 스위치를 켜 두고 켜졌다고 믿는 것이 이 정정이 출발한 자리다.
+        //
+        // 전제부터 확인한다: 이 어설션은 ignoreUnknownFields=false 위에서만 의미가 있다.
+        assertThat(DawnlineMessagingProperties.class.getAnnotation(ConfigurationProperties.class))
+                .as("ignoreUnknownFields 가 true 로 돌아가면 아래 어설션은 아무것도 검사하지 않는다")
+                .isNotNull()
+                .extracting(ConfigurationProperties::ignoreUnknownFields)
+                .isEqualTo(false);
+
+        // 그리고 실제 컨텍스트에서 그렇게 되는지 본다 — Binder 를 직접 부르면 애너테이션이
+        // 무엇을 하는지가 아니라 테스트가 무엇을 하는지를 보게 된다.
+        new ApplicationContextRunner()
+                .withUserConfiguration(EnableProperties.class)
+                .withPropertyValues("dawnline.messaging.outbox.leader.enabled=false")
+                .run(context -> assertThat(context)
+                        .as("사라진 키를 들고 있는 설정은 조용히 뜨면 안 된다")
+                        .hasFailed());
     }
 
     @Test
-    void 바인딩_리더가_꺼져_있으면_ttl_관계를_보지_않는다() {
-        // 락이 없으면 지킬 관계도 없다. 여기서 막으면 단일 인스턴스 선언이 이유 없이 어려워진다.
-        assertThatNoException().isThrownBy(() -> new DawnlineMessagingProperties.Outbox(true, 500,
-                Duration.ofSeconds(10), Duration.ofDays(7), 100L, 5000L, 3_600_000L,
-                new DawnlineMessagingProperties.Leader(false, Duration.ofSeconds(1))));
+    void 바인딩_아는_키만_있으면_정상_기동한다() {
+        // 위 테스트의 짝. 엄격 모드가 *아무거나* 거절하는 것이 아니라는 것을 함께 보여야
+        // "모르는 키에서 멈춘다" 가 검사된 것이다.
+        new ApplicationContextRunner()
+                .withUserConfiguration(EnableProperties.class)
+                .withPropertyValues("dawnline.messaging.outbox.batch-size=50")
+                .run(context -> assertThat(context).hasNotFailed()
+                        .getBean(DawnlineMessagingProperties.class)
+                        .extracting(properties -> properties.outbox().batchSize())
+                        .isEqualTo(50));
     }
 
-    @Test
-    void 바인딩_리더_ttl이_0이면_예외() {
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> new DawnlineMessagingProperties.Leader(true, Duration.ZERO))
-                .withMessageContaining("leader.ttl");
-    }
-
-    private static DawnlineMessagingProperties.Leader leader(Duration ttl) {
-        return new DawnlineMessagingProperties.Leader(true, ttl);
+    @EnableConfigurationProperties(DawnlineMessagingProperties.class)
+    static class EnableProperties {
     }
 
     @Test
