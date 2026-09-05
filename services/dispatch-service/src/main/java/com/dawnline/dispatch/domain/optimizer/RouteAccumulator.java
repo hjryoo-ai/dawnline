@@ -38,6 +38,25 @@ public final class RouteAccumulator {
         this.state = RouteState.empty(vehicle, depot, distance, startAt);
     }
 
+    /** 같은 지점에서 갈라져 나온 사본. 시험 배치에 쓴다 — 상태가 불변이라 값 복사로 충분하다. */
+    private RouteAccumulator(RuleSet rules, VehicleSpec vehicle, RouteState state, Money softPenalty) {
+        this.rules = rules;
+        this.vehicle = vehicle;
+        this.state = state;
+        this.softPenalty = softPenalty;
+    }
+
+    /**
+     * 지금 상태에서 갈라져 나온 사본.
+     *
+     * <p>{@code GreedyAssigner} 가 "이 클러스터를 이 차에 실으면 얼마인가" 를 <strong>실제로 넣어
+     * 보고</strong> 재는 데 쓴다. 되돌리기 코드를 쓰지 않는 이유는 {@link RouteState} 가 불변이라
+     * 사본이 값 두 개 복사이기 때문이다.
+     */
+    public RouteAccumulator branch() {
+        return new RouteAccumulator(rules, vehicle, state, softPenalty);
+    }
+
     /** 이 stop 을 넣을 수 있는가 (하드 룰). */
     public Feasibility check(Stop stop) {
         return rules.check(stop, vehicle, state);
