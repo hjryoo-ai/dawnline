@@ -333,6 +333,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 ## Phase 6 — 백오피스 (ops-api + ops-web)
 
+> **선결 — `rm_orders` 는 약속을 두 개 든다.** §8.1 의 정시율은 *원 약속* 기준인데
+> order-service 의 `promised_start/end` 는 개정 경로에서 덮인다(ADR-020 결정 3 — 덮는 것이 맞다).
+> 원 약속을 아는 곳은 `order.placed` 이벤트뿐이고, 두 기준을 모두 낼 수 있는 곳은 이 읽기 모델이다.
+> §5.5 DDL 의 `promised_end` 한 칸으로는 `dawnline_delivery_on_time_ratio{basis}` 를 낼 수 없고,
+> 그러면 **개정으로 정시율을 세탁할 수 있게 된다** — 두 값으로 내기로 한 이유가 바로 그것이었다.
+> Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
+
 **작업**
 1. ops-api: 전 토픽 프로젝션(§5.5 rm_* 테이블), KPI 시간 버킷 집계, JWT·역할, 커맨드 엔드포인트(웨이브 조기 마감·재계획·stop 재배정·주문 취소·DLQ replay) → 코어 서비스 REST 위임 + `audit_logs`.
 2. 코어 서비스에 필요한 운영 엔드포인트 추가(fulfillment: 웨이브 조기 마감; dispatch: 재계획·재배정은 Phase 3/5에서 존재).

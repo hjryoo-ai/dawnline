@@ -442,6 +442,7 @@ CREATE TABLE orders (
   volume_cm3       INTEGER NOT NULL,
   requires_cold    BOOLEAN NOT NULL DEFAULT FALSE,
   hazmat           BOOLEAN NOT NULL DEFAULT FALSE,
+  failure_reason   VARCHAR(24),                      -- 배차 불가 사유 (§5.2 6단계). 배달 실패에는 없다
   version          BIGINT NOT NULL DEFAULT 0,        -- 낙관적 락
   placed_at        TIMESTAMPTZ NOT NULL,
   updated_at       TIMESTAMPTZ NOT NULL
@@ -833,6 +834,15 @@ CREATE TABLE rm_kpi_hourly (camp_id UUID, bucket_hour TIMESTAMPTZ, orders INTEGE
 CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), target_type VARCHAR(24), target_id UUID,
   request JSONB, result VARCHAR(16), created_at TIMESTAMPTZ);
 ```
+
+**Phase 6 메모 — `rm_orders` 는 약속을 <em>두 개</em> 들어야 한다.** §8.1 의 정시율은 "고객이 처음
+받은 약속" 기준으로 재는데, order-service 의 `promised_start/end` 는 개정 경로에서 **덮인다**
+([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 3 — 덮는 것이 맞다,
+고객에게 보여 줄 값은 지금 유효한 약속이다). 그러면 원 약속을 아는 곳은 `order.placed` 이벤트뿐이고,
+그것을 보관해 두 기준을 모두 낼 수 있는 곳은 **여기**다. 위 DDL 의 `promised_end` 한 칸으로는
+`dawnline_delivery_on_time_ratio{basis}`(§9.1)의 두 값을 낼 수 없다 — 그 SLO 는 개정으로 정시율을
+세탁할 수 없게 하려고 두 값으로 낸 것인데, 한 칸만 두면 정확히 그 세탁이 가능해진다.
+Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
 
 `rm_waves` 의 `plan_id`·`plan_duration_ms`·`total_cost_krw`·`unassigned_count` 를 채우는 것은
 `plan.completed` 다([ADR-024](adr/ADR-024-plan-completed-event.md)). 이 네 칸은 웨이브 단위 값이라

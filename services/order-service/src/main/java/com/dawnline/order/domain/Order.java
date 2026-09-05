@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
@@ -40,7 +41,11 @@ public final class Order {
     private final UUID customerId;
     private final ServiceTier serviceTier;
     private final DeliveryAddress address;
-    private final PromisedWindow promisedWindow;
+    /**
+     * 고객에게 한 약속. <strong>{@link #revisePromise} 한 경로에서만 바뀐다</strong> —
+     * 그 외에는 불변이다 (ADR-020 결정 3).
+     */
+    private PromisedWindow promisedWindow;
     private final Parcel parcel;
     private final List<OrderItem> items;
     private final Instant placedAt;
@@ -48,6 +53,15 @@ public final class Order {
 
     private OrderStatus status;
     private Instant updatedAt;
+
+    /**
+     * 배차 불가 사유 (§5.2 6단계). {@link #markUnserviceable} 만 채운다.
+     *
+     * <p>배달을 시도했다 실패한 {@code FAILED} 와 아예 배차되지 못한 {@code FAILED} 를 상태만으로는
+     * 구별할 수 없어서 둔다. 고객에게 "왜" 를 답할 수 있어야 하고, 그 답이 이벤트에만 있으면
+     * 물어볼 수 없다.
+     */
+    private @Nullable String failureReason;
 
     private Order(UUID id, UUID customerId, ServiceTier serviceTier, DeliveryAddress address,
             PromisedWindow promisedWindow, Parcel parcel, List<OrderItem> items,
@@ -103,9 +117,11 @@ public final class Order {
      */
     public static Order rehydrate(UUID id, UUID customerId, ServiceTier serviceTier, DeliveryAddress address,
             PromisedWindow promisedWindow, Parcel parcel, List<OrderItem> items, OrderStatus status,
-            Instant placedAt, Instant updatedAt, long version) {
-        return new Order(id, customerId, serviceTier, address, promisedWindow, parcel, items,
+            Instant placedAt, Instant updatedAt, long version, @Nullable String failureReason) {
+        Order order = new Order(id, customerId, serviceTier, address, promisedWindow, parcel, items,
                 status, placedAt, updatedAt, version);
+        order.failureReason = failureReason;
+        return order;
     }
 
     /**
@@ -142,6 +158,53 @@ public final class Order {
      */
     public void markFailed(Instant at) {
         transitionTo(OrderStatus.FAILED, at);
+    }
+
+    /**
+     * 배차할 수 없다 ({@code fulfillment.planned} 의 {@code outcome=UNSERVICEABLE}, §5.2 6단계).
+     *
+     * <p>{@link #markFailed} 와 <strong>상태는 같지만 뜻이 다르다</strong> — 저쪽은 배달을 시도했다
+     * 실패한 것이고, 이쪽은 아예 배차되지 못한 것이다. 그래서 사유를 함께 남긴다. 고객에게
+     * "왜" 를 답할 수 있어야 하고, 그 답이 이벤트에만 있으면 물어볼 수 없다.
+     *
+     * <p><strong>자동 재접수는 하지 않는다.</strong> 살릴지는 사람이 정한다 —
+     * {@code STALE_PLACED} 로 실패한 20일 전 주문을 시스템이 조용히 되살리는 것이 유령 배송의
+     * 다른 이름이기 때문이다 (ADR-020 후속 정정).
+     *
+     * @param reason 배차 불가 사유. {@code fulfillment.planned} 의 {@code reason} 값이다
+     * @param at     전이 시각
+     */
+    public void markUnserviceable(String reason, Instant at) {
+        Objects.requireNonNull(reason, "reason");
+        transitionTo(OrderStatus.FAILED, at);
+        this.failureReason = reason;
+    }
+
+    /**
+     * 하류가 약속을 개정했다 ({@code fulfillment.planned} 의 {@code promiseRevised=true},
+     * [ADR-020](docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 3).
+     *
+     * <p>지금까지 {@code promisedWindow} 는 불변이었고, <strong>그 불변성을 푸는 것은 이 한
+     * 경로뿐</strong>이다. 세터가 아니라 메서드인 이유가 그것이다(불변규칙 6).
+     *
+     * <p>상태는 바꾸지 않는다. 개정은 전이가 아니라 <em>같은 주문에 대한 약속의 갱신</em>이고,
+     * 취소·배달 이후에는 갱신할 약속이 없다.
+     *
+     * <p><strong>원래 약속은 여기에 남지 않는다.</strong> §8.1 의 정시율은 "고객이 처음 받은 약속"
+     * 기준으로 재야 하는데, 그 값은 {@code order.placed} 이벤트에 있고 그것을 보관하는 것은
+     * ops-api 의 읽기 모델이다(§5.5). 여기에 원본까지 두면 같은 사실이 두 곳에 생긴다.
+     *
+     * @param window 개정된 약속창
+     * @param at     개정 시각
+     */
+    public void revisePromise(PromisedWindow window, Instant at) {
+        Objects.requireNonNull(window, "window");
+        Objects.requireNonNull(at, "at");
+        if (status.isTerminal()) {
+            throw new IllegalStateTransitionException("Order(약속 개정)", status, status);
+        }
+        this.promisedWindow = window;
+        this.updatedAt = at;
     }
 
     /**
@@ -206,6 +269,13 @@ public final class Order {
     /** 접수 시각. */
     public Instant placedAt() {
         return placedAt;
+    }
+
+    /**
+     * 배차 불가 사유 (§5.2 6단계). 배달을 시도했다 실패한 {@code FAILED} 에는 없다.
+     */
+    public Optional<String> failureReason() {
+        return Optional.ofNullable(failureReason);
     }
 
     /** 마지막 상태 변경 시각. */

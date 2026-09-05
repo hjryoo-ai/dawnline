@@ -7,8 +7,11 @@ import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.kafka.EventRecords;
 import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
+import com.dawnline.order.application.port.in.ApplyFulfillmentPlanUseCase;
 import com.dawnline.order.application.port.in.OrderProgress;
 import com.dawnline.order.domain.OrderStatus;
+import com.dawnline.order.domain.PromisedWindow;
+import com.dawnline.order.domain.ServiceTier;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Instant;
@@ -47,6 +50,9 @@ public class OrderProgressListener {
     /** {@code Topics.forEvent("delivery.status", 1)} 와 같아야 한다. */
     static final String DELIVERY_STATUS_TOPIC = "dawnline.delivery.status.v1";
 
+    /** {@code Topics.forEvent("fulfillment.planned", 1)} 와 같아야 한다. */
+    static final String FULFILLMENT_PLANNED_TOPIC = "dawnline.fulfillment.planned.v1";
+
     /** {@code processed_events.consumer} 값 (§8.5). 인스턴스마다 달라지면 멱등이 깨진다. */
     static final String CONSUMER = "order-service";
 
@@ -59,21 +65,89 @@ public class OrderProgressListener {
 
     private final IdempotentConsumer consumer;
     private final AdvanceOrderUseCase advanceOrder;
+    private final ApplyFulfillmentPlanUseCase applyPlan;
     private final EventJson json;
     private final MeterRegistry meters;
 
     /**
      * @param consumer     멱등 게이트 (불변규칙 2)
      * @param advanceOrder 상태 전이 유스케이스
+     * @param applyPlan    계획 반영 유스케이스 (전이 + 데이터 부착, ADR-017 경고)
      * @param json         이벤트 JSON 코덱
      * @param meters       Micrometer 레지스트리 (§9.1)
      */
     public OrderProgressListener(IdempotentConsumer consumer, AdvanceOrderUseCase advanceOrder,
-            EventJson json, MeterRegistry meters) {
+            ApplyFulfillmentPlanUseCase applyPlan, EventJson json, MeterRegistry meters) {
         this.consumer = Objects.requireNonNull(consumer, "consumer");
         this.advanceOrder = Objects.requireNonNull(advanceOrder, "advanceOrder");
+        this.applyPlan = Objects.requireNonNull(applyPlan, "applyPlan");
         this.json = Objects.requireNonNull(json, "json");
         this.meters = Objects.requireNonNull(meters, "meters");
+    }
+
+    /**
+     * {@code fulfillment.planned} — FC·캠프·권역·웨이브 결정 결과 (§4.1, §5.2 6단계).
+     *
+     * <p>두 결과를 모두 받는다. {@code PLANNED} 는 상태 전이(+ 약속 개정)이고,
+     * {@code UNSERVICEABLE} 은 주문을 {@code FAILED} 로 두고 사유를 남긴다 — 배차하지 못한 것도
+     * 고객에게 답해야 하는 사실이다.
+     *
+     * @param record Kafka 레코드
+     */
+    @KafkaListener(topics = FULFILLMENT_PLANNED_TOPIC)
+    public void onFulfillmentPlanned(ConsumerRecord<String, String> record) {
+        EventEnvelope<FulfillmentPlannedPayload> envelope =
+                EventRecords.parse(json, record, FulfillmentPlannedPayload.class);
+        FulfillmentPlannedPayload payload = envelope.payload();
+
+        consumer.consumeOnce(envelope, CONSUMER, () -> {
+            ApplyFulfillmentPlanUseCase.PlanApplication result = apply(payload, envelope.occurredAt());
+            countPlanApplication(envelope.eventType(), result);
+            if (result == ApplyFulfillmentPlanUseCase.PlanApplication.REJECTED
+                    || result == ApplyFulfillmentPlanUseCase.PlanApplication.ORDER_NOT_FOUND) {
+                // 아무것도 바꾸지 않았다. 주문 하나짜리 이벤트라 여기서 던져도 계약을 지킨다.
+                throw new EventRejectedException(result.name(),
+                        "fulfillment.planned 를 적용할 수 없습니다. orderId=" + payload.orderId());
+            }
+        });
+    }
+
+    private ApplyFulfillmentPlanUseCase.PlanApplication apply(FulfillmentPlannedPayload payload,
+            java.time.Instant at) {
+
+        if (FulfillmentPlannedPayload.UNSERVICEABLE.equals(payload.outcome())) {
+            String reason = payload.reason() == null ? "UNKNOWN" : payload.reason();
+            return applyPlan.unserviceable(payload.orderId(), reason, at);
+        }
+        // 개정된 창도 그 티어의 길이 상한을 지켜야 한다 — 지키지 못하면 계약이 깨진 것이고,
+        // 조용히 받는 것보다 터지는 편이 낫다(DLQ 로 가서 사람이 본다).
+        PromisedWindow window = payload.revised()
+                ? PromisedWindow.of(payload.promisedWindow().start(), payload.promisedWindow().end(),
+                        ServiceTier.valueOf(payload.serviceTier()))
+                : null;
+        return applyPlan.planned(payload.orderId(), window, payload.revised(), at);
+    }
+
+    /**
+     * 계획 반영 결과를 센다.
+     *
+     * <p>{@code STALE_BUT_DATA_APPLIED} 를 {@code STALE} 과 나눠 세는 이유는 ADR-017 의 경고가
+     * 가리키는 지점이기 때문이다 — 순서 뒤바뀜에도 <em>불구하고</em> 고객의 약속이 갱신된
+     * 경우이고, 그 둘을 묶으면 그 사실이 보이지 않는다.
+     */
+    private void countPlanApplication(String eventType,
+            ApplyFulfillmentPlanUseCase.PlanApplication result) {
+
+        if (result != ApplyFulfillmentPlanUseCase.PlanApplication.STALE
+                && result != ApplyFulfillmentPlanUseCase.PlanApplication.STALE_BUT_DATA_APPLIED) {
+            return;
+        }
+        Counter.builder(MessagingMetrics.EVENT_STALE)
+                .description("이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017)")
+                .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
+                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType + "." + result.name().toLowerCase())
+                .register(meters)
+                .increment();
     }
 
     /**

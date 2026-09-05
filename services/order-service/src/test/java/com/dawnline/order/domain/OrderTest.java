@@ -294,6 +294,6 @@ class OrderTest {
                         PLACED_AT.plus(Duration.ofHours(21)), ServiceTier.DAWN),
                 new Parcel(1200, 8000, false, false),
                 List.of(new OrderItem((short) 1, "SKU-1001", 2)),
-                status, PLACED_AT, PLACED_AT.plusSeconds(200), 7L);
+                status, PLACED_AT, PLACED_AT.plusSeconds(200), 7L, null);
     }
 }
