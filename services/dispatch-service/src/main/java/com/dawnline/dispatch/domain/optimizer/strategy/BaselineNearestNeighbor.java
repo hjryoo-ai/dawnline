@@ -7,16 +7,14 @@ import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.Explanation;
 import com.dawnline.dispatch.domain.optimizer.Feasibility;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
-import com.dawnline.dispatch.domain.optimizer.PlanMetrics;
+import com.dawnline.dispatch.domain.optimizer.PlanAssembler;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
-import com.dawnline.dispatch.domain.optimizer.PlannedStop;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import com.dawnline.dispatch.domain.optimizer.StopMerger;
 import com.dawnline.dispatch.domain.optimizer.Travel;
-import com.dawnline.dispatch.domain.optimizer.Unassigned;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -75,8 +73,6 @@ public final class BaselineNearestNeighbor implements DispatchStrategy {
         Set<Stop> remaining = new LinkedHashSet<>(stops);
         List<PlannedRoute> routes = new ArrayList<>();
         List<Explanation> explanations = new ArrayList<>();
-        // 라우트 비용은 차량 비용 + 그 라우트에서 쌓인 소프트 페널티다 (RouteAccumulator.toRoute).
-        Money routeCosts = Money.ZERO;
         // 마지막으로 본 불가 사유. 남은 stop 의 설명에 쓴다.
         Map<Stop, Feasibility> lastRefusal = new LinkedHashMap<>();
 
@@ -101,13 +97,12 @@ public final class BaselineNearestNeighbor implements DispatchStrategy {
             }
 
             if (!route.isEmpty()) {
-                PlannedRoute planned = route.toRoute(problem.cost());
-                routes.add(planned);
-                routeCosts = routeCosts.plus(planned.cost());
+                routes.add(route.toRoute(problem.cost()));
             }
         }
 
-        return assemble(problem, routes, remaining, lastRefusal, explanations, routeCosts);
+        return PlanAssembler.assemble(problem, routes, List.copyOf(remaining), lastRefusal,
+                explanations);
     }
 
     /**
@@ -136,38 +131,4 @@ public final class BaselineNearestNeighbor implements DispatchStrategy {
         return best;
     }
 
-    private PlanResult assemble(PlanningProblem problem, List<PlannedRoute> routes,
-            Set<Stop> remaining, Map<Stop, Feasibility> lastRefusal,
-            List<Explanation> explanations, Money routeCosts) {
-
-        List<Unassigned> unassigned = new ArrayList<>();
-        Money unassignedPenalty = Money.ZERO;
-        for (Stop stop : remaining) {
-            Feasibility refusal = lastRefusal.getOrDefault(stop,
-                    Feasibility.violated(NO_VEHICLE, "실을 수 있는 차량이 없습니다"));
-            for (OrderId orderId : stop.orderIds()) {
-                unassigned.add(Unassigned.from(orderId, refusal));
-                explanations.add(Explanation.unassigned(orderId, refusal,
-                        problem.vehicles().size()));
-            }
-            unassignedPenalty = unassignedPenalty.plus(problem.rules().unassignedPenalty(stop));
-        }
-
-        int assignedOrders = routes.stream().mapToInt(PlannedRoute::orderCount).sum();
-        long totalDistance = routes.stream().mapToLong(PlannedRoute::distanceM).sum();
-        long totalDuration = routes.stream().mapToLong(PlannedRoute::durationS).sum();
-        int lateStops = (int) routes.stream().mapToLong(PlannedRoute::lateStopCount).sum();
-        long totalLateMinutes = routes.stream()
-                .flatMap(route -> route.stops().stream())
-                .mapToLong(PlannedStop::lateMinutes).sum();
-
-        PlanMetrics metrics = new PlanMetrics(routes.size(), assignedOrders, unassigned.size(),
-                routes.size(), totalDistance, totalDuration, lateStops, totalLateMinutes,
-                // 계획 시간은 이 함수가 알 수 없다 — 재는 쪽(RunPlan·벤치마크)이 채운다.
-                0L);
-
-        // §6.1 의 목적함수: 라우트 비용(고정·거리·시간 + 소프트 페널티) + 미배정 페널티.
-        Money total = routeCosts.plus(unassignedPenalty);
-        return new PlanResult(routes, unassigned, total, metrics, explanations);
-    }
 }
