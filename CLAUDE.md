@@ -80,6 +80,7 @@ make down
 - 로그: 구조화 JSON, MDC에 `orderId/waveId/routeId/eventId`. 전체 주소·고객 식별 정보는 로그 금지.
 - 예외: 도메인 예외(`DomainException` 하위) → HTTP 매핑은 `adapter.in.web`의 단일 `@ControllerAdvice`. 응답은 RFC 9457 Problem Details.
 - 테스트 이름: `메서드_상황_기대결과` 한국어 가능. 통합 테스트는 `*IT.java`, `integrationTest` 소스셋.
+- **폴백 테스트는 전제를 첫 어설션으로 스스로 말한다.** "의존성 없이도 성립한다" 를 보는 테스트는 그 의존성이 <em>실제로 불가하다</em>는 것을 먼저 확인한다(`@BeforeEach` 또는 첫 줄). 전제가 조용히 무너지면 테스트는 계속 통과하면서 아무것도 검사하지 않는다 — 이 저장소에서 세 번 있었다: `PlaceOrderIT` 의 주소 고정, `OrderApiIT` 의 `tryLock`→`UNAVAILABLE` 확인, 그리고 `GeoFallbackIT` 가 살아 있는 Redis 를 보고 통과한 일(2026-09-05). 표준은 `OrderApiIT` 의 형태다.
 - 커밋: Conventional Commits (`feat(dispatch): …`, `test(order): …`, `docs(adr): …`). 한 커밋은 한 관심사.
 - PR 템플릿의 체크리스트(설계서 반영, 계약 갱신, 테스트, 메트릭, 런북)를 채운다.
 

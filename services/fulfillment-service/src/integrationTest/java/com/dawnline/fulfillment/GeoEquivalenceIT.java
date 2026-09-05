@@ -52,8 +52,15 @@ import org.springframework.boot.test.context.SpringBootTest;
 @DisplayName("GeoEquivalenceIT — Redis GEO 와 DB 폴백이 같은 답을 낸다")
 class GeoEquivalenceIT extends FulfillmentIntegrationTestBase {
 
-    /** 좌표 양자화(약 0.6 m)를 고려한 여유. 이보다 크게 벌어지면 계산식이 다른 것이다. */
-    private static final double DISTANCE_TOLERANCE_KM = 0.01;
+    /**
+     * 좌표 양자화(약 0.6 m)를 고려한 여유 — <strong>2 m</strong>.
+     *
+     * <p>이 값이 이 테스트의 날을 정한다. 10 m 로 두면 누가 {@link com.dawnline.fulfillment.domain.GeoDistance}
+     * 의 지구 반지름을 관례적인 6371 km 로 되돌려도(0.028% 차이) <em>36 km 넘는 쌍에서만</em>
+     * 걸린다 — 시드의 캠프-FC 거리는 대부분 그보다 짧으므로 조용히 통과한다.
+     * 2 m 면 7 km 넘는 쌍부터 잡히고, 시드에는 그런 쌍이 충분히 있다.
+     */
+    private static final double DISTANCE_TOLERANCE_KM = 0.002;
 
     private static final Instant NOW = Instant.parse("2026-09-05T00:00:00Z");
 
@@ -78,13 +85,36 @@ class GeoEquivalenceIT extends FulfillmentIntegrationTestBase {
         loaded = false;
     }
 
+    /**
+     * GEO 를 적재한다 — <strong>재시도한다</strong>.
+     *
+     * <p>첫 시도가 실패할 수 있다. 명령 타임아웃이 50 ms(§7.2 지연 예산)인데 첫 명령에는 연결
+     * 수립이 포함되고, 느린 CI 러너에서는 그 합이 예산을 넘긴다(실제로 그렇게 실패했다).
+     * <strong>그것이 결함이 아니라 이 설계가 재시도를 두는 이유</strong>다 — 적재는 best-effort 고
+     * 실패해도 서비스는 폴백으로 정상 동작하며, 연결이 데워진 다음 시도는 성공한다
+     * ([ADR-016](docs/adr/ADR-016-readiness-excludes-kafka.md) 후속 정정).
+     *
+     * <p>그래서 "첫 시도에 성공한다" 를 단정하지 않는다. 단정하면 설계에 없는 요구를 테스트가
+     * 만드는 것이다. 다만 <em>끝내</em> 적재되지 않으면 그때는 실패다 — 재시도가 수렴하지 않는
+     * 것은 다른 문제이기 때문이다.
+     */
     private void ensureLoaded() {
         fallbackDistances = new HaversineFcDistances(referenceData);
-        if (!loaded) {
-            assertThat(loader.loadCenters()).as("geo:fc 적재").isTrue();
-            assertThat(loader.loadCamps()).as("geo:camp 적재").isTrue();
-            loaded = true;
+        if (loaded) {
+            return;
         }
+        loadWithRetry("geo:fc", loader::loadCenters);
+        loadWithRetry("geo:camp", loader::loadCamps);
+        loaded = true;
+    }
+
+    private static void loadWithRetry(String what, java.util.function.BooleanSupplier attempt) {
+        for (int tries = 1; tries <= 20; tries++) {
+            if (attempt.getAsBoolean()) {
+                return;
+            }
+        }
+        throw new AssertionError(what + " 적재가 20회 재시도에도 성공하지 못했습니다");
     }
 
     @Test
@@ -166,7 +196,7 @@ class GeoEquivalenceIT extends FulfillmentIntegrationTestBase {
         expected.forEach((id, km) -> assertThat(afterDelete.get(id))
                 .isCloseTo(km, org.assertj.core.data.Offset.offset(1e-9)));
 
-        assertThat(loader.loadCenters()).as("다시 적재하면 복구된다 — GEOADD 는 멱등이다").isTrue();
+        loadWithRetry("geo:fc(재적재)", loader::loadCenters);
         loaded = true;
     }
 

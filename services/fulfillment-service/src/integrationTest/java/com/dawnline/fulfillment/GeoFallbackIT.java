@@ -1,6 +1,7 @@
 package com.dawnline.fulfillment;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.fulfillment.adapter.out.redis.GeoIndexLoader;
 import com.dawnline.fulfillment.adapter.out.redis.GeoMetrics;
@@ -20,12 +21,14 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
@@ -66,6 +69,9 @@ class GeoFallbackIT extends FulfillmentIntegrationTestBase {
     private MeterRegistry meterRegistry;
 
     @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate redis;
+
+    @Autowired
     private jakarta.persistence.EntityManager entityManager;
 
     @Autowired
@@ -83,6 +89,27 @@ class GeoFallbackIT extends FulfillmentIntegrationTestBase {
     @DynamicPropertySource
     static void deadRedis(DynamicPropertyRegistry registry) {
         registry.add("spring.data.redis.url", () -> "redis://127.0.0.1:1");
+    }
+
+    /**
+     * <strong>이 클래스의 전제를 매번 스스로 확인한다: Redis 를 쓸 수 없다.</strong>
+     *
+     * <p>폴백 테스트는 의존성이 실제로 불가할 때만 무언가를 증명한다. 전제가 조용히 무너지면
+     * 테스트는 <em>계속 통과하면서</em> 아무것도 검사하지 않는 상태가 된다 — 실제로 이 클래스가
+     * 그랬다. 기반 클래스도 {@code @DynamicPropertySource} 로 살아 있는 컨테이너 주소를 등록하는데
+     * 두 메서드의 적용 순서가 보장되지 않아, {@code host}/{@code port} 로 덮은 첫 판이 살아 있는
+     * Redis 를 보고 통과했다.
+     *
+     * <p>그래서 주소를 {@code spring.data.redis.url}(host/port 보다 우선)로 덮는 것과 별개로,
+     * <em>덮였다는 사실 자체</em>를 어설션으로 둔다. 이것이 이 프로젝트의 세 번째 사례이고
+     * (PlaceOrderIT 의 주소 고정, OrderApiIT 의 {@code tryLock UNAVAILABLE} 확인), 그래서 규칙이
+     * 되었다 — CLAUDE.md 「폴백 테스트는 전제를 첫 어설션으로 스스로 말한다」.
+     */
+    @BeforeEach
+    void 전제_Redis_를_쓸_수_없다() {
+        assertThatThrownBy(() -> redis.opsForValue().get("전제-확인"))
+                .as("이 테스트의 전제: Redis 를 쓸 수 없다")
+                .isInstanceOf(RedisConnectionFailureException.class);
     }
 
     @Test
