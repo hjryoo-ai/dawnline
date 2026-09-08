@@ -189,6 +189,10 @@ public class RunPlanService implements RunPlanUseCase {
         plan.complete(result.totalCost(), result.assignedOrderCount(), result.unassigned().size(),
                 durationMs, finishedAt);
 
+        // 여기부터가 영속화다 — 알고리즘이 아니라 I/O 이고, §6.7 의 30초와 견주지 않는다
+        // (ADR-029). 나노초로 재는 이유는 clock 이 저장 정밀도(마이크로초)로 잘려 있어서다.
+        long persistFrom = System.nanoTime();
+
         List<UUID> routeIds = routes.saveRoutes(plan.id(), result.routes());
         Map<VehicleId, UUID> byVehicle = new LinkedHashMap<>();
         for (int i = 0; i < result.routes().size(); i++) {
@@ -211,29 +215,26 @@ public class RunPlanService implements RunPlanUseCase {
         // 메트릭은 트랜잭션에 참여하지 않는다 — 계획이 롤백되면 이 수치는 남지만, 그것이
         // 발행을 막는 것보다 낫다 (fulfillment 와 같은 판단).
         metrics.planPublished(plan);
+        metrics.planPersisted(plan.campId(), Duration.ofNanos(System.nanoTime() - persistFrom));
         return Outcome.PUBLISHED;
     }
 
-    /** 계획 결과를 후보 상태에 반영한다. 늦게 온 취소는 축 규칙이 지켜 준다. */
+    /**
+     * 계획 결과를 후보 상태에 반영한다. 늦게 온 취소는 축 규칙이 지켜 준다.
+     *
+     * <p><strong>집합 둘, 문장 둘이다</strong>(ADR-029). 계획은 후보를 하나씩 다루지 않는다 —
+     * 배정된 것 전부와 미배정된 것 전부다. 한 건씩 {@code findById}→{@code update} 하면 그
+     * 5,000개가 영속성 컨텍스트에 남아 이후의 모든 네이티브 질의를 전수 더티 체크로 만든다.
+     */
     private void markCandidates(PlanResult result, Instant at) {
         Set<UUID> assigned = new LinkedHashSet<>();
         result.routes().forEach(route -> route.stops().forEach(stop ->
                 stop.stop().orderIds().forEach(orderId -> assigned.add(orderId.value()))));
-        applyStatus(assigned, CandidateStatus.PLANNED, at);
+        candidates.recordPlanResult(assigned, CandidateStatus.PLANNED, at);
 
         Set<UUID> unassigned = new LinkedHashSet<>();
         result.unassigned().forEach(entry -> unassigned.add(entry.orderId().value()));
-        applyStatus(unassigned, CandidateStatus.UNASSIGNED, at);
-    }
-
-    private void applyStatus(Set<UUID> orderIds, CandidateStatus status, Instant at) {
-        for (UUID orderId : orderIds) {
-            candidates.findById(orderId).ifPresent(candidate -> {
-                if (candidate.recordPlanResult(status, at)) {
-                    candidates.update(candidate);
-                }
-            });
-        }
+        candidates.recordPlanResult(unassigned, CandidateStatus.UNASSIGNED, at);
     }
 
     /** 계획을 시작한 뒤 취소된 주문들. 발행 직전 재검증이 쓰는 값이다. */

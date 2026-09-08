@@ -1099,6 +1099,7 @@ public interface DispatchStrategy {
 | 항목 | 목표 (8코어 노트북, Docker Compose) | 측정 방법 |
 |---|---|---|
 | 웨이브 5,000 주문 / 40 차량 계획 시간 | p95 ≤ 30초 (기본 전략) | `dawnline_plan_duration_seconds{strategy}` |
+| 같은 웨이브의 **영속화** 시간 | ≤ 3초 | `dawnline_plan_persist_seconds` |
 | 같은 조건 fast mode | ≤ 5초 | 동일 |
 | 메모리 | 계획 1회 힙 증가 ≤ 1 GB | JFR/actuator |
 | 베이스라인 대비 총비용 | ≥ 15% 절감 | benchmark 리포트 |
@@ -1106,6 +1107,7 @@ public interface DispatchStrategy {
 
 - **병렬화**: 클러스터별 시퀀싱·개선은 독립이므로 `ForkJoinPool`(CPU 바운드)로 병렬 실행. Kafka 리스너·DB I/O는 가상 스레드. 캠프 간 계획은 파티션(campId)별로 자연 병렬.
 - **시간 예산**: `PlanningBudget(totalMs, perRouteMs)`. 기본 30초. 개선 단계는 잔여 예산을 클러스터 수로 나눠 배분.
+- **30초는 알고리즘 예산이지 트랜잭션 예산이 아니다.** 위 표의 두 행이 재는 것이 다르다 — `planDurationMs` 는 `RunPlanService` 의 `startedAt`–`finishedAt`(후보 조회 + 룰 + 최적화 + 검증)이고, 영속화는 그 뒤의 라우트·stop·설명 저장과 outbox 기록이다. 둘을 한 수치로 합쳐 보고하면 예산이 알고리즘 예산이 아니라 ORM 예산이 된다 — 2026-09-07 에 실제로 그랬다. 왕복 26.8초 중 20.2초(75%)가 영속화였고, 그래서 "예산 안에 끝났다" 는 통과가 최적화에 대해 말해 주는 것이 거의 없었다([ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md), [측정](benchmarks/phase4-plan-roundtrip-breakdown.md)).
 - **열화(degrade) 모드**: `wave.closed` 소비 지연(consumer lag) > 3 웨이브 또는 직전 계획이 예산의 80% 초과 → 다음 계획은 자동 `mode=FAST`(개선 단계 생략). 메트릭·로그로 노출, 운영자가 수동 재계획 가능. 이것이 "성수기에도 정시"를 위한 명시적 트레이드오프다.
 - **거리 행렬**: stop 통합 후 n≈3,000이면 900만 쌍. 하버사인은 즉시 계산 가능하나 OSRM 사용 시 캐시 필수(`dist:{gh7a}:{gh7b}` Redis, TTL 1일).
 
@@ -1228,6 +1230,7 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 - `fulfillment_orders` 의 두 인덱스는 [EXPLAIN 근거](benchmarks/phase2-fulfillment-orders-indexes.md)를 갖는다. `wave_id` 는 **부분 인덱스가 아니다** — 부분 조건이 거르는 행이 2% 뿐이고(정상 상태의 98% 가 `PLANNED`), 무엇보다 부분 인덱스는 FK 검사에 쓰이지 못해 `waves` 삭제가 웨이브당 전수 스캔이 된다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 `waves` 행 두 자리뿐이고 둘 다 짧은 트랜잭션이다 — **편입은 `SELECT … FOR SHARE`, 마감은 `SELECT … FOR UPDATE`**([ADR-025](adr/ADR-025-wave-admission-share-lock.md)). 편입에 배타 락을 쓰면 §8.2 피크에서 웨이브 행 하나가 처리량 상한이 된다. 공유 락끼리는 막지 않고, 마감의 배타 락이 진행 중인 편입을 기다렸다가 `CLOSING` 으로 바꾸므로 "마감된 웨이브에 주문이 새는" 창도 함께 닫힌다.
+- **최적화기 I/O 경로(입력 적재·결과 저장)는 ORM 이 아니라 벌크**([ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md)). 계획의 입력(후보)은 읽기 전용 프로젝션으로 읽고, 결과(라우트·stop·설명)는 JDBC 배치로 쓰며, 후보 상태 반영은 결과별 집합 `UPDATE … WHERE order_id = ANY(?)` 다. 이유는 성능 이전에 **의미**다 — 최적화기의 입력은 순수 값이고(불변규칙 5) 결과물은 쓰는 시점에 도메인 동작이 없다. 값을 관리 엔티티로 읽어 두면 그 뒤의 모든 네이티브 질의가 auto-flush 로 전수 더티 체크를 하며, 측정된 대가는 **21.9배**였다([측정](benchmarks/phase4-plan-roundtrip-breakdown.md)).
 - N+1 방지: 컬렉션 로딩은 `@EntityGraph` 또는 명시 fetch join. 테스트에서 Hibernate statement 카운터로 쿼리 수 상한 검증.
 
 ### 7.2 Redis 사용 카탈로그
@@ -1401,7 +1404,8 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_geo_index_loaded` | gauge | fulfillment | index(fc/camp) — Redis GEO 적재 성공 여부 0/1. **레디니스가 아니라 이 게이지가 GEO 상태를 말한다**(§8.6, ADR-016 후속 정정). 0 이어도 서비스는 폴백으로 정상 동작한다 |
 | `dawnline_geo_lookups_total` | counter | fulfillment | index, outcome(redis/bypassed) — `bypassed` 는 Redis 를 건너뛰고 DB 전체 조회 + 메모리 하버사인으로 답한 것이다(§7.2). 레이트 리밋의 `bypassed` 와 같은 어휘를 쓴다 — **폴백은 조용히 일어나면 안 된다** |
-| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode |
+| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode — **알고리즘 시간만**이다(§6.7). 영속화는 아래 짝이 잰다 |
+| `dawnline_plan_persist_seconds` | histogram | dispatch | camp — 라우트·stop·설명 저장과 outbox 기록에 걸린 시간. `dawnline_plan_duration_seconds` 와 **한 쌍**이고, 둘을 나눠 두는 것이 [ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) 의 요점이다 — 한 수치였을 때 30초 예산의 75% 를 ORM 이 쓰고 있는 것이 보이지 않았다. 목표 5,000건 ≤ 3초 |
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |
 | `dawnline_plan_unassigned` | gauge | dispatch | camp |
 | `dawnline_plan_degraded_total` | counter | dispatch | camp |
@@ -1693,6 +1697,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 
 | 025 | 웨이브 편입은 `FOR SHARE`·마감만 `FOR UPDATE`, `order_count` 는 마감 시 집계 | 편입도 `FOR UPDATE`(§8.2 피크에서 웨이브 행이 처리량 상한), 락 없이 낙관적 락만(편입은 웨이브 행을 쓰지 않아 충돌로 안 잡힌다 — 마감된 웨이브에 주문이 샌다), 원자적 `order_count` 증감(배타 락을 이름만 바꾼 것 + 취소 경로 드리프트), advisory lock, 웨이브 샤딩(계획 단위가 쪼개진다) | [ADR-025](adr/ADR-025-wave-admission-share-lock.md) |
 | 026 | 취소는 최적화 트리거가 아니라 입력 변경 — stop 을 죽이고 순서는 두고 시간만 재전파 | 취소를 §6.8 재계획 트리거로(같은 판단을 하는 회로가 둘), 재시퀀싱(기사가 보고 있는 순번이 바뀐다), 취소된 stop 을 페이로드에서 삭제(부재는 값이 아니다 — 취소·이동·발행 누락이 구별되지 않는다), 부분 취소를 stop 상태로 표현(통합된 stop 은 여전히 방문한다) | [ADR-026](adr/ADR-026-dispatch-cancellation-window.md) |
+| 029 | **최적화기 I/O 경로는 ORM 이 아니라 벌크** — 후보는 읽기 전용 프로젝션, 결과는 JDBC 배치, 상태 반영은 집합 UPDATE | `FlushMode.COMMIT`(증상만 숨기고 세션에 5,001개가 뜬 원인은 그대로 · 같은 트랜잭션의 네이티브 질의가 미반영 변경을 못 보는 read-your-writes 위험을 설정 한 줄로 전역에 들인다), 그대로 두기(30초 예산 안이지만 여유 12% 이고 다음 작업이 계획 시간을 늘린다) | [ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) |
 | 027 | outbox 릴레이 리더 락 = **PostgreSQL advisory lock**(전용 장수 세션), 리더를 모르면 발행 중단 | 그대로 두기(전제를 지키는 것이 배포자의 기억뿐), **Redis `SET NX`**(2026-09-05 에 한 번 채택했다가 정정 — 조정을 서비스 밖으로 내보내 발행 가용성이 Redis 에 묶였고 폴백 없는 예외를 §7.2 에 만들었다), 판정 불가를 팔로워로 접기(대시보드에서 정상과 장애가 구별되지 않는다), `partition_key` 해시 분할(인스턴스 수가 바뀌는 전환 구간에 같은 문제), Kafka EOS(ADR-006 기각 + 두 프로듀서의 순서를 정해 주지 않는다), 리더 선출 라이브러리(의존 추가), 풀에서 빌린 커넥션에 락 잡기(반납하면 락이 풀 안에 남는다) | [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md) |
 
 013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다. 024는 Phase 2-3 에서 `WaveStatus` 의 마지막 두 전이에 트리거가 없다는 것을 발견해 추가했다 — §5.2 의 수명주기와 §4.1 의 소비자 표가 어긋나 있었고, 그 어긋남이 ADR-023 의 정리 배치를 조용히 무한 보존으로 만들고 있었다.

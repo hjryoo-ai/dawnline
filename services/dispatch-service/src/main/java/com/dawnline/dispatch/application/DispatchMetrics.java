@@ -29,6 +29,14 @@ public class DispatchMetrics {
     /** 계획 소요 시간 (§6.7 목표 p95 ≤ 30초). */
     public static final String PLAN_DURATION = "dawnline.plan.duration";
 
+    /**
+     * 계획 결과 영속화 시간 (§6.7 목표 5,000건 ≤ 3초, ADR-029).
+     *
+     * <p>{@link #PLAN_DURATION} 과 <strong>한 쌍</strong>이다. 둘을 나눠 두는 것이 ADR-029 의
+     * 요점이다 — 한 수치였을 때 30초 예산의 75% 를 ORM 이 쓰고 있는 것이 보이지 않았다.
+     */
+    public static final String PLAN_PERSIST = "dawnline.plan.persist";
+
     /** 계획 총비용. */
     public static final String PLAN_COST = "dawnline.plan.cost.krw";
 
@@ -77,6 +85,26 @@ public class DispatchMetrics {
             // 열화가 보이지 않으면 "성수기에도 정시" 를 위해 무엇을 포기했는지 아무도 모른다.
             registry.counter(PLAN_DEGRADED, "camp", plan.campId().toString()).increment();
         }
+    }
+
+    /**
+     * 계획 결과를 저장하는 데 걸린 시간 (ADR-029).
+     *
+     * <p>라우트·stop·설명 저장과 outbox 기록까지다 — {@code planDurationMs} 가 끝나는
+     * {@code finishedAt} 이후의 전부. 알고리즘이 아니라 I/O 를 재는 값이고, 그래서 §6.7 의
+     * 30초와 견주지 않는다.
+     *
+     * @param campId   캠프 id
+     * @param elapsed  걸린 시간
+     */
+    public void planPersisted(UUID campId, Duration elapsed) {
+        Objects.requireNonNull(campId, "campId");
+        Objects.requireNonNull(elapsed, "elapsed");
+        Timer.builder(PLAN_PERSIST)
+                .description("계획 결과 영속화 시간 (DESIGN.md §6.7, ADR-029)")
+                .tag("camp", campId.toString())
+                .register(registry)
+                .record(elapsed);
     }
 
     /**

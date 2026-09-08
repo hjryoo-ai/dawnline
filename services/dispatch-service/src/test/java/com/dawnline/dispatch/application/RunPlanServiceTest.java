@@ -228,6 +228,12 @@ class RunPlanServiceTest {
         }
 
         @Override
+        public int recordPlanResult(java.util.Collection<UUID> orderIds,
+                com.dawnline.dispatch.domain.CandidateStatus target, java.time.Instant at) {
+            return candidates.recordPlanResult(orderIds, target, at);
+        }
+
+        @Override
         public void update(DispatchCandidate candidate) {
             candidates.update(candidate);
         }

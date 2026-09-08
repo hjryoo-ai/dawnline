@@ -34,6 +34,11 @@ spring:
       pool-name: dispatch-service-pool
       maximum-pool-size: 10   # 인스턴스당 10 (DESIGN.md §8.2)
       minimum-idle: 2
+      data-source-properties:
+        # 배치 INSERT 를 다중 VALUES 로 다시 쓴다 (ADR-029). 이것이 없으면 batchUpdate 는
+        # 왕복만 줄이고 문장 수는 그대로다. URL 이 아니라 여기 두는 이유는 Compose 도
+        # Testcontainers 도 URL 을 각자 만들기 때문이다 — 한쪽에만 붙으면 측정과 운영이 갈린다.
+        reWriteBatchedInserts: true
 
   # --- JPA: 스키마 변경은 Flyway 만 한다 (DESIGN.md §7.1) ------------------
   jpa:

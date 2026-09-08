@@ -43,6 +43,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
 
 /**
@@ -64,13 +65,15 @@ public class DispatchApplicationConfig {
      * <p>Spring Data 리포지토리를 쓰지 않는다. 다른 서비스와 같은 이유다 — 생성되는 쿼리가
      * 소스에 그대로 있어야 하고, 여기서는 특히 그렇다({@code ON CONFLICT}, 인덱스를 타는 리터럴).
      *
-     * @param entityManagerFactory EMF
+     * @param entityManagerFactory EMF (단건 경로)
+     * @param jdbcTemplate         계획 경로 — 후보는 값으로 읽고 상태는 집합으로 쓴다 (ADR-029)
      */
     @Bean
     public DispatchCandidateRepository dispatchCandidateRepository(
-            EntityManagerFactory entityManagerFactory) {
+            EntityManagerFactory entityManagerFactory, JdbcTemplate jdbcTemplate) {
         return new JpaDispatchCandidateRepository(
-                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory),
+                jdbcTemplate);
     }
 
     /**
@@ -115,12 +118,15 @@ public class DispatchApplicationConfig {
     }
 
     /**
-     * @param entityManagerFactory EMF
+     * 라우트·stop·설명은 <strong>영속성 컨텍스트를 지나지 않는다</strong> (ADR-029, §7.1).
+     * 쓰는 시점에 도메인 동작이 없는 대량 결과물이라 ORM 을 지날 이유가 없고, 지나면 문장마다
+     * auto-flush 가 전수 더티 체크를 한다.
+     *
+     * @param jdbcTemplate 같은 트랜잭션에 참여하는 JDBC 템플릿
      */
     @Bean
-    public PlannedRouteRepository plannedRouteRepository(EntityManagerFactory entityManagerFactory) {
-        return new JdbcPlannedRouteRepository(
-                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+    public PlannedRouteRepository plannedRouteRepository(JdbcTemplate jdbcTemplate) {
+        return new JdbcPlannedRouteRepository(jdbcTemplate);
     }
 
     /**

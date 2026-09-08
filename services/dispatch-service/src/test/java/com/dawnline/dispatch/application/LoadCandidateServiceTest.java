@@ -59,6 +59,20 @@ class LoadCandidateServiceTest {
         public void update(DispatchCandidate candidate) {
             rows.put(candidate.orderId(), candidate);
         }
+
+        /** 이 테스트는 적재만 본다 — 계획 결과 반영은 RunPlanServiceTest 의 몫이다. */
+        @Override
+        public int recordPlanResult(java.util.Collection<UUID> orderIds,
+                com.dawnline.dispatch.domain.CandidateStatus target, java.time.Instant at) {
+            int changed = 0;
+            for (UUID orderId : orderIds) {
+                DispatchCandidate candidate = rows.get(orderId);
+                if (candidate != null && candidate.recordPlanResult(target, at)) {
+                    changed++;
+                }
+            }
+            return changed;
+        }
     }
 
     private final InMemory repository = new InMemory();

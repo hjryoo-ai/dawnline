@@ -5,12 +5,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
+import com.dawnline.dispatch.application.DispatchMetrics;
 import com.dawnline.dispatch.application.port.in.PlanView;
 import com.dawnline.dispatch.application.port.in.RunPlanCommand;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.domain.DispatchCandidate;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -20,6 +22,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -55,8 +58,11 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
     private static final UUID CAMP_ID = UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
     private static final GeoPoint CAMP = GeoPoint.of(37.640000, 127.030000);
 
-    /** §6.7 목표 — 기본 전략 계획 시간 p95 ≤ 30초. */
+    /** §6.7 목표 — 기본 전략 계획 시간 p95 ≤ 30초. <strong>알고리즘 예산이다</strong>(ADR-029). */
     private static final Duration BUDGET = Duration.ofSeconds(30);
+
+    /** §6.7 목표 — 같은 웨이브의 영속화 ≤ 3초 (ADR-029). 알고리즘 예산과 별개다. */
+    private static final Duration PERSIST_BUDGET = Duration.ofSeconds(3);
 
     @Autowired
     private RunPlanUseCase runPlan;
@@ -72,6 +78,9 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     /** 릴레이는 끈다 — 검사 대상은 발행이 아니다. 발행은 {@code PlanExecutionIT} 가 본다. */
     @DynamicPropertySource
@@ -153,16 +162,26 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
 
         // 측정값을 표준 출력에 남긴다. 마감 문서가 옮겨 적는 값이고, 어설션만 있으면 통과했다는
         // 사실만 남고 *얼마나* 는 사라진다 (§6.9 「환경 없는 수치」와 같은 이유).
-        System.out.printf("[Phase 3 DoD] 5,000건 통합 계획: 왕복 %d ms · 계획 %s ms · 라우트 %d · "
-                        + "배정 %d · 미배정 %d · 비용 %,d원%n",
-                wallClock.toMillis(), plan.planDurationMs(), plan.routes().size(),
-                plan.assignedCount(), plan.unassignedCount(), plan.totalCostKrw());
+        Duration persisted = Duration.ofMillis((long) meterRegistry
+                .get(DispatchMetrics.PLAN_PERSIST).timer().totalTime(TimeUnit.MILLISECONDS));
+        System.out.printf("[Phase 3 DoD] 5,000건 통합 계획: 왕복 %d ms · 계획 %s ms · 영속화 %d ms · "
+                        + "라우트 %d · 배정 %d · 미배정 %d · 비용 %,d원%n",
+                wallClock.toMillis(), plan.planDurationMs(), persisted.toMillis(),
+                plan.routes().size(), plan.assignedCount(), plan.unassignedCount(),
+                plan.totalCostKrw());
 
         assertThat(plan.status()).as("완주하지 못하면 시간은 의미가 없다").isEqualTo("PUBLISHED");
         assertThat(plan.planDurationMs()).isNotNull();
         assertThat(Duration.ofMillis(plan.planDurationMs()))
                 .as("§6.7 목표: 기본 전략 계획 시간 p95 ≤ 30초")
                 .isLessThan(BUDGET);
+        // §6.7 의 두 번째 행을 문서가 아니라 게이트로 만든다 (ADR-029). 실측 800 ms 이므로
+        // 여유는 3.7배다. 여기서 깨지면 둘 중 하나다 — 영속화 경로가 다시 ORM 을 지나기
+        // 시작했거나, 목표가 이 기계에서 현실적이지 않거나. **조용히 늘리지 않는다**:
+        // 어느 쪽인지 재서 ADR-029 재검토 지점에 적는다.
+        assertThat(persisted)
+                .as("§6.7 목표: 5,000건 영속화 ≤ 3초 (ADR-029). 실측 800 ms")
+                .isLessThan(PERSIST_BUDGET);
         assertThat(plan.assignedCount() + plan.unassignedCount())
                 .as("한 건도 잃지 않는다 — 배정되지 않았으면 미배정으로 세어져야 한다")
                 .isEqualTo(5_000);

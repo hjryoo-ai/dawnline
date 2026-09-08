@@ -175,6 +175,45 @@ class DispatchPersistenceIT extends DispatchIntegrationTestBase {
     }
 
     @Test
+    void 계획_결과는_집합으로_반영되고_취소를_뒤집지_않는다() {
+        // ADR-029 — 벌크 UPDATE 의 `AND status = 'PENDING'` 이 애그리거트의 축 규칙
+        // (recordPlanResult 의 !hasProgressedPast)을 옮겨 적은 것이다. 같은 규칙을 두 곳이
+        // 적으므로 어긋나면 조용하다. 그래서 둘을 한 테스트에서 나란히 확인한다.
+        UUID waveId = Ids.newId();
+        DispatchCandidate pending = candidate(waveId);
+        DispatchCandidate cancelled = candidate(waveId);
+        tx().executeWithoutResult(status -> {
+            candidates.insertIfAbsent(pending);
+            candidates.insertIfAbsent(cancelled);
+        });
+        tx().executeWithoutResult(status -> {
+            DispatchCandidate loaded = candidates.findById(cancelled.orderId()).orElseThrow();
+            loaded.cancel(NOW.plusSeconds(30));
+            candidates.update(loaded);
+        });
+
+        // 전제 — 애그리거트는 취소된 후보의 계획 결과 반영을 거부한다. 이것이 SQL 이 지켜야
+        // 할 규칙이고, 여기서 확인하지 않으면 아래 어설션은 SQL 만 보는 것이 된다.
+        DispatchCandidate cancelledSnapshot =
+                tx().execute(status -> candidates.findById(cancelled.orderId()).orElseThrow());
+        assertThat(cancelledSnapshot.recordPlanResult(CandidateStatus.PLANNED, NOW.plusSeconds(60)))
+                .as("전제: 애그리거트는 CANCELLED 를 PLANNED 로 되돌리지 않는다 (ADR-026)")
+                .isFalse();
+
+        int changed = tx().execute(status -> candidates.recordPlanResult(
+                List.of(pending.orderId(), cancelled.orderId()),
+                CandidateStatus.PLANNED, NOW.plusSeconds(60)));
+
+        assertThat(changed).as("PENDING 하나만 전이해야 한다").isEqualTo(1);
+        assertThat(tx().execute(status -> candidates.findById(pending.orderId()).orElseThrow())
+                .status()).isEqualTo(CandidateStatus.PLANNED);
+        assertThat(tx().execute(status -> candidates.findById(cancelled.orderId()).orElseThrow())
+                .status())
+                .as("취소된 후보가 집합 UPDATE 로 뒤집히면 ADR-026 이 깨진다")
+                .isEqualTo(CandidateStatus.CANCELLED);
+    }
+
+    @Test
     void 계획_대상_조회가_인덱스를_탄다() {
         // ix_cand_wave (wave_id, status) — 계획이 "이 웨이브의 PENDING 후보" 를 집는 질의가
         // 유일한 뜨거운 경로다(§5.3). 계획이 실제로 도는 모양 그대로 본다: JPQL 의
