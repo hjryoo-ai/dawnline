@@ -181,9 +181,17 @@ public final class DatasetGenerator {
 
     private List<VehicleSpec> vehicles(RandomGenerator random) {
         List<VehicleSpec> vehicles = new ArrayList<>(dataset.vehicles());
-        // 근무창은 전 차량 공통 10시간. 차량마다 흔들면 미배정의 원인이 근무창인지 용량인지
-        // 구분되지 않아 전략 비교가 흐려진다.
-        TimeWindow shift = new TimeWindow(startedAt, startedAt.plus(Duration.ofHours(10)));
+        // 근무창은 전 차량 공통이다. 차량마다 흔들면 미배정의 원인이 근무창인지 용량인지
+        // 구분되지 않아 전략 비교가 흐려진다 — 이 성질은 유지한다.
+        //
+        // **길이와 위치는 시드의 근무조에서 유도한다** (2026-09-08, ADR-030). 이 웨이브는
+        // SAME_DAY 이고(위 WaveRef), 부록 A 에서 그 티어를 싣는 것은 **주간조 09:00–22:00** 다.
+        // §2.2 의 SAME_DAY 첫 컷오프가 10:00 이므로 계획 시각부터 근무 종료까지 12시간,
+        // 시작은 한 시간 전이다. 이전 값(계획 시각부터 10시간)은 약속창의 마지막 끝
+        // (startedAt + 10h)을 덮으려고 고른 수였고 근무조와는 무관했다 — 시드에 야간조가
+        // 생기면서 "어느 조가 이 웨이브를 싣는가" 에 답이 생겼고, 그 답에서 다시 유도한다.
+        TimeWindow shift = new TimeWindow(startedAt.minus(Duration.ofHours(1)),
+                startedAt.plus(Duration.ofHours(12)));
         for (int i = 0; i < dataset.vehicles(); i++) {
             // 자전거를 넣지 않는다. 이 규모는 차량당 약 100 stop 을 요구하는데(§6.9 의 500/5 ·
             // 2000/20 · 5000/40), 30 kg 자전거는 평균 2.8 kg 화물로 10곳밖에 못 간다 — 선호가

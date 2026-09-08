@@ -72,24 +72,27 @@ curl -sf --max-time 3 -o /dev/null "$url" \
 [ -s "$WAVE_IDS_FILE" ] \
   || fail "웨이브 id 파일이 없다: $WAVE_IDS_FILE. phase2-demo.sh 를 먼저 돌려라(make demo)."
 
-# 전제: 지금이 차량 근무창 안이어야 한다.
+# 전제: 근무조가 둘이어야 한다 — 그래야 이 데모가 시각에 의존하지 않는다.
 #
-# shift_start/end 는 벽시계 TIME 이고 어댑터가 *계획 날짜*에 붙인다(JdbcReferenceData).
-# §6.3 의 하드 룰은 "복귀 ≤ 근무 종료 − 30분 버퍼" 이므로, 근무 종료가 한 시간도 안 남았으면
-# 어떤 라우트도 실행 가능하지 않고 모든 계획이 NO_CANDIDATES 로 끝난다. 그때 아래 1단계는
-# "PUBLISHED 계획 0 (기대 29)" 라고만 말하는데, 그 문장은 원인을 가리키지 않는다.
+# 2026-09-05 에는 200대 전부가 06:00–22:00 이었고, 그래서 21시 이후에 돌면 근무 종료까지 한
+# 시간이 안 남아 모든 계획이 NO_CANDIDATES 로 끝났다. CI 는 UTC 라 하루 8시간 빨갰다.
+# ADR-030 이 야간조(23:00–08:00)를 넣어 그 창을 닫았다 — 근무창은 **출발 하한**이지 계획
+# 시각의 제약이 아니므로(RouteState.empty), 22:10 에 도는 계획은 23:00 에 출발하는 야간
+# 라우트를 만든다.
+#
+# 그러니 이제 확인할 전제는 "지금이 근무창 안인가" 가 아니라 **"근무조가 둘인가"** 다.
+# 야간조가 시드에서 사라지면 8시간 창이 조용히 돌아오고, 그때 아래 1단계는 "PUBLISHED 계획 0
+# (기대 29)" 이라고만 말한다 — 그 문장은 원인을 가리키지 않는다.
 # 전제는 전제로 확인한다 (CLAUDE.md — 전제를 스스로 말한다).
-shift_window="$(dq "SELECT to_char(min(shift_start),'HH24:MI') || ' ' || to_char(max(shift_end),'HH24:MI') FROM vehicles WHERE active")"
+crews="$(dq "SELECT count(DISTINCT (shift_start, shift_end)) FROM vehicles WHERE active")"
+night="$(dq "SELECT count(*) FROM vehicles WHERE active AND shift_end <= shift_start")"
 now_kst="$(TZ=Asia/Seoul date +%H:%M)"
-printf '  %-22s %s (지금 %s KST)\n' "차량 근무창" "$(echo $shift_window | tr ' ' '-')" "$now_kst"
-awk -v now="$now_kst" -v w="$shift_window" 'BEGIN {
-  split(now, n, ":"); split(w, p, " "); split(p[1], a, ":"); split(p[2], b, ":");
-  nm = n[1]*60 + n[2]; sm = a[1]*60 + a[2]; em = b[1]*60 + b[2];
-  exit (nm >= sm && nm <= em - 60) ? 0 : 1;
-}' || fail "지금($now_kst KST)은 차량 근무창($(echo $shift_window | tr ' ' '-') KST) 밖이거나 끝까지 한 시간이 안 남았다.
-  §6.3 은 복귀가 근무 종료 − 30분 버퍼 안이기를 요구하므로, 이 시각에는 실행 가능한 라우트가
-  없어 모든 계획이 NO_CANDIDATES 로 끝난다. 데모의 결함이 아니라 시드 근무창의 결과다.
-  근무창 안에서 다시 돌려라. (이 창은 CI 에도 걸린다 — IMPLEMENTATION_PLAN Phase 4-12)"
+printf '  %-22s %s개 (야간 %s대 · 지금 %s KST)\n' "차량 근무조" "$crews" "$night" "$now_kst"
+[ "${night:-0}" -gt 0 ] || fail "자정을 넘는 근무조(야간)가 시드에 없다. 야간 $night 대.
+  근무조가 주간뿐이면 근무 종료 한 시간 전부터 다음 날 근무 시작까지 실행 가능한 라우트가
+  없고, 이 데모와 CI 스모크가 하루 8시간 실패한다(2026-09-05 에 실제로 그랬다).
+  §2.2 의 DAWN 티어(익일 00:00–07:00)를 실을 차량이 없다는 뜻이기도 하다.
+  부록 A 와 R__seed_dispatch.sql 을 확인해라 (ADR-030)."
 wave_count="$(wc -l < "$WAVE_IDS_FILE" | tr -d ' ')"
 ids="$(sed "s/.*/'&'/" "$WAVE_IDS_FILE" | paste -sd, -)"
 printf '  %-22s %s\n' "이어받은 웨이브" "$wave_count"

@@ -66,8 +66,14 @@ public final class RouteState {
         Objects.requireNonNull(depot, "depot");
         Objects.requireNonNull(distance, "distance");
         Objects.requireNonNull(startAt, "startAt");
-        return new RouteState(vehicle, depot, distance, startAt, List.of(), Parcel.EMPTY,
-                depot.point(), startAt, 0);
+        // 근무 시작 전에는 출발하지 않는다 (§6.3 — 근무창은 "이 창 안에서 출발하고 복귀").
+        // 이 한 줄이 없으면 SHIFT_WINDOW 는 복귀만 보게 되고, 야간 근무조는 "마감이 늦은
+        // 주간 차량" 과 구별되지 않는다 — 새벽 웨이브를 실제로 그 조가 싣는다는 사실이
+        // 모델에 없는 상태가 된다 (ADR-030).
+        Instant departAt = startAt.isBefore(vehicle.shift().start())
+                ? vehicle.shift().start() : startAt;
+        return new RouteState(vehicle, depot, distance, departAt, List.of(), Parcel.EMPTY,
+                depot.point(), departAt, 0);
     }
 
     /**

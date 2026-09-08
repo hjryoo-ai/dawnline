@@ -68,12 +68,20 @@ jobs:
           # HEAD^1(base) 을 보려면 병합 커밋의 양쪽 부모가 있어야 한다.
           fetch-depth: 2
 
-      - name: 기존 마이그레이션이 수정·삭제·이동되지 않았는지 확인
+      - name: 기존 버전 마이그레이션이 수정·삭제·이동되지 않았는지 확인
         run: |
           # M(수정) D(삭제) R(이동) 만 본다. 추가(A)는 정상적인 변경 방법이다.
-          changed=$(git diff --diff-filter=MDR --name-only HEAD^1 HEAD -- '*/db/migration/*' || true)
+          #
+          # **버전(V) 마이그레이션만 본다** (2026-09-08 정정). 반복(R__) 마이그레이션은
+          # 체크섬이 바뀌면 Flyway 가 **재실행**한다 — 실패가 아니라 그것이 설계다. 불변규칙 13 의
+          # 근거("파일이 바뀌면 이미 적용한 DB 가 기동에서 깨진다")는 V 에만 해당한다.
+          # 이 저장소의 R__seed_* 는 `ON CONFLICT (id) DO UPDATE SET …` 로 끝난다 —
+          # 내용이 바뀐 채 재적용되는 것을 전제로 쓴 파일이고, 그것이 R__ 를 쓴 이유다.
+          # 이 검사가 R__ 까지 막으면 시드를 고칠 방법이 사라진다(새 V 를 추가해도 다음 기동에
+          # R__ 재적용이 그것을 되돌린다 — DO UPDATE 가 shift_start 까지 덮는다).
+          changed=$(git diff --diff-filter=MDR --name-only HEAD^1 HEAD -- '*/db/migration/V*' || true)
           if [ -n "$changed" ]; then
-            echo "::error::이미 머지된 Flyway 스크립트가 바뀌었습니다 (CLAUDE.md 불변규칙 13)."
+            echo "::error::이미 머지된 버전 마이그레이션이 바뀌었습니다 (CLAUDE.md 불변규칙 13)."
             echo "$changed" | while read -r f; do echo "::error file=$f::이 파일은 불변입니다. 새 V<다음번호>__*.sql 을 추가하세요."; done
             echo ""
             echo "왜 예외가 없는가: Flyway 는 적용된 스크립트의 체크섬을 기록한다."
@@ -81,7 +89,7 @@ jobs:
             echo "'아직 배포된 적 없으니까' 는 이 규칙을 무너뜨리는 전형적인 첫 예외다."
             exit 1
           fi
-          echo "기존 마이그레이션 변경 없음."
+          echo "기존 버전 마이그레이션 변경 없음."
 
   # ---------------------------------------------------------------------------
   # 1) 빌드 + 단위/ArchUnit/계약 테스트 + JaCoCo 게이트
