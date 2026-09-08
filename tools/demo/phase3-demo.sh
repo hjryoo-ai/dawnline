@@ -158,9 +158,28 @@ printf '  %-46s %s\n' "비냉장 차량에 실린 냉장 주문 (0이어야 한�
 printf '  %-46s %s\n' "쓰인 비냉장 차량 (0이면 위 0은 공허하다)" "$warm_used"
 
 # 전제를 스스로 말한다 — 검사할 것이 없으면 통과가 아니라 실패다 (CLAUDE.md 「폴백 테스트」와 같은 규칙).
+#
+# "비냉장 차량이 쓰였다" 가 **운이 아니라 결과**가 되려면 전제 둘을 먼저 확인해야 한다:
+# 상온 주문이 있고, 그것을 실을 비냉장 차량이 그 캠프에 있다. 둘을 확인하지 않으면 이 검사는
+# "시각" 을 검사한다 — 남은 근무 시간이 짧아 두 대가 필요해지면 통과하고 한 대로 충분하면
+# 실패한다. 2026-09-08 에 실제로 그랬고, CI 의 이전 통과는 시각 운이었다(ADR-031).
+warm_orders="$(dq "SELECT count(*) FROM dispatch_candidates c
+                    WHERE c.wave_id IN ($ids) AND NOT c.requires_cold" | tr -d '[:space:]')"
+warm_fleet="$(dq "SELECT count(*) FROM vehicles v
+                   WHERE v.active AND NOT v.is_cold
+                     AND v.camp_id IN (SELECT DISTINCT camp_id FROM route_plans WHERE wave_id IN ($ids))" | tr -d '[:space:]')"
+printf '  %-46s %s\n' "상온 후보 (전제)" "$warm_orders"
+printf '  %-46s %s\n' "그 캠프들의 비냉장 차량 (전제)" "$warm_fleet"
+
 [ "$cold_total" -gt 0 ]    || fail "냉장 후보가 하나도 없다. cold-chain 룰이 검사되지 않았다 (sim 의 cold-ratio 확인)."
 [ "$cold_assigned" -gt 0 ] || fail "냉장 주문이 하나도 배정되지 않았다. 검사할 것이 없다."
-[ "$warm_used" -gt 0 ]     || fail "비냉장 차량이 한 대도 쓰이지 않았다 — '냉장 차량에만' 이 자동으로 참이 된다."
+[ "$warm_orders" -gt 0 ]   || fail "상온 주문이 하나도 없다. 그러면 비냉장 차량이 안 쓰이는 것이 정상이고,
+  아래 '비냉장 차량이 쓰였다' 는 검사할 수 없는 것을 검사하게 된다 (sim 의 cold-ratio 확인)."
+[ "$warm_fleet" -gt 0 ]    || fail "계획이 돈 캠프들에 비냉장 차량이 한 대도 없다.
+  그러면 '냉장 차량에만' 은 선택의 결과가 아니라 유일한 가능성이다 (부록 A · R__seed_dispatch)."
+[ "$warm_used" -gt 0 ]     || fail "비냉장 차량이 한 대도 쓰이지 않았다 — '냉장 차량에만' 이 자동으로 참이 된다.
+  상온 주문 $warm_orders 건과 비냉장 차량 $warm_fleet 대가 있는데도 그렇다면, 이것은 시드가 아니라
+  **할당기의 동률 규칙**이 깨진 것이다 (§6.5 3단계 least-capable-first, ADR-031)."
 [ "$violations" = "0" ]    || fail "냉장 주문 $violations 건이 비냉장 차량에 실렸다 (§6.3 cold-chain 하드 룰)."
 
 # -----------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.Feasibility;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.Stop;
+import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -124,12 +125,18 @@ public final class GreedyAssigner {
                 continue;                       // 한 개도 못 넣었다 — 이 차는 후보가 아니다
             }
             long marginal = trial.toRoute(cost).cost().krw() - currentCost(route, cost);
-            trials.put(route, new Trial(trial, leftover.size(), marginal));
+            trials.put(route, new Trial(trial, leftover.size(), marginal,
+                    route.state().vehicle()));
         }
 
         Trial best = trials.values().stream()
                 // 많이 넣는 쪽이 먼저다 — 절반만 넣고 싼 차보다 전부 넣는 차가 낫다.
-                .min(Comparator.comparingInt(Trial::leftover).thenComparingLong(Trial::marginalKrw))
+                // 셋째 키가 **동률 규칙**이다 (§6.5 3단계, ADR-031): 한계비용까지 같으면
+                // 능력이 적은 차를 고른다. 이것이 없으면 동률은 trials 의 순회 순서 —
+                // 즉 어댑터의 `ORDER BY code` — 로 깨진다. 결정이 아니라 우연이다.
+                .min(Comparator.comparingInt(Trial::leftover)
+                        .thenComparingLong(Trial::marginalKrw)
+                        .thenComparing(Trial::vehicle, VehicleSpec.LEAST_CAPABLE_FIRST))
                 .orElse(null);
         if (best == null) {
             return null;
@@ -171,7 +178,9 @@ public final class GreedyAssigner {
      * @param route       사본
      * @param leftover    넣지 못한 stop 수
      * @param marginalKrw 이 배치로 오르는 비용
+     * @param vehicle     이 사본의 차량. 동률을 깨는 데 쓴다 (ADR-031)
      */
-    private record Trial(RouteAccumulator route, int leftover, long marginalKrw) {
+    private record Trial(RouteAccumulator route, int leftover, long marginalKrw,
+            VehicleSpec vehicle) {
     }
 }
