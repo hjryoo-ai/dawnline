@@ -154,9 +154,11 @@ dawnline:
   dispatch:
     plan:
       # §6.6 의 기본 전략. 새 전략은 인터페이스 구현 + 등록만으로 추가된다.
-      default-strategy: sweep-greedy-nn
-      # §6.7 시간 예산. large(5,000 주문) 실측이 674 ms 라 여유가 크다
-      # (docs/benchmarks/phase3-baseline.md).
+      # 개선 단계(§6.5 5단계)를 뺀 sweep-greedy-nn 은 §6.7 의 FAST 모드 기본이다 —
+      # 열화란 이 전략에서 5단계를 끄는 것이다 (ADR-032).
+      default-strategy: sweep-greedy-nn+ls
+      # §6.7 시간 예산. large(5,000 주문) 실측 p95 가 3,247 ms 라 여유가 9배다
+      # (docs/benchmarks/phase4-local-search.md).
       budget: 30s
       per-route-budget: 3s
       # §5.3 — 이만큼 지난 PLANNING 은 죽은 인스턴스가 남긴 것으로 본다.

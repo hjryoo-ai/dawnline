@@ -28,6 +28,8 @@ public final class DispatchStrategies {
         Map<String, Supplier<DispatchStrategy>> strategies = new LinkedHashMap<>();
         strategies.put(BaselineNearestNeighbor.NAME, BaselineNearestNeighbor::new);
         strategies.put(SweepGreedyNearestNeighbor.NAME, SweepGreedyNearestNeighbor::new);
+        strategies.put(SweepGreedyNearestNeighbor.NAME_WITH_LOCAL_SEARCH,
+                SweepGreedyNearestNeighbor::withLocalSearch);
         return Map.copyOf(strategies);
     }
 

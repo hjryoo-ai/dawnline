@@ -19,6 +19,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * §6.5 의 1~4단계 — 통합 → 스윕 클러스터링 → 탐욕 차량 할당 → 시간창 최근접 이웃
@@ -35,12 +36,19 @@ import java.util.Map;
  *       지각 페널티를 함께 최소화한다.</li>
  * </ol>
  *
- * <p>개선 단계(2-opt·Or-opt·relocate)는 여기 없다 — {@code sweep-greedy-nn+ls} 가 Phase 4 다.
+ * <h2>개선 단계는 켜고 끈다</h2>
+ * §6.5 5단계({@link LocalSearchImprover})가 붙은 것이 {@code sweep-greedy-nn+ls} 이고, 나머지는
+ * 전부 같다. <strong>두 클래스로 나누지 않는 이유</strong>는 1~4단계가 갈라지면 §6.9 의 비교표가
+ * "개선 단계의 값어치" 가 아니라 "두 구현의 차이" 를 재게 되기 때문이다. 같은 이유로 §6.7 의
+ * 열화 모드(FAST)도 이 자리를 끄는 것으로 표현된다.
  */
 public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
 
     /** 전략 이름 (§6.6). */
     public static final String NAME = "sweep-greedy-nn";
+
+    /** 개선 단계를 붙인 전략 이름 (§6.6, Phase 4-1). */
+    public static final String NAME_WITH_LOCAL_SEARCH = "sweep-greedy-nn+ls";
 
     /** 권역 경계 자르기를 허용하기 시작하는 클러스터 크기. */
     private static final int MIN_STOPS_BEFORE_ZONE_CUT = 8;
@@ -49,13 +57,32 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
     private final NearestNeighborSequencer sequencer = new NearestNeighborSequencer();
     private final GreedyAssigner assigner = new GreedyAssigner(sequencer);
 
+    private final @Nullable LocalSearchImprover improver;
+
+    /** 1~4단계만. */
+    public SweepGreedyNearestNeighbor() {
+        this(null);
+    }
+
+    private SweepGreedyNearestNeighbor(@Nullable LocalSearchImprover improver) {
+        this.improver = improver;
+    }
+
+    /** 5단계(국소 탐색)까지. */
+    public static SweepGreedyNearestNeighbor withLocalSearch() {
+        return new SweepGreedyNearestNeighbor(new LocalSearchImprover());
+    }
+
     @Override
     public String name() {
-        return NAME;
+        return improver == null ? NAME : NAME_WITH_LOCAL_SEARCH;
     }
 
     @Override
     public PlanResult plan(PlanningProblem problem) {
+        // 경과 시간을 재는 스톱워치다 — 시각을 묻지 않으므로 불변규칙 12 의 대상이 아니고,
+        // 물어서도 안 된다(계획 시각은 problem.startedAt() 이 이미 들고 있는 입력이다).
+        long startedNanos = System.nanoTime();
         List<Stop> stops = StopMerger.merge(problem.candidates());
         DistanceProvider distance = problem.distance();
 
@@ -72,10 +99,13 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
         List<Stop> unassigned = assigner.assign(clusters, routes, problem.depot(), distance,
                 problem.cost(), problem.startedAt(), refusals);
 
+        List<RouteAccumulator> finished = improver == null ? routes
+                : improver.improve(problem, routes, System.nanoTime() - startedNanos).routes();
+
         List<PlannedRoute> planned = new ArrayList<>();
         List<Explanation> explanations = new ArrayList<>();
-        for (int i = 0; i < routes.size(); i++) {
-            RouteAccumulator route = routes.get(i);
+        for (int i = 0; i < finished.size(); i++) {
+            RouteAccumulator route = finished.get(i);
             if (route.isEmpty()) {
                 continue;                       // 빈 라우트는 만들지 않는다 (고정비를 물지 않는다)
             }

@@ -21,7 +21,7 @@ public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance
      * @param staleAfter      이만큼 지난 {@code PLANNING} 은 죽은 것으로 본다 (§5.3 기본 10분)
      * @param recoverBatch    한 번에 회수할 최대 계획 수
      */
-    public record Plan(@DefaultValue("sweep-greedy-nn") String defaultStrategy,
+    public record Plan(@DefaultValue("sweep-greedy-nn+ls") String defaultStrategy,
             @DefaultValue("30s") Duration budget,
             @DefaultValue("3s") Duration perRouteBudget,
             @DefaultValue("10m") Duration staleAfter,

@@ -2,10 +2,10 @@ package com.dawnline.dispatch.domain.optimizer;
 
 import com.dawnline.common.GeoPoint;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 import java.util.Set;
 
 /**
@@ -23,6 +23,16 @@ import java.util.Set;
  *
  * <p>불변이다. {@link #append} 는 새 상태를 돌려준다 — 개선 단계(2-opt·relocate)가 여러 후보 배치를
  * 시험해 보고 버리기 때문에, 제자리에서 바뀌는 상태는 되돌리기 코드를 부른다.
+ *
+ * <h2>붙이기는 O(1) 이다</h2>
+ * stop 목록을 배열로 들고 {@code append} 마다 복사하면 붙이기가 O(n) 이 되고, 라우트 하나를
+ * 처음부터 다시 만드는 일이 O(n²) 이 된다. 그 재구성은 <strong>탐욕 배정과 국소 탐색의 안쪽
+ * 루프</strong>다 — {@code large}(라우트당 약 100 stop)에서 한 번에 수만 번 돈다.
+ *
+ * <p>그래서 목록 대신 <strong>앞 상태를 가리키는 사슬</strong>로 든다. 붙이기는 노드 하나이고,
+ * {@link #stops()} 가 필요할 때 한 번만 펴 준다(라우트를 굳힐 때). 같은 이유로
+ * {@code zones} 도 누적해 둔다 — {@code ZONE_AFFINITY} 가 stop 마다 묻는데 그때마다 전체를
+ * 훑으면 그것만으로 O(n²) 이다. 권역이 늘 때만 복사하므로 보통은 참조 하나다.
  */
 public final class RouteState {
 
@@ -30,21 +40,28 @@ public final class RouteState {
     private final CampDepot depot;
     private final DistanceProvider distance;
     private final Instant startedAt;
-    private final List<PlannedStop> stops;
+    private final @Nullable RouteState previous;
+    private final @Nullable PlannedStop last;
+    private final int stopCount;
+    private final Set<String> zones;
     private final Parcel load;
     private final GeoPoint at;
     private final Instant time;
     private final int distanceM;
 
     private RouteState(VehicleSpec vehicle, CampDepot depot, DistanceProvider distance,
-            Instant startedAt, List<PlannedStop> stops, Parcel load, GeoPoint at, Instant time,
+            Instant startedAt, @Nullable RouteState previous, @Nullable PlannedStop last,
+            int stopCount, Set<String> zones, Parcel load, GeoPoint at, Instant time,
             int distanceM) {
 
         this.vehicle = vehicle;
         this.depot = depot;
         this.distance = distance;
         this.startedAt = startedAt;
-        this.stops = stops;
+        this.previous = previous;
+        this.last = last;
+        this.stopCount = stopCount;
+        this.zones = zones;
         this.load = load;
         this.at = at;
         this.time = time;
@@ -72,8 +89,8 @@ public final class RouteState {
         // 모델에 없는 상태가 된다 (ADR-030).
         Instant departAt = startAt.isBefore(vehicle.shift().start())
                 ? vehicle.shift().start() : startAt;
-        return new RouteState(vehicle, depot, distance, departAt, List.of(), Parcel.EMPTY,
-                depot.point(), departAt, 0);
+        return new RouteState(vehicle, depot, distance, departAt, null, null, 0, Set.of(),
+                Parcel.EMPTY, depot.point(), departAt, 0);
     }
 
     /**
@@ -86,10 +103,9 @@ public final class RouteState {
         Travel travel = distance.between(at, stop.point());
         Instant arrival = time.plusSeconds(travel.seconds());
         Instant departure = arrival.plusSeconds(stop.serviceSeconds());
-        List<PlannedStop> next = new ArrayList<>(stops);
-        next.add(new PlannedStop(stops.size() + 1, stop, arrival, departure));
-        return new RouteState(vehicle, depot, distance, startedAt, List.copyOf(next),
-                load.plus(stop.parcel()), stop.point(), departure,
+        PlannedStop planned = new PlannedStop(stopCount + 1, stop, arrival, departure);
+        return new RouteState(vehicle, depot, distance, startedAt, this, planned, stopCount + 1,
+                withZone(stop.zone()), load.plus(stop.parcel()), stop.point(), departure,
                 Math.addExact(distanceM, travel.meters()));
     }
 
@@ -131,14 +147,26 @@ public final class RouteState {
         return depot;
     }
 
-    /** 여기까지 배치된 stop 들 (방문 순서). */
+    /**
+     * 여기까지 배치된 stop 들 (방문 순서).
+     *
+     * <p>사슬을 펴는 일이라 O(n) 이고 <strong>매번 새로 만든다</strong>. 라우트를 굳힐 때
+     * 한 번 부르는 값이지 룰이 stop 마다 묻는 값이 아니다 — 룰이 보는 것은
+     * {@link #stopCount()}·{@link #zones()}·{@link #load()} 이고 전부 O(1) 이다.
+     */
     public List<PlannedStop> stops() {
-        return stops;
+        PlannedStop[] out = new PlannedStop[stopCount];
+        RouteState node = this;
+        for (int i = stopCount - 1; i >= 0; i--) {
+            out[i] = node.last;
+            node = node.previous;
+        }
+        return List.of(out);
     }
 
     /** 배치된 stop 수 (§6.3 {@code MAX_STOPS_PER_ROUTE}). */
     public int stopCount() {
-        return stops.size();
+        return stopCount;
     }
 
     /** 누적 적재 (§6.3 {@code VEHICLE_CAPACITY}). */
@@ -168,13 +196,21 @@ public final class RouteState {
 
     /** 지나온 권역들 (§6.3 {@code ZONE_AFFINITY}). 방문 순서를 유지한다. */
     public Set<String> zones() {
-        Set<String> zones = new LinkedHashSet<>();
-        stops.forEach(planned -> zones.add(planned.stop().zone()));
         return zones;
+    }
+
+    /** 이 권역을 더한 집합. 이미 있으면 <strong>같은 참조</strong>다 — 보통의 경우다. */
+    private Set<String> withZone(String zone) {
+        if (zones.contains(zone)) {
+            return zones;
+        }
+        Set<String> next = new LinkedHashSet<>(zones);
+        next.add(zone);
+        return java.util.Collections.unmodifiableSet(next);
     }
 
     /** 배치된 stop 이 하나도 없는가. 비어 있는 라우트는 차량 고정비를 물지 않는다 (§6.4). */
     public boolean isEmpty() {
-        return stops.isEmpty();
+        return stopCount == 0;
     }
 }

@@ -247,7 +247,7 @@ jobs:
       # 실패해도 아티팩트에 "왜" 가 남는다.
       - name: medium 데이터셋 전략 비교 + 게이트
         run: |
-          ./gradlew :tools:benchmark:run --args='--dataset medium --repeats 5 --strategies baseline-nn,sweep-greedy-nn --gate baseline-nn --out build/reports/benchmark/medium.md'
+          ./gradlew :tools:benchmark:run --args='--dataset medium --repeats 5 --strategies baseline-nn,sweep-greedy-nn,sweep-greedy-nn+ls --gate baseline-nn --out build/reports/benchmark/medium.md'
 
       - name: 벤치마크 리포트 아티팩트
         if: always()
