@@ -338,7 +338,7 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
                 orderIds.add(orderId);
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                         GeoPoint.of(CAMP.lat() + 0.005d * (i + 1), CAMP.lng() + 0.004d * (i + 1)),
-                        1_000, 2_000, false, false, window, 60, 0, now));
+                        1_000, 2_000, false, false, window, 60, false, 0, now));
             }
         });
         return orderIds;

@@ -64,9 +64,6 @@ public final class LocalSearchImprover {
     /** 안전 상한. 0.1% 규칙이 먼저 걸리는 것이 정상이다. */
     private static final int MAX_PASSES = 50;
 
-    /** 하드 룰을 어기는 후보. 합산 전에 걸러야 하므로 더하지 않는다. */
-    private static final long INFEASIBLE = Long.MAX_VALUE;
-
     private final LongSupplier nanoTime;
 
     /** 운영용. 경과 시간만 재므로 {@code System.nanoTime()} 이고, 이것은 시계가 아니라 스톱워치다. */
@@ -435,24 +432,13 @@ public final class LocalSearchImprover {
 
         // ---------------------------------------------------------------- 평가와 적용
 
-        /** 이 순서로 라우트를 다시 만들었을 때의 비용. 하드 룰을 어기면 {@link #INFEASIBLE}. */
+        /** 이 순서로 라우트를 다시 만들었을 때의 비용. 판정은 재삽입과 공유한다. */
         private long costOf(int r, List<Stop> stops) {
-            if (stops.isEmpty()) {
-                return 0L;                      // 빈 라우트는 고정비를 물지 않는다 (§6.4)
-            }
-            RouteAccumulator route = new RouteAccumulator(problem.rules(), vehicles.get(r),
-                    problem.depot(), problem.distance(), problem.startedAt());
-            for (Stop stop : stops) {
-                if (!route.check(stop).feasible()) {
-                    return INFEASIBLE;
-                }
-                route.append(stop);
-            }
-            return route.toRoute(problem.cost()).cost().krw();
+            return RouteRebuild.cost(problem, vehicles.get(r), stops);
         }
 
         private static long combined(long left, long right) {
-            return left == INFEASIBLE || right == INFEASIBLE ? INFEASIBLE : left + right;
+            return RouteRebuild.combined(left, right);
         }
 
         private void commit(int r, List<Stop> stops, long cost) {
@@ -486,15 +472,12 @@ public final class LocalSearchImprover {
         private List<RouteAccumulator> rebuild() {
             List<RouteAccumulator> built = new ArrayList<>(routes.size());
             for (int r = 0; r < routes.size(); r++) {
-                RouteAccumulator route = new RouteAccumulator(problem.rules(), vehicles.get(r),
-                        problem.depot(), problem.distance(), problem.startedAt());
-                for (Stop stop : routes.get(r)) {
-                    if (!route.check(stop).feasible()) {
-                        // 받아들인 이동은 전부 실행 가능했다. 여기서 걸리면 개선 코드의 버그다.
-                        throw new IllegalStateException(
-                                "개선된 라우트가 하드 룰을 어깁니다: " + route.check(stop).reason());
-                    }
-                    route.append(stop);
+                RouteAccumulator route =
+                        RouteRebuild.accumulate(problem, vehicles.get(r), routes.get(r));
+                if (route == null) {
+                    // 받아들인 이동은 전부 실행 가능했다. 여기서 걸리면 개선 코드의 버그다.
+                    throw new IllegalStateException(
+                            "개선된 라우트가 하드 룰을 어깁니다: 차량 " + vehicles.get(r).id());
                 }
                 built.add(route);
             }

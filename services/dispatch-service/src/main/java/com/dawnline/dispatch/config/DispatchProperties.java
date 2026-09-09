@@ -12,7 +12,24 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param distance 거리 계산 설정
  */
 @ConfigurationProperties(prefix = "dawnline.dispatch")
-public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance distance) {
+public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance distance,
+        @DefaultValue Priority priority) {
+
+    /**
+     * 후보 우선도 점수표 (§6.3, ADR-028). 우선도는 선언이 아니라 <strong>파생</strong>이고,
+     * 가중치는 정책이므로 데이터로 둔다 — 정책을 바꾸는 데 배포가 필요하면 그것은 바꿀 수
+     * 없는 정책이다.
+     *
+     * <p>세 번째 사실 <strong>「배송 실패 후 재배송」(+3)</strong> 은 tracking 이 만든다.
+     * 그 사실이 도착하기 전에 가중치만 먼저 두지 않는다 — 쓰이지 않는 설정 키는 다음 사람이
+     * 측정 없이 믿는 값이 된다. Phase 5 에서 사실과 함께 들어온다.
+     *
+     * @param promiseRevised 약속을 개정한 주문에 더하는 점수
+     * @param requiresCold   냉장 주문에 더하는 점수
+     */
+    public record Priority(@DefaultValue("2") int promiseRevised,
+            @DefaultValue("1") int requiresCold) {
+    }
 
     /**
      * @param defaultStrategy 기본 전략 (§6.6)

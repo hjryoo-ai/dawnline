@@ -30,6 +30,7 @@ public final class DispatchCandidate {
     private final boolean hazmat;
     private final TimeWindow promised;
     private final int serviceSeconds;
+    private final boolean promiseRevised;
     private final int priority;
     private final Instant createdAt;
 
@@ -39,8 +40,8 @@ public final class DispatchCandidate {
 
     private DispatchCandidate(UUID orderId, UUID waveId, UUID campId, @Nullable UUID zoneId,
             GeoPoint location, int weightG, int volumeCm3, boolean requiresCold, boolean hazmat,
-            TimeWindow promised, int serviceSeconds, int priority, CandidateStatus status,
-            Instant createdAt, Instant updatedAt, long version) {
+            TimeWindow promised, int serviceSeconds, boolean promiseRevised, int priority,
+            CandidateStatus status, Instant createdAt, Instant updatedAt, long version) {
 
         this.orderId = Objects.requireNonNull(orderId, "orderId");
         this.waveId = Objects.requireNonNull(waveId, "waveId");
@@ -66,6 +67,7 @@ public final class DispatchCandidate {
         this.requiresCold = requiresCold;
         this.hazmat = hazmat;
         this.serviceSeconds = serviceSeconds;
+        this.promiseRevised = promiseRevised;
         this.priority = priority;
         this.version = version;
     }
@@ -73,28 +75,33 @@ public final class DispatchCandidate {
     /**
      * 새로 적재한다.
      *
+     * <p>{@code priority} 를 인자로 받는 이유: 그 값은 <strong>사실이 아니라 정책의 결과</strong>
+     * 이고(ADR-028), 정책({@link CandidatePriority})은 설정에서 온다. 애그리거트가 점수표를 들면
+     * 정책을 바꾸는 데 도메인을 고쳐야 한다. 대신 근거({@code promiseRevised}·{@code requiresCold})는
+     * 함께 남긴다 — 파생값만 저장하면 "왜 이 우선도인가" 에 답할 수 없다.
+     *
      * @param at 적재 시각 (주입된 {@code Clock}, 불변규칙 12)
      */
     public static DispatchCandidate load(UUID orderId, UUID waveId, UUID campId,
             @Nullable UUID zoneId, GeoPoint location, int weightG, int volumeCm3,
             boolean requiresCold, boolean hazmat, TimeWindow promised, int serviceSeconds,
-            int priority, Instant at) {
+            boolean promiseRevised, int priority, Instant at) {
 
         return new DispatchCandidate(orderId, waveId, campId, zoneId, location, weightG, volumeCm3,
-                requiresCold, hazmat, promised, serviceSeconds, priority, CandidateStatus.PENDING,
-                at, at, 0L);
+                requiresCold, hazmat, promised, serviceSeconds, promiseRevised, priority,
+                CandidateStatus.PENDING, at, at, 0L);
     }
 
     /** 저장된 상태에서 되살린다. */
     public static DispatchCandidate rehydrate(UUID orderId, UUID waveId, UUID campId,
             @Nullable UUID zoneId, GeoPoint location, int weightG, int volumeCm3,
             boolean requiresCold, boolean hazmat, TimeWindow promised, int serviceSeconds,
-            int priority, CandidateStatus status, Instant createdAt, Instant updatedAt,
-            long version) {
+            boolean promiseRevised, int priority, CandidateStatus status, Instant createdAt,
+            Instant updatedAt, long version) {
 
         return new DispatchCandidate(orderId, waveId, campId, zoneId, location, weightG, volumeCm3,
-                requiresCold, hazmat, promised, serviceSeconds, priority, status, createdAt,
-                updatedAt, version);
+                requiresCold, hazmat, promised, serviceSeconds, promiseRevised, priority, status,
+                createdAt, updatedAt, version);
     }
 
     /**
@@ -186,7 +193,12 @@ public final class DispatchCandidate {
         return serviceSeconds;
     }
 
-    /** 우선도. */
+    /** 약속이 개정된 주문인가 (ADR-020). {@link #priority()} 의 근거다 (ADR-028). */
+    public boolean promiseRevised() {
+        return promiseRevised;
+    }
+
+    /** 우선도. 사실이 아니라 점수표({@code CandidatePriority})를 적용한 값이다 (ADR-028). */
     public int priority() {
         return priority;
     }

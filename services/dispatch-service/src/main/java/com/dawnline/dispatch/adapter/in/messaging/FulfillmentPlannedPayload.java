@@ -15,16 +15,15 @@ import tools.jackson.databind.JsonNode;
  * <p>페이로드에는 주소 문자열·고객 id·품목이 함께 오지만 <strong>계획이 쓰는 것만</strong>
  * 꺼낸다. 담지 않으면 로그에 샐 수도 없다(CLAUDE.md — 전체 주소·고객 식별 정보 로그 금지).
  *
- * <h2>계약에 없는 값 둘</h2>
- * <ul>
- *   <li><strong>{@code serviceSeconds}</strong> — 하차·전달 시간은 <em>배송 운영</em>의 값이지
- *       주문의 속성이 아니다. 기본값을 여기서 준다. 캠프·차종별로 달라지면 참조 데이터에서 온다.</li>
- *   <li><strong>{@code priority}</strong> — {@code fulfillment.planned} 에 우선도가 없다.
- *       그래서 지금은 <strong>모든 후보가 0</strong> 이고, §6.3 의 {@code PRIORITY_BOOST} 는
- *       운영에서 한 번도 발화하지 않는다(벤치마크에서는 생성기가 값을 준다).
- *       우선도의 출처를 정하는 것은 계약 변경이고, 여기서 조용히 만들어 낼 값이 아니다 —
- *       {@code serviceTier} 로 유추하면 "DAWN 이 곧 VIP" 라는 정책을 코드가 몰래 정하는 셈이다.</li>
- * </ul>
+ * <h2>계약에 없는 값 하나 — {@code serviceSeconds}</h2>
+ * 하차·전달 시간은 <em>배송 운영</em>의 값이지 주문의 속성이 아니다. 기본값을 여기서 준다.
+ * 캠프·차종별로 달라지면 참조 데이터에서 온다.
+ *
+ * <h2>우선도는 여기서 만들지 않는다</h2>
+ * 계약에는 여전히 {@code priority} 가 없고, <strong>그것이 맞다</strong>([ADR-028]) — 클라이언트
+ * 값은 신뢰할 수 없고 티어에서 파생하면 한 웨이브 안에서 상수가 된다. 대신 계약에 이미 있는
+ * <strong>사실</strong> {@code promiseRevised} 를 그대로 나르고, 점수표를 적용하는 것은
+ * {@code LoadCandidateService} 다. 어댑터는 계약을 옮기는 곳이지 정책을 아는 곳이 아니다.
  */
 final class FulfillmentPlannedPayload {
 
@@ -33,9 +32,6 @@ final class FulfillmentPlannedPayload {
 
     /** 기본 하차·전달 시간(초). 계약에 없어 여기서 준다. */
     static final int DEFAULT_SERVICE_SECONDS = 90;
-
-    /** 우선도. 계약에 없으므로 모든 후보가 이 값이다 — 위 주석의 두 번째 항목 참고. */
-    static final int DEFAULT_PRIORITY = 0;
 
     private FulfillmentPlannedPayload() {
     }
@@ -67,7 +63,7 @@ final class FulfillmentPlannedPayload {
                 flag(parcel, "hazmat"),
                 new TimeWindow(Instant.parse(text(window, "start")), Instant.parse(text(window, "end"))),
                 DEFAULT_SERVICE_SECONDS,
-                DEFAULT_PRIORITY);
+                flag(payload, "promiseRevised"));
     }
 
     /** 없으면 거짓. 스키마가 기본값을 주지 않는 불리언 필드에 쓴다. */

@@ -99,8 +99,22 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
         List<Stop> unassigned = assigner.assign(clusters, routes, problem.depot(), distance,
                 problem.cost(), problem.startedAt(), refusals);
 
-        List<RouteAccumulator> finished = improver == null ? routes
-                : improver.improve(problem, routes, System.nanoTime() - startedNanos).routes();
+        // 3단계가 남긴 것을 규칙으로 다시 싣는다 (ADR-028). 클러스터 단위 배정은 "이 묶음이
+        // 이 차에 들어가는가" 만 묻기 때문에, 제약이 붙은 stop 하나 때문에 나머지가 통째로
+        // 밀려나는 일이 생긴다 — 그 stop 을 stop 단위로 다시 보는 것이 여기다.
+        UnassignedRepair.Outcome repaired = UnassignedRepair.repair(problem, routes, unassigned);
+        List<RouteAccumulator> finished = repaired.routes();
+        unassigned = repaired.unassigned();
+
+        if (improver != null) {
+            finished = improver.improve(problem, finished,
+                    System.nanoTime() - startedNanos).routes();
+            // 개선 단계는 <strong>자리를 만든다</strong> — 라우트가 짧아지면 근무창·약속창에
+            // 여유가 생긴다. 그래서 한 번 더 본다. 재삽입 자체는 개선이 아니라 값싼 탐욕이다.
+            UnassignedRepair.Outcome again = UnassignedRepair.repair(problem, finished, unassigned);
+            finished = again.routes();
+            unassigned = again.unassigned();
+        }
 
         List<PlannedRoute> planned = new ArrayList<>();
         List<Explanation> explanations = new ArrayList<>();

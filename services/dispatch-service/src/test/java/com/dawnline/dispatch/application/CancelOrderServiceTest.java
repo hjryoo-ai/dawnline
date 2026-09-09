@@ -258,7 +258,7 @@ class CancelOrderServiceTest {
     private UUID candidate(Instant at) {
         UUID orderId = Ids.newId();
         candidates.put(DispatchCandidate.load(orderId, Ids.newId(), CAMP_ID, null, NEAR,
-                10_000, 20_000, false, false, WINDOW, 60, 0, at));
+                10_000, 20_000, false, false, WINDOW, 60, false, 0, at));
         return orderId;
     }
 }

@@ -805,6 +805,10 @@ CREATE TABLE drivers (id UUID PK, camp_id UUID, vehicle_id UUID, name TEXT, stat
 CREATE TABLE dispatch_candidates (order_id UUID PK, wave_id UUID NOT NULL, camp_id UUID NOT NULL, zone_id UUID,
   lat NUMERIC(9,6), lng NUMERIC(9,6), geohash7 CHAR(7), weight_g INTEGER, volume_cm3 INTEGER,
   requires_cold BOOLEAN, hazmat BOOLEAN, promised_start TIMESTAMPTZ, promised_end TIMESTAMPTZ,
+  -- promise_revised 는 우선도의 *근거*, priority 는 그 결과다 (ADR-028). 둘 다 남긴다 —
+  -- 근거만 두면 점수표를 바꿀 때 계획 중인 웨이브의 우선도가 흔들리고(§6.3 스냅샷),
+  -- 결과만 두면 "왜 이 우선도인가" 에 답할 수 없다.
+  promise_revised BOOLEAN NOT NULL DEFAULT FALSE,
   priority SMALLINT NOT NULL DEFAULT 0, status VARCHAR(16) NOT NULL, version BIGINT NOT NULL DEFAULT 0);
 CREATE INDEX ix_cand_wave ON dispatch_candidates (wave_id, status);
 CREATE TABLE route_plans (id UUID PK, wave_id UUID NOT NULL UNIQUE, camp_id UUID NOT NULL, status VARCHAR(16) NOT NULL,
@@ -987,6 +991,26 @@ SOFT 지만 **평가 시점이 다르다** — 배정에 실패한 주문에 붙
 | VEHICLE_PREFERENCE | SOFT | preferredTypes, penaltyKrw | 소형 물량에 대형 차량 배정 시 페널티 |
 | UNASSIGNED_PENALTY | SOFT | baseKrw, perPriorityKrw | 미배정 비용 (티어별 차등) |
 
+**`priority` 는 어디서 오는가 — 선언이 아니라 파생이다** (2026-09-09, [ADR-028](adr/ADR-028-unassigned-policy.md)).
+위 표의 두 룰(`PRIORITY_BOOST`·`UNASSIGNED_PENALTY`)이 `priority` 를 읽는데, 그 값의 출처가
+설계서에 없었다. 계약에 필드를 넣는 길은 두 가지로 막힌다 — **클라이언트 값은 신뢰할 수 없고**
+(§10, 고객 API 는 무인증이라 `customerId` 조차 클라이언트 주장값이다), **티어에서 파생하면
+상수가 된다**(웨이브가 (캠프, 티어, 컷오프) 단위라 한 계획 안의 모든 후보가 같은 티어다).
+아무것도 가르지 못하는 값은 우선순위가 아니다.
+
+한 계획 <em>안에서</em> 실제로 달라야 하는 것은 **"이 주문을 우리가 이미 얼마나 실망시켰는가"**
+이고, 그것은 dispatch 가 후보 적재 시점에 **이미 받은 사실**이다. 점수표는 룰과 같은 이유로
+데이터다(설정 `dawnline.dispatch.priority.*`).
+
+| 사실 | 가중치 | 근거 |
+|---|---:|---|
+| `promiseRevised` | **+2** | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 의 개정은 <em>한 번 깬 약속</em>이다 |
+| `requiresCold` | **+1** | 미배정의 비용이 다른 주문보다 크다 (cold-chain) |
+| 배송 실패 후 재배송 | +3 | **Phase 5** — 그 사실은 tracking 이 만든다. 사실이 오기 전에 가중치만 먼저 두지 않는다 |
+
+**범위 밖 — VIP 같은 고객 등급 우선순위.** 고객 서비스가 없어 등급의 출처가 없고, 있는 척하면
+`serviceTier` 를 등급으로 몰래 읽는 코드가 된다.
+
 **룰 정의 예시 (`dispatch_rules.params`)**
 
 ```json
@@ -1055,16 +1079,23 @@ plan(problem, budget):
 시간을 근무창 판정에 넣는 것). 그건 **조기 배송을 금지하겠다는 정책 결정**이라 §2.2 를 먼저 고쳐야
 하고, 최적화 안에서 조용히 할 일이 아니다.
 
-**3단계에서 미배정을 고르는 규칙** (2026-09-05 결정, Phase 4 구현 예정). 원래 문장은 "그래도 없으면
-미배정" 이었고 **어느 주문을 남길지는 말하지 않았다.** 말하지 않으면 아무도 안 정한 것이 아니라
-*우연이 정한다* — 지금은 마지막 클러스터에 남은 주문이 그대로 떨어진다. 측정이 그것을 드러냈다:
-`small` 에서 두 전략의 미배정 건수가 **9 로 같은데 페널티는 20,000원 다르다**(§6.9 리포트). 건수가
-같고 값이 다르면 남긴 대상이 다르다는 뜻이고, 그 차이를 만든 것은 알고리즘이 아니라 부재하는 규칙이다.
+**3단계에서 미배정을 고르는 규칙 — 「비싼 것부터 자리를 준다」** (2026-09-05 결정 · 2026-09-09 구현,
+[ADR-028](adr/ADR-028-unassigned-policy.md)). 원래 문장은 "그래도 없으면 미배정" 이었고 **어느
+주문을 남길지는 말하지 않았다.** 말하지 않으면 아무도 안 정한 것이 아니라 *우연이 정한다* —
+마지막 클러스터에 남은 주문이 그대로 떨어졌다. 측정이 그것을 드러냈다: `small` 에서 두 전략의
+미배정 건수가 **9 로 같은데 페널티는 20,000원 달랐다.** 건수가 같고 값이 다르면 남긴 대상이
+다르다는 뜻이고, 그 차이를 만든 것은 알고리즘이 아니라 부재하는 규칙이다.
 
-규칙은 목적함수를 그대로 따른다 — **`UNASSIGNED_PENALTY` 가 싼 것부터 뺀다**(§6.3 의 티어별 차등이
-곧 우선순위다). 값싼 그리디이고 최적이 아니지만, 최적일 필요가 없다: 이 자리에서 재는 것은 "용량이
-모자랄 때 누가 남는가" 이고 그 답이 **재현 가능하다는 것**이 지금 없는 성질이다. 구현은 Phase 4 다
-(`GreedyAssigner` — 3단계 안에서 끝나므로 파이프라인 형태는 바뀌지 않는다).
+규칙은 목적함수(§6.1)를 그대로 따른다 — 싣지 않으면 `UNASSIGNED_PENALTY` 를 물고 실으면 라우트
+비용이 오르니, **페널티가 비싼 것부터 자리를 주고 오르는 비용이 페널티보다 쌀 때만 싣는다.**
+한 문장이 두 질문에 답한다: "누가 빠지는가" 는 *끝까지 자리를 못 찾은 쪽*이고 그건 싼 것들이다.
+두 질문을 두 곳에 적으면 같은 정책이 두 벌이 된다.
+
+자리를 찾는 일은 클러스터가 아니라 **stop 단위**다(`UnassignedRepair`). 3단계의 배정은 "이 묶음이
+이 차에 들어가는가" 만 묻기 때문에, 제약이 붙은 stop 하나 때문에 나머지가 통째로 밀려난다. 그래서
+탐욕 배정 직후에 한 번, **국소 탐색 뒤에 한 번 더** 부른다 — 개선 단계는 라우트를 짧게 만들어
+근무창·약속창에 *자리를 만들기* 때문이다. 재삽입 자체는 개선이 아니라 값싼 탐욕이라 §6.7 의
+FAST 모드에서도 돈다. FAST 가 생략하는 것은 5단계(국소 탐색)다.
 
 **3단계의 동률 규칙 — 능력이 적은 차 먼저** (2026-09-08, [ADR-031](adr/ADR-031-least-capable-first-tie-break.md)).
 한계비용이 같은 실행 가능 차량이 여럿일 때 무엇을 고르는지가 **적혀 있지 않았고**, 그래서
@@ -1762,6 +1793,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 031 | **배정 동률은 「능력이 적은 차 먼저」** — 비냉장 < 냉장 < …, 마지막 키는 id(재현성). 냉장 프리미엄 +7,000원 | 위험물까지 아껴 두기(**재 보고 뺐다** — 미배정 99→115, 비용 +3.9%), 데모 시나리오 키우기(데이터로 테스트를 통과시킨다), 공허성 검사 약화, 시드에서 냉장을 첫 자리에서 치우기(`ORDER BY code` 의존은 그대로) | [ADR-031](adr/ADR-031-least-capable-first-tie-break.md) |
 | 030 | **부록 A 에 야간 근무조** — 캠프당 야간 8대(23:00–08:00)·주간 12대(09:00–22:00), 냉장·대형은 두 조에 배분. 근무 시작 전에는 출발하지 않는다 | 기사 단위 로스터(실제 운영의 방향이지만 모델 변경 — **다음 단계**로 기록), 계획 시각 주입(테스트가 모델의 구멍을 가린다), 그대로 두기(CI 가 하루 8시간 빨갛고 그 빨강이 시각에 따라만 보인다) | [ADR-030](adr/ADR-030-night-shift-seed.md) |
 | 029 | **최적화기 I/O 경로는 ORM 이 아니라 벌크** — 후보는 읽기 전용 프로젝션, 결과는 JDBC 배치, 상태 반영은 집합 UPDATE | `FlushMode.COMMIT`(증상만 숨기고 세션에 5,001개가 뜬 원인은 그대로 · 같은 트랜잭션의 네이티브 질의가 미반영 변경을 못 보는 read-your-writes 위험을 설정 한 줄로 전역에 들인다), 그대로 두기(30초 예산 안이지만 여유 12% 이고 다음 작업이 계획 시간을 늘린다) | [ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) |
+| 028 | **미배정 정책 하나** — 우선도는 계약이 아니라 사실에서 파생(`promiseRevised` +2 · `requiresCold` +1), 자리는 페널티가 비싼 것부터, 오르는 비용이 페널티보다 쌀 때만 싣는다. 탐욕 뒤 + 국소 탐색 뒤 두 번 | 계약에 `priority` 추가(무인증이라 클라이언트 값을 믿을 수 없다), `serviceTier` 에서 파생(한 웨이브 = 한 티어라 상수), 파생값만 저장(왜 이 우선도인지 답할 수 없다), 근거만 저장하고 계획 시점 계산(계획 중인 웨이브가 흔들린다), 선택과 재삽입을 따로 두기(같은 규칙이 두 벌), 밀어내기(남은 병목은 예산이 아니라 실행 가능성이다) | [ADR-028](adr/ADR-028-unassigned-policy.md) |
 | 027 | outbox 릴레이 리더 락 = **PostgreSQL advisory lock**(전용 장수 세션), 리더를 모르면 발행 중단 | 그대로 두기(전제를 지키는 것이 배포자의 기억뿐), **Redis `SET NX`**(2026-09-05 에 한 번 채택했다가 정정 — 조정을 서비스 밖으로 내보내 발행 가용성이 Redis 에 묶였고 폴백 없는 예외를 §7.2 에 만들었다), 판정 불가를 팔로워로 접기(대시보드에서 정상과 장애가 구별되지 않는다), `partition_key` 해시 분할(인스턴스 수가 바뀌는 전환 구간에 같은 문제), Kafka EOS(ADR-006 기각 + 두 프로듀서의 순서를 정해 주지 않는다), 리더 선출 라이브러리(의존 추가), 풀에서 빌린 커넥션에 락 잡기(반납하면 락이 풀 안에 남는다) | [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md) |
 
 013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다. 024는 Phase 2-3 에서 `WaveStatus` 의 마지막 두 전이에 트리거가 없다는 것을 발견해 추가했다 — §5.2 의 수명주기와 §4.1 의 소비자 표가 어긋나 있었고, 그 어긋남이 ADR-023 의 정리 배치를 조용히 무한 보존으로 만들고 있었다.

@@ -40,9 +40,9 @@ public class JpaDispatchCandidateRepository implements DispatchCandidateReposito
             INSERT INTO dispatch_candidates (
                 order_id, wave_id, camp_id, zone_id, lat, lng, geohash7,
                 weight_g, volume_cm3, requires_cold, hazmat,
-                promised_start, promised_end, service_seconds, priority,
+                promised_start, promised_end, service_seconds, promise_revised, priority,
                 status, version, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             ON CONFLICT (order_id) DO NOTHING
             """;
 
@@ -55,7 +55,7 @@ public class JpaDispatchCandidateRepository implements DispatchCandidateReposito
     private static final String FIND_PLANNABLE_SQL = """
             SELECT order_id, wave_id, camp_id, zone_id, lat, lng, weight_g, volume_cm3,
                    requires_cold, hazmat, promised_start, promised_end, service_seconds,
-                   priority, status, created_at, updated_at, version
+                   promise_revised, priority, status, created_at, updated_at, version
               FROM dispatch_candidates
              WHERE wave_id = ? AND status = 'PENDING'
              ORDER BY order_id
@@ -105,10 +105,11 @@ public class JpaDispatchCandidateRepository implements DispatchCandidateReposito
                 .setParameter(12, candidate.promised().start())
                 .setParameter(13, candidate.promised().end())
                 .setParameter(14, candidate.serviceSeconds())
-                .setParameter(15, (short) candidate.priority())
-                .setParameter(16, candidate.status().name())
-                .setParameter(17, candidate.createdAt())
-                .setParameter(18, candidate.updatedAt())
+                .setParameter(15, candidate.promiseRevised())
+                .setParameter(16, (short) candidate.priority())
+                .setParameter(17, candidate.status().name())
+                .setParameter(18, candidate.createdAt())
+                .setParameter(19, candidate.updatedAt())
                 .executeUpdate();
         return inserted > 0;
     }
@@ -133,11 +134,11 @@ public class JpaDispatchCandidateRepository implements DispatchCandidateReposito
                         rs.getInt(7), rs.getInt(8), rs.getBoolean(9), rs.getBoolean(10),
                         new TimeWindow(rs.getObject(11, java.time.OffsetDateTime.class).toInstant(),
                                 rs.getObject(12, java.time.OffsetDateTime.class).toInstant()),
-                        rs.getInt(13), rs.getShort(14),
-                        CandidateStatus.valueOf(rs.getString(15)),
-                        rs.getObject(16, java.time.OffsetDateTime.class).toInstant(),
+                        rs.getInt(13), rs.getBoolean(14), rs.getShort(15),
+                        CandidateStatus.valueOf(rs.getString(16)),
                         rs.getObject(17, java.time.OffsetDateTime.class).toInstant(),
-                        rs.getLong(18)),
+                        rs.getObject(18, java.time.OffsetDateTime.class).toInstant(),
+                        rs.getLong(19)),
                 waveId));
     }
 

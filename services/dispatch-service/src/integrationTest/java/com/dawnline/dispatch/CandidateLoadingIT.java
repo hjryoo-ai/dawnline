@@ -143,6 +143,31 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
                 assertThat(count("dispatch_candidates")).isEqualTo(1L));
     }
 
+    @Test
+    void 개정된_약속은_우선도로_남는다() {
+        // ADR-028 — 우선도는 계약의 필드가 아니라 계약의 <em>사실</em>에서 나온다.
+        // 브로커까지 도는 경로에서 그 파생이 실제로 일어나는지 본다: 단위 테스트는 점수표를,
+        // 계약 테스트는 매핑을 보지만, 둘을 잇는 배선이 빠져도 각각은 통과한다.
+        UUID plain = Ids.newId();
+        UUID revised = Ids.newId();
+
+        publish(plain, planned(plain, "PLANNED", false));
+        publish(revised, planned(revised, "PLANNED", true));
+
+        awaitCandidate(plain);
+        awaitCandidate(revised);
+        assertThat(findById(plain).orElseThrow().priority())
+                .as("전제: 개정되지 않은 주문은 0 이어야 한다 — 아니면 아래 2 는 우연일 수 있다")
+                .isZero();
+        assertThat(findById(revised).orElseThrow())
+                .satisfies(candidate -> {
+                    assertThat(candidate.promiseRevised()).as("근거를 함께 남긴다").isTrue();
+                    assertThat(candidate.priority())
+                            .as("promiseRevised 가중치 +2 (dawnline.dispatch.priority)")
+                            .isEqualTo(2);
+                });
+    }
+
     private void awaitCandidate(UUID orderId) {
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> assertThat(findById(orderId)).isPresent());
@@ -162,13 +187,18 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
         producer.flush();
     }
 
-    /** 계약 예시에서 orderId 와 outcome 만 바꾼다 — 나머지는 계약이 보증한 모양 그대로다. */
     private static String planned(UUID orderId, String outcome) {
+        return planned(orderId, outcome, false);
+    }
+
+    /** 계약 예시에서 orderId·outcome·promiseRevised 만 바꾼다 — 나머지는 계약이 보증한 모양이다. */
+    private static String planned(UUID orderId, String outcome, boolean promiseRevised) {
         var envelope = CONTRACTS.readTree(CONTRACTS.contractsDirectory()
                 .resolve(java.nio.file.Path.of("examples", "fulfillment.planned.v1.example.json")));
         var payload = (tools.jackson.databind.node.ObjectNode) envelope.get("payload");
         payload.put("orderId", orderId.toString());
         payload.put("outcome", outcome);
+        payload.put("promiseRevised", promiseRevised);
         var root = (tools.jackson.databind.node.ObjectNode) envelope;
         root.put("eventId", Ids.newId().toString());
         root.put("partitionKey", orderId.toString());

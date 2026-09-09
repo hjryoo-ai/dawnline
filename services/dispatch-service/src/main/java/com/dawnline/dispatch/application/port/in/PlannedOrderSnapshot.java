@@ -29,11 +29,12 @@ import org.jspecify.annotations.Nullable;
  * @param hazmat         위험물
  * @param promised       약속 배송창
  * @param serviceSeconds 하차·전달 시간(초)
- * @param priority       우선도
+ * @param promiseRevised 약속이 개정된 주문인가 (ADR-020). 우선도의 <em>근거</em>이지 우선도가 아니다 —
+ *                       점수표를 적용하는 것은 애플리케이션이다 (ADR-028)
  */
 public record PlannedOrderSnapshot(UUID orderId, UUID waveId, UUID campId, @Nullable UUID zoneId,
         GeoPoint location, int weightG, int volumeCm3, boolean requiresCold, boolean hazmat,
-        TimeWindow promised, int serviceSeconds, int priority) {
+        TimeWindow promised, int serviceSeconds, boolean promiseRevised) {
 
     public PlannedOrderSnapshot {
         Objects.requireNonNull(orderId, "orderId");

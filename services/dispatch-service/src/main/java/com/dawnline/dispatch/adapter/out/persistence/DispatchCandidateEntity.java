@@ -79,6 +79,10 @@ public class DispatchCandidateEntity {
     @Column(name = "service_seconds", nullable = false)
     private int serviceSeconds;
 
+    /** 우선도의 <em>근거</em> (ADR-028). 파생값인 {@code priority} 와 함께 남긴다. */
+    @Column(name = "promise_revised", nullable = false)
+    private boolean promiseRevised;
+
     @Column(name = "priority", nullable = false)
     private short priority;
 
@@ -120,6 +124,7 @@ public class DispatchCandidateEntity {
         entity.promisedStart = candidate.promised().start();
         entity.promisedEnd = candidate.promised().end();
         entity.serviceSeconds = candidate.serviceSeconds();
+        entity.promiseRevised = candidate.promiseRevised();
         entity.priority = (short) candidate.priority();
         entity.status = candidate.status();
         entity.createdAt = candidate.createdAt();
@@ -134,7 +139,7 @@ public class DispatchCandidateEntity {
         return DispatchCandidate.rehydrate(orderId, waveId, campId, zoneId,
                 GeoPoint.of(lat.doubleValue(), lng.doubleValue()), weightG, volumeCm3,
                 requiresCold, hazmat, new TimeWindow(promisedStart, promisedEnd), serviceSeconds,
-                priority, status, createdAt, updatedAt, version);
+                promiseRevised, priority, status, createdAt, updatedAt, version);
     }
 
     /**

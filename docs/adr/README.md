@@ -43,6 +43,7 @@
 | 032 | 국소 탐색은 근사로 후보를 줄이고, 예산은 패스 단위로만 끊는다 | ✅ Accepted (2026-09-09) | [ADR-032](ADR-032-local-search-budget-and-approximations.md) |
 | 030 | 부록 A 에 야간 근무조(캠프당 8대 23:00–08:00) — 「새벽 배송」에 새벽 차량이 없었다 | ✅ Accepted (2026-09-08) | [ADR-030](ADR-030-night-shift-seed.md) |
 | 029 | 최적화기 I/O 경로(입력 적재·결과 저장)는 ORM 이 아니라 벌크 | ✅ Accepted (2026-09-08) | [ADR-029](ADR-029-optimizer-io-is-bulk-not-orm.md) |
+| 028 | 미배정 정책 — 우선도는 파생이고, 자리는 비싼 것부터 준다 | ✅ Accepted (2026-09-09) | [ADR-028](ADR-028-unassigned-policy.md) |
 | 027 | outbox 릴레이는 리더 락으로 단일 활성, 리더를 모르면 발행하지 않는다 | ✅ Accepted (2026-09-05) + **후속 정정 (2026-09-05)** — 조정자를 Redis → PostgreSQL advisory lock | [ADR-027](ADR-027-outbox-relay-leader-lock.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.

@@ -235,7 +235,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
                 (requiresCold ? cold : warm).add(orderId);
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                         GeoPoint.of(CAMP.lat() + 0.004d * (i % 8 + 1), CAMP.lng() + 0.005d * (i / 8 + 1)),
-                        30_000, 60_000, requiresCold, false, window, 60, 0, now));
+                        30_000, 60_000, requiresCold, false, window, 60, false, 0, now));
             }
         });
         return new Seeded(cold, warm);
@@ -251,7 +251,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
                 orderIds.add(orderId);
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                         GeoPoint.of(CAMP.lat() + 0.0008d * (i % 71), CAMP.lng() + 0.0011d * (i / 71 % 71)),
-                        2_500, 6_000, false, false, window, 60, 0, now));
+                        2_500, 6_000, false, false, window, 60, false, 0, now));
             }
         });
         return orderIds;

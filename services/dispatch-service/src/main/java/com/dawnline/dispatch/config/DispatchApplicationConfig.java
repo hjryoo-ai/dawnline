@@ -14,6 +14,7 @@ import com.dawnline.dispatch.adapter.out.persistence.JpaDispatchCandidateReposit
 import com.dawnline.dispatch.application.CancelOrderService;
 import com.dawnline.dispatch.application.DispatchMetrics;
 import com.dawnline.dispatch.application.LoadCandidateService;
+import com.dawnline.dispatch.domain.CandidatePriority;
 import com.dawnline.dispatch.application.ManageResourcesService;
 import com.dawnline.dispatch.application.ReassignStopService;
 import com.dawnline.dispatch.application.RecoverStalePlansService;
@@ -78,12 +79,17 @@ public class DispatchApplicationConfig {
 
     /**
      * @param candidates 후보 저장소
+     * @param properties 우선도 점수표가 여기 있다 (ADR-028)
      * @param clock      시각 출처 (불변규칙 12)
      */
     @Bean
     public LoadCandidateUseCase loadCandidateUseCase(DispatchCandidateRepository candidates,
-            Clock clock) {
-        return new LoadCandidateService(candidates, clock);
+            DispatchProperties properties, Clock clock) {
+
+        return new LoadCandidateService(candidates,
+                new CandidatePriority(properties.priority().promiseRevised(),
+                        properties.priority().requiresCold()),
+                clock);
     }
 
     /**

@@ -8,6 +8,7 @@ import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.in.LoadCandidateUseCase;
 import com.dawnline.dispatch.application.port.in.PlannedOrderSnapshot;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
+import com.dawnline.dispatch.domain.CandidatePriority;
 import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import java.time.Clock;
@@ -76,12 +77,15 @@ class LoadCandidateServiceTest {
     }
 
     private final InMemory repository = new InMemory();
+    /** 점수표. 설정 기본값과 같은 값이다 (ADR-028). */
+    private static final CandidatePriority SCALE = new CandidatePriority(2, 1);
+
     private final LoadCandidateService service =
-            new LoadCandidateService(repository, Clock.fixed(NOW, ZoneOffset.UTC));
+            new LoadCandidateService(repository, SCALE, Clock.fixed(NOW, ZoneOffset.UTC));
 
     private static PlannedOrderSnapshot snapshot(UUID orderId) {
         return new PlannedOrderSnapshot(orderId, Ids.newId(), Ids.newId(), Ids.newId(),
-                GeoPoint.of(37.4979, 127.0276), 1_000, 2_000, false, false, WINDOW, 90, 0);
+                GeoPoint.of(37.4979, 127.0276), 1_000, 2_000, false, false, WINDOW, 90, false);
     }
 
     @Test
@@ -95,6 +99,36 @@ class LoadCandidateServiceTest {
             assertThat(candidate.location()).isEqualTo(snapshot.location());
             assertThat(candidate.createdAt()).isEqualTo(NOW);
         });
+    }
+
+    @Test
+    void 우선도는_선언이_아니라_사실에서_파생한다() {
+        // ADR-028. 계약에 priority 가 없고 앞으로도 넣지 않는다 — 여기서 계산한다.
+        // 네 조합을 전부 본다: 하나만 보면 점수표를 안 읽어도 통과한다.
+        assertThat(priorityOf(false, false)).as("사실 없음").isZero();
+        assertThat(priorityOf(true, false)).as("약속 개정").isEqualTo(2);
+        assertThat(priorityOf(false, true)).as("냉장").isEqualTo(1);
+        assertThat(priorityOf(true, true)).as("둘 다").isEqualTo(3);
+    }
+
+    @Test
+    void 적재한_뒤에는_근거도_함께_남는다() {
+        // 파생값만 남기면 "왜 이 우선도인가" 에 답할 수 없고, 점수표를 고쳐도 이미 적재된
+        // 후보를 다시 뽑을 방법이 없다 (V4 마이그레이션의 주석과 같은 이유).
+        PlannedOrderSnapshot revised = new PlannedOrderSnapshot(Ids.newId(), Ids.newId(),
+                Ids.newId(), null, GeoPoint.of(37.5, 127.0), 1, 1, false, false, WINDOW, 60, true);
+        service.load(revised);
+
+        assertThat(repository.findById(revised.orderId())).hasValueSatisfying(candidate ->
+                assertThat(candidate.promiseRevised()).isTrue());
+    }
+
+    private int priorityOf(boolean promiseRevised, boolean requiresCold) {
+        PlannedOrderSnapshot snapshot = new PlannedOrderSnapshot(Ids.newId(), Ids.newId(),
+                Ids.newId(), null, GeoPoint.of(37.5, 127.0), 1, 1, requiresCold, false,
+                WINDOW, 60, promiseRevised);
+        service.load(snapshot);
+        return repository.findById(snapshot.orderId()).orElseThrow().priority();
     }
 
     @Test
@@ -116,7 +150,7 @@ class LoadCandidateServiceTest {
 
         PlannedOrderSnapshot changed = new PlannedOrderSnapshot(orderId, first.waveId(),
                 first.campId(), first.zoneId(), GeoPoint.of(37.0, 127.9), 9_999, 9_999,
-                true, true, WINDOW, 90, 5);
+                true, true, WINDOW, 90, true);
         service.load(changed);
 
         assertThat(repository.findById(orderId)).hasValueSatisfying(candidate -> {
@@ -129,7 +163,7 @@ class LoadCandidateServiceTest {
     void 웨이브별로_계획_대상을_모은다() {
         PlannedOrderSnapshot first = snapshot(Ids.newId());
         PlannedOrderSnapshot sameWave = new PlannedOrderSnapshot(Ids.newId(), first.waveId(),
-                first.campId(), null, GeoPoint.of(37.5, 127.0), 1, 1, false, false, WINDOW, 60, 0);
+                first.campId(), null, GeoPoint.of(37.5, 127.0), 1, 1, false, false, WINDOW, 60, false);
         service.load(first);
         service.load(sameWave);
         service.load(snapshot(Ids.newId()));
@@ -143,7 +177,7 @@ class LoadCandidateServiceTest {
         Instant nanos = Instant.parse("2026-09-06T01:00:00.123456789Z");
         PlannedOrderSnapshot snapshot = new PlannedOrderSnapshot(Ids.newId(), Ids.newId(),
                 Ids.newId(), null, GeoPoint.of(37.5, 127.0), 1, 1, false, false,
-                new TimeWindow(nanos, nanos.plusSeconds(3600)), 60, 0);
+                new TimeWindow(nanos, nanos.plusSeconds(3600)), 60, false);
 
         assertThat(snapshot.promised().start())
                 .isEqualTo(Instant.parse("2026-09-06T01:00:00.123456Z"));

@@ -510,7 +510,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                         GeoPoint.of(CAMP.lat() + 0.004d * (i % 8 + 1),
                                 CAMP.lng() + 0.005d * (i / 8 + 1)),
-                        40_000, 80_000, false, false, window, 60, 0, now));
+                        40_000, 80_000, false, false, window, 60, false, 0, now));
             }
         });
         return orderIds;

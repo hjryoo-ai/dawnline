@@ -60,7 +60,7 @@ class RunPlanServiceTest {
             candidates.put(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                     GeoPoint.of(InMemoryDispatchPorts.CAMP.lat() + 0.004d * (i + 1),
                             InMemoryDispatchPorts.CAMP.lng() + 0.003d * (i + 1)),
-                    1_000, 2_000, false, false, window, 60, 0, NOW));
+                    1_000, 2_000, false, false, window, 60, false, 0, NOW));
         }
         return orderIds;
     }

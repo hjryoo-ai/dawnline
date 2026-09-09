@@ -67,7 +67,7 @@ class JpaDispatchCandidateRepositoryTest {
 
     private static DispatchCandidate candidate() {
         return DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(), Ids.newId(),
-                GeoPoint.of(37.4979, 127.0276), 1_200, 8_000, false, false, WINDOW, 90, 0, NOW);
+                GeoPoint.of(37.4979, 127.0276), 1_200, 8_000, false, false, WINDOW, 90, false, 0, NOW);
     }
 
     @Test

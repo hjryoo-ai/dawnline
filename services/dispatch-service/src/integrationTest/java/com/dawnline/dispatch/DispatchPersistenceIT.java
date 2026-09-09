@@ -93,7 +93,7 @@ class DispatchPersistenceIT extends DispatchIntegrationTestBase {
     private static DispatchCandidate candidate(UUID waveId) {
         return DispatchCandidate.load(Ids.newId(), waveId, Ids.newId(), Ids.newId(),
                 GeoPoint.of(37.497900, 127.027600), 1_234, 5_678, true, false,
-                new TimeWindow(NOW, NOW.plus(Duration.ofHours(4))), 120, 2, NOW);
+                new TimeWindow(NOW, NOW.plus(Duration.ofHours(4))), 120, true, 2, NOW);
     }
 
     @Test
@@ -301,7 +301,7 @@ class DispatchPersistenceIT extends DispatchIntegrationTestBase {
         // NUMERIC(9,6) 이다. 자르지 않으면 저장 전후 값이 달라져 거리 계산이 미세하게 어긋난다.
         DispatchCandidate saved = DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(), null,
                 GeoPoint.of(37.4979009, 127.0276001), 1, 1, false, false,
-                new TimeWindow(NOW, NOW.plusSeconds(3600)), 60, 0, NOW);
+                new TimeWindow(NOW, NOW.plusSeconds(3600)), 60, false, 0, NOW);
         tx().executeWithoutResult(status -> candidates.insertIfAbsent(saved));
 
         DispatchCandidate loaded = tx().execute(status ->
