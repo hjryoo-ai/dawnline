@@ -147,6 +147,46 @@ class DispatchSeedCoverageIT extends DispatchIntegrationTestBase {
 
     @Test
     @Transactional
+    void 위험물_허용은_캠프마다_20퍼센트이고_겹친_제약이_한_대에_몰리지_않는다() {
+        // 부록 A (2026-09-09, ADR-033). 위험물 허용 4/20 이고 그중 절반(2대)이 냉장이며,
+        // 근무조마다 냉장 ∧ 위험물이 한 대씩 있다.
+        //
+        // **캠프별·조별로 본다.** 전체 합만 보면 한 캠프에 몰려 있어도 통과하고, 조를 안 보면
+        // 야간에 냉장 ∧ 위험물이 0 대인 시각이 생긴다 — 그 시각의 계획에는 막다른 길이다.
+        // 벤치마크에서 같은 결함이 large 미배정 89건으로 나타났고, 거기서 세운 기준
+        // (제약 조합별 수요 ≤ 그 조합 차량 용량의 80%)을 운영 시드로 옮긴 것이 이 대수다.
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT camp_id::text,
+                       count(*),
+                       count(*) FILTER (WHERE allows_hazmat),
+                       count(*) FILTER (WHERE allows_hazmat AND is_cold),
+                       count(*) FILTER (WHERE allows_hazmat AND is_cold AND shift_end <= shift_start),
+                       count(*) FILTER (WHERE allows_hazmat AND is_cold AND shift_end >  shift_start)
+                  FROM vehicles WHERE active
+                 GROUP BY camp_id ORDER BY camp_id
+                """).getResultList();
+
+        assertThat(rows).as("전제: 캠프가 열이어야 한다").hasSize(10);
+        assertThat(rows).allSatisfy(row -> {
+            String camp = (String) row[0];
+            long total = ((Number) row[1]).longValue();
+            long hazmat = ((Number) row[2]).longValue();
+            long coldHazmat = ((Number) row[3]).longValue();
+            long nightColdHazmat = ((Number) row[4]).longValue();
+            long dayColdHazmat = ((Number) row[5]).longValue();
+
+            assertThat(hazmat).as("캠프 %s 위험물 허용 (차량 %d 대의 20%%)", camp, total)
+                    .isEqualTo(total / 5);
+            assertThat(coldHazmat).as("캠프 %s 냉장 ∧ 위험물 — 위험물의 절반", camp)
+                    .isEqualTo(hazmat / 2);
+            assertThat(nightColdHazmat).as("캠프 %s 야간조의 냉장 ∧ 위험물", camp).isPositive();
+            assertThat(dayColdHazmat).as("캠프 %s 주간조의 냉장 ∧ 위험물", camp).isPositive();
+        });
+    }
+
+    @Test
+    @Transactional
     void 차종이_섞여_있다() {
         @SuppressWarnings("unchecked")
         List<String> types = entityManager

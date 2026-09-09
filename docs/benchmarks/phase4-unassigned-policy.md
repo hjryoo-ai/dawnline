@@ -8,6 +8,9 @@
 | 데이터셋 | `DatasetGenerator` seed `20260905`, 전략당 3회 |
 | 결정 | [ADR-028](../adr/ADR-028-unassigned-policy.md) |
 
+> ⚠️ **이 문서의 수치는 «정정 전» 열이다.** 2026-09-09 에 데이터셋의 능력 분포와 §6.5 1단계의 통합 키가 바뀌어([ADR-033](../adr/ADR-033-constraint-classes.md)) 절대 수치가 전부 재기준됐다. 현재 값은 [`phase4-constraint-classes.md`](phase4-constraint-classes.md) §4 의 세 열 표에 있다.
+> 여기 남는 것은 **그 시점의 측정**이고, 그것이 §6.9 가 리포트마다 커밋을 박아 두는 이유다.
+
 ---
 
 ## 1. 재기준 기록 (§6.9 게이트 규칙 1)

@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 import java.util.random.RandomGenerator;
 
@@ -68,6 +69,9 @@ public final class DatasetGenerator {
     private static final double CLUSTER_SIGMA_M = 700.0d;
     /** 웨이브 하나의 약속창 수 (§2.2 — 티어당 창이 몇 개뿐이다). */
     private static final int PROMISED_WINDOWS = 3;
+
+    /** 위험물 허용 차량의 비율 (부록 A — 캠프 20대 중 4대). */
+    private static final double HAZMAT_RATIO = 0.20d;
 
     /** 위도 1도 ≈ 111.32 km. 8 km 반경에서는 평면 근사로 충분하다. */
     private static final double METERS_PER_DEGREE_LAT = 111_320.0d;
@@ -181,6 +185,7 @@ public final class DatasetGenerator {
 
     private List<VehicleSpec> vehicles(RandomGenerator random) {
         List<VehicleSpec> vehicles = new ArrayList<>(dataset.vehicles());
+        Set<Integer> hazmatIndices = hazmatIndices();
         // 근무창은 전 차량 공통이다. 차량마다 흔들면 미배정의 원인이 근무창인지 용량인지
         // 구분되지 않아 전략 비교가 흐려진다 — 이 성질은 유지한다.
         //
@@ -204,8 +209,8 @@ public final class DatasetGenerator {
             // 차만 냉장이 되어 냉장 용량이 수요의 66% 밖에 안 됐다(첫 측정: 650kg 수요 / 430kg 용량).
             // 트럭은 전부, 밴은 넷 중 하나만 냉장으로 둔다 — 냉장이 아닌 차가 충분히 남아야
             // cold-chain 하드 룰이 실제로 배정을 바꾼다.
-            boolean cold = "TRUCK".equals(type) || i % 8 == 0;
-            boolean hazmat = i % 10 == 0;
+            boolean cold = isCold(i);
+            boolean hazmat = hazmatIndices.contains(i);
             Capacity capacity = "VAN".equals(type)
                     ? new Capacity(400_000, 1_200_000)
                     : new Capacity(1_200_000, 4_000_000);
@@ -216,6 +221,52 @@ public final class DatasetGenerator {
                     new VehicleAttrs(type, cold, hazmat), shift, cost));
         }
         return List.copyOf(vehicles);
+    }
+
+    /**
+     * 이 첨자의 차량이 냉장인가. 트럭은 전부, 밴은 넷 중 하나.
+     *
+     * <p>{@link #vehicles} 와 {@link #hazmatIndices} 가 <strong>같은 식</strong>을 봐야 한다 —
+     * 갈라지면 "냉장에서 먼저 고른다" 가 조용히 거짓이 된다.
+     */
+    private static boolean isCold(int index) {
+        return index % 2 != 0 || index % 8 == 0;    // 홀수 = TRUCK
+    }
+
+    /**
+     * 위험물을 허용하는 차량의 첨자 (부록 A 의 규칙).
+     *
+     * <h2>왜 첨자 산술이 아니라 규칙인가</h2>
+     * 이전에는 {@code i % 10 == 0} 이었다. 그런데 냉장은 {@code TRUCK ∨ i % 8 == 0} 이고 차종은
+     * {@code i % 2} 라, <strong>위험물 첨자가 전부 짝수(=VAN)가 되고 그중 {@code i % 8 == 0} 인
+     * 것은 {@code i = 0} 하나뿐</strong>이었다. 결과: 데이터셋 크기와 무관하게
+     * <strong>냉장 ∧ 위험물 차량이 언제나 1대.</strong> 규모를 키워도 그 조합의 용량은 그대로였고,
+     * {@code large} 에서 그 한 대에 수요의 110% 가 몰렸다 — 어떤 알고리즘으로도 실을 수 없는
+     * 수요를 만들어 놓고 알고리즘을 재고 있었다({@code DatasetFeasibilityTest},
+     * {@code docs/benchmarks/phase4-constraint-classes.md}).
+     *
+     * <p>그래서 <em>겹친 능력의 대수를 규칙으로</em> 정한다 — 위험물 허용은 차량의 20%, 그중
+     * 절반은 냉장이다. 냉장 차량에서 먼저 고르고 남는 만큼을 비냉장에서 고르므로, 규모가 커지면
+     * 겹친 능력의 대수도 함께 커진다.
+     */
+    private Set<Integer> hazmatIndices() {
+        int total = dataset.vehicles();
+        int hazmat = Math.max(1, (int) Math.round(total * HAZMAT_RATIO));
+        int coldHazmat = Math.max(1, hazmat / 2);
+
+        List<Integer> coldFirst = new ArrayList<>();
+        List<Integer> warmFirst = new ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            (isCold(i) ? coldFirst : warmFirst).add(i);
+        }
+
+        Set<Integer> chosen = new java.util.LinkedHashSet<>();
+        coldFirst.stream().limit(Math.min(coldHazmat, coldFirst.size())).forEach(chosen::add);
+        warmFirst.stream().limit(hazmat - chosen.size()).forEach(chosen::add);
+        // 비냉장이 모자라면 냉장에서 더 채운다 — 대수가 비율보다 우선이다.
+        coldFirst.stream().filter(i -> !chosen.contains(i)).limit(hazmat - chosen.size())
+                .forEach(chosen::add);
+        return Set.copyOf(chosen);
     }
 
     private GeoPoint nearCluster(RandomGenerator random, GeoPoint center) {
