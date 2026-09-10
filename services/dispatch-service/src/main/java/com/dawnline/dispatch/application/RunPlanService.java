@@ -11,6 +11,8 @@ import com.dawnline.dispatch.application.port.out.RuleCatalog;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
+import com.dawnline.dispatch.domain.PlanMode;
+import com.dawnline.dispatch.domain.PlanModeSelector;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
@@ -57,6 +59,11 @@ import org.springframework.transaction.annotation.Transactional;
  * 트랜잭션 안에서 도는 것이 부담이지만, {@code large} 실측이 674 ms 라 지금 규모에서는
  * 나누는 복잡도가 더 비싸다 — 재검토 지점은 §6.7 의 예산(30초)에 가까워질 때다.
  *
+ * <h2>모드는 계획마다 다시 정한다</h2>
+ * §6.7 의 열화는 <strong>래치가 아니다</strong>. {@link PlanModeSelector} 가 매번 두 사실을
+ * 다시 본다 — 이 파티션이 얼마나 밀렸는가(레코드가 싣고 온다), 같은 캠프의 직전 계획이 예산을
+ * 얼마나 썼는가(DB 가 답한다). 그래서 "한 번 열화하면 누가 되돌리는가" 라는 질문이 없다.
+ *
  * <h2>발행 직전 재검증</h2>
  * 계획은 시작 시점 스냅샷으로 돈다. 그 사이 도착한 취소는 반영되지 않았으므로, 발행 직전에
  * 후보 상태를 <strong>다시 읽어</strong> 취소된 것을 뺀다(§6.5 6단계, ADR-026 분기 2).
@@ -94,6 +101,7 @@ public class RunPlanService implements RunPlanUseCase {
     private final Clock clock;
     private final String defaultStrategy;
     private final PlanningBudget budget;
+    private final PlanModeSelector modeSelector;
 
     /**
      * @param plans           계획 저장소
@@ -107,11 +115,12 @@ public class RunPlanService implements RunPlanUseCase {
      * @param clock           시각 출처 (불변규칙 12)
      * @param defaultStrategy 기본 전략 (§6.6)
      * @param budget          시간 예산 (§6.7)
+     * @param modeSelector    열화 판단 (§6.7, ADR-034)
      */
     public RunPlanService(RoutePlanRepository plans, DispatchCandidateRepository candidates,
             PlannedRouteRepository routes, DispatchEvents events, VehicleCatalog vehicles,
             RuleCatalog rules, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
-            String defaultStrategy, PlanningBudget budget) {
+            String defaultStrategy, PlanningBudget budget, PlanModeSelector modeSelector) {
 
         this.plans = Objects.requireNonNull(plans, "plans");
         this.candidates = Objects.requireNonNull(candidates, "candidates");
@@ -124,6 +133,7 @@ public class RunPlanService implements RunPlanUseCase {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.defaultStrategy = Objects.requireNonNull(defaultStrategy, "defaultStrategy");
         this.budget = Objects.requireNonNull(budget, "budget");
+        this.modeSelector = Objects.requireNonNull(modeSelector, "modeSelector");
     }
 
     @Override
@@ -139,9 +149,11 @@ public class RunPlanService implements RunPlanUseCase {
             return Outcome.ALREADY_PUBLISHED;
         }
 
+        PlanModeSelector.Decision mode = chooseMode(command);
+
         List<DispatchCandidate> plannable = candidates.findPlannableInWave(command.waveId());
         if (plannable.isEmpty()) {
-            plan.begin(strategyOf(command), command.effectiveMode(), command.effectiveSeed(), 0,
+            plan.begin(strategyOf(command), mode.mode(), mode.reason(), command.effectiveSeed(), 0,
                     startedAt);
             plan.fail(NO_CANDIDATES, clock.instant());
             plans.update(plan);
@@ -150,11 +162,12 @@ public class RunPlanService implements RunPlanUseCase {
         }
 
         RuleSet ruleSet = rules.forCamp(command.campId());
-        plan.begin(strategyOf(command), command.effectiveMode(), command.effectiveSeed(),
+        plan.begin(strategyOf(command), mode.mode(), mode.reason(), command.effectiveSeed(),
                 ruleSet.version(), startedAt);
         plans.update(plan);
 
-        PlanningProblem problem = problemOf(command, plan, plannable, ruleSet, startedAt);
+        PlanningProblem problem =
+                problemOf(command, plan, plannable, ruleSet, startedAt, mode.mode());
         PlanResult result = DispatchStrategies.create(strategyOf(command)).plan(problem);
 
         List<PlanValidator.Violation> violations = validator.validate(problem, result);
@@ -179,6 +192,27 @@ public class RunPlanService implements RunPlanUseCase {
         }
 
         return publish(command, plan, result, startedAt);
+    }
+
+    /**
+     * 이 계획을 어떤 모드로 돌릴지 (§6.7, ADR-034).
+     *
+     * <p>사실 둘의 출처가 다르다 — 랙은 <strong>부르는 쪽</strong>이 싣고 오고(Kafka 어댑터만
+     * 안다), 직전 계획 시간은 <strong>DB</strong> 가 답한다. 유스케이스는 둘을 모으기만 하고
+     * 판단은 도메인({@link PlanModeSelector})이 한다.
+     */
+    private PlanModeSelector.Decision chooseMode(RunPlanCommand command) {
+        Duration last = plans.lastPublishedDuration(command.campId()).orElse(null);
+        PlanModeSelector.Decision decision =
+                modeSelector.select(command.mode(), command.backlog(), last, budget.total());
+
+        if (decision.reason().isDegraded()) {
+            // 열화는 조용하면 안 된다 — 무엇을 포기했는지 로그와 메트릭 둘 다에 남는다(§6.7).
+            log.warn("열화 모드로 계획합니다: waveId={} campId={} 사유={} 파티션랙={} 직전계획={}ms",
+                    command.waveId(), command.campId(), decision.reason(), command.backlog(),
+                    last == null ? null : last.toMillis());
+        }
+        return decision;
     }
 
     private Outcome publish(RunPlanCommand command, RoutePlan plan, PlanResult result,
@@ -278,7 +312,7 @@ public class RunPlanService implements RunPlanUseCase {
     }
 
     private PlanningProblem problemOf(RunPlanCommand command, RoutePlan plan,
-            List<DispatchCandidate> plannable, RuleSet ruleSet, Instant startedAt) {
+            List<DispatchCandidate> plannable, RuleSet ruleSet, Instant startedAt, PlanMode mode) {
 
         List<VehicleSpec> fleet = vehicles.availableAt(command.campId(), startedAt);
         if (fleet.isEmpty()) {
@@ -299,7 +333,7 @@ public class RunPlanService implements RunPlanUseCase {
         return new PlanningProblem(
                 new WaveRef(command.waveId(), command.campId(), "SAME_DAY", startedAt),
                 new CampDepot(command.campId(), point), optimizerCandidates, fleet, ruleSet, cost,
-                distance, budget, startedAt, command.effectiveSeed());
+                distance, budget, mode, startedAt, command.effectiveSeed());
     }
 
     private static List<UUID> orderIdsOf(PlannedRoute route) {

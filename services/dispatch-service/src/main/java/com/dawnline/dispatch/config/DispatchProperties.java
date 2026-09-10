@@ -10,10 +10,26 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * @param plan     계획 실행 설정
  * @param distance 거리 계산 설정
+ * @param priority 후보 우선도 점수표
+ * @param degrade  열화 모드 임계 (§6.7)
  */
 @ConfigurationProperties(prefix = "dawnline.dispatch")
 public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance distance,
-        @DefaultValue Priority priority) {
+        @DefaultValue Priority priority, @DefaultValue Degrade degrade) {
+
+    /**
+     * 열화 모드 임계 (§6.7, ADR-034). 기본값은 설계서의 두 수 그대로다 —
+     * <strong>랙 3 웨이브</strong>, <strong>예산의 80%</strong>.
+     *
+     * <p>설정으로 두는 이유는 이 둘이 정책이기 때문이다. 캠프 규모와 러너 사양에 따라 "밀렸다"
+     * 의 뜻이 달라지고, 임계를 바꾸는 데 배포가 필요하면 성수기 한복판에서 바꿀 수 없다.
+     *
+     * @param maxBacklogWaves 이 수를 넘으면 열화한다 (레코드 수 = 웨이브 수)
+     * @param budgetRatio     직전 계획이 예산의 이 비율을 넘겼으면 열화한다
+     */
+    public record Degrade(@DefaultValue("3") long maxBacklogWaves,
+            @DefaultValue("0.8") double budgetRatio) {
+    }
 
     /**
      * 후보 우선도 점수표 (§6.3, ADR-028). 우선도는 선언이 아니라 <strong>파생</strong>이고,

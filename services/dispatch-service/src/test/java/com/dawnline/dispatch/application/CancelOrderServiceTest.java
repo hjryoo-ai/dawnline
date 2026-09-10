@@ -11,6 +11,7 @@ import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanMode;
+import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
@@ -250,7 +251,7 @@ class CancelOrderServiceTest {
         RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), CAMP_ID,
                 InMemoryDispatchPorts.CAMP);
         plans.insertIfAbsent(plan);
-        plan.begin("baseline-nn", PlanMode.FULL, 1L, 1, NOW);
+        plan.begin("baseline-nn", PlanMode.FULL, PlanModeReason.NONE, 1L, 1, NOW);
         plans.update(plan);
         return plan;
     }

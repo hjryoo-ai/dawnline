@@ -15,6 +15,7 @@ import com.dawnline.dispatch.application.CancelOrderService;
 import com.dawnline.dispatch.application.DispatchMetrics;
 import com.dawnline.dispatch.application.LoadCandidateService;
 import com.dawnline.dispatch.domain.CandidatePriority;
+import com.dawnline.dispatch.domain.PlanModeSelector;
 import com.dawnline.dispatch.application.ManageResourcesService;
 import com.dawnline.dispatch.application.ReassignStopService;
 import com.dawnline.dispatch.application.RecoverStalePlansService;
@@ -175,7 +176,9 @@ public class DispatchApplicationConfig {
 
         return new RunPlanService(plans, candidates, routes, events, reference, reference,
                 distance, metrics, clock, properties.plan().defaultStrategy(),
-                new PlanningBudget(properties.plan().budget(), properties.plan().perRouteBudget()));
+                new PlanningBudget(properties.plan().budget(), properties.plan().perRouteBudget()),
+                new PlanModeSelector(properties.degrade().maxBacklogWaves(),
+                        properties.degrade().budgetRatio()));
     }
 
     /**

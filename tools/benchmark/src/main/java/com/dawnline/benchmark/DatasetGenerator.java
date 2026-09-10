@@ -3,6 +3,7 @@ package com.dawnline.benchmark;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
+import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
@@ -96,8 +97,9 @@ public final class DatasetGenerator {
      *
      * @param rules  적용할 룰 묶음
      * @param budget 시간 예산
+     * @param mode   실행 모드 (§6.7). {@code FAST} 는 개선 단계를 생략한다
      */
-    public PlanningProblem generate(RuleSet rules, PlanningBudget budget) {
+    public PlanningProblem generate(RuleSet rules, PlanningBudget budget, PlanMode mode) {
         RandomGenerator random = new Random(seed);
         UUID campId = Ids.newId();
         CampDepot depot = new CampDepot(campId, CAMP);
@@ -115,6 +117,7 @@ public final class DatasetGenerator {
                 // 도로계수 1.3, 평균 25 km/h — §6.2 의 기본값
                 new HaversineDistance(1.3d, 25.0d),
                 budget,
+                mode,
                 startedAt,
                 seed);
     }

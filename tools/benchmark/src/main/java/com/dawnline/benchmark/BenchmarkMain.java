@@ -48,17 +48,17 @@ public final class BenchmarkMain {
                 maxOneTenth(options.budget()));
 
         PlanningProblem problem = new DatasetGenerator(options.dataset(), options.seed(), startedAt)
-                .generate(rules, budget);
+                .generate(rules, budget, options.mode());
 
-        System.err.printf("데이터셋 %s · 주문 %d · 차량 %d · seed %d · 전략 %s · %d회%n",
+        System.err.printf("데이터셋 %s · 주문 %d · 차량 %d · seed %d · 전략 %s · 모드 %s · %d회%n",
                 options.dataset().cliName(), problem.candidates().size(), problem.vehicles().size(),
-                options.seed(), options.strategies(), options.repeats());
+                options.seed(), options.strategies(), options.mode(), options.repeats());
 
         Map<String, StrategySummary> summaries = BenchmarkRunner.standard(registry)
                 .run(problem, options.strategies(), options.repeats());
 
         String report = new MarkdownReport(options.dataset(), options.seed(), options.repeats(),
-                startedAt, SourceVersion.detect()).render(summaries);
+                options.mode(), startedAt, SourceVersion.detect()).render(summaries);
         write(report, options.out());
 
         if (options.gate() != null) {

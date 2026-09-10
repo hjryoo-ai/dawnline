@@ -55,7 +55,8 @@ public class PlanController {
      * @param waveId   대상 웨이브
      * @param campId   캠프. 이미 계획이 있으면 생략할 수 있다
      * @param strategy 전략 이름. 생략하면 설정의 기본 전략 (§6.6)
-     * @param mode     실행 모드. 생략하면 {@code FULL} (§6.7)
+     * @param mode     실행 모드. <strong>생략하면 자동 판단</strong>이다 (§6.7, ADR-034) —
+     *                 지정하면 사람의 결정이므로 자동 판단을 이기고, 열화로 세지 않는다
      */
     @PostMapping("/{waveId}/run")
     @ApiResponses({
@@ -70,9 +71,11 @@ public class PlanController {
                 .map(PlanView::campId)
                 .orElseThrow(() -> NotFoundException.of("RoutePlan", waveId.toString()));
 
+        // 랙은 null 이다 — 웹 경로에는 볼 파티션이 없다. 0 으로 접으면 "랙 없음" 이 되어
+        // 열화 조건 하나가 조용히 「아니오」가 된다(ADR-034).
         RunPlanUseCase.Outcome outcome = runPlan.run(new RunPlanCommand(waveId, camp, null,
                 strategy, mode == null ? null : PlanMode.valueOf(mode.toUpperCase(Locale.ROOT)),
-                null));
+                null, null));
         return ResponseEntity.ok(new RunPlanResponse(waveId, outcome.name()));
     }
 

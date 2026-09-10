@@ -3,6 +3,7 @@ package com.dawnline.dispatch.adapter.out.persistence;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Money;
 import com.dawnline.dispatch.domain.PlanMode;
+import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
 import jakarta.persistence.Column;
@@ -42,6 +43,11 @@ public class RoutePlanEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "mode", length = 8)
     private @Nullable PlanMode mode;
+
+    /** 왜 그 모드였는가 (V5, §6.7). {@code mode} 만으로는 "왜 FAST 였나" 에 답할 수 없다. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "mode_reason", length = 16)
+    private @Nullable PlanModeReason modeReason;
 
     @Column(name = "seed")
     private @Nullable Long seed;
@@ -88,8 +94,9 @@ public class RoutePlanEntity {
     public RoutePlan toDomain() {
         GeoPoint depot = depotLat == null || depotLng == null ? null
                 : GeoPoint.of(depotLat.doubleValue(), depotLng.doubleValue());
-        return RoutePlan.rehydrate(id, waveId, campId, status, strategy, mode, seed, ruleVersion,
-                startedAt, finishedAt, totalCostKrw == null ? null : Money.krw(totalCostKrw),
+        return RoutePlan.rehydrate(id, waveId, campId, status, strategy, mode, modeReason, seed,
+                ruleVersion, startedAt, finishedAt,
+                totalCostKrw == null ? null : Money.krw(totalCostKrw),
                 assignedCount, unassignedCount, planDurationMs, failureReason, depot, version);
     }
 
@@ -106,6 +113,7 @@ public class RoutePlanEntity {
         this.status = plan.status();
         this.strategy = plan.strategy().orElse(null);
         this.mode = plan.mode().orElse(null);
+        this.modeReason = plan.modeReason().orElse(null);
         this.seed = plan.seed().orElse(null);
         this.ruleVersion = plan.ruleVersion().orElse(null);
         this.startedAt = plan.startedAt().orElse(null);

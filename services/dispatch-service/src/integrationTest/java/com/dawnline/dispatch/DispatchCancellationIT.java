@@ -223,7 +223,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
     private Planned plannedRoute() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 8);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         UUID routeId = plan.routes().getFirst().routeId();
         RouteView route = tx().execute(status -> planQueries.findRoute(routeId)).orElseThrow();
@@ -242,7 +242,7 @@ class DispatchCancellationIT extends DispatchIntegrationTestBase {
     private TwoRoutes twoRoutes() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 40);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         assertThat(plan.routes()).as("재배정을 보려면 라우트가 둘 이상이어야 한다").hasSizeGreaterThan(1);
 

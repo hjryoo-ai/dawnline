@@ -101,6 +101,17 @@ final class InMemoryDispatchPorts {
         }
 
         @Override
+        public Optional<Duration> lastPublishedDuration(UUID campId) {
+            // 마지막으로 발행된 것 — 삽입 순서가 곧 발행 순서다(이 흉내에서는 한 번에 하나씩 돈다).
+            return byId.values().stream()
+                    .filter(plan -> plan.campId().equals(campId))
+                    .filter(plan -> plan.status() == PlanStatus.PUBLISHED)
+                    .flatMap(plan -> plan.planDurationMs().stream())
+                    .reduce((first, second) -> second)
+                    .map(Duration::ofMillis);
+        }
+
+        @Override
         public void update(RoutePlan plan) {
             byId.put(plan.id(), plan);
         }

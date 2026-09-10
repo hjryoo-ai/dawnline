@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.domain.optimizer;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
@@ -70,7 +71,7 @@ final class OptimizerFixtures {
 
     static PlanningProblem problem(RuleSet rules, List<VehicleSpec> vehicles, List<Candidate> candidates) {
         return new PlanningProblem(wave(), depot(), candidates, vehicles, rules, new CostModel(),
-                distance(), new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)),
+                distance(), new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)), PlanMode.FULL,
                 START, 42L);
     }
 }

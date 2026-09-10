@@ -166,7 +166,7 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seedCandidates(waveId, 6);
 
-        RunPlanUseCase.Outcome outcome = runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        RunPlanUseCase.Outcome outcome = runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
 
         assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
         List<ConsumerRecord<String, String>> records =
@@ -187,7 +187,7 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seedCandidates(waveId, 3);
 
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         List<ConsumerRecord<String, String>> records =
                 drainUntil(waveId, orderIds, ROUTE_ASSIGNED, ORDER_DISPATCHED, PLAN_COMPLETED);
 
@@ -201,7 +201,7 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seedCandidates(waveId, 4);
 
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
 
         List<CandidateStatus> statuses = tx().execute(status -> orderIds.stream()
                 .map(id -> candidates.findById(id).orElseThrow().status()).toList());
@@ -218,9 +218,9 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 3);
 
-        assertThat(runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP)))
+        assertThat(runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
-        assertThat(runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP)))
+        assertThat(runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.ALREADY_PUBLISHED);
         assertThat(count("route_plans")).isEqualTo(1L);
     }
@@ -229,7 +229,7 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
     void 후보가_없으면_plan_failed_가_나간다() {
         UUID waveId = Ids.newId();
 
-        assertThat(runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP)))
+        assertThat(runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.NO_CANDIDATES);
 
         List<ConsumerRecord<String, String>> records = drainUntil(waveId, List.of(), PLAN_FAILED);
@@ -244,7 +244,7 @@ class PlanExecutionIT extends DispatchIntegrationTestBase {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 5);
 
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
 
         assertThat(count("routes")).isPositive();
         assertThat(count("route_stops")).isPositive();

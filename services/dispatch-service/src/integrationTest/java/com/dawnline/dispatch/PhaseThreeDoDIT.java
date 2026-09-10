@@ -117,7 +117,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
         UUID waveId = Ids.newId();
         Seeded seeded = seedMixedColdCandidates(waveId, 400);
 
-        tx().executeWithoutResult(status -> runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP)));
+        tx().executeWithoutResult(status -> runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null)));
 
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         List<PlanView.ExplanationView> assignedCold = plan.explanations().stream()
@@ -155,7 +155,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
         // 배정 수가 흔들린다 — 마감 문서에 옮겨 적을 수 없는 값이 된다.
         long startedNanos = System.nanoTime();
         tx().executeWithoutResult(status ->
-                runPlan.run(new RunPlanCommand(waveId, CAMP_ID, CAMP, null, null, 20260905L)));
+                runPlan.run(new RunPlanCommand(waveId, CAMP_ID, CAMP, null, null, 20260905L, null)));
         Duration wallClock = Duration.ofNanos(System.nanoTime() - startedNanos);
 
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();

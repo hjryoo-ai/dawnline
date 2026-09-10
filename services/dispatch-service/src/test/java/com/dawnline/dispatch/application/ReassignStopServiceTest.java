@@ -11,6 +11,7 @@ import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.PlanMode;
+import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
@@ -146,7 +147,7 @@ class ReassignStopServiceTest {
         RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), CAMP_ID,
                 InMemoryDispatchPorts.CAMP);
         plans.insertIfAbsent(plan);
-        plan.begin("baseline-nn", PlanMode.FULL, 1L, 1, NOW);
+        plan.begin("baseline-nn", PlanMode.FULL, PlanModeReason.NONE, 1L, 1, NOW);
         plans.update(plan);
         return plan;
     }

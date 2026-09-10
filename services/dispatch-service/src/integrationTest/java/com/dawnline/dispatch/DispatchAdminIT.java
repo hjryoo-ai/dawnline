@@ -165,7 +165,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     void 계획_조회가_라우트_요약과_설명을_함께_돌려준다() {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seedCandidates(waveId, 8);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
 
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
 
@@ -187,7 +187,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     void 같은_계획을_식별자로도_찾는다() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 4);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         UUID planId = tx().execute(status -> planQueries.findPlanByWave(waveId))
                 .orElseThrow().planId();
 
@@ -209,7 +209,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     void 라우트_조회가_stop_과_주문을_순서대로_돌려준다() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 8);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         UUID routeId = plan.routes().getFirst().routeId();
 
@@ -468,7 +468,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     private TwoRoutes twoRoutes() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 40);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         assertThat(plan.routes()).as("재배정을 보려면 라우트가 둘 이상이어야 한다").hasSizeGreaterThan(1);
 

@@ -2,6 +2,7 @@ package com.dawnline.benchmark;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
@@ -68,7 +69,7 @@ class DatasetFeasibilityTest {
     private static final boolean[] BOTH = {false, true};
 
     private static PlanningProblem problem(Dataset dataset) {
-        return new DatasetGenerator(dataset, 20_260_905L, START).generate(RuleSet.empty(), BUDGET);
+        return new DatasetGenerator(dataset, 20_260_905L, START).generate(RuleSet.empty(), BUDGET, PlanMode.FULL);
     }
 
     @ParameterizedTest

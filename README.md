@@ -120,6 +120,14 @@ cost(R) = Σ_r [ fixed(v) + dist_km·perKm(v) + dur_min·perMin(v) + Σ_stop lat
 > −43.98% 가 나왔지만 그것은 자가 반대로 휜 것이었고(`baseline-nn` 이 늘어난 차량을 쓰지 못해 더 나빠졌다), §6.5 1단계의 통합 키에서 **제약 전파**를 없애자 베이스라인이 크게 좋아지며 −14.53% 가 남았다. 세 열의 기록은
 > [`phase4-constraint-classes.md`](docs/benchmarks/phase4-constraint-classes.md) 에 있다 — «데이터로 통과시키지 않았다» 는 것을 그 표가 증명한다. `p95 ≤ 30초` 는 **5,829 ms 로 통과**한다.
 
+> **열화(FAST) 모드는 무엇을 포기하는지 수치로 말한다** ([`phase4-fast-mode.md`](docs/benchmarks/phase4-fast-mode.md), ADR-034).
+> 계획이 밀리면(파티션 컨슈머 랙 > 3 웨이브, 또는 직전 계획이 예산의 80% 초과) 다음 계획은
+> §6.5 5단계(국소 탐색)를 **끈다** — 전략을 바꾸는 것이 아니다. `large` 기준 계획 p95 가
+> 5,872 → **1,569 ms**(3.7배)가 되고 총비용은 **+9.39%** 오른다. 그 대가는 세 규모에서 거의
+> 같다(+9.0 ~ +9.5%). §6.7 의 「fast mode ≤ 5초」를 1,569 ms 로 통과한다.
+> **왜 열화했는지는 계획 행에 남고**(`route_plans.mode_reason`), 운영자가 지정한 FAST 는
+> 열화로 세지 않는다 — 사람이 고른 것은 시스템이 밀려서 포기한 것이 아니다.
+
 상세: [DESIGN.md §6](docs/DESIGN.md)
 
 ---

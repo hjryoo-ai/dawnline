@@ -1,5 +1,6 @@
 package com.dawnline.benchmark;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -12,8 +13,8 @@ import java.util.Objects;
  * ./gradlew :tools:benchmark:run --args='--dataset small --strategies baseline-nn,sweep-greedy-nn+ls'
  * </pre>
  *
- * <p>라이브러리를 쓰지 않고 손으로 읽는다 — 인자가 다섯 개이고, 이 하나를 위해 의존을 늘리는 것은
- * CLAUDE.md 의 "새 라이브러리 추가는 최소화" 에 어긋난다.
+ * <p>라이브러리를 쓰지 않고 손으로 읽는다 — 인자가 열 개 미만이고, 이 하나를 위해 의존을 늘리는
+ * 것은 CLAUDE.md 의 "새 라이브러리 추가는 최소화" 에 어긋난다.
  *
  * @param dataset    데이터셋
  * @param strategies 비교할 전략들 (등록 순서 아님 — 적은 순서대로 표에 나온다)
@@ -23,9 +24,11 @@ import java.util.Objects;
  * @param rulesFile  룰 시드 JSON. {@code null} 이면 {@link RuleSeed#locate()} 가 찾는다
  * @param out        리포트 출력 경로. 없으면 표준 출력
  * @param gate       회귀 게이트의 기준 전략. {@code null} 이면 게이트 없이 리포트만 낸다
+ * @param mode       실행 모드 (§6.7). {@code FAST} 면 개선 단계를 생략한다 — §6.7 의
+ *                   「같은 조건 fast mode ≤ 5초」를 <em>재는</em> 자리다
  */
 public record BenchmarkOptions(Dataset dataset, List<String> strategies, int repeats, long seed,
-        Duration budget, Path rulesFile, Path out, String gate) {
+        Duration budget, Path rulesFile, Path out, String gate, PlanMode mode) {
 
     private static final Dataset DEFAULT_DATASET = Dataset.SMALL;
     private static final int DEFAULT_REPEATS = 5;
@@ -35,6 +38,7 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
     public BenchmarkOptions {
         Objects.requireNonNull(dataset, "dataset");
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(mode, "mode");
         strategies = List.copyOf(Objects.requireNonNull(strategies, "strategies"));
         if (strategies.isEmpty()) {
             throw new IllegalArgumentException("비교할 전략이 하나도 없습니다");
@@ -69,6 +73,7 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
         Path rules = null;
         Path out = null;
         String gate = null;
+        PlanMode mode = PlanMode.FULL;
 
         for (int i = 0; i < args.length; i++) {
             String flag = args[i];
@@ -82,11 +87,14 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                 case "--rules" -> rules = Path.of(value(args, ++i, flag));
                 case "--out" -> out = Path.of(value(args, ++i, flag));
                 case "--gate" -> gate = value(args, ++i, flag);
+                case "--mode" -> mode = PlanMode.valueOf(
+                        value(args, ++i, flag).toUpperCase(java.util.Locale.ROOT));
                 default -> throw new IllegalArgumentException(
                         "알 수 없는 인자: %s%n%s".formatted(flag, usage()));
             }
         }
-        return new BenchmarkOptions(dataset, strategies, repeats, seed, budget, rules, out, gate);
+        return new BenchmarkOptions(dataset, strategies, repeats, seed, budget, rules, out,
+                gate, mode);
     }
 
     /** 사용법. */
@@ -100,7 +108,8 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                   --budget-seconds <n>                 기본 30 (§6.7)
                   --rules <path>                       기본: 위로 올라가며 찾은 contracts/seed/dispatch-rules.json
                   --out <path>                         없으면 표준 출력
-                  --gate <strategy>                    이 전략보다 비싼 전략이 있으면 종료 코드 1 (§6.9)""";
+                  --gate <strategy>                    이 전략보다 비싼 전략이 있으면 종료 코드 1 (§6.9)
+                  --mode <full|fast>                   기본 full. fast 는 개선 단계를 생략한다 (§6.7)""";
     }
 
     private static String value(String[] args, int index, String flag) {

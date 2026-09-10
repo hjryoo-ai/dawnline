@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
+import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
@@ -63,10 +64,15 @@ class SweepGreedyNearestNeighborTest {
 
     private static PlanningProblem problem(List<Candidate> candidates, List<VehicleSpec> vehicles,
             RuleSet rules) {
+        return problem(candidates, vehicles, rules, PlanMode.FULL);
+    }
+
+    private static PlanningProblem problem(List<Candidate> candidates, List<VehicleSpec> vehicles,
+            RuleSet rules, PlanMode mode) {
         return new PlanningProblem(new WaveRef(Ids.newId(), CAMP_ID, "SAME_DAY", START),
                 new CampDepot(CAMP_ID, CAMP), candidates, vehicles, rules, new CostModel(),
                 new HaversineDistance(1.3d, 25.0d),
-                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)), START, 1L);
+                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)), mode, START, 1L);
     }
 
     private static List<Candidate> fourSectors(int perSector) {
@@ -202,6 +208,40 @@ class SweepGreedyNearestNeighborTest {
 
         assertThat(strategy.plan(problem).totalCost())
                 .isEqualTo(new SweepGreedyNearestNeighbor().plan(problem).totalCost());
+    }
+
+    @Test
+    void FAST_는_개선_단계만_생략한다() {
+        // §6.7 의 열화는 "다른 전략으로 바꾼다" 가 아니라 "이 전략의 5단계를 끈다" 이다
+        // (ADR-034). 그것이 참이면 FAST 로 돈 +ls 의 결과는 개선 단계가 없는 전략의 결과와
+        // <strong>정확히 같아야</strong> 한다 — 같지 않다면 FAST 가 다른 무언가도 끄고 있다.
+        List<Candidate> orders = fourSectors(5);
+        List<VehicleSpec> fleet = List.of(vehicle("VAN", 10_000_000, false),
+                vehicle("VAN", 10_000_000, false));
+
+        long full = SweepGreedyNearestNeighbor.withLocalSearch()
+                .plan(problem(orders, fleet, RuleSet.empty(), PlanMode.FULL)).totalCost().krw();
+        long withoutImprover =
+                new SweepGreedyNearestNeighbor().plan(problem(orders, fleet, RuleSet.empty()))
+                        .totalCost().krw();
+
+        assertThat(full)
+                .as("전제: 이 문제에서 개선 단계가 실제로 값을 만든다. 아니면 아래 어설션은 "
+                        + "'FAST 가 5단계를 끈다' 가 아니라 '5단계가 아무것도 안 한다' 로도 통과한다")
+                .isLessThan(withoutImprover);
+
+        long fast = SweepGreedyNearestNeighbor.withLocalSearch()
+                .plan(problem(orders, fleet, RuleSet.empty(), PlanMode.FAST)).totalCost().krw();
+
+        assertThat(fast).isEqualTo(withoutImprover);
+    }
+
+    @Test
+    void FAST_여도_전략_이름은_그대로다() {
+        // 이름은 "무엇을 쓰려 했는가", 모드는 "무엇을 포기했는가" 다. 이름이 바뀌면 §6.9 의
+        // 비교표에서 열화가 전략 교체로 보이고, plan.completed 의 두 필드가 같은 말을 두 번 한다.
+        assertThat(SweepGreedyNearestNeighbor.withLocalSearch().name())
+                .isEqualTo("sweep-greedy-nn+ls");
     }
 
     @Test

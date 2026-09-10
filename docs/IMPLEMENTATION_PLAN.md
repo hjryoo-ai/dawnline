@@ -662,7 +662,42 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    보이지 않았을 것이다 — 탐욕은 예산의 61%를 쓰고도 "예산 안" 이었다.
 2. `savings-cw+ls` 전략.
 3. 클러스터 병렬 처리(ForkJoin), Kafka/I/O는 가상 스레드(`spring.threads.virtual.enabled=true`) — 성능 전후 측정.
-4. FAST 모드 자동 전환(§6.7 조건), `dawnline_plan_degraded_total`, 수동 재계획 API의 `mode` 파라미터.
+4. **FAST 모드 — ✅ 완료** (2026-09-10, [ADR-034](adr/ADR-034-degrade-mode.md) · [측정](benchmarks/phase4-fast-mode.md)).
+
+   **뼈대는 이미 있었고 비어 있던 것은 가운데 한 칸이었다.** `PlanMode` enum · `RunPlanCommand.mode` ·
+   `PlanController` 의 `mode` 파라미터 · `dawnline_plan_degraded_total` 이 전부 있었는데 **그 `mode` 가
+   전략에 닿지 않았다** — `mode=FAST` 로 돌려도 개선 단계가 그대로 돌았다. 열화는 기록되기만 하고
+   아무것도 생략하지 않는 이름이었고, 그 상태의 카운터는 "성수기를 이렇게 넘겼다" 가 아니라 아무 일도
+   하지 않은 라벨의 개수를 세고 있었다.
+
+   | `sweep-greedy-nn+ls` | 계획 p95 FULL → FAST | 총비용 FULL → FAST | 열화의 대가 |
+   |---|---:|---:|---:|
+   | small | 270 → **63 ms** | 1,490,513 → 1,624,788 | +9.01% |
+   | medium | 1,283 → **542 ms** | 3,919,106 → 4,290,728 | +9.48% |
+   | large | 5,872 → **1,569 ms** (3.7배) | 8,276,130 → 9,053,096 | **+9.39%** |
+
+   §6.7 의 「같은 조건 fast mode ≤ 5초」를 `large` **1,569 ms** 로 통과한다. 그리고 이 표가 FAST 의
+   존재 이유다 — FULL 의 5,872 ms 는 30초 예산 안이지만 **5초 목표는 넘는다.**
+
+   - **FAST 가 생략하는 것은 §6.5 5단계 하나다** (전제는 [ADR-028](adr/ADR-028-unassigned-policy.md) 이
+     이미 정했다). `SweepGreedyNearestNeighborTest.FAST_는_개선_단계만_생략한다` 가 **FAST 결과 ==
+     개선 단계 없는 전략 결과**를 한 자리까지 확인하고, 「개선 단계가 이 문제에서 실제로 값을 만든다」를
+     첫 어설션으로 말한다. **전략 이름은 바뀌지 않는다** — 이름은 「무엇을 쓰려 했는가」, 모드는
+     「무엇을 포기했는가」다.
+   - **조건 둘은 역할 분담이다.** 랙은 선행(버스트를 그 순간에 본다), 직전 계획 시간은 후행. 랙 조건이
+     없으면 §8.2 의 피크를 놓치고 FULL↔FAST 로 진동한다 — 히스테리시스를 따로 두지 않는 이유다.
+   - **랙은 `Consumer#currentLag`(KIP-695).** Micrometer 게이지를 읽지 않는다 — 제어 입력을 관측
+     지표에서 읽으면 지표 이름이 바뀔 때 `NaN` 이 「랙 없음」으로 읽혀 판단이 조용히 멈춘다.
+     값은 **파티션** 단위라 「이 캠프의 랙」이 아니라 「이 캠프가 실린 소비 흐름의 랙」이다.
+   - **모름은 0이 아니다.** 사유 다섯(`REQUESTED`·`LAG`·`BUDGET`·`LAG_UNKNOWN`·`NONE`) 중
+     `LAG_UNKNOWN` 이 `NONE` 과 따로 있는 이유이고, 그 수는 새 카운터
+     `dawnline_plan_backlog_unknown_total` 이 센다. **사람이 지정한 FAST 는 열화로 세지 않는다.**
+   - **사유는 계획 행에 남는다**(`route_plans.mode_reason`, V5) — 카운터는 추세, 행은 개별 답.
+   - **인덱스는 넣지 않았다** (불변규칙 11). 기준을 먼저 쓰고(계획 시간의 1% = 58 ms) 쟀다:
+     10만 행에서 순차 스캔 **5.441 ms**(0.09%) 대 인덱스 0.025 ms. 218배지만 절대값이 기준의 1/10
+     아래다. **재검토 조건은 「캠프 100개」 또는 「`route_plans` 100만 행」.**
+   - `small` 에서 FAST 는 베이스라인보다 **+6.09%** 비싸다. 숨기지 않는다 — 다만 `small` 은 FULL 로도
+     p95 가 270 ms 라 애초에 열화 조건에 닿지 않는다.
 5. 벤치마크: 4개 데이터셋 × 3~4 전략 × 5회, 중앙값·p95, `docs/benchmarks/<date>-strategies.md`. README에 표 링크.
 6. (선택) `timefold` 전략 실험 → ADR-004 결론에 수치 반영. 기본 경로에 포함하지 않는다.
 7. ADR-004, 008 확정.
@@ -892,7 +927,16 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 - 5,000 주문 계획 p95 ≤ 30초(미달 시 프로파일링 결과·병목 문서화).
   - **통과 — 5,829 ms** (여유 5배). Phase 3 대비 탐욕 단계가 15배 빨라진 것이 함께 들어 있다.
 - 계획 시간 예산을 5초로 줄였을 때 FAST 모드로 전환되고 결과가 여전히 하드 룰을 만족.
-  - 4번 작업. `sweep-greedy-nn` 이 그 모드의 기본이다(§6.6·ADR-032).
+  - **통과** ([측정](benchmarks/phase4-fast-mode.md) §6). `--budget-seconds 5` 로 `large` 를 돌리면
+    FULL 이 **4,930 ms** — [ADR-032](adr/ADR-032-local-search-budget-and-approximations.md) 의 패스
+    단위 예산이 개선 단계를 끊은 값이고, 잘린 대가는 **+0.21%** 뿐이다. 그 4,930 ms 는 예산의
+    98.6% 라 임계 80%(4,000 ms)를 넘고, **다음 계획은 `BUDGET` 사유로 FAST** 가 된다
+    (`PlanModeSelectorTest`·`RunPlanServiceTest` 가 그 전이를 확인한다). FAST 는 **1,567 ms**
+    (예산의 31%)이고, 하드 룰은 두 모드 5회 전부 `PlanValidator` 를 통과했다 —
+    `BenchmarkRunner` 가 회차마다 돌린다.
+  - **정정**: 이전에 여기 적혀 있던 "`sweep-greedy-nn` 이 그 모드의 기본이다" 는 틀렸다.
+    FAST 는 **전략을 바꾸지 않는다** — 같은 전략의 §6.5 5단계를 끄는 것이고, 계획 행의 전략
+    이름은 `sweep-greedy-nn+ls` 로 남는다([ADR-034](adr/ADR-034-degrade-mode.md)).
 
 ---
 

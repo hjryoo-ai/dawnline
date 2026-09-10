@@ -36,11 +36,17 @@ import org.jspecify.annotations.Nullable;
  *       지각 페널티를 함께 최소화한다.</li>
  * </ol>
  *
- * <h2>개선 단계는 켜고 끈다</h2>
+ * <h2>개선 단계는 켜고 끈다 — 두 축으로</h2>
  * §6.5 5단계({@link LocalSearchImprover})가 붙은 것이 {@code sweep-greedy-nn+ls} 이고, 나머지는
  * 전부 같다. <strong>두 클래스로 나누지 않는 이유</strong>는 1~4단계가 갈라지면 §6.9 의 비교표가
- * "개선 단계의 값어치" 가 아니라 "두 구현의 차이" 를 재게 되기 때문이다. 같은 이유로 §6.7 의
- * 열화 모드(FAST)도 이 자리를 끄는 것으로 표현된다.
+ * "개선 단계의 값어치" 가 아니라 "두 구현의 차이" 를 재게 되기 때문이다.
+ *
+ * <p>축은 둘이다. <strong>전략 이름</strong>이 "이 계획에 개선 단계가 있는가" 를 정하고(§6.6 —
+ * 벤치마크가 값어치를 재는 자리), <strong>모드</strong>가 "지금 그것을 돌 여유가 있는가" 를
+ * 정한다(§6.7 — 운영이 밀릴 때 포기하는 자리). 둘을 한 축으로 접으면 열화가 전략 교체로 보이고,
+ * {@code dawnline_plan_duration_seconds} 의 {@code strategy}·{@code mode} 두 라벨이 같은 것을
+ * 두 번 말하게 된다. 그래서 FAST 로 돈 {@code +ls} 계획도 이름은 {@code +ls} 다 — 그 웨이브에
+ * <em>무엇을 쓰려 했는지</em>와 <em>무엇을 포기했는지</em>가 둘 다 남아야 한다.
  */
 public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
 
@@ -106,7 +112,7 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
         List<RouteAccumulator> finished = repaired.routes();
         unassigned = repaired.unassigned();
 
-        if (improver != null) {
+        if (improver != null && problem.runsImprovement()) {
             finished = improver.improve(problem, finished,
                     System.nanoTime() - startedNanos).routes();
             // 개선 단계는 <strong>자리를 만든다</strong> — 라우트가 짧아지면 근무창·약속창에
