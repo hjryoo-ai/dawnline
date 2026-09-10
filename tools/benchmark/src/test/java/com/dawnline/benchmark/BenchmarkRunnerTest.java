@@ -37,7 +37,7 @@ class BenchmarkRunnerTest {
             new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3));
 
     private PlanningProblem problem(RuleSet rules) {
-        return new DatasetGenerator(Dataset.SMALL, 1L, START).generate(rules, BUDGET, PlanMode.FULL);
+        return new DatasetGenerator(Dataset.SMALL, 1L, START).generate(rules, BUDGET, PlanMode.FULL, 1.0d);
     }
 
     @Test

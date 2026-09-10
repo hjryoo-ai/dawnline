@@ -71,7 +71,7 @@ final class OptimizerFixtures {
 
     static PlanningProblem problem(RuleSet rules, List<VehicleSpec> vehicles, List<Candidate> candidates) {
         return new PlanningProblem(wave(), depot(), candidates, vehicles, rules, new CostModel(),
-                distance(), new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)), PlanMode.FULL,
+                distance(), new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)), PlanMode.FULL, 1.0d,
                 START, 42L);
     }
 }

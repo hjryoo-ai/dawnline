@@ -178,7 +178,8 @@ public class DispatchApplicationConfig {
                 distance, metrics, clock, properties.plan().defaultStrategy(),
                 new PlanningBudget(properties.plan().budget(), properties.plan().perRouteBudget()),
                 new PlanModeSelector(properties.degrade().maxBacklogWaves(),
-                        properties.degrade().budgetRatio()));
+                        properties.degrade().budgetRatio(),
+                        properties.degrade().budgetFactor()));
     }
 
     /**

@@ -26,7 +26,7 @@ class DatasetGeneratorTest {
     private static final GeoPoint CAMP = GeoPoint.of(37.5663, 126.9779);
 
     private PlanningProblem generate(Dataset dataset, long seed) {
-        return new DatasetGenerator(dataset, seed, START).generate(RuleSet.empty(), BUDGET, PlanMode.FULL);
+        return new DatasetGenerator(dataset, seed, START).generate(RuleSet.empty(), BUDGET, PlanMode.FULL, 1.0d);
     }
 
     @Test

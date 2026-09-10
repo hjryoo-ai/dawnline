@@ -26,9 +26,13 @@ import java.util.Objects;
  * @param gate       회귀 게이트의 기준 전략. {@code null} 이면 게이트 없이 리포트만 낸다
  * @param mode       실행 모드 (§6.7). {@code FAST} 면 개선 단계를 생략한다 — §6.7 의
  *                   「같은 조건 fast mode ≤ 5초」를 <em>재는</em> 자리다
+ * @param budgetFactor 개선 예산에 곱하는 계수 (§6.7 사다리의 아랫단). 열화가 «개선을 끄는
+ *                   것»과 «덜 하는 것»으로 갈리므로, 그 둘의 대가를 나란히 재려면 이 축이
+ *                   필요하다. <strong>예산이 조이지 않으면 아무것도 하지 않는다</strong>
  */
 public record BenchmarkOptions(Dataset dataset, List<String> strategies, int repeats, long seed,
-        Duration budget, Path rulesFile, Path out, String gate, PlanMode mode) {
+        Duration budget, Path rulesFile, Path out, String gate, PlanMode mode,
+        double budgetFactor) {
 
     private static final Dataset DEFAULT_DATASET = Dataset.SMALL;
     private static final int DEFAULT_REPEATS = 5;
@@ -39,6 +43,10 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
         Objects.requireNonNull(dataset, "dataset");
         Objects.requireNonNull(budget, "budget");
         Objects.requireNonNull(mode, "mode");
+        if (!(budgetFactor > 0.0d) || budgetFactor > 1.0d) {
+            throw new IllegalArgumentException(
+                    "개선 예산 계수는 0 초과 1 이하여야 합니다: " + budgetFactor);
+        }
         strategies = List.copyOf(Objects.requireNonNull(strategies, "strategies"));
         if (strategies.isEmpty()) {
             throw new IllegalArgumentException("비교할 전략이 하나도 없습니다");
@@ -74,6 +82,7 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
         Path out = null;
         String gate = null;
         PlanMode mode = PlanMode.FULL;
+        double budgetFactor = 1.0d;
 
         for (int i = 0; i < args.length; i++) {
             String flag = args[i];
@@ -89,12 +98,14 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                 case "--gate" -> gate = value(args, ++i, flag);
                 case "--mode" -> mode = PlanMode.valueOf(
                         value(args, ++i, flag).toUpperCase(java.util.Locale.ROOT));
+                case "--budget-factor" ->
+                        budgetFactor = Double.parseDouble(value(args, ++i, flag));
                 default -> throw new IllegalArgumentException(
                         "알 수 없는 인자: %s%n%s".formatted(flag, usage()));
             }
         }
         return new BenchmarkOptions(dataset, strategies, repeats, seed, budget, rules, out,
-                gate, mode);
+                gate, mode, budgetFactor);
     }
 
     /** 사용법. */
@@ -109,7 +120,8 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                   --rules <path>                       기본: 위로 올라가며 찾은 contracts/seed/dispatch-rules.json
                   --out <path>                         없으면 표준 출력
                   --gate <strategy>                    이 전략보다 비싼 전략이 있으면 종료 코드 1 (§6.9)
-                  --mode <full|fast>                   기본 full. fast 는 개선 단계를 생략한다 (§6.7)""";
+                  --mode <full|fast>                   기본 full. fast 는 개선 단계를 생략한다 (§6.7)
+                  --budget-factor <0~1>                기본 1.0. 개선 예산에 곱한다 (§6.7 사다리)""";
     }
 
     private static String value(String[] args, int index, String flag) {

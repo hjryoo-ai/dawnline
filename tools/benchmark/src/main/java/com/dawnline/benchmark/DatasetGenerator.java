@@ -98,8 +98,10 @@ public final class DatasetGenerator {
      * @param rules  적용할 룰 묶음
      * @param budget 시간 예산
      * @param mode   실행 모드 (§6.7). {@code FAST} 는 개선 단계를 생략한다
+     * @param budgetFactor 개선 예산에 곱하는 계수 (§6.7 사다리)
      */
-    public PlanningProblem generate(RuleSet rules, PlanningBudget budget, PlanMode mode) {
+    public PlanningProblem generate(RuleSet rules, PlanningBudget budget, PlanMode mode,
+            double budgetFactor) {
         RandomGenerator random = new Random(seed);
         UUID campId = Ids.newId();
         CampDepot depot = new CampDepot(campId, CAMP);
@@ -118,6 +120,7 @@ public final class DatasetGenerator {
                 new HaversineDistance(1.3d, 25.0d),
                 budget,
                 mode,
+                budgetFactor,
                 startedAt,
                 seed);
     }

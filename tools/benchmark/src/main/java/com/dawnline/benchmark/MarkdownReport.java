@@ -25,6 +25,7 @@ public final class MarkdownReport {
     private final long seed;
     private final int repeats;
     private final PlanMode mode;
+    private final double budgetFactor;
     private final Instant generatedAt;
     private final SourceVersion source;
 
@@ -34,15 +35,18 @@ public final class MarkdownReport {
      * @param repeats     전략당 반복 횟수
      * @param mode        실행 모드 (§6.7). FAST 로 낸 표와 FULL 로 낸 표는 <strong>같은 축이
      *                    아니다</strong> — 헤더에 없으면 다음 사람이 그것을 알 방법이 없다
+     * @param budgetFactor 개선 예산 계수 (§6.7 사다리). 모드와 같은 이유로 헤더에 박는다 —
+     *                    계수가 다른 두 표는 같은 축이 아니다
      * @param generatedAt 생성 시각
      * @param source      이 리포트를 낸 소스의 커밋 (§6.9)
      */
     public MarkdownReport(Dataset dataset, long seed, int repeats, PlanMode mode,
-            Instant generatedAt, SourceVersion source) {
+            double budgetFactor, Instant generatedAt, SourceVersion source) {
         this.dataset = Objects.requireNonNull(dataset, "dataset");
         this.seed = seed;
         this.repeats = repeats;
         this.mode = Objects.requireNonNull(mode, "mode");
+        this.budgetFactor = budgetFactor;
         this.generatedAt = Objects.requireNonNull(generatedAt, "generatedAt");
         this.source = Objects.requireNonNull(source, "source");
     }
@@ -60,8 +64,8 @@ public final class MarkdownReport {
                 .append(seed).append("` · 전략 ")
                 .append(summaries.keySet().stream().map(name -> "`" + name + "`")
                         .collect(java.util.stream.Collectors.joining(", ")))
-                .append(" · 모드 **").append(mode).append("** · 전략당 ").append(repeats)
-                .append("회\n\n");
+                .append(" · 모드 **").append(mode).append("**(개선예산×").append(budgetFactor)
+                .append(") · 전략당 ").append(repeats).append("회\n\n");
         out.append("> 이 셋(커밋 · seed · 전략 이름)이 리포트의 신원이다. **다른 리포트의 절대 수치와\n");
         out.append("> 비교하기 전에 커밋이 같은지 먼저 본다** — 동결되는 것은 `baseline-nn` 클래스이지\n");
         out.append("> 그것이 쓰는 `StopMerger`·`CostModel`·거리 함수가 아니다 (§6.9).\n\n");

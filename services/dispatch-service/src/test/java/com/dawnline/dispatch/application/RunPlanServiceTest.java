@@ -83,7 +83,7 @@ class RunPlanServiceTest {
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 clock,
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
-                new PlanModeSelector(3L, 0.8d));
+                new PlanModeSelector(3L, 0.8d, 0.5d));
     }
 
     private List<UUID> seed(UUID waveId, int count) {
@@ -184,7 +184,7 @@ class RunPlanServiceTest {
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
-                new PlanModeSelector(3L, 0.8d));
+                new PlanModeSelector(3L, 0.8d, 0.5d));
 
         assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
@@ -264,9 +264,11 @@ class RunPlanServiceTest {
     }
 
     @Test
-    void 직전_계획이_예산을_넘겼으면_다음_계획이_열화한다() {
-        // §6.7 둘째 조건. "직전" 은 같은 캠프의 마지막 발행 계획이고, 저장소가 답한다 —
-        // 인메모리 홀더면 재기동에 사라지고 인스턴스마다 달라진다 (ADR-034).
+    void 직전_계획이_예산을_넘겼으면_다음_계획은_개선을_덜_한다() {
+        // §6.7 사다리의 아랫단 (ADR-034 후속 정정). "직전" 은 같은 캠프의 마지막 발행 계획이고,
+        // 저장소가 답한다 — 인메모리 홀더면 재기동에 사라지고 인스턴스마다 달라진다.
+        // **FAST 가 아니다**: 예산을 다 썼다는 것은 개선이 배고프다는 뜻이지 처리량이 모자란다는
+        // 뜻이 아니고, 두 처방의 대가가 45배 차이다.
         UUID slow = Ids.newId();
         seed(slow, 3);
         RunPlanService service = service(RuleSet.empty(), 2, stepping(Duration.ofSeconds(25)));
@@ -283,7 +285,7 @@ class RunPlanServiceTest {
         service.run(RunPlanCommand.of(next, CAMP_ID, InMemoryDispatchPorts.CAMP, 0L));
 
         assertThat(plans.findByWaveId(next)).hasValueSatisfying(plan -> {
-            assertThat(plan.mode()).contains(PlanMode.FAST);
+            assertThat(plan.mode()).as("개선을 끄지 않는다").contains(PlanMode.FULL);
             assertThat(plan.modeReason()).contains(PlanModeReason.BUDGET);
         });
     }

@@ -172,12 +172,14 @@ dawnline:
       recover-batch: 20
       recover-interval-ms: 60000
       recover-initial-delay-ms: 60000
-    # §6.7 열화 모드 임계 (ADR-034). 조건 둘은 중복이 아니라 역할 분담이다 —
-    # 랙은 선행 지표(웨이브가 몰린 순간 바로 보인다), 직전 계획 시간은 후행 지표
-    # (한 계획이 이미 늦은 뒤에 보인다). 랙 조건이 없으면 FULL↔FAST 로 진동한다.
+    # §6.7 열화 **사다리** (ADR-034 + 후속 정정). 두 조건은 다른 것을 말하므로 처방도 다르다:
+    #   랙 > 3        → 처리량이 모자란다      → FAST (개선을 끈다, 대가 +9.4%)
+    #   직전 > 예산×0.8 → 개선이 예산을 다 썼다 → 개선 예산 × 0.5 (덜 한다, 대가 1% 대)
+    # 둘을 같은 처방(FAST)으로 묶었던 것이 45배 비싼 처방이었다 — phase4-fast-mode.md §7.
     degrade:
       max-backlog-waves: 3
       budget-ratio: 0.8
+      budget-factor: 0.5
     distance:
       # §6.2 기본값. 캠프 설정값이라 코드에 상수를 두지 않는다.
       road-factor: 1.3

@@ -18,17 +18,19 @@ public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance
         @DefaultValue Priority priority, @DefaultValue Degrade degrade) {
 
     /**
-     * 열화 모드 임계 (§6.7, ADR-034). 기본값은 설계서의 두 수 그대로다 —
+     * 열화 사다리의 임계 (§6.7, [ADR-034] + 후속 정정). 앞의 두 수는 설계서 그대로다 —
      * <strong>랙 3 웨이브</strong>, <strong>예산의 80%</strong>.
      *
-     * <p>설정으로 두는 이유는 이 둘이 정책이기 때문이다. 캠프 규모와 러너 사양에 따라 "밀렸다"
+     * <p>설정으로 두는 이유는 이 셋이 정책이기 때문이다. 캠프 규모와 러너 사양에 따라 "밀렸다"
      * 의 뜻이 달라지고, 임계를 바꾸는 데 배포가 필요하면 성수기 한복판에서 바꿀 수 없다.
      *
-     * @param maxBacklogWaves 이 수를 넘으면 열화한다 (레코드 수 = 웨이브 수)
-     * @param budgetRatio     직전 계획이 예산의 이 비율을 넘겼으면 열화한다
+     * @param maxBacklogWaves 이 수를 넘으면 <strong>FAST</strong> 다 (레코드 수 = 웨이브 수)
+     * @param budgetRatio     직전 계획이 예산의 이 비율을 넘겼으면 개선 예산을 줄인다
+     * @param budgetFactor    그때 개선 예산에 곱하는 계수. 기본 0.5 — <strong>절반</strong>
      */
     public record Degrade(@DefaultValue("3") long maxBacklogWaves,
-            @DefaultValue("0.8") double budgetRatio) {
+            @DefaultValue("0.8") double budgetRatio,
+            @DefaultValue("0.5") double budgetFactor) {
     }
 
     /**

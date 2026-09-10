@@ -83,7 +83,8 @@ public final class LocalSearchImprover {
      *
      * @param problem      계획 입력
      * @param seeded       차량 순서대로의 라우트들 (빈 것 포함). 이 목록은 바뀌지 않는다
-     * @param elapsedNanos 앞 단계들이 이미 쓴 시간. 남은 예산 = {@code budget.total() − 이 값}
+     * @param elapsedNanos 앞 단계들이 이미 쓴 시간. 개선 예산은
+     *                     {@code (budget.total() − 이 값) × budgetFactor} 다 (§6.7 사다리)
      * @return 개선된 라우트들. 입력과 같은 순서·같은 길이다
      */
     public Outcome improve(PlanningProblem problem, List<RouteAccumulator> seeded,
@@ -91,7 +92,7 @@ public final class LocalSearchImprover {
 
         Objects.requireNonNull(problem, "problem");
         Objects.requireNonNull(seeded, "seeded");
-        long remaining = problem.budget().total().toNanos() - elapsedNanos;
+        long remaining = problem.improvementNanos(elapsedNanos);
         return new Search(problem, seeded, nanoTime.getAsLong() + remaining).run();
     }
 

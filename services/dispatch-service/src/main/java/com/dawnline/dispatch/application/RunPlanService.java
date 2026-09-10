@@ -11,7 +11,6 @@ import com.dawnline.dispatch.application.port.out.RuleCatalog;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
-import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeSelector;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
@@ -63,6 +62,9 @@ import org.springframework.transaction.annotation.Transactional;
  * §6.7 의 열화는 <strong>래치가 아니다</strong>. {@link PlanModeSelector} 가 매번 두 사실을
  * 다시 본다 — 이 파티션이 얼마나 밀렸는가(레코드가 싣고 온다), 같은 캠프의 직전 계획이 예산을
  * 얼마나 썼는가(DB 가 답한다). 그래서 "한 번 열화하면 누가 되돌리는가" 라는 질문이 없다.
+ *
+ * <p>그리고 <strong>사다리</strong>다 — 둘은 같은 처방을 내지 않는다. 랙만 FAST 로 보내고,
+ * 예산 조건은 다음 계획의 <em>개선 예산</em>만 줄인다({@code budgetFactor}).
  *
  * <h2>발행 직전 재검증</h2>
  * 계획은 시작 시점 스냅샷으로 돈다. 그 사이 도착한 취소는 반영되지 않았으므로, 발행 직전에
@@ -166,8 +168,7 @@ public class RunPlanService implements RunPlanUseCase {
                 ruleSet.version(), startedAt);
         plans.update(plan);
 
-        PlanningProblem problem =
-                problemOf(command, plan, plannable, ruleSet, startedAt, mode.mode());
+        PlanningProblem problem = problemOf(command, plan, plannable, ruleSet, startedAt, mode);
         PlanResult result = DispatchStrategies.create(strategyOf(command)).plan(problem);
 
         List<PlanValidator.Violation> violations = validator.validate(problem, result);
@@ -208,8 +209,9 @@ public class RunPlanService implements RunPlanUseCase {
 
         if (decision.reason().isDegraded()) {
             // 열화는 조용하면 안 된다 — 무엇을 포기했는지 로그와 메트릭 둘 다에 남는다(§6.7).
-            log.warn("열화 모드로 계획합니다: waveId={} campId={} 사유={} 파티션랙={} 직전계획={}ms",
-                    command.waveId(), command.campId(), decision.reason(), command.backlog(),
+            log.warn("열화합니다: waveId={} campId={} 사유={} 모드={} 개선예산×{} 파티션랙={} 직전계획={}ms",
+                    command.waveId(), command.campId(), decision.reason(), decision.mode(),
+                    decision.budgetFactor(), command.backlog(),
                     last == null ? null : last.toMillis());
         }
         return decision;
@@ -312,7 +314,8 @@ public class RunPlanService implements RunPlanUseCase {
     }
 
     private PlanningProblem problemOf(RunPlanCommand command, RoutePlan plan,
-            List<DispatchCandidate> plannable, RuleSet ruleSet, Instant startedAt, PlanMode mode) {
+            List<DispatchCandidate> plannable, RuleSet ruleSet, Instant startedAt,
+            PlanModeSelector.Decision mode) {
 
         List<VehicleSpec> fleet = vehicles.availableAt(command.campId(), startedAt);
         if (fleet.isEmpty()) {
@@ -333,7 +336,8 @@ public class RunPlanService implements RunPlanUseCase {
         return new PlanningProblem(
                 new WaveRef(command.waveId(), command.campId(), "SAME_DAY", startedAt),
                 new CampDepot(command.campId(), point), optimizerCandidates, fleet, ruleSet, cost,
-                distance, budget, mode, startedAt, command.effectiveSeed());
+                distance, budget, mode.mode(), mode.budgetFactor(), startedAt,
+                command.effectiveSeed());
     }
 
     private static List<UUID> orderIdsOf(PlannedRoute route) {

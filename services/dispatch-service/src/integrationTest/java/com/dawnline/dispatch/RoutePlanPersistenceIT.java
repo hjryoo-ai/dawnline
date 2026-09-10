@@ -176,7 +176,7 @@ class RoutePlanPersistenceIT extends DispatchIntegrationTestBase {
         // 기준은 수치를 보기 전에 정했다: 이 질의는 계획마다 한 번 도므로, 계획 시간
         // (large 실측 5,829 ms)의 1% = 58 ms 를 넘으면 인덱스를 넣는다.
         //
-        // 측정(docs/benchmarks/phase4-fast-mode.md §5): 10만 행 · 캠프 10개 · ANALYZE 후,
+        // 측정(docs/benchmarks/phase4-fast-mode.md §6): 10만 행 · 캠프 10개 · ANALYZE 후,
         // 순차 스캔 5.441 ms (계획 시간의 0.09%) 대 (camp_id, finished_at DESC) 인덱스
         // 0.025 ms. 218배 빠르지만 절대값이 기준의 1/10 아래라 인덱스는 유지 비용만 남긴다.
         //

@@ -72,7 +72,7 @@ class BaselineNearestNeighborTest {
         return new PlanningProblem(new WaveRef(Ids.newId(), CAMP_ID, "SAME_DAY", START),
                 new CampDepot(CAMP_ID, CAMP), candidates, vehicles, rules, new CostModel(),
                 new HaversineDistance(1.3d, 25.0d),
-                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)), PlanMode.FULL, START, 1L);
+                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)), PlanMode.FULL, 1.0d, START, 1L);
     }
 
     private static RuleSet rules(RuleDefinition... definitions) {

@@ -210,6 +210,55 @@ class LocalSearchImproverTest {
                 .isEqualTo(longitudes(seeded(problem, vehicle, stops)));
     }
 
+    @Test
+    void 개선_예산_계수가_마감을_당긴다() {
+        // §6.7 사다리의 아랫단 (ADR-034 후속 정정). BUDGET 사유의 처방은 개선을 <em>끄는</em> 것이
+        // 아니라 <em>덜 하는</em> 것이고, 그것이 실제로 일어나려면 계수가 마감에 닿아야 한다.
+        //
+        // 벽시계로 재지 않는다 — 계수는 산술의 문제다. 시계를 「첫 호출은 0, 그 뒤로는 언제나
+        // 예산의 3/4」로 고정하면 계수 1.0(마감 30초)에서는 아직 시간이 남고 계수 0.5(마감 15초)
+        // 에서는 이미 지난 상태가 되어, 갈리는 것이 오직 계수뿐이다.
+        long total = Duration.ofSeconds(30).toNanos();
+        AtomicLong calls = new AtomicLong();
+        LocalSearchImprover fixed =
+                new LocalSearchImprover(() -> calls.getAndIncrement() == 0L ? 0L : total * 3 / 4);
+        List<Stop> stops = List.of(east(1), east(3), east(2), east(4));
+
+        PlanningProblem whole = problem(RuleSet.empty(), List.of(), List.of(vehicle()), 1.0d);
+        LocalSearchImprover.Outcome full =
+                fixed.improve(whole, List.of(seeded(whole, vehicle(), stops)), 0L);
+
+        assertThat(full.passes())
+                .as("전제: 계수 1.0 이면 이 시계로도 개선이 돈다. 돌지 않으면 아래 검사는 "
+                        + "「계수가 마감을 당겼다」가 아니라 「시계가 이미 지났다」를 본다")
+                .isPositive();
+
+        calls.set(0L);
+        PlanningProblem half = problem(RuleSet.empty(), List.of(), List.of(vehicle()), 0.5d);
+        LocalSearchImprover.Outcome halved =
+                fixed.improve(half, List.of(seeded(half, vehicle(), stops)), 0L);
+
+        assertThat(halved.budgetExhausted()).isTrue();
+        assertThat(halved.passes()).isZero();
+        assertThat(longitudes(halved.routes().getFirst()))
+                .as("예산이 반이면 이 시계에서는 한 패스도 못 돈다 — 씨앗 그대로여야 한다")
+                .isEqualTo(longitudes(seeded(half, vehicle(), stops)));
+    }
+
+    @Test
+    void 계수는_개선_예산에만_곱해진다() {
+        // 「개선 예산」은 total − 앞 단계가 쓴 시간이다. 계수를 total 에 곱하면 그리디가 오래
+        // 걸린 날 개선이 음수 예산을 받는다.
+        PlanningProblem half = problem(RuleSet.empty(), List.of(), List.of(vehicle()), 0.5d);
+        long elapsed = Duration.ofSeconds(10).toNanos();
+
+        assertThat(half.improvementNanos(elapsed))
+                .as("(30초 − 10초) × 0.5 = 10초")
+                .isEqualTo(Duration.ofSeconds(10).toNanos());
+        assertThat(half.improvementNanos(Duration.ofSeconds(40).toNanos()))
+                .as("이미 예산을 넘겼으면 0 이다 — 음수 마감은 과거가 된다").isZero();
+    }
+
     // ------------------------------------------------------------------ 재료
 
     /** 캠프에서 동쪽으로 {@code steps} 칸(약 0.9 km) 떨어진 지점. */
@@ -269,10 +318,16 @@ class LocalSearchImproverTest {
 
     private static PlanningProblem problem(RuleSet rules, List<Candidate> candidates,
             List<VehicleSpec> vehicles) {
+        return problem(rules, candidates, vehicles, 1.0d);
+    }
+
+    private static PlanningProblem problem(RuleSet rules, List<Candidate> candidates,
+            List<VehicleSpec> vehicles, double budgetFactor) {
 
         return new PlanningProblem(new WaveRef(Ids.newId(), CAMP_ID, "SAME_DAY", START),
                 new CampDepot(CAMP_ID, CAMP), candidates, vehicles, rules, new CostModel(),
                 new HaversineDistance(1.3d, 25.0d),
-                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)), PlanMode.FULL, START, 1L);
+                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)), PlanMode.FULL,
+                budgetFactor, START, 1L);
     }
 }

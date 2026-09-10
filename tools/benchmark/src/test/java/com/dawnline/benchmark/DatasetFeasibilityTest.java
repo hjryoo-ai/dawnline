@@ -69,7 +69,7 @@ class DatasetFeasibilityTest {
     private static final boolean[] BOTH = {false, true};
 
     private static PlanningProblem problem(Dataset dataset) {
-        return new DatasetGenerator(dataset, 20_260_905L, START).generate(RuleSet.empty(), BUDGET, PlanMode.FULL);
+        return new DatasetGenerator(dataset, 20_260_905L, START).generate(RuleSet.empty(), BUDGET, PlanMode.FULL, 1.0d);
     }
 
     @ParameterizedTest
