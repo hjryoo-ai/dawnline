@@ -40,6 +40,7 @@
 | 025 | 웨이브 편입은 `FOR SHARE`, 마감만 `FOR UPDATE`. `order_count` 는 마감 시 집계 | ✅ Accepted (2026-09-05) | [ADR-025](ADR-025-wave-admission-share-lock.md) |
 | 026 | 취소는 최적화 트리거가 아니라 입력 변경 — stop 을 죽이고 시간만 재전파한다 | ✅ Accepted (2026-09-05) | [ADR-026](ADR-026-dispatch-cancellation-window.md) |
 | 031 | 배정 동률은 「능력이 적은 차 먼저」 — id 순서는 결정이 아니라 우연이었다 | ✅ Accepted (2026-09-08) | [ADR-031](ADR-031-least-capable-first-tie-break.md) |
+| 035 | 병렬 단위는 **클러스터가 아니다** — 배정은 순차 의존, 개선의 88%는 라우트 쌍. 그리고 **벽시계가 물린 실행은 재현 대상이 아니다** | ✅ Accepted (2026-09-11) | [ADR-035](ADR-035-parallel-unit-is-not-the-cluster.md) |
 | 034 | 열화는 **사다리다** — 랙만 FAST, 예산 조건은 개선 예산 절반. 왜 열화했는지가 계획 행에 남는다 | ✅ Accepted + 후속 정정 (2026-09-10) | [ADR-034](ADR-034-degrade-mode.md) |
 | 033 | 겹친 제약은 한 대에 몰리지 않는다 — 기준 80% · 능력 분포 · 통합 키 | ✅ Accepted (2026-09-09) | [ADR-033](ADR-033-constraint-classes.md) |
 | 032 | 국소 탐색은 근사로 후보를 줄이고, 예산은 패스 단위로만 끊는다 | ✅ Accepted (2026-09-09) | [ADR-032](ADR-032-local-search-budget-and-approximations.md) |
