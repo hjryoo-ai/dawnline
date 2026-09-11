@@ -66,6 +66,22 @@ class DatasetFeasibilityTest {
      */
     private static final double CLASS_HEADROOM = 0.80d;
 
+    /**
+     * stop 수 축의 여유 — <strong>조합 기준과 같은 80%</strong>다 (2026-09-12).
+     *
+     * <p>원래 이 축만 여유가 0% 였다(「{@code 차량 수 × 120} 이하」). 그건 <em>완벽한 패킹</em>을
+     * 요구하는 수인데, 같은 이유로 중량·부피에는 이미 여유를 두고 있었다 — 축 하나만 기준이
+     * 달랐던 것이다. [ADR-033](../../../../../docs/adr/ADR-033-constraint-classes.md) 의 80%를
+     * stop 축으로 옮긴다.
+     */
+    private static final double STOP_HEADROOM = 0.80d;
+
+    // 실현 가능성 기준은 OVERLOAD 를 <strong>빼는 방식</strong>으로 적는다(EXCLUDE), 드는
+    // 방식이 아니라 — 데이터셋이 새로 생기면 자동으로 검사 대상이 되어야 한다. 드는 방식이던
+    // 2026-09-12 까지 `peak` 이 목록에 없었고, 그래서 stop 8,411 개가 슬롯 7,200 개를 넘는다는
+    // 사실을 아무도 보지 못했다. OVERLOAD 의 «일부러 어긴다» 는
+    // overload_는_stop_기준을_일부러_어긴다() 가 따로 말한다.
+
     private static final boolean[] BOTH = {false, true};
 
     private static PlanningProblem problem(Dataset dataset) {
@@ -73,7 +89,7 @@ class DatasetFeasibilityTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = Dataset.class, names = {"SMALL", "MEDIUM", "LARGE"})
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
     void 총_수요가_차량_용량의_70퍼센트를_넘지_않는다(Dataset dataset) {
         PlanningProblem problem = problem(dataset);
 
@@ -91,7 +107,7 @@ class DatasetFeasibilityTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = Dataset.class, names = {"SMALL", "MEDIUM", "LARGE"})
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
     void 냉장_수요가_냉장_차량_용량의_70퍼센트를_넘지_않는다(Dataset dataset) {
         PlanningProblem problem = problem(dataset);
 
@@ -120,7 +136,7 @@ class DatasetFeasibilityTest {
      * 기준이 <em>모델을 포함해</em> 실현 가능성을 묻는다는 뜻이다.
      */
     @ParameterizedTest
-    @EnumSource(value = Dataset.class, names = {"SMALL", "MEDIUM", "LARGE"})
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
     void 모든_제약_조합에서_수요가_그_조합의_차량_용량의_80퍼센트를_넘지_않는다(Dataset dataset) {
         PlanningProblem problem = problem(dataset);
         List<Stop> stops = StopMerger.merge(problem.candidates());
@@ -219,20 +235,21 @@ class DatasetFeasibilityTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = Dataset.class, names = {"SMALL", "MEDIUM", "LARGE"})
-    void 통합_후_stop_수가_차량_stop_상한_안에_들어간다(Dataset dataset) {
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
+    void 통합_후_stop_수가_차량_stop_슬롯의_80퍼센트를_넘지_않는다(Dataset dataset) {
         PlanningProblem problem = problem(dataset);
         List<Stop> stops = StopMerger.merge(problem.candidates());
         int slots = problem.vehicles().size() * MAX_STOPS;
 
-        assertThat(stops.size())
-                .as("%s stop %d, 슬롯 %d (차량 %d × %d) — 넘으면 MAX_STOPS_PER_ROUTE 만으로 미배정이 확정된다",
+        assertThat((double) stops.size() / slots)
+                .as("%s stop %,d / 슬롯 %,d (차량 %d × %d) — 넘으면 MAX_STOPS_PER_ROUTE 만으로 "
+                                + "미배정이 확정된다",
                         dataset.cliName(), stops.size(), slots, problem.vehicles().size(), MAX_STOPS)
-                .isLessThanOrEqualTo(slots);
+                .isLessThanOrEqualTo(STOP_HEADROOM);
     }
 
     @ParameterizedTest
-    @EnumSource(value = Dataset.class, names = {"SMALL", "MEDIUM", "LARGE"})
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
     void 유효_stop_슬롯이_stop_수의_1_2배_이상이다(Dataset dataset) {
         PlanningProblem problem = problem(dataset);
         List<Stop> stops = StopMerger.merge(problem.candidates());
@@ -249,6 +266,30 @@ class DatasetFeasibilityTest {
                                 + "아니라 차량 부족에서 나온다",
                         dataset.cliName(), effective, stops.size(), averageWeight)
                 .isGreaterThanOrEqualTo(1.2d);
+    }
+
+    /**
+     * {@code overload} 는 <strong>기준을 어기는 것이 목적</strong>이다 — 그 사실을 테스트가
+     * 스스로 말한다.
+     *
+     * <p>말하지 않으면 두 가지가 조용히 일어난다. ① 다음 사람이 이것을 결함으로 보고 «고친다»
+     * (차량을 늘린다) — 그러면 과부하 거동을 재는 자리가 사라진다. ② 반대로 누군가 이것을
+     * 정상 데이터셋으로 읽고 §6.9 비교표에 같은 절로 싣는다 — 그러면 표가 재는 것이 라우팅
+     * 품질이 아니라 용량이 된다.
+     */
+    @org.junit.jupiter.api.Test
+    void overload_는_stop_기준을_일부러_어긴다() {
+        PlanningProblem problem = problem(Dataset.OVERLOAD);
+        List<Stop> stops = StopMerger.merge(problem.candidates());
+        int slots = problem.vehicles().size() * MAX_STOPS;
+
+        assertThat((double) stops.size() / slots)
+                .as("overload stop %,d / 슬롯 %,d — 이 데이터셋의 존재 이유가 «다 못 싣는다» 다. "
+                                + "이 어설션이 깨졌다면 차량을 늘린 것이고, 그건 도구를 없앤 것이다",
+                        stops.size(), slots)
+                .isGreaterThan(STOP_HEADROOM);
+        assertThat(problem.candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
+                .hasSameSizeAs(problem(Dataset.PEAK).candidates());
     }
 
     private static long sum(List<Candidate> candidates, java.util.function.ToLongFunction<Candidate> field) {

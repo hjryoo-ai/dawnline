@@ -112,7 +112,7 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
     public static String usage() {
         return """
                 사용법: benchmark [옵션]
-                  --dataset <small|medium|large|peak>  기본 small
+                  --dataset <small|medium|large|peak|overload>  기본 small
                   --strategies <a,b,c>                 기본: 등록된 전략 전부
                   --repeats <n>                        기본 5 (§6.9)
                   --seed <n>                           기본 20260905

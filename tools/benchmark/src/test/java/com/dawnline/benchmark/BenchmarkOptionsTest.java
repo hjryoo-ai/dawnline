@@ -63,7 +63,7 @@ class BenchmarkOptionsTest {
     void 값이_빠진_옵션은_사용법과_함께_실패한다() {
         assertThatThrownBy(() -> BenchmarkOptions.parse(new String[] {"--dataset"}, REGISTERED))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("--dataset <small|medium|large|peak>");
+                .hasMessageContaining("--dataset <small|medium|large|peak|overload>");
     }
 
     @Test
