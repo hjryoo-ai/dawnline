@@ -78,4 +78,27 @@ final class RuleFixtures {
             Map<String, Object> params) {
         return new RuleDefinition(name, type, type.severity(), priority, params);
     }
+
+    /**
+     * 그 타입의 <strong>유효한</strong> 정의 하나. 타입을 도는 검사들이 함께 쓴다 — 파라미터가
+     * 한 곳에만 있어야 새 타입이 생겼을 때 고칠 자리가 하나다.
+     */
+    static RuleDefinition definitionFor(RuleType type) {
+        String name = type.name().toLowerCase(java.util.Locale.ROOT);
+        Map<String, Object> params = switch (type) {
+            case VEHICLE_ATTRIBUTE_MATCH ->
+                    Map.of("orderFlag", "requiresCold", "vehicleFlag", "isCold");
+            case VEHICLE_CAPACITY -> Map.of();
+            case MAX_STOPS_PER_ROUTE -> Map.of("max", 120);
+            case SHIFT_WINDOW -> Map.of("bufferMinutes", 30);
+            case TIME_WINDOW_LIMIT -> Map.of("hardLimitMinutes", 60);
+            case TIME_WINDOW_PENALTY -> Map.of("penaltyPerMinuteKrw", 50);
+            case ZONE_AFFINITY -> Map.of("crossZonePenaltyKrw", 2_000);
+            case PRIORITY_BOOST -> Map.of("bonusKrw", 3_000);
+            case VEHICLE_PREFERENCE ->
+                    Map.of("preferredTypes", List.of("VAN"), "penaltyKrw", 4_000);
+            case UNASSIGNED_PENALTY -> Map.of("baseKrw", 30_000, "perPriorityKrw", 20_000);
+        };
+        return definition(name, type, 10, params);
+    }
 }

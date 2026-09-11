@@ -1,5 +1,7 @@
 package com.dawnline.dispatch.domain.optimizer;
 
+import java.util.OptionalInt;
+
 /**
  * 위반하면 배정할 수 없는 룰 (DESIGN.md §6.3).
  *
@@ -31,5 +33,23 @@ public non-sealed interface HardRule extends DispatchRule {
      */
     default boolean positionIndependent() {
         return false;
+    }
+
+    /**
+     * 이 룰이 라우트 하나에 허용하는 <strong>stop 수의 상한</strong>. 상한을 말하지 않는 룰은
+     * 비어 있다 ([ADR-038]).
+     *
+     * <p>{@link #positionIndependent()} 과 같은 모양이다 — <strong>룰의 속을 여는 것이 아니라
+     * 룰이 답하는 질문을 하나 더 두는 것</strong>이다. §6.3 은 룰을 데이터로 뒀고, 그래서
+     * 클러스터러는 {@code max-stops} 의 파라미터를 읽을 수 없었다. 읽을 수 없으니 「차 한 대
+     * 몫」을 중량·부피로만 쟀고, 그 결과 <strong>묶는 축은 stop 인데 클러스터는 적재로 재는</strong>
+     * 상태가 됐다(네 데이터셋에서 클러스터 64개 전부 stop 축에 묶였다).
+     *
+     * <p>상한이 <em>있다</em>고 답하는 룰만 이 값을 준다. 여럿이면 {@link RuleSet} 이 가장 작은
+     * 것을 쓴다 — 상한은 모두 동시에 성립해야 하므로 min 이 유효 상한이다. 기본값이 「없음」인
+     * 것은 의도다: 자기 판정을 stop 수 상한으로 요약할 수 있는 룰만 스스로 답한다.
+     */
+    default OptionalInt routeStopCap() {
+        return OptionalInt.empty();
     }
 }

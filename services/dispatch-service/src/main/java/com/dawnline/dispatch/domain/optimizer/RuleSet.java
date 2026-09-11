@@ -4,6 +4,7 @@ import com.dawnline.common.Money;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 /**
  * 한 계획에 적용되는 룰 묶음 (DESIGN.md §6.3).
@@ -127,6 +128,25 @@ public final class RuleSet {
     /** 미배정 룰들 (우선순위 순). */
     public List<UnassignedRule> unassignedRules() {
         return unassigned;
+    }
+
+    /**
+     * 이 룰셋이 라우트 하나에 허용하는 <strong>유효 stop 상한</strong> ([ADR-038]).
+     *
+     * <p>답하는 룰들의 <strong>최솟값</strong>이다 — 상한은 모두 동시에 성립해야 하므로 가장 작은
+     * 것이 실제로 무는 값이고, 아무도 답하지 않으면 상한이 없다. 클러스터러가 「차 한 대 몫」을
+     * 자를 때 쓴다(§6.5 2단계): 묶는 축이 stop 인데 적재로만 재면 클러스터가 stop 축에서
+     * 두세 대 몫이 되어 배정에서 쪼개진다.
+     *
+     * <p>이 값은 <strong>계획 시작 시점 스냅샷</strong>의 것이다 — 캠프 오버라이드는 이 묶음이
+     * 만들어지기 전에 이미 병합됐다(§6.3). 계획 도중에 룰이 바뀌어도 이 계획은 자기 상한을 쓴다.
+     */
+    public OptionalInt routeStopCap() {
+        return hard.stream()
+                .map(HardRule::routeStopCap)
+                .filter(OptionalInt::isPresent)
+                .mapToInt(OptionalInt::getAsInt)
+                .min();
     }
 
     /** 하드 룰들 (우선순위 순). {@link PlanValidator} 가 최종 라우트에 다시 돌린다. */
