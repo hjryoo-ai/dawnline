@@ -82,6 +82,13 @@ make down
 - 로그: 구조화 JSON, MDC에 `orderId/waveId/routeId/eventId`. 전체 주소·고객 식별 정보는 로그 금지.
 - 예외: 도메인 예외(`DomainException` 하위) → HTTP 매핑은 `adapter.in.web`의 단일 `@ControllerAdvice`. 응답은 RFC 9457 Problem Details.
 - 테스트 이름: `메서드_상황_기대결과` 한국어 가능. 통합 테스트는 `*IT.java`, `integrationTest` 소스셋.
+- **집합을 도는 검사는 열거하지 않고 전체에서 뺀다.** 데이터셋·시드·job 처럼 *구성원이 늘어나는*
+  집합에 거는 검사는 `@EnumSource(mode = EXCLUDE, names = …)` 처럼 **빼는 방식**으로 적는다.
+  드는 방식은 새 구성원이 조용히 검사 밖에 남고 그 사실이 어디에도 나타나지 않는다 — 이 저장소에서
+  같은 부류가 세 번 있었다: 회귀 게이트 `if: false`, Compose 스모크 job 의 `needs`, 그리고
+  `DatasetFeasibilityTest` 가 `peak` 을 목록에 안 넣어 stop 8,411 > 슬롯 7,200 을 아무도 못 본 일
+  (2026-09-12). **제외한 것이 왜 제외인지를 검사하는 테스트를 함께 둔다** — 없으면 다음 사람은
+  「검토했는데 제외」와 「잊었다」를 구별할 수 없다(`docs/DESIGN.md` §13).
 - **테스트 픽스처에 시각 리터럴을 쓰지 않는다 — 주입된 시계에서 파생한다.** 운영 코드가 그 값을 벽시계와 비교하면 그 테스트는 *작성한 날로부터* 유효 기간이 생긴다. `GeoFallbackIT` 가 컷오프를 `Instant.parse("2026-09-05T…")` 로 적어 두었다가 2026-09-07 에 열 캠프 전부 배차 불가로 터졌다 — `FcSelection.isStale` 이 24시간 상한을 보기 때문이고, 실패 메시지는 캠프 코드 열 줄이라 원인이 Redis 인지 시각인지 말해 주지 않았다. DB 를 왕복만 하는 픽스처는 리터럴이어도 되지만, **값이 시계와 비교되는 경로에 들어가면 시계에서 뽑는다**(`PlanningClock` 또는 주입된 `Clock`). 어느 쪽인지는 운영 코드의 `clock.instant()` 비교 지점을 세어 판단한다.
 - **폴백 테스트는 전제를 첫 어설션으로 스스로 말한다.** "의존성 없이도 성립한다" 를 보는 테스트는 그 의존성이 <em>실제로 불가하다</em>는 것을 먼저 확인한다(`@BeforeEach` 또는 첫 줄). 전제가 조용히 무너지면 테스트는 계속 통과하면서 아무것도 검사하지 않는다 — 이 저장소에서 세 번 있었다: `PlaceOrderIT` 의 주소 고정, `OrderApiIT` 의 `tryLock`→`UNAVAILABLE` 확인, 그리고 `GeoFallbackIT` 가 살아 있는 Redis 를 보고 통과한 일(2026-09-05). 표준은 `OrderApiIT` 의 형태다.
 - 커밋: Conventional Commits (`feat(dispatch): …`, `test(order): …`, `docs(adr): …`). 한 커밋은 한 관심사.
