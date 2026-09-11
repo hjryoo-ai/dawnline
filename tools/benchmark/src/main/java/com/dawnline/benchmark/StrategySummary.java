@@ -20,6 +20,17 @@ public record StrategySummary(String strategy, List<RunOutcome> runs) {
     }
 
     /**
+     * 이 전략의 회차 중 <strong>마감에 잘린 것이 하나라도 있는가</strong>.
+     *
+     * <p>하나라도 있으면 이 행의 수치는 <em>재현 대상이 아니다</em> — 기계가 다르면 잘리는
+     * 지점이 다르다([ADR-035] 4번). 「전부 잘렸는가」가 아니라 「하나라도 잘렸는가」인 이유는,
+     * 회차마다 다르게 잘렸다면 중앙값 자체가 서로 다른 계산의 중앙값이기 때문이다.
+     */
+    public boolean anyBudgetExhausted() {
+        return runs.stream().anyMatch(RunOutcome::budgetExhausted);
+    }
+
+    /**
      * 가장 흔한 미배정 사유. 회차마다 같은 결과가 나오므로(결정적) 첫 회차의 것으로 충분하다.
      *
      * <p>"미배정 83건" 만으로는 알고리즘이 나쁜 것인지 용량이 모자란 것인지 알 수 없다.

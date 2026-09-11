@@ -1,7 +1,9 @@
 package com.dawnline.dispatch.domain.optimizer.strategy;
 
 import com.dawnline.common.GeoPoint;
+import com.dawnline.dispatch.domain.optimizer.Feasibility;
 import com.dawnline.dispatch.domain.optimizer.PlannedStop;
+import com.dawnline.dispatch.domain.optimizer.PlanningDeadline;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.Stop;
@@ -9,6 +11,7 @@ import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -47,6 +50,10 @@ final class UnassignedRepair {
     /** 라우트 하나에서 정확히 재 볼 삽입 자리 수 (거리가 가까운 순). */
     private static final int TRIED_POSITIONS = 3;
 
+    /** 마감 때문에 시도하지 못한 stop 의 사유 ([ADR-036]). */
+    private static final Feasibility DEADLINE = Feasibility.violated(
+            "plan-deadline", "계획 마감 시간이 지나 재삽입을 시도하지 못했습니다");
+
     private UnassignedRepair() {
     }
 
@@ -66,12 +73,15 @@ final class UnassignedRepair {
      * @param problem    계획 입력
      * @param seeded     차량 순서대로의 라우트들 (빈 것 포함)
      * @param unassigned 아직 배정되지 못한 stop 들
+     * @param refusals   stop 별 불가 사유. 마감에 잘린 stop 의 사유를 여기 적는다
+     * @param deadline   계획 전체의 마감 ([ADR-036])
      */
     static Outcome repair(PlanningProblem problem, List<RouteAccumulator> seeded,
-            List<Stop> unassigned) {
+            List<Stop> unassigned, Map<Stop, Feasibility> refusals, PlanningDeadline deadline) {
 
         Objects.requireNonNull(problem, "problem");
         Objects.requireNonNull(seeded, "seeded");
+        Objects.requireNonNull(deadline, "deadline");
         if (unassigned.isEmpty()) {
             return new Outcome(List.copyOf(seeded), List.of(), 0);
         }
@@ -94,6 +104,13 @@ final class UnassignedRepair {
         List<Stop> left = new ArrayList<>();
         int inserted = 0;
         for (Stop stop : queue) {
+            if (deadline.expired()) {
+                // 재삽입은 값싼 탐욕이지만 «싸다» 는 실행 가능한 문제에서만 참이다 —
+                // 미배정이 많으면 이 루프가 계획 시간의 61%가 된다([ADR-036] 의 측정).
+                left.add(stop);
+                refusals.put(stop, DEADLINE);
+                continue;
+            }
             // 실으면 오르는 비용이 안 실었을 때 무는 페널티보다 싸야 한다 (§6.1 목적함수).
             // 상한을 페널티로 두는 것이 곧 그 조건이다.
             long budget = problem.rules().unassignedPenalty(stop).krw();

@@ -3,6 +3,7 @@ package com.dawnline.benchmark;
 import com.dawnline.dispatch.domain.PlanMode;
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -52,6 +53,30 @@ public final class MarkdownReport {
     }
 
     /**
+     * <strong>재현 조건의 마지막 한 줄</strong> — 이 실행은 수렴으로 끝났는가 (§6.9, [ADR-035] 4번).
+     *
+     * <p>예산이 물려 끊긴 실행은 코어 수 이전에 <em>기계가 다르면 잘리는 지점이 다르다.</em>
+     * 그런 표를 다른 표와 나란히 놓는 것은 알고리즘이 아니라 그날의 CPU 를 비교하는 일이라,
+     * 리포트가 그 사실을 <strong>스스로 말한다.</strong>
+     */
+    private static void renderConvergence(StringBuilder out, Map<String, StrategySummary> summaries) {
+        List<String> cut = summaries.values().stream()
+                .filter(StrategySummary::anyBudgetExhausted)
+                .map(StrategySummary::strategy)
+                .toList();
+        if (cut.isEmpty()) {
+            out.append("> **수렴 종료** — 어느 회차도 계획 마감(§6.7)에 잘리지 않았다. ")
+                    .append("이 수치는 재현 가능하다.\n\n");
+            return;
+        }
+        out.append("> ⚠ **마감에 잘린 회차가 있다**: ")
+                .append(cut.stream().map(name -> "`" + name + "`")
+                        .collect(java.util.stream.Collectors.joining(", ")))
+                .append(". 잘린 지점은 기계에 달렸으므로 **이 행들은 재현 대상이 아니다** ")
+                .append("(§6.9 재현 조건, [ADR-035] 4번).\n\n");
+    }
+
+    /**
      * @param summaries 전략별 요약 (등록 순서)
      */
     public String render(Map<String, StrategySummary> summaries) {
@@ -69,6 +94,7 @@ public final class MarkdownReport {
         out.append("> 이 셋(커밋 · seed · 전략 이름)이 리포트의 신원이다. **다른 리포트의 절대 수치와\n");
         out.append("> 비교하기 전에 커밋이 같은지 먼저 본다** — 동결되는 것은 `baseline-nn` 클래스이지\n");
         out.append("> 그것이 쓰는 `StopMerger`·`CostModel`·거리 함수가 아니다 (§6.9).\n\n");
+        renderConvergence(out, summaries);
 
         out.append("| 전략 | 총비용(중앙값) | 미배정 | 주된 사유 | 차량 | 총거리 | 계획시간 p50 | p95 | 지각 stop | 평균 지각(분) |\n");
         out.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|\n");

@@ -128,7 +128,8 @@ class BenchmarkRunnerTest {
             PlannedRoute route = new PlannedRoute(problem.vehicles().getFirst().id(), stops,
                     state.distanceWithReturn(), state.durationWithReturn(), Money.ZERO);
             return new PlanResult(List.of(route), List.of(), Money.ZERO,
-                    new PlanMetrics(1, 3, 0, 1, state.distanceWithReturn(), 0, 0, 0, 0), List.of());
+                    new PlanMetrics(1, 3, 0, 1, state.distanceWithReturn(), 0, 0, 0, 0), List.of(),
+                    false);
         }
     }
 }

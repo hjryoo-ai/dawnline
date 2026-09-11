@@ -71,7 +71,7 @@ class PlanValidatorTest {
     private PlanResult resultOf(PlannedRoute route) {
         return new PlanResult(List.of(route), List.of(), Money.ZERO,
                 new PlanMetrics(1, route.orderCount(), 0, 1, route.distanceM(), 0, 0, 0, 0),
-                List.of());
+                List.of(), false);
     }
 
     @Test

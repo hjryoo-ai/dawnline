@@ -13,7 +13,9 @@ import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
 import com.dawnline.dispatch.domain.optimizer.Parcel;
+import com.dawnline.dispatch.domain.optimizer.Feasibility;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
+import com.dawnline.dispatch.domain.optimizer.PlanningDeadline;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
@@ -31,8 +33,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
@@ -55,6 +59,47 @@ class UnassignedRepairTest {
     private static final UUID CAMP_ID = Ids.newId();
     private static final TimeWindow WINDOW = new TimeWindow(START, START.plus(Duration.ofHours(8)));
 
+    /**
+     * 마감이 <strong>물지 않는</strong> 재삽입 — 이 테스트들이 재는 것은 정책이지 시간이 아니다.
+     *
+     * <p>마감이 물면 결과가 기계에 달리므로([ADR-036]) 정책 테스트는 물지 않는 마감에서 돈다.
+     * 마감이 실제로 무는 경우는 {@link #마감이_지나면_남은_것은_미배정으로_끝낸다} 가 따로 본다.
+     */
+    private static UnassignedRepair.Outcome repair(PlanningProblem problem,
+            List<RouteAccumulator> seeded, List<Stop> unassigned) {
+
+        return UnassignedRepair.repair(problem, seeded, unassigned, new LinkedHashMap<>(),
+                new PlanningDeadline(() -> 0L, Duration.ofSeconds(30)));
+    }
+
+    @Test
+    void 마감이_지나면_남은_것은_미배정으로_끝낸다() {
+        // [ADR-036]. 마감은 계획 전체의 것이고, 지나면 재삽입은 <em>시도하지 않는다</em>.
+        PlanningProblem problem = problem(coldChain(), List.of(vehicle(false)));
+        List<Stop> waiting = List.of(east(1, 0), east(2, 0));
+        Map<Stop, Feasibility> refusals = new LinkedHashMap<>();
+
+        assertThat(repair(problem, List.of(empty(problem, vehicle(false))), waiting).inserted())
+                .as("전제: 마감이 넉넉하면 이 stop 들은 실제로 실린다. 실리지 않으면 아래 검사는 "
+                        + "「마감이 잘랐다」가 아니라 「어차피 못 실었다」를 본다")
+                .isPositive();
+
+        // 시계가 출발 직후에 마감을 지난다 — 첫 stop 부터 시도하지 않는다. 벽시계로 재지
+        // 않는 이유는 예산 테스트와 같다: 갈리는 것이 오직 마감이어야 한다.
+        AtomicLong calls = new AtomicLong();
+        UnassignedRepair.Outcome outcome = UnassignedRepair.repair(problem,
+                List.of(empty(problem, vehicle(false))), waiting, refusals,
+                new PlanningDeadline(
+                        () -> calls.getAndIncrement() == 0L ? 0L : Duration.ofMinutes(1).toNanos(),
+                        Duration.ofSeconds(30)));
+
+        assertThat(outcome.inserted()).isZero();
+        assertThat(outcome.unassigned()).containsExactlyInAnyOrderElementsOf(waiting);
+        assertThat(refusals.values()).extracting(Feasibility::ruleName)
+                .as("사유가 「실을 차가 없다」면 §6.3 의 설명이 거짓말이 된다 — 시도하지 않았다")
+                .containsOnly("plan-deadline");
+    }
+
     @Test
     void 자리가_모자라면_페널티가_싼_것부터_남는다() {
         // 자리는 둘, 후보는 넷. 목적함수를 그대로 따르면 비싼 둘이 실리고 싼 둘이 남는다.
@@ -62,7 +107,7 @@ class UnassignedRepairTest {
         List<Stop> waiting = List.of(east(1, 0), east(2, 3), east(3, 1), east(4, 2));
 
         UnassignedRepair.Outcome outcome =
-                UnassignedRepair.repair(problem, List.of(empty(problem, vehicle(false))), waiting);
+                repair(problem, List.of(empty(problem, vehicle(false))), waiting);
 
         assertThat(outcome.inserted()).as("전제: 두 자리는 실제로 채워져야 한다").isEqualTo(2);
         assertThat(outcome.unassigned()).extracting(Stop::priority)
@@ -76,8 +121,7 @@ class UnassignedRepairTest {
         // <strong>더 나쁜 계획</strong>이고, 그 판단이 이 한 줄에 들어 있다.
         PlanningProblem problem = problem(cheapUnassigned(), List.of(vehicle(false)));
 
-        UnassignedRepair.Outcome outcome = UnassignedRepair.repair(problem,
-                List.of(empty(problem, vehicle(false))), List.of(east(30, 0)));
+        UnassignedRepair.Outcome outcome = repair(problem, List.of(empty(problem, vehicle(false))), List.of(east(30, 0)));
 
         assertThat(outcome.inserted()).isZero();
         assertThat(outcome.unassigned()).hasSize(1);
@@ -93,7 +137,7 @@ class UnassignedRepairTest {
                 WINDOW, 60, 0);
 
         UnassignedRepair.Outcome outcome =
-                UnassignedRepair.repair(problem, List.of(empty(problem, vehicle(false))), List.of(cold));
+                repair(problem, List.of(empty(problem, vehicle(false))), List.of(cold));
 
         assertThat(outcome.inserted()).isZero();
         assertThat(outcome.unassigned()).containsExactly(cold);
@@ -107,7 +151,7 @@ class UnassignedRepairTest {
                 List.of(OrderId.of(Ids.newId())), new Parcel(1_000, 2_000, true, false),
                 WINDOW, 60, 0);
 
-        assertThat(UnassignedRepair.repair(problem, List.of(empty(problem, vehicle(true))),
+        assertThat(repair(problem, List.of(empty(problem, vehicle(true))),
                 List.of(cold)).inserted()).isEqualTo(1);
     }
 
@@ -126,7 +170,7 @@ class UnassignedRepairTest {
 
     private static List<Integer> insertedOrder(PlanningProblem problem, List<Stop> waiting) {
         UnassignedRepair.Outcome outcome =
-                UnassignedRepair.repair(problem, List.of(empty(problem, vehicle(false))), waiting);
+                repair(problem, List.of(empty(problem, vehicle(false))), waiting);
         return outcome.routes().getFirst().state().stops().stream()
                 .map(planned -> (int) Math.round(
                         (planned.stop().point().lng() - CAMP.lng()) * 100))

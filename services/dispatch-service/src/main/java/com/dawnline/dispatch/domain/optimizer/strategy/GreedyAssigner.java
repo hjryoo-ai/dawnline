@@ -5,6 +5,7 @@ import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.Feasibility;
+import com.dawnline.dispatch.domain.optimizer.PlanningDeadline;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
@@ -45,6 +46,10 @@ import java.util.Objects;
  */
 public final class GreedyAssigner {
 
+    /** 마감 때문에 시도하지 못한 stop 의 사유 ([ADR-036]). */
+    static final Feasibility DEADLINE = Feasibility.violated(
+            "plan-deadline", "계획 마감 시간이 지나 배정을 시도하지 못했습니다");
+
     private final NearestNeighborSequencer sequencer;
 
     /**
@@ -63,11 +68,12 @@ public final class GreedyAssigner {
      * @param distance  거리 제공자
      * @param cost      비용 산식
      * @param startedAt 계획 시작 시각
+     * @param deadline  계획 전체의 마감 ([ADR-036]). 지나면 남은 클러스터는 미배정이다
      * @return 어떤 차에도 들어가지 못한 stop 들
      */
     public List<Stop> assign(List<List<Stop>> clusters, List<RouteAccumulator> routes,
             CampDepot depot, DistanceProvider distance, CostModel cost, Instant startedAt,
-            Map<Stop, Feasibility> refusals) {
+            Map<Stop, Feasibility> refusals, PlanningDeadline deadline) {
 
         // 가장 이른 약속 마감 순으로 — 시간이 급한 것부터 자리를 잡아야 지각이 준다 (§6.5 3단계).
         List<List<Stop>> ordered = new ArrayList<>(clusters);
@@ -75,6 +81,13 @@ public final class GreedyAssigner {
 
         List<Stop> unassigned = new ArrayList<>();
         for (List<Stop> cluster : ordered) {
+            if (deadline.expired()) {
+                // 마감이 오면 남은 것은 미배정으로 끝낸다 — 사유는 「시도하지 못했다」다.
+                // 「실을 차가 없다」로 적으면 §6.3 의 설명이 거짓말이 된다.
+                cluster.forEach(stop -> refusals.put(stop, DEADLINE));
+                unassigned.addAll(cluster);
+                continue;
+            }
             unassigned.addAll(place(cluster, routes, distance, cost, refusals));
         }
         unassigned.forEach(stop -> refusals.putIfAbsent(stop, lastRefusalFor(stop, routes)));

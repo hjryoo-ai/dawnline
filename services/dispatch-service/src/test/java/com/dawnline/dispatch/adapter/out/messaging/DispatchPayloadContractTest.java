@@ -143,7 +143,7 @@ class DispatchPayloadContractTest {
     void plan_completed_가_계약을_지킨다() {
         RoutePlan plan = publishedPlan();
         PlanResult result = new PlanResult(List.of(route()), List.of(), Money.krw(1_500_000),
-                new PlanMetrics(1, 2, 0, 1, 8_420, 2_340, 0, 0, 674), List.of());
+                new PlanMetrics(1, 2, 0, 1, 8_420, 2_340, 0, 0, 674), List.of(), false);
 
         CONTRACTS.validatePayload(PlanResultPayloads.COMPLETED_EVENT_TYPE,
                 PlanResultPayloads.SCHEMA_VERSION,

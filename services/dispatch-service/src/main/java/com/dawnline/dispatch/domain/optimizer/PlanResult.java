@@ -15,9 +15,13 @@ import java.util.Objects;
  * @param totalCost    총비용
  * @param metrics      지표
  * @param explanations 설명 (§6.3)
+ * @param budgetExhausted 계획 마감(§6.7) 때문에 <strong>하지 못한 일이 있는가</strong>.
+ *                     {@code false} 면 이 계획은 수렴으로 끝났고 <em>재현 가능하다</em> —
+ *                     동일성을 말하는 테스트·게이트·리포트가 전제 어설션으로 먼저 보는 값이다
+ *                     ([ADR-035] 4번, §6.9 재현 조건)
  */
 public record PlanResult(List<PlannedRoute> routes, List<Unassigned> unassigned, Money totalCost,
-        PlanMetrics metrics, List<Explanation> explanations) {
+        PlanMetrics metrics, List<Explanation> explanations, boolean budgetExhausted) {
 
     public PlanResult {
         Objects.requireNonNull(totalCost, "totalCost");
