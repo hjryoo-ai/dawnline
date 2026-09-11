@@ -49,6 +49,12 @@ public record VehicleAttributeMatchRule(String name, int priority, String orderF
                 params.requireString("orderFlag"), params.requireString("vehicleFlag"));
     }
 
+    /** 차량 속성과 stop 속성만 본다 — 라우트 상태를 아예 보지 않는다. */
+    @Override
+    public boolean positionIndependent() {
+        return true;
+    }
+
     @Override
     public Feasibility check(Stop stop, VehicleSpec vehicle, RouteState state) {
         boolean orderNeeds = ORDER_FLAGS.get(orderFlag).test(stop.parcel());

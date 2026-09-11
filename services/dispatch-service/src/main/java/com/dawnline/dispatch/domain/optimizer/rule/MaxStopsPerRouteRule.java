@@ -20,6 +20,12 @@ public record MaxStopsPerRouteRule(String name, int priority, int max) implement
                 params.requirePositiveInt("max"));
     }
 
+    /** stop 수는 넣는 자리와 무관하다 — 어디에 끼워도 {@code stopCount + 1} 이다. */
+    @Override
+    public boolean positionIndependent() {
+        return true;
+    }
+
     @Override
     public Feasibility check(Stop stop, VehicleSpec vehicle, RouteState state) {
         // 이 stop 을 붙이면 stopCount + 1 이 된다. 그 값이 상한을 넘는지 본다.

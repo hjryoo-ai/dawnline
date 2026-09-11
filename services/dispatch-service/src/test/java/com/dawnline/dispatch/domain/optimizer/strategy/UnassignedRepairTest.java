@@ -101,6 +101,25 @@ class UnassignedRepairTest {
     }
 
     @Test
+    void 들어갈_수_없는_라우트는_자리를_보지_않는다() {
+        // [ADR-037]. stop 상한에 닿은 라우트는 <em>어느 자리도</em> 볼 필요가 없다. 그 사실이
+        // 실제로 쓰였다는 증거는 <strong>사유</strong>다 — 자리를 다 훑고 못 넣은 것이라면
+        // 사유가 없어 「실을 차가 없습니다」가 되지만, 가지치기가 돌면 룰 이름이 남는다.
+        PlanningProblem problem = problem(twoStopLimit(), List.of(vehicle(false)));
+        List<Stop> waiting = List.of(east(1, 0), east(2, 3), east(3, 1), east(4, 2));
+        Map<Stop, Feasibility> refusals = new LinkedHashMap<>();
+
+        UnassignedRepair.Outcome outcome = UnassignedRepair.repair(problem,
+                List.of(empty(problem, vehicle(false))), waiting, refusals,
+                new PlanningDeadline(() -> 0L, Duration.ofSeconds(30)));
+
+        assertThat(outcome.inserted()).as("전제: 두 자리는 실제로 채워진다").isEqualTo(2);
+        assertThat(refusals.values()).extracting(Feasibility::ruleName)
+                .as("가지치기가 돌면 거절한 룰이 사유로 남는다 — 「실을 차가 없다」가 아니라")
+                .containsOnly("max-stops");
+    }
+
+    @Test
     void 자리가_모자라면_페널티가_싼_것부터_남는다() {
         // 자리는 둘, 후보는 넷. 목적함수를 그대로 따르면 비싼 둘이 실리고 싼 둘이 남는다.
         PlanningProblem problem = problem(twoStopLimit(), List.of(vehicle(false)));

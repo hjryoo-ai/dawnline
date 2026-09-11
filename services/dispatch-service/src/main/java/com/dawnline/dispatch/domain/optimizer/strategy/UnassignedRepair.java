@@ -101,6 +101,9 @@ final class UnassignedRepair {
         List<Stop> queue = new ArrayList<>(unassigned);
         queue.sort(byPenaltyDescending(problem));
 
+        // 라우트의 <strong>현재 상태</strong>. 위치 무관 하드 룰이 이것을 본다 ([ADR-037]).
+        List<RouteAccumulator> live = new ArrayList<>(seeded);
+
         List<Stop> left = new ArrayList<>();
         int inserted = 0;
         for (Stop stop : queue) {
@@ -115,7 +118,18 @@ final class UnassignedRepair {
             // 상한을 페널티로 두는 것이 곧 그 조건이다.
             long budget = problem.rules().unassignedPenalty(stop).krw();
             Placement best = null;
+            Feasibility refused = null;
             for (int r = 0; r < plan.size(); r++) {
+                // 「이 stop 이 이 라우트에 들어갈 수 있기는 한가」 — stop 수·적재·차량 속성은
+                // <strong>넣는 자리와 무관</strong>하므로, 여기서 거절이면 어느 자리도 볼 필요가
+                // 없다 ([ADR-037]). 시도해도 못 들어가는 자리를 시도하지 않는 것이라
+                // <strong>결과가 바뀔 수 없다.</strong>
+                Feasibility admits = problem.rules()
+                        .checkPositionIndependent(stop, vehicles.get(r), live.get(r).state());
+                if (!admits.feasible()) {
+                    refused = admits;
+                    continue;
+                }
                 for (int at : nearestPositions(problem, plan.get(r), stop)) {
                     List<Stop> candidate = new ArrayList<>(plan.get(r));
                     candidate.add(at, stop);
@@ -131,11 +145,18 @@ final class UnassignedRepair {
                 }
             }
             if (best == null) {
+                // 어느 라우트도 받지 못했다. 위치 무관 룰이 거절한 사유가 있으면 그것을 남긴다 —
+                // 「실을 차가 없다」보다 「용량 초과」·「stop 상한」이 §6.3 에 쓸모 있는 답이다.
                 left.add(stop);
+                if (refused != null) {
+                    refusals.putIfAbsent(stop, refused);
+                }
                 continue;
             }
             plan.set(best.route(), best.stops());
             costs[best.route()] = best.cost();
+            live.set(best.route(),
+                    RouteRebuild.accumulate(problem, vehicles.get(best.route()), best.stops()));
             inserted++;
         }
 
