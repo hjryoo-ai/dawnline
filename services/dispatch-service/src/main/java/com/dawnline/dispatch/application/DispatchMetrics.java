@@ -1,6 +1,7 @@
 package com.dawnline.dispatch.application;
 
 import com.dawnline.dispatch.domain.PlanMode;
+import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -12,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * §9.1 의 계획 메트릭 넷.
+ * §9.1 의 계획·취소 메트릭.
  *
  * <h2>게이지 값을 직접 들고 있는 이유</h2>
  * {@code registry.gauge} 는 재등록 시 기존 미터를 돌려주고 대상을 <strong>약한 참조</strong>로
@@ -29,14 +30,41 @@ public class DispatchMetrics {
     /** 계획 소요 시간 (§6.7 목표 p95 ≤ 30초). */
     public static final String PLAN_DURATION = "dawnline.plan.duration";
 
+    /**
+     * 계획 결과 영속화 시간 (§6.7 목표 5,000건 ≤ 3초, ADR-029).
+     *
+     * <p>{@link #PLAN_DURATION} 과 <strong>한 쌍</strong>이다. 둘을 나눠 두는 것이 ADR-029 의
+     * 요점이다 — 한 수치였을 때 30초 예산의 75% 를 ORM 이 쓰고 있는 것이 보이지 않았다.
+     */
+    public static final String PLAN_PERSIST = "dawnline.plan.persist";
+
     /** 계획 총비용. */
     public static final String PLAN_COST = "dawnline.plan.cost.krw";
 
     /** 미배정 주문 수 (§6.7 목표 ≤ 0.5%). */
     public static final String PLAN_UNASSIGNED = "dawnline.plan.unassigned";
 
-    /** 열화 모드로 돈 계획 수 (§6.7). */
+    /**
+     * <strong>열화</strong>로 돈 계획 수 (§6.7, ADR-034). 라벨 {@code camp}, {@code reason}.
+     *
+     * <p>운영자가 {@code mode=FAST} 를 지정한 계획은 <strong>세지 않는다</strong> — 사람이 고른
+     * 것은 시스템이 밀려서 포기한 것이 아니다. 섞으면 이 값이 "성수기에 무엇을 포기했나" 가
+     * 아니라 "누가 FAST 를 몇 번 썼나" 가 된다.
+     */
     public static final String PLAN_DEGRADED = "dawnline.plan.degraded";
+
+    /**
+     * 랙을 <strong>모른 채</strong> 내린 자동 모드 판단의 수 (§6.7 첫 조건, ADR-034).
+     *
+     * <p>모름은 0 이 아니다. 이 값이 오르는 동안 열화 판단은 조건 <em>둘 중 하나만</em> 보고
+     * 있고, 그 사실이 어디에도 안 보이면 "랙 조건이 한 번도 발화하지 않았다" 가 건강의 증거처럼
+     * 읽힌다 — {@code dawnline_geo_lookups_total{outcome=bypassed}} 와 같은 어휘다.
+     * <strong>폴백은 조용히 일어나면 안 된다.</strong>
+     *
+     * <p>정상적으로 오르는 경로도 있다: 운영자 재실행과 정체 회수는 레코드에서 오지 않으므로
+     * 볼 파티션이 없다. 그래서 0 이어야 하는 값이 아니라 <em>비율</em>을 보는 값이다.
+     */
+    public static final String PLAN_BACKLOG_UNKNOWN = "dawnline.plan.backlog.unknown";
 
     /** 배송이 끝난 뒤 도착해 거부한 취소 (§6.10, §9.4 알림). */
     public static final String CANCEL_TOO_LATE = "dawnline.cancel.too_late";
@@ -73,10 +101,35 @@ public class DispatchMetrics {
         gauge(unassignedByCamp, PLAN_UNASSIGNED, plan.campId(),
                 plan.unassignedCount().orElse(0).longValue());
 
-        if (mode == PlanMode.FAST) {
+        PlanModeReason reason = plan.modeReason().orElse(PlanModeReason.NONE);
+        if (reason.isDegraded()) {
             // 열화가 보이지 않으면 "성수기에도 정시" 를 위해 무엇을 포기했는지 아무도 모른다.
-            registry.counter(PLAN_DEGRADED, "camp", plan.campId().toString()).increment();
+            registry.counter(PLAN_DEGRADED, "camp", plan.campId().toString(),
+                    "reason", reason.name()).increment();
         }
+        if (reason == PlanModeReason.LAG_UNKNOWN) {
+            registry.counter(PLAN_BACKLOG_UNKNOWN, "camp", plan.campId().toString()).increment();
+        }
+    }
+
+    /**
+     * 계획 결과를 저장하는 데 걸린 시간 (ADR-029).
+     *
+     * <p>라우트·stop·설명 저장과 outbox 기록까지다 — {@code planDurationMs} 가 끝나는
+     * {@code finishedAt} 이후의 전부. 알고리즘이 아니라 I/O 를 재는 값이고, 그래서 §6.7 의
+     * 30초와 견주지 않는다.
+     *
+     * @param campId   캠프 id
+     * @param elapsed  걸린 시간
+     */
+    public void planPersisted(UUID campId, Duration elapsed) {
+        Objects.requireNonNull(campId, "campId");
+        Objects.requireNonNull(elapsed, "elapsed");
+        Timer.builder(PLAN_PERSIST)
+                .description("계획 결과 영속화 시간 (DESIGN.md §6.7, ADR-029)")
+                .tag("camp", campId.toString())
+                .register(registry)
+                .record(elapsed);
     }
 
     /**

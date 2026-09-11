@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.domain.optimizer;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
@@ -23,12 +24,21 @@ import java.util.Objects;
  * @param cost       비용 산식
  * @param distance   거리 제공자
  * @param budget     시간 예산
+ * @param mode       실행 모드 (§6.7). {@code FAST} 가 생략하는 것은 §6.5 <strong>5단계</strong>
+ *                   하나이고, 그 사실은 여기 입력으로 들어와야 순수 함수로 남는다 — 전략이
+ *                   설정을 읽거나 스스로 바쁨을 판단하면 같은 입력이 다른 답을 낸다
+ * @param budgetFactor <strong>개선 예산</strong>에 곱하는 계수 (0 초과 1 이하, §6.7 사다리).
+ *                   개선 예산은 {@code budget.total() − 앞 단계가 쓴 시간}이고, 여기에 이 값을
+ *                   곱한 만큼만 §6.5 5단계가 돈다. {@code 1.0} 이 정상이다.
+ *                   <strong>예산이 조이지 않으면 이 값은 아무것도 하지 않는다</strong> — 개선
+ *                   단계는 보통 국소 최적이나 「개선 폭 &lt; 0.1%」로 먼저 멈추기 때문이다
  * @param startedAt  계획 시작 시각. 라우트의 출발 시각 기준이자 예산 계산의 기준점
  * @param seed       난수 seed. 같으면 결과가 같아야 한다 (불변규칙 12)
  */
 public record PlanningProblem(WaveRef wave, CampDepot depot, List<Candidate> candidates,
         List<VehicleSpec> vehicles, RuleSet rules, CostModel cost, DistanceProvider distance,
-        PlanningBudget budget, Instant startedAt, long seed) {
+        PlanningBudget budget, PlanMode mode, double budgetFactor, Instant startedAt,
+        long seed) {
 
     public PlanningProblem {
         Objects.requireNonNull(wave, "wave");
@@ -37,6 +47,11 @@ public record PlanningProblem(WaveRef wave, CampDepot depot, List<Candidate> can
         Objects.requireNonNull(cost, "cost");
         Objects.requireNonNull(distance, "distance");
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(mode, "mode");
+        if (!(budgetFactor > 0.0d) || budgetFactor > 1.0d) {
+            throw new IllegalArgumentException(
+                    "개선 예산 계수는 0 초과 1 이하여야 합니다: " + budgetFactor);
+        }
         Objects.requireNonNull(startedAt, "startedAt");
         candidates = List.copyOf(Objects.requireNonNull(candidates, "candidates"));
         vehicles = List.copyOf(Objects.requireNonNull(vehicles, "vehicles"));
@@ -45,5 +60,30 @@ public record PlanningProblem(WaveRef wave, CampDepot depot, List<Candidate> can
     /** 계획 마감 시각. */
     public Instant deadline() {
         return budget.deadlineFrom(startedAt);
+    }
+
+    /**
+     * §6.5 5단계(국소 탐색)를 돌리는가.
+     *
+     * <p><strong>FAST 가 생략하는 것은 이 단계 하나다.</strong> 재삽입은 개선이 아니라 값싼
+     * 탐욕이라 FAST 에서도 돈다(ADR-028). 통합·클러스터링·배정·시퀀싱은 계획이 <em>존재하기</em>
+     * 위한 단계라 애초에 생략할 수 있는 것이 아니다.
+     */
+    public boolean runsImprovement() {
+        return mode != PlanMode.FAST;
+    }
+
+    /**
+     * §6.5 5단계에 실제로 주는 시간.
+     *
+     * <p><strong>열화는 사다리다</strong>(§6.7, ADR-034 후속 정정). 계획이 예산을 다 쓴 것과
+     * 처리량이 모자란 것은 다른 신호이고, 처방도 달라야 한다 — 앞의 것은 이 값을 줄이고
+     * (개선을 덜 한다), 뒤의 것만 {@link #runsImprovement()} 를 끈다(개선을 안 한다).
+     *
+     * @param elapsedNanos 앞 단계들이 이미 쓴 시간
+     */
+    public long improvementNanos(long elapsedNanos) {
+        long remaining = budget.total().toNanos() - elapsedNanos;
+        return remaining <= 0L ? 0L : (long) (remaining * budgetFactor);
     }
 }

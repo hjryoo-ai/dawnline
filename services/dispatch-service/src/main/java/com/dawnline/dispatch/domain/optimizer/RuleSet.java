@@ -70,6 +70,31 @@ public final class RuleSet {
     }
 
     /**
+     * <strong>위치와 무관한</strong> 하드 룰만 평가한다 ([ADR-037]).
+     *
+     * <p>«이 stop 이 이 라우트에 <em>들어갈 수 있기는 한가</em>» 를 묻는다. 거절이면 어느 자리도
+     * 볼 필요가 없으므로 재삽입이 그 라우트를 통째로 건너뛴다 — 시도해도 못 들어가는 자리를
+     * 시도하지 않는 것이라 <strong>결과가 바뀔 수 없다.</strong> 통과라고 해서 들어간다는
+     * 뜻은 아니다(근무창·약속창은 자리마다 다르다).
+     *
+     * @param stop    넣으려는 stop
+     * @param vehicle 라우트의 차량
+     * @param state   여기까지 쌓인 라우트 상태
+     */
+    public Feasibility checkPositionIndependent(Stop stop, VehicleSpec vehicle, RouteState state) {
+        for (HardRule rule : hard) {
+            if (!rule.positionIndependent()) {
+                continue;
+            }
+            Feasibility result = rule.check(stop, vehicle, state);
+            if (!result.feasible()) {
+                return result;
+            }
+        }
+        return Feasibility.ok();
+    }
+
+    /**
      * 소프트 룰을 <strong>모두</strong> 평가해 합산한다. 보너스가 있으므로 음수일 수 있다.
      *
      * @param stop    배치하려는 stop

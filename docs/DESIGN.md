@@ -296,9 +296,9 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 ### 4.4 전달 보장: Outbox + at-least-once + 멱등 소비자 (ADR-006)
 
 - **발행**: 도메인 변경과 `outbox_events` INSERT를 같은 DB 트랜잭션에서 수행. 별도 릴레이(`OutboxRelay`, 폴링 100ms, 배치 500, `FOR UPDATE SKIP LOCKED`)가 Kafka로 발행 후 `published_at` 기록. SKIP LOCKED 는 다중 인스턴스에서의 중복 발행을 막지만, 같은 `partition_key` 의 행이 서로 다른 인스턴스에서 발행되면 §4.5의 키 단위 순서가 깨질 수 있다. 따라서 릴레이는 **서비스당 단일 활성 인스턴스**여야 하고, 그것을 **리더 락이 강제한다**(2026-09-05, [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)). SKIP LOCKED 는 리더 전환 경합의 안전망으로 유지한다.
-- **릴레이 리더 락** (§7.2 `lock:relay:{service}`, ADR-027): 배치 <strong>전에</strong> 매번 Redis `SET NX` + 갱신을 한 번의 왕복(Lua)으로 확인하고, 리더가 아니면 발행하지 않는다. TTL 기본 30초 — 리더가 죽었을 때 교체까지의 상한이고 §9.4 의 "outbox 지연 > 30s" 알림과 같은 눈금이다. TTL 은 전송 타임아웃보다 길어야 하며(배치 도중에는 확인하지 않는다) 그 관계는 설정 바인딩이 기동 시 검증한다. 정상 종료는 리더십을 내려놓아 발행 공백을 TTL 이 아니라 폴링 주기로 만든다. **락이 거는 것은 발행뿐이다** — 메트릭 갱신과 정리는 리더가 아니어도 돈다(순서를 가진 것은 발행밖에 없다).
-- **판정 불가는 팔로워가 아니다.** 상태는 `LEADER`/`FOLLOWER`/`UNKNOWN` 셋이고 게이지 `dawnline_outbox_leader` 가 `1/0/-1` 로 노출한다(§9.1). 발행을 멈추는 결정은 뒤의 둘이 같지만 봐야 할 곳이 정반대다 — 팔로워는 정상이고 판정 불가는 Redis 장애다.
-- **Redis 장애는 fail-closed** — `lock:wave` 와 반대다(ADR-027 결정 4). 웨이브 락은 멈추면 컷오프 시각을 잃고 중복 마감은 DB 가 막으므로 진행한다. 여기서 락 없이 진행하면 **키 단위 순서**를 잃는데 DB 에는 그것을 지킬 수단이 없고, 멈춰서 잃는 것은 **지연뿐**이다(행은 남고 복구되면 이어서 나간다). 되돌릴 수 없는 손실과 되돌아오는 손실 중 후자를 고른다. 락을 켠 채로 Redis 가 없으면 **기동에서 실패한다** — 없는 락을 있다고 믿는 것이 락이 없는 것보다 나쁘다. 끄려면 `dawnline.messaging.outbox.leader.enabled=false` 로 <em>적는다</em>(ops-api 가 그 값을 쓴다 — 이벤트를 발행하지 않기 때문이다).
+- **릴레이 리더 락** (PostgreSQL advisory lock, [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md) + 2026-09-05 정정): 배치 <strong>전에</strong> 매번 `pg_try_advisory_lock(classid, objid)` 로 확인하고, 리더가 아니면 발행하지 않는다. 키는 (저장소 네임스페이스, 서비스명 해시) 두 정수다. 락은 **전용 장수 세션**에 잡는다 — 세션 수준 락이라 커넥션을 풀에 반납하면 락이 반납된 커넥션에 남는다. 리더 여부는 메모리 플래그가 아니라 **매 사이클 `pg_locks` 에 물어** 도출한다(세션이 끊기면 재연결 후 재획득). **TTL 도 갱신도 없다** — 세션이 죽으면 서버가 즉시 락을 푼다. 정상 종료는 `pg_advisory_unlock_all()` 로 내려놓아 발행 공백을 폴링 주기로 만든다. **락이 거는 것은 발행뿐이다** — 메트릭 갱신과 정리는 리더가 아니어도 돈다(순서를 가진 것은 발행밖에 없다).
+- **판정 불가는 팔로워가 아니다.** 상태는 `LEADER`/`FOLLOWER`/`UNKNOWN` 셋이고 게이지 `dawnline_outbox_leader` 가 `1/0/-1` 로 노출한다(§9.1). 발행을 멈추는 결정은 뒤의 둘이 같지만 봐야 할 곳이 정반대다 — 팔로워는 정상이고 판정 불가는 **DB 세션 장애**다.
+- **조정자는 outbox 가 있는 바로 그 DB 다.** 그래서 "락을 못 잡아 발행을 멈춘다" 와 "DB 가 죽어 발행할 것을 읽지 못한다" 가 **같은 사건**이 되고, fail-open/fail-closed 딜레마 자체가 사라진다 — 조정자만 죽고 저장소는 살아 있는 상태가 존재하지 않기 때문이다. 릴레이 리더 선출은 **서비스 내부** 조정이고, 한 서비스의 인스턴스들은 정의상 같은 DB 를 공유한다(불변규칙 3). 이 자리에 Redis 를 두면 다섯 서비스의 발행 경로가 조정용 외부 의존 하나에 묶이는데, 그것은 불변규칙 7 의 예외가 아니라 **위반**이었다(2026-09-05 [ADR-027 후속 정정](adr/ADR-027-outbox-relay-leader-lock.md)).
 - **소비**: 리스너는 `processed_events(event_id, consumer)`를 먼저 INSERT(같은 트랜잭션)한다. 이미 있으면 처리 생략. 비즈니스 로직 + processed 기록 + 자기 outbox 기록이 하나의 트랜잭션.
 - **`processed_events` 보존: 14일** (일 1회 배치 삭제, outbox 7일 정리와 같은 정리 스케줄러 — §7.1). 근거: 재전달 가능 창의 상한은 본 토픽 보존 7일(오프셋 리셋 포함)이며 14일은 그 2배 여유다. DLQ 보존 30일은 이 창과 무관하다 — DLQ 에 들어간 이벤트는 처리 트랜잭션이 롤백된 것이므로 `processed_events` 에 성공 기록이 없고, replay 의 안전성이 이 테이블에 의존하지 않는다. **경고: 이 논거는 "성공 처리된 이벤트는 DLQ 에 들어가지 않는다" 는 §4.6의 구조에 의존한다. DLQ 적재 경로를 바꾸는 변경은 이 보존 기간을 재검토해야 한다.**
 - Kafka 트랜잭션/EOS는 사용하지 않는다. 이유·대안은 ADR-006.
@@ -805,10 +805,15 @@ CREATE TABLE drivers (id UUID PK, camp_id UUID, vehicle_id UUID, name TEXT, stat
 CREATE TABLE dispatch_candidates (order_id UUID PK, wave_id UUID NOT NULL, camp_id UUID NOT NULL, zone_id UUID,
   lat NUMERIC(9,6), lng NUMERIC(9,6), geohash7 CHAR(7), weight_g INTEGER, volume_cm3 INTEGER,
   requires_cold BOOLEAN, hazmat BOOLEAN, promised_start TIMESTAMPTZ, promised_end TIMESTAMPTZ,
+  -- promise_revised 는 우선도의 *근거*, priority 는 그 결과다 (ADR-028). 둘 다 남긴다 —
+  -- 근거만 두면 점수표를 바꿀 때 계획 중인 웨이브의 우선도가 흔들리고(§6.3 스냅샷),
+  -- 결과만 두면 "왜 이 우선도인가" 에 답할 수 없다.
+  promise_revised BOOLEAN NOT NULL DEFAULT FALSE,
   priority SMALLINT NOT NULL DEFAULT 0, status VARCHAR(16) NOT NULL, version BIGINT NOT NULL DEFAULT 0);
 CREATE INDEX ix_cand_wave ON dispatch_candidates (wave_id, status);
 CREATE TABLE route_plans (id UUID PK, wave_id UUID NOT NULL UNIQUE, camp_id UUID NOT NULL, status VARCHAR(16) NOT NULL,
-  strategy VARCHAR(32), mode VARCHAR(8), seed BIGINT, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ,
+  strategy VARCHAR(32), mode VARCHAR(8), mode_reason VARCHAR(16), -- 왜 그 모드였나 (§6.7, ADR-034)
+  seed BIGINT, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ,
   total_cost_krw BIGINT, assigned_count INTEGER, unassigned_count INTEGER, plan_duration_ms INTEGER, version BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE routes (id UUID PK, plan_id UUID REFERENCES route_plans, vehicle_id UUID, driver_id UUID, seq_no SMALLINT,
   status VARCHAR(16), stop_count INTEGER, distance_m INTEGER, duration_s INTEGER, cost_krw INTEGER, version BIGINT NOT NULL DEFAULT 0);
@@ -823,7 +828,9 @@ CREATE TABLE plan_explanations (id UUID PK, plan_id UUID NOT NULL, order_id UUID
 CREATE INDEX ix_expl_plan_order ON plan_explanations (plan_id, order_id);
 ```
 
-**Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시), `route:{id}:progress` (HASH: nextSeq, completed, failed), `lock:plan:{waveId}` (이중 안전장치).
+**Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시), `route:{id}:progress` (HASH: nextSeq, completed, failed).
+
+`lock:plan:{waveId}` 는 **설계에서 뺐다**(2026-09-05). "이중 안전장치" 라고 적혀 있었지만 `route_plans.wave_id` 의 UNIQUE 제약이 이미 그 안전장치이고, 계획 유스케이스는 그 제약 위에서 `openPlan` 이 경합을 흡수하도록 짜여 있다(§5.3 `RunPlanService`). 두 번째 장치는 없는 문제를 막으면서 Redis 장애 시 무엇이 맞는지를 새로 정하게 만든다 — **폴백을 정해야 하는 키를 하나 늘리는 것이 안전장치를 하나 늘리는 것보다 비싸다.**
 
 ### 5.4 tracking-service
 
@@ -985,6 +992,26 @@ SOFT 지만 **평가 시점이 다르다** — 배정에 실패한 주문에 붙
 | VEHICLE_PREFERENCE | SOFT | preferredTypes, penaltyKrw | 소형 물량에 대형 차량 배정 시 페널티 |
 | UNASSIGNED_PENALTY | SOFT | baseKrw, perPriorityKrw | 미배정 비용 (티어별 차등) |
 
+**`priority` 는 어디서 오는가 — 선언이 아니라 파생이다** (2026-09-09, [ADR-028](adr/ADR-028-unassigned-policy.md)).
+위 표의 두 룰(`PRIORITY_BOOST`·`UNASSIGNED_PENALTY`)이 `priority` 를 읽는데, 그 값의 출처가
+설계서에 없었다. 계약에 필드를 넣는 길은 두 가지로 막힌다 — **클라이언트 값은 신뢰할 수 없고**
+(§10, 고객 API 는 무인증이라 `customerId` 조차 클라이언트 주장값이다), **티어에서 파생하면
+상수가 된다**(웨이브가 (캠프, 티어, 컷오프) 단위라 한 계획 안의 모든 후보가 같은 티어다).
+아무것도 가르지 못하는 값은 우선순위가 아니다.
+
+한 계획 <em>안에서</em> 실제로 달라야 하는 것은 **"이 주문을 우리가 이미 얼마나 실망시켰는가"**
+이고, 그것은 dispatch 가 후보 적재 시점에 **이미 받은 사실**이다. 점수표는 룰과 같은 이유로
+데이터다(설정 `dawnline.dispatch.priority.*`).
+
+| 사실 | 가중치 | 근거 |
+|---|---:|---|
+| `promiseRevised` | **+2** | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 의 개정은 <em>한 번 깬 약속</em>이다 |
+| `requiresCold` | **+1** | 미배정의 비용이 다른 주문보다 크다 (cold-chain) |
+| 배송 실패 후 재배송 | +3 | **Phase 5** — 그 사실은 tracking 이 만든다. 사실이 오기 전에 가중치만 먼저 두지 않는다 |
+
+**범위 밖 — VIP 같은 고객 등급 우선순위.** 고객 서비스가 없어 등급의 출처가 없고, 있는 척하면
+`serviceTier` 를 등급으로 몰래 읽는 코드가 된다.
+
 **룰 정의 예시 (`dispatch_rules.params`)**
 
 ```json
@@ -1016,7 +1043,7 @@ SOFT 지만 **평가 시점이 다르다** — 배정에 실패한 주문에 붙
 ```
 plan(problem, budget):
   1. 전처리
-     - 같은 geohash7 + 같은 약속창인 후보를 하나의 Stop으로 통합 (중량·부피 합산)
+     - 같은 geohash7 + 같은 약속창 + **같은 제약(냉장·위험물)** 인 후보를 하나의 Stop으로 통합 (중량·부피 합산)
      - 하드 룰 사전 필터: (stop, vehicleType) 실행 가능 행렬 계산
      - Stop 간 거리 행렬 계산 (DistanceProvider, 통합 후)
   2. 클러스터링 (Sweep)
@@ -1053,16 +1080,59 @@ plan(problem, budget):
 시간을 근무창 판정에 넣는 것). 그건 **조기 배송을 금지하겠다는 정책 결정**이라 §2.2 를 먼저 고쳐야
 하고, 최적화 안에서 조용히 할 일이 아니다.
 
-**3단계에서 미배정을 고르는 규칙** (2026-09-05 결정, Phase 4 구현 예정). 원래 문장은 "그래도 없으면
-미배정" 이었고 **어느 주문을 남길지는 말하지 않았다.** 말하지 않으면 아무도 안 정한 것이 아니라
-*우연이 정한다* — 지금은 마지막 클러스터에 남은 주문이 그대로 떨어진다. 측정이 그것을 드러냈다:
-`small` 에서 두 전략의 미배정 건수가 **9 로 같은데 페널티는 20,000원 다르다**(§6.9 리포트). 건수가
-같고 값이 다르면 남긴 대상이 다르다는 뜻이고, 그 차이를 만든 것은 알고리즘이 아니라 부재하는 규칙이다.
+**3단계에서 미배정을 고르는 규칙 — 「비싼 것부터 자리를 준다」** (2026-09-05 결정 · 2026-09-09 구현,
+[ADR-028](adr/ADR-028-unassigned-policy.md)). 원래 문장은 "그래도 없으면 미배정" 이었고 **어느
+주문을 남길지는 말하지 않았다.** 말하지 않으면 아무도 안 정한 것이 아니라 *우연이 정한다* —
+마지막 클러스터에 남은 주문이 그대로 떨어졌다. 측정이 그것을 드러냈다: `small` 에서 두 전략의
+미배정 건수가 **9 로 같은데 페널티는 20,000원 달랐다.** 건수가 같고 값이 다르면 남긴 대상이
+다르다는 뜻이고, 그 차이를 만든 것은 알고리즘이 아니라 부재하는 규칙이다.
 
-규칙은 목적함수를 그대로 따른다 — **`UNASSIGNED_PENALTY` 가 싼 것부터 뺀다**(§6.3 의 티어별 차등이
-곧 우선순위다). 값싼 그리디이고 최적이 아니지만, 최적일 필요가 없다: 이 자리에서 재는 것은 "용량이
-모자랄 때 누가 남는가" 이고 그 답이 **재현 가능하다는 것**이 지금 없는 성질이다. 구현은 Phase 4 다
-(`GreedyAssigner` — 3단계 안에서 끝나므로 파이프라인 형태는 바뀌지 않는다).
+규칙은 목적함수(§6.1)를 그대로 따른다 — 싣지 않으면 `UNASSIGNED_PENALTY` 를 물고 실으면 라우트
+비용이 오르니, **페널티가 비싼 것부터 자리를 주고 오르는 비용이 페널티보다 쌀 때만 싣는다.**
+한 문장이 두 질문에 답한다: "누가 빠지는가" 는 *끝까지 자리를 못 찾은 쪽*이고 그건 싼 것들이다.
+두 질문을 두 곳에 적으면 같은 정책이 두 벌이 된다.
+
+자리를 찾는 일은 클러스터가 아니라 **stop 단위**다(`UnassignedRepair`). 3단계의 배정은 "이 묶음이
+이 차에 들어가는가" 만 묻기 때문에, 제약이 붙은 stop 하나 때문에 나머지가 통째로 밀려난다. 그래서
+탐욕 배정 직후에 한 번, **국소 탐색 뒤에 한 번 더** 부른다 — 개선 단계는 라우트를 짧게 만들어
+근무창·약속창에 *자리를 만들기* 때문이다. 재삽입 자체는 개선이 아니라 값싼 탐욕이라 §6.7 의
+FAST 모드에서도 돈다. FAST 가 생략하는 것은 5단계(국소 탐색)다.
+
+**3단계의 동률 규칙 — 능력이 적은 차 먼저** (2026-09-08, [ADR-031](adr/ADR-031-least-capable-first-tie-break.md)).
+한계비용이 같은 실행 가능 차량이 여럿일 때 무엇을 고르는지가 **적혀 있지 않았고**, 그래서
+어댑터의 `ORDER BY code` 가 정하고 있었다. 시드의 캠프별 첫 차량이 냉장이라 작은 웨이브에서는
+언제나 냉장차가 뽑혔고, cold-chain DoD 의 공허성 검사가 시각과 시드 배분에 따라 통과·실패했다.
+
+정렬 키는 **넣지 못한 stop 수 → 한계비용 → 능력 순위(비냉장 < 냉장) → 용량(소형 < 대형) →
+차량 id** 다. 빈 패킹의 고전 규칙이고 — *특수 자원은 그것을 요구하는 수요에 남겨 둔다* —
+마지막 키가 id 인 것은 재현성 때문이다(불변규칙 12).
+
+**위험물 허용은 능력 순위에 넣지 않는다.** 같은 논리로 넣었다가 측정이 반대였다 — `large` 에서
+위험물 미배정이 99 → 115 로 *늘고* 총비용이 3.9% 올랐다. 아껴 두기는 아낀 자원이 그 수요와
+짝지어질 때만 이득인데, 2% 비율에서는 탐욕이 그 짝짓기를 만들지 못한다(냉장은 25% 라 일어난다).
+[측정](benchmarks/phase3-baseline.md) §4-7.
+
+**5단계의 이동 넷과 그것을 돌릴 수 있게 한 근사 둘** (2026-09-09, [ADR-032](adr/ADR-032-local-search-budget-and-approximations.md)).
+이동은 §6.5 그대로다 — 2-opt(라우트 안 구간 뒤집기) · Or-opt(1~3개 묶음을 라우트 안에서 옮기기) ·
+inter-route relocate(1~3개 묶음을 다른 라우트로, 양 방향) · swap(두 라우트의 stop 맞바꾸기).
+후보의 값은 **그 순서로 라우트를 다시 만들어** 잰다 — 비용 근사식을 쓰면 룰을 코드에 두 번째로
+적는 일이 되고(§6.3 은 룰을 데이터로 뒀다), 두 벌은 갈라진다.
+
+그대로 두면 `large` 에서 한 패스도 끝나지 않으므로 후보를 두 겹으로 줄인다: **이웃 표**
+(새 간선이 K=20 최근접 안인 이동만 만든다)와 **거리 선별**(이동 거리가 줄지 않는 후보는 룰을
+돌리기 전에 버린다). 둘 다 *개선을 덜 찾는* 방향으로만 틀리고 — 하드 룰은 재구성이 본다 —
+대가를 쟀다: 선별을 끄면 `small` 총비용이 1.04% 좋아지고 계획 시간이 **16.7배**가 되며 500 주문에서도
+예산이 끝난다([측정](benchmarks/phase4-local-search.md)). **예외 하나**: 원래 라우트를 통째로
+비우는 이동은 이득이 거리가 아니라 차량 고정비이므로(§6.4) 선별을 건너뛴다.
+
+**예산은 패스 단위로만 끊는다.** 패스는 통째로 적용되거나 통째로 버려지고, 그래서 결과는
+결정적인 수열 S₀ ⊇ S₁ ⊇ … 의 한 원소이며 예산은 *어디까지 갔는지만* 정한다 — 느린 기계에서
+앞쪽 원소가 나오지 **다른 답이 나오지 않는다**(불변규칙 12). 종료 조건 셋(국소 최적 · 개선 폭
+< 0.1% · 예산 소진) 중 세 번째는 세 데이터셋 어디에서도 발화하지 않았다.
+
+**1단계의 통합 키에 제약이 들어가는 이유** (2026-09-09, [ADR-033](adr/ADR-033-constraint-classes.md)). 통합의 질문은 *이 둘을 한 번에 배송할 수 있는가* 이고, 약속창이 다르면 시각이 막듯 **제약이 다르면 차량이 막는다.** 키에 제약이 없던 동안 통합은 제약을 **전파**했다 — 위험물 한 건이 섞인 건물 stop 이 옆의 평범한 아홉 건을 데리고 위험물 차량을 기다렸고, `large` 에서 미배정 stop 18개가 주문 **89건**을 안고 있었다(stop 하나가 평균 4.9건). **희소한 능력 하나가 인질을 잡는다.**
+
+이것은 벤치마크가 아니라 **모델**의 문제다 — 냉장 ∧ 위험물 차량이 한 대 고장 난 날의 캠프가 정확히 이 상태다. 대가는 stop 수 증가인데, 같은 좌표라 **이동 거리는 늘지 않고** 하차·전달 시간도 원래 주문마다 더하므로 그대로다. 늘어나는 것은 「그 주소를 두 번 취급한다」는 사실이고, 그건 `MAX_STOPS_PER_ROUTE` 소비로 이미 값이 매겨져 있다.
 
 **2단계의 "권역 경계에서 자르기 우선" 은 "자를 때가 됐으면 경계에서" 라는 뜻이다** (같은 측정).
 경계마다 자르면 클러스터가 차량 수의 6~10배로 부서지고, 남는 클러스터가 이미 실은 차에 얹혀
@@ -1090,21 +1160,102 @@ public interface DispatchStrategy {
 | `savings-cw+ls` | Clarke-Wright savings로 라우트 구성 후 LS | 비교 전략 |
 | `timefold` | Timefold Solver(Community) VRPTW 모델 | 선택(Phase 4 stretch), ADR-004 비교용 |
 
-전략은 `PlanRunner`가 `strategy` 파라미터로 선택하며 기본값은 설정 `dawnline.dispatch.default-strategy`. 새 전략 추가는 인터페이스 구현 + 등록만으로 가능해야 한다.
+전략은 `PlanRunner`가 `strategy` 파라미터로 선택하며 기본값은 설정 `dawnline.dispatch.plan.default-strategy`. 새 전략 추가는 인터페이스 구현 + 등록만으로 가능해야 한다.
+
+**`sweep-greedy-nn` 과 `sweep-greedy-nn+ls` 는 한 클래스다** (2026-09-09, Phase 4-1). 개선 단계를
+붙였는지만 다르고 1~4단계는 같은 코드다 — 둘로 나누면 §6.9 의 비교표가 "개선 단계의 값어치" 가
+아니라 "두 구현의 차이" 를 재게 된다. 같은 이유로 §6.7 의 FAST 모드도 이 자리를 끄는 것으로
+표현된다. 설정 기본값은 2026-09-09 에 `sweep-greedy-nn+ls` 로 옮겼다 — 이 표가 처음부터 그렇게
+적고 있었고 코드의 기본값만 따라오지 않았다.
 
 ### 6.7 성능 목표, 병렬화, 시간 예산, 열화 모드
 
 | 항목 | 목표 (8코어 노트북, Docker Compose) | 측정 방법 |
 |---|---|---|
 | 웨이브 5,000 주문 / 40 차량 계획 시간 | p95 ≤ 30초 (기본 전략) | `dawnline_plan_duration_seconds{strategy}` |
+| 같은 웨이브의 **영속화** 시간 | ≤ 3초 | `dawnline_plan_persist_seconds` |
 | 같은 조건 fast mode | ≤ 5초 | 동일 |
 | 메모리 | 계획 1회 힙 증가 ≤ 1 GB | JFR/actuator |
 | 베이스라인 대비 총비용 | ≥ 15% 절감 | benchmark 리포트 |
 | 미배정률 (정상 용량) | ≤ 0.5% | plan 메트릭 |
 
-- **병렬화**: 클러스터별 시퀀싱·개선은 독립이므로 `ForkJoinPool`(CPU 바운드)로 병렬 실행. Kafka 리스너·DB I/O는 가상 스레드. 캠프 간 계획은 파티션(campId)별로 자연 병렬.
-- **시간 예산**: `PlanningBudget(totalMs, perRouteMs)`. 기본 30초. 개선 단계는 잔여 예산을 클러스터 수로 나눠 배분.
-- **열화(degrade) 모드**: `wave.closed` 소비 지연(consumer lag) > 3 웨이브 또는 직전 계획이 예산의 80% 초과 → 다음 계획은 자동 `mode=FAST`(개선 단계 생략). 메트릭·로그로 노출, 운영자가 수동 재계획 가능. 이것이 "성수기에도 정시"를 위한 명시적 트레이드오프다.
+- **병렬화**: Kafka 리스너·DB I/O는 가상 스레드. 캠프 간 계획은 파티션(campId)별로 자연 병렬.
+
+  **계획 *안*의 병렬 단위는 클러스터가 아니다** (2026-09-11 정정, [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) · [측정](benchmarks/phase4-where-the-time-is.md)).
+  원래 문장은 「클러스터별 시퀀싱·개선은 독립이므로 `ForkJoinPool` 로 병렬 실행」이었는데,
+  코드를 쓰기 전에 쓴 문장이고 두 군데에서 성립하지 않는다 — **클러스터는 독립이 아니고**
+  (3단계가 하나씩 붙이며 차량 상태를 바꾼다, 시퀀싱도 클러스터가 아니라 (클러스터 × 차량)
+  시험 배치마다 돈다), **개선은 클러스터 단위가 아니다**(시간의 88%가 라우트 *쌍*을 보는
+  relocate·swap 이고, 클러스터별로 자르면 그 88%가 사라진다).
+
+  | `large` 5,773 ms 의 분해 | 시간 | 비중 | 병렬 단위 |
+  |---|---:|---:|---|
+  | 1·2 통합·클러스터링 | 19 ms | 0.3% | — |
+  | 3 탐욕 배정 | 1,548 ms | 26.8% | 한 클러스터 안의 **차량 후보** |
+  | 5 개선 — 라우트 안 | 444 ms | 7.7% | **라우트** |
+  | 5 개선 — 라우트 사이 | 3,680 ms | 63.7% | 라우트 **쌍** 스캔(투기적) |
+
+  그리고 **병렬화를 만들 이유는 이 표가 만들지 않는다.** `large` 는 예산의 19%만 쓰고 수렴한다 —
+  코어를 더 줘도 같은 답을 더 빨리 낼 뿐이다. 그래서 게이트를 먼저 돌렸다(`peak` 15,000/60,
+  30초 대 120초): **예산은 물지만 잘림의 대가가 +0.83%** 라 기준 1% 미만 —
+  **계획 내 병렬화는 이월한다**([측정](benchmarks/phase4-peak-gate.md)). 그리고 `peak` 에서는
+  병렬화가 표적을 못 맞춘다 — 계획 시간의 **61%가 재삽입**이고 개선은 29.7%다.
+
+- **마감은 계획 전체의 것이다** (2026-09-12 수정, [ADR-036](adr/ADR-036-deadline-belongs-to-the-plan.md)).
+  `totalMs` 는 계획의 예산으로 쓴 낱말인데 구현은 §6.5 5단계에만 걸려 있었다. `overload` 가 그것을
+  드러냈다 — 개선 단계는 13,841 ms 를 받아 12,859 ms 를 쓰며 **예산을 정확히 지켰는데 계획은
+  43.2초**였고, 시간의 **61%가 마감 없는 재삽입**이었다. 이제 **배정·재삽입·개선이 같은 마감
+  아래** 돌고, 마감이 오면 남은 것은 **`plan-deadline` 사유의 미배정**으로 끝낸다 — 「시도하지
+  못했습니다」는 정직한 답이고 「실을 차가 없습니다」는 거짓말이다(§6.3).
+
+  이것이 없으면 **열화 사다리가 허구다**: FAST 가 §6.5 5단계를 통째로 꺼도 `overload` 의 43.2초는
+  30.4초가 될 뿐 30초가 되지 않는다. [ADR-028](adr/ADR-028-unassigned-policy.md) 의 「재삽입은 값싼
+  탐욕」은 *실행 가능한 문제에서만* 참이었고(`large` 34 ms → `overload` 26.5초), 그것을 참으로
+  만드는 것이 이 마감이다.
+
+  | | 총비용 전 → 후 | 계획 시간 전 → 후 | 종료 |
+  |---|---|---|---|
+  | `small`·`medium`·`large`·`peak` | **한 자리도 안 바뀜** | 그대로 | 수렴 |
+  | `overload` | 147,956,375 → 163,608,882 (+10.6%) | 43,233 → **30,014 ms** | 마감 |
+
+  실현 가능한 데이터셋이 안 바뀌는 것이 **「설계 부합 수정이지 재기준이 아니다」의 증거**다.
+  베이스라인은 §6.9 게이트 규칙 1 로 동결돼 있어 마감의 대상이 아니다 — 동결의 대가이고,
+  마감은 기본 전략을 *나쁘게* 만들 뿐이라 비교를 유리하게 만들지 않는다.
+- **시간 예산**: `PlanningBudget(totalMs, perRouteMs)`. 기본 30초. 개선 예산은 `(총예산 − 앞 단계가 쓴 시간) × 개선예산계수`다 — **클러스터 수로 나누지 않는다**([ADR-034](adr/ADR-034-degrade-mode.md) 가 대체했고 [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) 3번이 문장을 걷어냈다: 라우트 사이 이동은 어느 클러스터에도 속하지 않아 배분할 주체가 없다).
+- **30초는 알고리즘 예산이지 트랜잭션 예산이 아니다.** 위 표의 두 행이 재는 것이 다르다 — `planDurationMs` 는 `RunPlanService` 의 `startedAt`–`finishedAt`(후보 조회 + 룰 + 최적화 + 검증)이고, 영속화는 그 뒤의 라우트·stop·설명 저장과 outbox 기록이다. 둘을 한 수치로 합쳐 보고하면 예산이 알고리즘 예산이 아니라 ORM 예산이 된다 — 2026-09-07 에 실제로 그랬다. 왕복 26.8초 중 20.2초(75%)가 영속화였고, 그래서 "예산 안에 끝났다" 는 통과가 최적화에 대해 말해 주는 것이 거의 없었다([ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md), [측정](benchmarks/phase4-plan-roundtrip-breakdown.md)).
+- **열화(degrade) 모드**: `wave.closed` 소비 지연(consumer lag) > 3 웨이브 또는 직전 계획이 예산의 80% 초과 → 다음 계획은 자동 `mode=FAST`(개선 단계 생략). 메트릭·로그로 노출, 운영자가 수동 재계획 가능. 이것이 "성수기에도 정시"를 위한 명시적 트레이드오프다. **구현은 2026-09-10, [ADR-034](adr/ADR-034-degrade-mode.md) · [측정](benchmarks/phase4-fast-mode.md).**
+
+  **열화는 사다리다** (2026-09-10 후속 정정). 두 조건은 다른 것을 말하므로 처방도 다르다 —
+  §6.7 의 예산 조건은 [ADR-032](adr/ADR-032-local-search-budget-and-approximations.md) 의 패스
+  단위 예산이 생기기 **전에** 쓰인 문장이고, 예산이 이미 계획 시간을 상한으로 묶는 지금
+  「직전 계획이 예산에 가까웠다」는 과부하가 아니라 **「개선 단계가 예산을 다 썼다」**일 뿐이다.
+  **처리량 부족을 말하는 신호는 랙 하나다.**
+
+  | 단 | 조건 | 처방 | `large` 계획 p95 | 대가 |
+  |---|---|---|---:|---:|
+  | 아래 | 직전 계획 > 예산 × 0.8 | 다음 계획의 **개선 예산 × 0.5** (모드는 `FULL`) | 4,898 → **3,208 ms** | **+1.35%** |
+  | 위 | 파티션 랙 > 3 웨이브 | 개선 단계를 **끈다** (`FAST`) | → **1,542 ms** | **+9.39%** |
+
+  둘을 같은 처방(FAST)으로 묶었던 것이 **45배 비싼 처방**이었다 — 예산으로 개선을 끊는 대가는
+  +0.21%, FAST 의 대가는 +9.4%다. 아랫단은 아낀 시간당 대가가 **4배 싸다**(56원/ms 대 232원/ms).
+  기본 30초 예산에서는 계수가 **아무것도 하지 않는다**(계수 1.0 과 0.5 의 결과가 한 자리도
+  다르지 않다) — 개선 단계가 「개선 폭 < 0.1%」로 먼저 멈추기 때문이고, 그래서 아랫단은 예산이
+  *실제로* 조일 때만 작동한다. 계수는 `PlanningProblem.budgetFactor` 로 들어가 **개선 예산**
+  (`budget.total() − 앞 단계가 쓴 시간`)에만 곱한다.
+
+  | | FULL | FAST | |
+  |---|---:|---:|---|
+  | `large` 계획 p95 (예산 30초) | 5,872 ms | **1,569 ms** | 3.7배 (fast 목표 5초의 31%) |
+  | `large` 총비용 | 8,276,130 | 9,053,096 | **+9.39%** — 이것이 포기하는 값이다 |
+
+  - **FAST 가 생략하는 것은 §6.5 5단계 하나다.** 재삽입은 개선이 아니라 값싼 탐욕이라 FAST 에서도 돈다([ADR-028](adr/ADR-028-unassigned-policy.md)). 1~4단계는 계획이 *존재하기* 위한 단계라 생략할 수 있는 것이 아니다. **전략 이름은 바뀌지 않는다** — 이름은 「무엇을 쓰려 했는가」(§6.6), 모드는 「무엇을 포기했는가」(§6.7)이고, 접으면 `dawnline_plan_duration_seconds` 의 두 라벨이 같은 말을 두 번 한다.
+  - **조건 둘은 중복이 아니라 역할 분담이다.** 랙은 **선행**(웨이브가 몰린 순간 보인다), 직전 계획 시간은 **후행**(한 계획이 이미 늦은 뒤에 보인다). 랙 조건이 없으면 §8.2 의 버스트를 놓친다. 진동은 **아랫단에만** 있고(계수 0.5 의 계획이 예산의 64% 로 끝나 임계 아래로 내려온다) 진폭이 +1.35% 라 평균 +0.78% 다 — 그 진동이 평균 계획 시간을 4,898 → 4,053 ms 로 사 온다. 윗단(FAST)은 랙이 남아 있는 동안 유지되므로 진동하지 않는다. 히스테리시스 임계를 따로 두지 않는 이유가 이것이다.
+  - **랙은 `Consumer#currentLag`(KIP-695)로 잰다.** Micrometer 게이지를 읽지 않는다 — **제어 입력을 관측 지표에서 읽으면** 지표 이름이 바뀔 때 `NaN` 이 「랙 없음」으로 읽혀 판단이 조용히 멈춘다. 아래 §9.1 의 "Kafka 소비자 랙은 기본 지표 사용" 은 **보는** 용도다. 값은 **파티션** 단위이므로 「이 캠프의 랙」이 아니라 **「이 캠프가 실린 소비 흐름의 랙」**이다(campId 키라 같은 캠프는 언제나 같은 파티션이지만, 파티션 수 < 캠프 수라 역은 아니다).
+  - **모름은 0이 아니다.** 랙을 볼 수 없는 경로(운영자 재실행·정체 회수·리밸런스 직후)에서 `null` 을 0 으로 접으면 랙 조건이 조용히 「아니오」가 된다. 사유 다섯 — `REQUESTED`(사람이 정했다, **열화 아님**) · `LAG` · `BUDGET` · `LAG_UNKNOWN`(FULL 이지만 조건 하나를 못 봤다) · `NONE`.
+  - **사유는 계획 행에 남는다**(`route_plans.mode_reason`, V5). 카운터 라벨은 집계지 개별 답이 아니고, "이 웨이브는 왜 FAST 였나" 는 §6.3 이 라우트에 "왜 이 차인가" 를 남기게 한 것과 같은 요구다.
+  - **직전 계획은 DB 에서, 캠프별로** 읽는다. 인메모리 홀더는 재기동에 사라지고 인스턴스마다 다르다. 큰 캠프의 느린 계획이 작은 캠프를 열화시키면 이 신호가 「이 캠프가 밀린다」가 아니라 「어딘가 바쁘다」를 뜻하게 된다. 조회 비용은 10만 행에서 **5.4 ms**(계획 시간의 0.09%)라 인덱스를 넣지 않았다 — 판단과 재검토 조건은 [측정](benchmarks/phase4-fast-mode.md) §5.
+  - **열화는 래치가 아니다.** 상태를 들지 않고 매 계획마다 두 사실을 다시 본다. 조건이 사라지면 다음 계획이 곧바로 FULL 이라 "한 번 열화하면 누가 되돌리는가" 라는 질문이 없다.
+  - 임계는 설정이다: `dawnline.dispatch.degrade.max-backlog-waves`(3) · `budget-ratio`(0.8) · `budget-factor`(0.5).
 - **거리 행렬**: stop 통합 후 n≈3,000이면 900만 쌍. 하버사인은 즉시 계산 가능하나 OSRM 사용 시 캐시 필수(`dist:{gh7a}:{gh7b}` Redis, TTL 1일).
 
 ### 6.8 재계획 (Partial Re-plan)
@@ -1125,9 +1276,41 @@ public interface DispatchStrategy {
 
 ### 6.9 벤치마크 방법
 
-- 데이터셋: `tools/benchmark/datasets/` — `small`(500 주문/5 차량), `medium`(2,000/20), `large`(5,000/40), `peak`(15,000/60), 각각 seed 고정 생성. 좌표는 서울 근사 격자(캠프 중심 반경 8 km, 밀도 불균일).
+- 데이터셋: `tools/benchmark/datasets/` — `small`(500 주문/5 차량), `medium`(2,000/20), `large`(5,000/40), `peak`(15,000/**88**), `overload`(15,000/60), 각각 seed 고정 생성. 좌표는 서울 근사 격자(캠프 중심 반경 8 km, 밀도 불균일).
+- **실현 가능성 기준과 `overload`** (2026-09-12). 수요가 용량을 넘으면 어떤 알고리즘도 미배정을 없앨 수 없고, 그 표는 라우팅 품질이 아니라 용량 부족을 잰다. 기준은 `DatasetFeasibilityTest` 가 강제하며 축은 다섯이다 — 총 중량·부피 70%, 냉장 70%, **제약 조합 80%**([ADR-033](adr/ADR-033-constraint-classes.md)), **통합 후 stop 수 ≤ 0.8 × max-stops × 차량 수**, 유효 stop 슬롯 ≥ stop 수 × 1.2.
+
+  stop 축의 80%는 2026-09-12 에 옮겨 왔다. 그 축만 여유가 0%(「차량 수 × 120 이하」)였는데 그것은 *완벽한 패킹*을 요구하는 수이고, 같은 이유로 중량·부피에는 이미 여유를 두고 있었다 — 축 하나만 기준이 달랐다. 그리고 **`peak` 이 그 검사의 대상이 아니었다**: stop 8,411 개가 슬롯 7,200 개를 넘는 것을 아무도 보지 못했고, 총비용의 88%가 미배정 페널티인 표를 「피크 성능」으로 읽을 뻔했다([측정](benchmarks/phase4-peak-gate.md)). 검사 목록은 이제 **빼는 방식**(`EXCLUDE`)으로 적는다 — 데이터셋이 새로 생기면 자동으로 대상이 된다.
+
+  **`overload`(15,000/60)는 그 기준을 일부러 어긴다.** `peak` 과 주문·seed 가 같고 차량만 60대라 stop 8,411 개가 슬롯의 **146%**다. 버리지 않는 이유는 그것이 실제 성수기의 질문이기 때문이다 — 「다 못 실을 때 누가 빠지고, 계획은 몇 초에 끝나는가」. 재는 것은 셋이다: **미배정 정책**(ADR-028) · **계획 시간의 상한**(마감이 없는 단계가 여기서 드러난다) · **열화**(§6.7). 실제로 셋을 다 드러냈다.
+
+  다만 **웨이브는 (캠프, 티어, 컷오프) 단위**다(§2.2·§5.2). 그러므로 **15,000건 한 웨이브는 캠프 하루치를 통째로 한 웨이브에 넣은 것**이지 정상적인 피크 웨이브가 아니다. `overload` 를 「성수기의 정상 부하」로 읽으면 안 된다.
+
+  §6.9 비교표는 **두 절**로 나눈다 — 실현 가능한 데이터셋(`small`·`medium`·`large`·`peak`)과 과부하(`overload`). 같은 절에 섞으면 표가 재는 것이 전략이 아니라 데이터셋이 된다. 회귀 게이트는 `medium` 그대로다.
+
+  **벤치마크 데이터셋의 규모는 데모 시드의 캠프와 다르다.** 부록 A 의 캠프는 20대(+야간조 8대)인데 `peak` 은 88대다 — `peak` 은 「한 캠프의 성수기」가 아니라 **`large` 의 3배 규모 웨이브를 그 규모에 맞는 용량으로 푸는 것**이다. 차량 수는 고른 값이 아니라 실현 가능성 기준이 정한 최소 대수이고, 그래서 데이터셋이 커지면 대수도 따라 커진다. `overload` 를 「캠프 하루치를 한 웨이브에」로 적은 것과 같은 종류의 문장이다 — 둘 다 **이 표가 무엇을 재는 것이 아닌지**를 말한다.
 - 지표: 총비용, 총거리, 계획 시간, 미배정 수, 지각 stop 수·평균 지각분, 차량 사용 대수.
 - 각 전략 × 데이터셋을 5회 반복, 중앙값·p95 기록. 결과는 `docs/benchmarks/YYYY-MM-DD.md`에 표와 함께 커밋. README 상단에 최신 표를 링크.
+- **최적화 항목은 구현 전에 그림자 계측으로 상한을 잰다** (2026-09-12 규칙화). 기계장치를 만들기
+  전에, 그 기계장치가 **건너뛰거나 줄일 수 있었을 일의 양을** 기존 코드 안에서 세어 본다 —
+  판정은 계산하되 동작은 바꾸지 않으므로 결과가 흔들리지 않고, 「그 판정이 틀린 적이 있는가」를
+  같은 실행에서 함께 검사할 수 있다. Phase 4 에서 세 번 썼고 **세 번 다 결정을 바꿨다**:
+  ① 병렬 단위(§6.7 분해 — 클러스터에 시간이 없었다) ② 안 훑기(쌍 건너뛰기 상한 4~17%, 잘못된
+  건너뛰기 0 — 정확하지만 만들 값이 없었다) ③ `peak` 게이트(잘림의 대가 +0.83%).
+  구현 뒤에 재면 «만들었으니 쓴다» 가 되고, 그때 측정은 결정이 아니라 변호가 된다.
+
+  **상한이 갈리는 자리는 「판정 단위와 낭비 단위가 맞는가」다.** 같은 Phase 에서 두 기계장치의
+  상한이 정반대로 나왔고, 이유는 대칭이다 — **안 훑기**(4~17%)는 무효화 단위가 **라우트 전체**
+  (91~140 stop)인데 낭비 단위는 **위치 하나**였다. 이동 하나가 라우트 둘을 통째로 더럽히니 걷을
+  수 있는 것이 거의 남지 않는다. **재삽입 가지치기**(93~97%)는 판정 단위가 (stop × 라우트)
+  하나이고 낭비 단위도 (stop × 라우트) 하나다. **단위가 맞으면 거의 전부 걷힌다.** 그림자
+  계측을 어디에 걸지 고를 때 이 물음이 먼저다.
+- **재현 조건**: 커밋 SHA · 데이터셋 seed · 전략 이름 · 모드 · 개선 예산 계수, 그리고
+  **「이 실행은 수렴으로 끝났다」**(2026-09-11, [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) 4번).
+  예산이 물려 끊긴 실행은 코어 수 이전에 **기계가 다르면 잘리는 지점이 다르다** — 그런 실행끼리
+  비교하는 것은 알고리즘이 아니라 그날의 CPU 를 비교하는 것이다. 그래서 결과 동일성을 말하는
+  테스트·게이트·리포트는 수렴 종료를 **전제 어설션으로 먼저 말한다**(CLAUDE.md 의 「폴백 테스트는
+  전제를 첫 어설션으로 스스로 말한다」와 같은 규칙). 전제가 조용히 무너지면 동일성 테스트는 계속
+  통과하면서 아무것도 검사하지 않는다.
 - 회귀 방지: CI에서 **`medium`** 을 실행해 기본 전략 **비용**이 베이스라인보다 나쁘면 실패
   (`--gate baseline-nn` → 종료 코드 1).
 
@@ -1137,6 +1320,11 @@ public interface DispatchStrategy {
 medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기다. `small` 에서 기본 전략이
 베이스라인보다 **+8.8%** 비싼 것은 지워지는 결과가 아니라 **제품 사실**이므로
 `docs/benchmarks/phase3-baseline.md` §4-5 에 비용 분해와 함께, README 에 「알려진 레짐」으로 남긴다.
+
+**그 격차는 2026-09-09 에 닫혔다** (Phase 4-1, [측정](benchmarks/phase4-local-search.md) §4).
+개선 단계가 붙은 `sweep-greedy-nn+ls` 는 `small` 에서 `baseline-nn` 보다 **−3.9%** 다. 다만
+**게이트 데이터셋은 `medium` 으로 둔다** — 위 문단의 근거는 결과가 아니라 자유도의 유무이고,
+그 사실은 격차가 닫혔다고 달라지지 않는다. 결과를 보고 기준을 옮기면 다음 번에도 그렇게 된다.
 
 **게이트 규칙 둘** (2026-09-05 확정)
 
@@ -1226,6 +1414,7 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 - `fulfillment_orders` 의 두 인덱스는 [EXPLAIN 근거](benchmarks/phase2-fulfillment-orders-indexes.md)를 갖는다. `wave_id` 는 **부분 인덱스가 아니다** — 부분 조건이 거르는 행이 2% 뿐이고(정상 상태의 98% 가 `PLANNED`), 무엇보다 부분 인덱스는 FK 검사에 쓰이지 못해 `waves` 삭제가 웨이브당 전수 스캔이 된다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 `waves` 행 두 자리뿐이고 둘 다 짧은 트랜잭션이다 — **편입은 `SELECT … FOR SHARE`, 마감은 `SELECT … FOR UPDATE`**([ADR-025](adr/ADR-025-wave-admission-share-lock.md)). 편입에 배타 락을 쓰면 §8.2 피크에서 웨이브 행 하나가 처리량 상한이 된다. 공유 락끼리는 막지 않고, 마감의 배타 락이 진행 중인 편입을 기다렸다가 `CLOSING` 으로 바꾸므로 "마감된 웨이브에 주문이 새는" 창도 함께 닫힌다.
+- **최적화기 I/O 경로(입력 적재·결과 저장)는 ORM 이 아니라 벌크**([ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md)). 계획의 입력(후보)은 읽기 전용 프로젝션으로 읽고, 결과(라우트·stop·설명)는 JDBC 배치로 쓰며, 후보 상태 반영은 결과별 집합 `UPDATE … WHERE order_id = ANY(?)` 다. 이유는 성능 이전에 **의미**다 — 최적화기의 입력은 순수 값이고(불변규칙 5) 결과물은 쓰는 시점에 도메인 동작이 없다. 값을 관리 엔티티로 읽어 두면 그 뒤의 모든 네이티브 질의가 auto-flush 로 전수 더티 체크를 하며, 측정된 대가는 **21.9배**였다([측정](benchmarks/phase4-plan-roundtrip-breakdown.md)).
 - N+1 방지: 컬렉션 로딩은 `@EntityGraph` 또는 명시 fetch join. 테스트에서 Hibernate statement 카운터로 쿼리 수 상한 검증.
 
 ### 7.2 Redis 사용 카탈로그
@@ -1236,8 +1425,7 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `rl:customer:{id}` | HASH(Lua 토큰버킷) | order | 60s | **허용**(fail-open) + `bypassed` 메트릭·알림 |
 | `geo:fc`, `geo:camp` | GEO | fulfillment | 없음(기동 시 재적재) | DB 전체 조회 후 메모리 하버사인 |
 | `zone:geohash5:{p}` | STRING(`zoneId:campId`) | fulfillment | 10m | DB 조회 |
-| `lock:wave:{id}`, `lock:plan:{waveId}` | STRING NX | fulfillment, dispatch | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
-| `lock:relay:{service}` | STRING NX | 전 서비스(발행) | 30s | **없다 — 발행을 멈춘다**([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)) |
+| `lock:wave:{id}` | STRING NX | fulfillment | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
 | `route:{id}:progress` | HASH | dispatch/tracking | 2d | DB 조회 |
@@ -1246,12 +1434,16 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 
 원칙: Redis는 **성능·조정(coordination)** 용도이며 **유일한 진실 저장소가 아니다**. 어떤 키가 사라져도 정확성은 DB로 회복된다.
 
-**`lock:relay` 만 예외이고, 예외인 이유가 원칙을 설명한다**(2026-09-05, ADR-027). 다른 모든 행은
-폴백 칸에 *DB 로 무엇을 하면 되는지*가 적혀 있다. 릴레이 리더 락에는 그 칸이 비어 있다 — 락 없이
-진행할 때 잃는 것이 **키 단위 순서**인데 `FOR UPDATE SKIP LOCKED` 는 중복 발행만 막고 순서는
-막지 못하기 때문이다. 회복 경로가 없는 자리에서 이 원칙이 요구하는 것은 없는 폴백을 지어내는
-것이 아니라 **멈추는 것**이다. 멈춰서 잃는 것은 지연뿐이고(행은 `outbox_events` 에 남는다),
-그 지연은 `dawnline_outbox_lag_seconds` 와 §9.4 알림이 그대로 잡는다.
+**이 표에는 2026-09-05 하루 동안 예외가 하나 있었다.** `lock:relay:{service}` 행의 폴백 칸에는
+"없다 — 발행을 멈춘다" 가 적혀 있었다(ADR-027). 폴백이 없는 이유는 맞았다 — 락 없이 진행하면
+**키 단위 순서**를 잃는데 `FOR UPDATE SKIP LOCKED` 는 중복 발행만 막는다. 틀린 것은 그 락을
+**여기에 둔 것**이다. 릴레이 리더 선출은 서비스 내부 조정이고 그 인스턴스들은 같은 DB 를
+공유하므로, 조정자를 DB 로 옮기면 폴백을 물을 필요 자체가 없어진다(같은 날 [ADR-027 후속
+정정](adr/ADR-027-outbox-relay-leader-lock.md)). **원칙에 예외를 두는 대신 예외가 필요 없는
+자리로 락을 옮겼다.** 그래서 이 표의 모든 행은 다시 폴백 칸이 채워져 있다.
+
+`lock:plan:{waveId}` 도 같은 날 사라졌다(§5.3). 이유는 반대쪽이다 — 폴백이 없어서가 아니라
+**막으려던 것을 DB 제약이 이미 막고 있어서**다.
 
 **레이트 리밋 버킷의 의미** (`rl:customer:{id}`): 용량 60, 초당 1개 리필. 정확히 "분당 60회" 가 아니라
 **분당 60을 넘는 지속 부하를 막되 짧은 버스트는 허용**한다는 뜻이다. 오래 쉰 고객은 가득 찬 버킷으로
@@ -1342,7 +1534,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | 컴포넌트 장애 | 증상 | 자동 대응 | 수동 대응 (런북) |
 |---|---|---|---|
 | Kafka 브로커 다운 | outbox 미발행 누적 | 릴레이 재시도, 주문 API 정상 | RB-01: 브로커 복구 후 outbox 지연 해소 확인 |
-| PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패 | 트래픽 차단(프로브), 소비자 재시도 후 pause | RB-02 |
+| PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패, **릴레이 발행 중단**(리더십 판정 불가 — 발행할 행도 못 읽으므로 같은 사건이다, ADR-027 정정) | 트래픽 차단(프로브), 소비자 재시도 후 pause | RB-02 |
 | Redis 다운 | 성능 저하, 락 폴백 | 폴백 경로(§7.2) | RB-03: 복구 후 geo 재적재 확인 |
 | dispatch 계획 중 크래시 | plan `PLANNING` 정체 | 10분 후 자동 재실행 | RB-04: 강제 재실행 |
 | 독약 메시지 (소비 측) | 소비자 반복 실패 | 3회 후 DLQ | RB-05: 원인 수정 후 replay |
@@ -1387,7 +1579,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_outbox_lag_seconds` | gauge | 전 서비스 | service |
 | `dawnline_outbox_unpublished` | gauge | 전 서비스 | service |
 | `dawnline_outbox_failed` | gauge | 전 서비스 | service — 격리된(미해결) outbox 행 수 (§4.6) |
-| `dawnline_outbox_leader` | gauge | 전 서비스 | service — 릴레이 리더십([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)). **1** 리더(발행 중) · **0** 팔로워(정상, 다른 인스턴스가 리더) · **-1** 판정 불가(Redis 장애). 0 과 -1 을 합치지 않는 이유는 발행을 멈추는 결정은 같아도 <em>봐야 할 곳</em>이 정반대이기 때문이다. 이 값에 별도 알림을 걸지 않는다 — 결과가 `dawnline_outbox_lag_seconds` 로 곧바로 나타나고 그 알림이 §9.4 에 이미 있다. 이 게이지는 <em>왜</em> 지연이 오르는지를 말한다 |
+| `dawnline_outbox_leader` | gauge | 전 서비스 | service — 릴레이 리더십([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)). **1** 리더(발행 중) · **0** 팔로워(정상, 다른 인스턴스가 리더) · **-1** 판정 불가(DB 세션 장애). 0 과 -1 을 합치지 않는 이유는 발행을 멈추는 결정은 같아도 <em>봐야 할 곳</em>이 정반대이기 때문이다. 이 값에 별도 알림을 걸지 않는다 — 결과가 `dawnline_outbox_lag_seconds` 로 곧바로 나타나고 그 알림이 §9.4 에 이미 있다. 이 게이지는 <em>왜</em> 지연이 오르는지를 말한다 |
 | `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
 | `dawnline_event_rejected_total` | counter | 전 소비자 | **consumer, eventType, reason** — 비즈니스 규칙 위반으로 무시한 이벤트 (§4.6). `outcome=rejected` 가 "몇 번" 을 세고 이쪽이 "왜" 를 센다. 예약해 둔 라벨 확장을 Phase 2-8 에서 붙였다 — 거부하는 소비자가 order·fulfillment 둘이 되어 "누가 무엇을" 이 필요해졌다. **세 라벨은 이 카운터를 올리는 모든 곳이 같이 써야 한다**(`IdempotentConsumer`·두 리스너): Prometheus 는 같은 이름의 미터가 같은 라벨 키 집합을 갖기를 요구하므로 한쪽만 붙이면 다른 쪽 등록이 실패한다 |
 | `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
@@ -1396,10 +1588,12 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_geo_index_loaded` | gauge | fulfillment | index(fc/camp) — Redis GEO 적재 성공 여부 0/1. **레디니스가 아니라 이 게이지가 GEO 상태를 말한다**(§8.6, ADR-016 후속 정정). 0 이어도 서비스는 폴백으로 정상 동작한다 |
 | `dawnline_geo_lookups_total` | counter | fulfillment | index, outcome(redis/bypassed) — `bypassed` 는 Redis 를 건너뛰고 DB 전체 조회 + 메모리 하버사인으로 답한 것이다(§7.2). 레이트 리밋의 `bypassed` 와 같은 어휘를 쓴다 — **폴백은 조용히 일어나면 안 된다** |
-| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode |
+| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode — **알고리즘 시간만**이다(§6.7). 영속화는 아래 짝이 잰다 |
+| `dawnline_plan_persist_seconds` | histogram | dispatch | camp — 라우트·stop·설명 저장과 outbox 기록에 걸린 시간. `dawnline_plan_duration_seconds` 와 **한 쌍**이고, 둘을 나눠 두는 것이 [ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) 의 요점이다 — 한 수치였을 때 30초 예산의 75% 를 ORM 이 쓰고 있는 것이 보이지 않았다. 목표 5,000건 ≤ 3초 |
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |
 | `dawnline_plan_unassigned` | gauge | dispatch | camp |
-| `dawnline_plan_degraded_total` | counter | dispatch | camp |
+| `dawnline_plan_degraded_total` | counter | dispatch | camp, reason(LAG/BUDGET) — **자동 열화만** 센다([ADR-034](adr/ADR-034-degrade-mode.md)). 운영자가 `mode=FAST` 를 지정한 계획은 들어가지 않는다 — 사람이 고른 것은 시스템이 밀려서 포기한 것이 아니고, 섞으면 이 값이 「성수기에 무엇을 포기했나」가 아니라 「누가 FAST 를 몇 번 썼나」가 된다. 개별 답은 `route_plans.mode_reason` 이 든다 |
+| `dawnline_plan_backlog_unknown_total` | counter | dispatch | camp — 랙을 **모른 채** 내린 자동 모드 판단. 모름은 0 이 아니다(§6.7) — 이 값이 오르는 동안 열화 판단은 조건 둘 중 하나만 보고 있고, 그 사실이 안 보이면 「랙 조건이 한 번도 발화하지 않았다」가 건강의 증거처럼 읽힌다. `dawnline_geo_lookups_total{outcome=bypassed}` 와 같은 어휘다 — **폴백은 조용히 일어나면 안 된다.** 운영자 재실행·정체 회수는 볼 파티션이 없어 정상적으로 오르므로, 0 이어야 하는 값이 아니라 **비율**을 보는 값이다 |
 | `dawnline_cancel_too_late_total` | counter | dispatch | camp — 이미 `ARRIVED`/`COMPLETED` 인 stop 에 도착해 **거부한** `order.cancelled` (§6.10, [ADR-026](adr/ADR-026-dispatch-cancellation-window.md)). order-service 의 축 밖 거부 카운터와 **한 쌍**이다 — 저쪽은 "취소된 주문에 배차가 왔다", 이쪽은 "배송된 주문에 취소가 왔다" 를 세고 둘 다 같은 경합 창의 양 끝이다. 오르면 볼 곳은 dispatch 가 아니라 order-service 의 `order.dispatched` 컨슈머 랙이다 |
 | `dawnline_at_risk_total` | counter | tracking | camp — campId 는 `route.assigned` 가 싣고 오지만(필수 필드) §5.4 의 `shipments` 에는 컬럼이 없다. **Phase 5 에서 보관해야 이 라벨을 붙일 수 있다** |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
@@ -1563,7 +1757,7 @@ dawnline/
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트** | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다 |
-| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표, 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다. **명시적 예외 하나**: `lock:relay` 는 폴백이 없어 fail-closed 다([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)) — 회복 경로가 없는 자리에서 이 규칙이 요구하는 것은 멈추는 것이다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |
+| 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표(**예외 없음** — 2026-09-05 에 하루 있었고 [ADR-027 후속 정정](adr/ADR-027-outbox-relay-leader-lock.md)이 그 행을 없앴다), 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |
 | 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
 | 10 | ID는 UUIDv7 | — | `Ids.newId()`, `IdsTest`(RFC 9562 비트 레이아웃·단조 증가) | ✅(생성기) |
@@ -1583,6 +1777,50 @@ dawnline/
 날 테스트는 <strong>계속 통과하면서</strong> 아무것도 검사하지 않는 상태가 되고, 그것은 실패보다
 나쁘다 — 실패는 보이지만 이쪽은 안 보인다. 이 저장소에서 세 번 있었고(마지막은 `GeoFallbackIT`
 가 살아 있는 Redis 를 보고 통과한 일), 그래서 규칙이 되었다.
+
+**꺼 둔 검증은 실패하지 않는다** — 그래서 초록으로 보인다. 위 규칙이 *전제가 조용히 무너진*
+테스트를 말한다면 이쪽은 한 걸음 더 나간 형태다: 검증이 **아예 돌지 않는데도** 파이프라인이
+초록이다. 없는 job 은 실패하지 않고, 실패하지 않는 것은 눈에 띄지 않는다. 2026-09-05 하루에
+두 건이 나왔다.
+
+| 무엇이 꺼져 있었나 | 어떻게 드러났나 | 교훈 |
+|---|---|---|
+| 벤치마크 회귀 게이트가 `if: false` 였고, 인자의 전략 이름(`sweep-greedy-nn+ls`)은 **존재하지 않았다** | Phase 3 마감 대조표가 "게이트를 켠다" 항목을 커밋과 짝지으려다 | **켜져 있다고 믿는 게이트는 없는 게이트보다 나쁘다.** 없는 게이트는 아무도 신뢰하지 않는다 |
+| Compose 스모크 job 이 `needs: [build, image]` 였는데 `image` 는 **다른 러너**에서 빌드한다 — 켰다면 `check-images` 에서 죽었다 | 같은 대조표가 그 job 을 실제로 켜 보고 | **꺼 둔 job 의 결함은 켜기 전까지 보이지 않는다.** 꺼 두는 동안 그 job 은 검증이 아니라 <em>검증이 있다는 인상</em>이다 |
+| `DatasetFeasibilityTest` 가 검사 대상을 `{"SMALL","MEDIUM","LARGE"}` 로 **열거**했다 — `peak` 은 그 목록에 없었다 (2026-09-12) | 병렬화 게이트를 재려고 `peak` 을 돌렸더니 총비용의 88%가 미배정 페널티였다. stop 8,411 개가 슬롯 7,200 개를 넘고 있었다 | **목록에 없는 것은 검사되지 않는데, 목록에 없다는 사실은 아무도 보지 않는다** |
+
+셋 다 "지금은 못 켠다·이건 특별하다" 는 합리적인 이유로 빠졌고, 그 이유가 사라졌는지 확인할
+사람이 없었다. 그래서 규칙 둘.
+
+1. **`if: false` 로 두는 job 에는 켜는 조건을 주석으로 적고, 그 조건이 사라지는 Phase 의 마감
+   대조표에 항목으로 넣는다.** 대조표가 앞의 둘을 잡은 것은 우연이 아니라 대조표가 *코드가 아니라
+   계획서*를 기준으로 읽기 때문이다.
+2. **집합을 도는 검사는 열거하지 않고 전체에서 뺀다** (2026-09-12). 데이터셋·시드·job 처럼
+   *구성원이 늘어나는* 집합에 거는 검사는 `@EnumSource(mode = EXCLUDE, names = …)` 처럼
+   **빼는 방식**으로 적는다. 드는 방식은 새 구성원이 조용히 검사 밖에 남고, 그 사실이 어디에도
+   나타나지 않는다 — 빼는 방식은 제외를 *쓰게 만들고*, 쓰인 제외는 읽힌다.
+   그리고 **제외한 것이 왜 제외인지를 검사하는 테스트를 함께 둔다**
+   (`overload_는_stop_기준을_일부러_어긴다`) — 그것이 없으면 제외가 「검토했는데 제외」인지
+   「잊었는지」를 다음 사람이 구별할 수 없다.
+
+**픽스처가 정하지 않은 축** — 「통과했지만 아무것도 검사하지 않는 테스트」의 목록이다. 공통점은
+하나다: **지금 깨지지 않는 이유가 테스트에 적혀 있지 않다.** Phase 3 마감에서 셋이었던 것이
+Phase 4-0 하나의 PR 에서 여섯이 됐고, 여섯 다 *다른 것이 우연히 그 자리를 메우고 있었다.*
+
+| # | 축 | 무엇이 우연이었나 | 어떻게 드러났나 |
+|---|---|---|---|
+| 1 | **시드 행** | `DispatchAdminIT` 가 시드를 고치고 `@AfterEach` 로 되돌린다 — 병렬 실행이 들어오면 무너지는 격리 | 아직 안 깨졌다(기록만) |
+| 2 | **시각** | dispatch IT 셋이 약속창을 `Instant.now()` 로 만들었다 | 21시에 돌렸더니 근무창 밖 |
+| 3 | **릴레이 리더** | 발행을 보는 IT 가 리더가 되는 것이 클래스 시작 순서에 달려 있었다 | 리더 락이 Redis→advisory 로 옮겨져 **실제로 동작하기 시작**하자 |
+| 4 | **플래너 통계** | 통계 없는 테이블에서 플래너가 *짐작으로* 인덱스를 골랐다 — 50행에서 순차 스캔이 옳다 | CI 에서 autoanalyze 가 먼저 돌아 |
+| 5 | **컷오프 상한** | `GeoFallbackIT` 의 시각 리터럴이 `isStale` 24시간을 넘겼다 — 작성한 날로부터 25시간짜리 | 이틀 뒤 열 캠프 전부 배차 불가 |
+| 6 | **배정 동률** | 한계비용이 같을 때 `ORDER BY code` 순서로 차를 골랐다. cold-chain 공허성 검사의 통과·실패가 **시각과 시드 배분**에 달려 있었고, **CI 의 이전 통과는 시각 운이었다** | 근무조를 나누자 한 대가 웨이브를 흡수하게 되어([ADR-030](adr/ADR-030-night-shift-seed.md)) 드러남 |
+| 7 | **검사 대상 집합** | 실현 가능성 기준이 `{SMALL, MEDIUM, LARGE}` 를 **열거**했다 — `peak` 은 목록에 없었고, 목록에 없다는 사실은 어디에도 나타나지 않았다 | 병렬화 게이트를 재려고 `peak` 을 돌렸더니 총비용의 88%가 미배정 페널티(stop 8,411 > 슬롯 7,200) |
+
+6번이 이 목록의 요점을 가장 잘 보여 준다. 검사는 옳았고 코드도 "틀리지" 않았다 — 다만 답을
+정하는 자리가 비어 있었고, 그 빈자리를 **어댑터의 정렬 순서**가 메우고 있었다. 채운 것이
+[ADR-031](adr/ADR-031-least-capable-first-tie-break.md) 이다. 그리고 이 결함을 잡은 것은
+벤치마크가 아니라 **데모의 공허성 검사**였다 — 벤치마크 수치는 하나도 바뀌지 않았다.
 
 **결정론**: 최적화 테스트는 seed 고정. 시간은 `Clock` 주입으로 제어. Testcontainers 재사용(`testcontainers.reuse.enable=true`)으로 로컬 실행 시간 단축.
 
@@ -1648,7 +1886,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 002 | DB-per-service + 폴링 Outbox 릴레이 | Debezium CDC(운영 복잡도), 2PC(불가) | [ADR-002](adr/ADR-002-db-per-service-polling-outbox.md) |
 | 003 | JSON + JSON Schema 이벤트 계약 | Avro/Protobuf + Schema Registry(로컬 복잡도, 확장 경로만 기술) | [ADR-003](adr/ADR-003-json-schema-event-contracts.md) |
 | 004 | 자체 휴리스틱(sweep-greedy-nn+ls) 기본 + Timefold 비교 | OR-Tools(JNI·배포 부담), Timefold 단독(블랙박스로는 알고리즘 역량 증명 약함) | — (Phase 4 예정) |
-| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | PostgreSQL advisory lock(서비스별 DB 분리 시 범위 한계), Redisson | — (Phase 2 예정) |
+| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | PostgreSQL advisory lock(**서비스 <em>간</em> 락에 한한 기각 사유다** — 2026-09-05 각주), Redisson | — (Phase 2 예정) |
 | 006 | at-least-once + 멱등 소비자 | Kafka 트랜잭션/EOS(DB 쓰기와 원자성 불가) | [ADR-006](adr/ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제 | 계층형(경계 침식) | [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) |
 | 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | 전부 플랫폼 스레드 | — (Phase 4 예정) |
@@ -1673,7 +1911,17 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 
 | 025 | 웨이브 편입은 `FOR SHARE`·마감만 `FOR UPDATE`, `order_count` 는 마감 시 집계 | 편입도 `FOR UPDATE`(§8.2 피크에서 웨이브 행이 처리량 상한), 락 없이 낙관적 락만(편입은 웨이브 행을 쓰지 않아 충돌로 안 잡힌다 — 마감된 웨이브에 주문이 샌다), 원자적 `order_count` 증감(배타 락을 이름만 바꾼 것 + 취소 경로 드리프트), advisory lock, 웨이브 샤딩(계획 단위가 쪼개진다) | [ADR-025](adr/ADR-025-wave-admission-share-lock.md) |
 | 026 | 취소는 최적화 트리거가 아니라 입력 변경 — stop 을 죽이고 순서는 두고 시간만 재전파 | 취소를 §6.8 재계획 트리거로(같은 판단을 하는 회로가 둘), 재시퀀싱(기사가 보고 있는 순번이 바뀐다), 취소된 stop 을 페이로드에서 삭제(부재는 값이 아니다 — 취소·이동·발행 누락이 구별되지 않는다), 부분 취소를 stop 상태로 표현(통합된 stop 은 여전히 방문한다) | [ADR-026](adr/ADR-026-dispatch-cancellation-window.md) |
-| 027 | outbox 릴레이 리더 락(Redis `SET NX` + 갱신), 리더를 모르면 발행 중단 | 그대로 두기(전제를 지키는 것이 배포자의 기억뿐), Redis 장애에 fail-open(락이 가장 필요한 순간에 락이 사라짐), `partition_key` 해시 분할(인스턴스 수가 바뀌는 전환 구간에 같은 문제), advisory lock(세션 수명이 커넥션 풀에 묶임), Kafka EOS(ADR-006 기각 + 두 프로듀서의 순서를 정해 주지 않는다), 리더 선출 라이브러리(의존 추가), 갱신 전용 스케줄(폴링은 도는데 갱신이 죽은 상태가 새로 생긴다) | [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md) |
+| 037 | **재삽입은 들어갈 수 없는 자리를 시도하지 않는다** — 하드 룰을 「위치와 무관한가」로 가르고(stop 수·적재·차량 속성 ✅ / 근무창·약속창 ❌), 위치 무관 룰이 거절한 라우트는 자리를 보지 않는다 · 상한을 **구현 전에 그림자로** 쟀다(`overload` 96.8% · `large` 93.2%) · **결과가 한 자리도 안 바뀐다**(`overload` 43.2 → 19.2초, 120초 예산의 수렴값과 같은 답) · 미배정 사유가 룰 이름으로 남는다 | k-최근접 라우트 한정(**휴리스틱** — 빈 차가 멀리 있을 수 있다, 재기준 경로), 잔여 용량을 재삽입 안에서 직접 계산(룰을 코드에 두 번째로 적는 일), 기본값을 「위치 무관」으로 두고 예외만 표시(새 룰이 조용히 대상이 되고 **답이 달라진다**), 속성 클래스 단위 건너뛰기(라우트별만으로 96.8% — 남은 것은 값싼 룰 평가 21만 번, **재검토 지점**) | [ADR-037](adr/ADR-037-reinsertion-prunes-what-cannot-fit.md) |
+| 036 | **마감은 계획 전체의 것이다** — §6.7 의 `totalMs` 는 계획의 예산인데 구현은 §6.5 5단계에만 걸려 있었다(`overload` 43.2초 중 61%가 마감 없는 재삽입) · 마감이 오면 남은 것은 **`plan-deadline` 사유의 미배정** · 이것이 없으면 **열화 사다리가 허구**(FAST 로 개선을 다 꺼도 30초가 안 된다) · 베이스라인은 동결이라 대상 밖 · `budgetExhausted` 로 재현 가능 여부를 리포트가 스스로 말한다 | 예산의 뜻을 「개선 단계의 것」으로 좁히기(목표와 예산이 다른 것을 가리킨다), 마감에 예외를 던져 계획을 버리기(웨이브가 통째로 배차되지 않는다 — 미배정보다 나쁘다), FAST 에서 재삽입 생략(열화의 정의가 바뀐다, 그리고 비싸진 것은 미배정이 많을 때뿐이라 모드가 아니라 마감의 일), 재삽입 시도 횟수 상한(상한이 **결과**를 바꾼다 — 마감은 「하지 못한 일」을 남기지 「다른 답」을 만들지 않는다) | [ADR-036](adr/ADR-036-deadline-belongs-to-the-plan.md) |
+| 035 | **병렬 단위는 클러스터가 아니다, 그리고 벽시계가 물린 실행은 재현 대상이 아니다** — §6.7 의 「클러스터별 시퀀싱·개선은 독립」이 두 군데에서 거짓이었다(배정은 차량 상태를 바꾸며 진행하고, 개선 시간의 **88%가 라우트 쌍**을 본다) · 병렬 단위는 **차량 후보 · 라우트 · 라우트 쌍** · 개선 예산을 클러스터 수로 나누지 않는다 · **재현의 기준은 수렴 종료**이고 동일성을 말하는 자리는 그것을 전제 어설션으로 말한다 · 순서는 **안 훑기 → 게이트(`peak`) → 병렬** (라우트 사이 스캔의 **97.6%가 헛스캔**) | 설계서대로 클러스터를 `ForkJoinPool` 에(배정이 순차 의존이라 **틀린 답**), 클러스터별 독립 개선(88%가 사라진다 — 빨라지는 게 아니라 덜 하는 것), 분해표만 보고 바로 병렬화(`large` 는 예산의 19%만 쓴다 — 시간이 어디 있는지와 문제인지는 다른 질문), 노드 단위 don't-look bits(근사라 §6.9 의 모든 수치가 재기준 대상) | [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) |
+| 034 | **열화는 사다리다, 그리고 왜 열화했는지가 계획에 남는다** — FAST 는 §6.5 5단계 하나만 끈다(전략 이름은 그대로) · **랙만 FAST, 예산 조건은 개선 예산 절반**(후속 정정 — 둘을 같은 처방으로 묶은 것이 45배 비싼 처방이었다: +0.21% 대 +9.4%) · 랙은 `Consumer#currentLag` 로 재고 **모름을 0으로 접지 않는다** · 사유는 `route_plans.mode_reason` 에 · 사람이 지정한 FAST 는 열화가 아니다 | 별도 전략으로 전환(§6.6 이 이미 기각 — 비교표가 「두 구현의 차이」를 재게 된다), Micrometer 게이지에서 랙 읽기(제어 입력을 관측 지표에서 — 이름이 바뀌면 `NaN` 이 「랙 없음」이 된다), 랙 조건 빼기(버스트를 놓치고 FULL↔FAST 진동), 직전 계획을 인메모리로(재기동에 사라진다), 사유를 카운터 라벨로만(집계는 「이 웨이브는 왜」에 답하지 못한다), 히스테리시스 임계(랙 조건이 이미 그 일을 하고, 정정 뒤 아랫단의 진폭은 1% 대다), `PlanMode` 에 세 번째 값(계약 변경이고, 이 단은 「무엇을 생략했나」가 아니라 「얼마나 했나」다), 계수를 전체 예산에 곱하기(그리디가 오래 걸린 날 개선이 음수 예산을 받는다), `(camp_id, finished_at)` 인덱스(218배지만 5.4 ms → 0.025 ms 로 기준의 1/10 아래 — **재검토 조건**과 함께 기록) | [ADR-034](adr/ADR-034-degrade-mode.md) |
+| 033 | **겹친 제약은 한 대에 몰리지 않는다** — 기준(제약 조합별 수요 ≤ 그 조합 차량 용량의 80%) · 능력 분포를 규칙으로(위험물 20%, 그중 절반 냉장) · 통합 키에 제약 클래스 | 그대로 두기(총비용의 34%가 누구도 건드릴 수 없는 상수라 비율의 분모가 부풀어 있다), 데이터셋만 고치기(자가 다른 방향으로 휜다 — `baseline-nn` 이 늘어난 차량을 못 써 −43.98% 가 나왔다), 통합 키만 고치기(냉장∧위험물 차량 1대라는 구조적 결함은 그대로), 필요할 때만 분할(관측되지 않은 압박을 위한 복잡도 — **재검토 지점**으로 기록) | [ADR-033](adr/ADR-033-constraint-classes.md) |
+| 032 | **국소 탐색은 근사로 후보를 줄이고 예산은 패스 단위로만 끊는다** — 이웃 표(K=20) + 거리 선별, 패스는 통째로 적용되거나 통째로 버려진다 | 전수 평가(`large` 에서 한 패스도 못 돌아 개선 0), 비용 델타 근사식(룰을 코드에 두 번째로 적는 일), 이동 단위로 예산 끊기(같은 입력에 다른 답), `Clock` 주입(예산은 경과이지 시각이 아니다) | [ADR-032](adr/ADR-032-local-search-budget-and-approximations.md) |
+| 031 | **배정 동률은 「능력이 적은 차 먼저」** — 비냉장 < 냉장 < …, 마지막 키는 id(재현성). 냉장 프리미엄 +7,000원 | 위험물까지 아껴 두기(**재 보고 뺐다** — 미배정 99→115, 비용 +3.9%), 데모 시나리오 키우기(데이터로 테스트를 통과시킨다), 공허성 검사 약화, 시드에서 냉장을 첫 자리에서 치우기(`ORDER BY code` 의존은 그대로) | [ADR-031](adr/ADR-031-least-capable-first-tie-break.md) |
+| 030 | **부록 A 에 야간 근무조** — 캠프당 야간 8대(23:00–08:00)·주간 12대(09:00–22:00), 냉장·대형은 두 조에 배분. 근무 시작 전에는 출발하지 않는다 | 기사 단위 로스터(실제 운영의 방향이지만 모델 변경 — **다음 단계**로 기록), 계획 시각 주입(테스트가 모델의 구멍을 가린다), 그대로 두기(CI 가 하루 8시간 빨갛고 그 빨강이 시각에 따라만 보인다) | [ADR-030](adr/ADR-030-night-shift-seed.md) |
+| 029 | **최적화기 I/O 경로는 ORM 이 아니라 벌크** — 후보는 읽기 전용 프로젝션, 결과는 JDBC 배치, 상태 반영은 집합 UPDATE | `FlushMode.COMMIT`(증상만 숨기고 세션에 5,001개가 뜬 원인은 그대로 · 같은 트랜잭션의 네이티브 질의가 미반영 변경을 못 보는 read-your-writes 위험을 설정 한 줄로 전역에 들인다), 그대로 두기(30초 예산 안이지만 여유 12% 이고 다음 작업이 계획 시간을 늘린다) | [ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) |
+| 028 | **미배정 정책 하나** — 우선도는 계약이 아니라 사실에서 파생(`promiseRevised` +2 · `requiresCold` +1), 자리는 페널티가 비싼 것부터, 오르는 비용이 페널티보다 쌀 때만 싣는다. 탐욕 뒤 + 국소 탐색 뒤 두 번 | 계약에 `priority` 추가(무인증이라 클라이언트 값을 믿을 수 없다), `serviceTier` 에서 파생(한 웨이브 = 한 티어라 상수), 파생값만 저장(왜 이 우선도인지 답할 수 없다), 근거만 저장하고 계획 시점 계산(계획 중인 웨이브가 흔들린다), 선택과 재삽입을 따로 두기(같은 규칙이 두 벌), 밀어내기(남은 병목은 예산이 아니라 실행 가능성이다) | [ADR-028](adr/ADR-028-unassigned-policy.md) |
+| 027 | outbox 릴레이 리더 락 = **PostgreSQL advisory lock**(전용 장수 세션), 리더를 모르면 발행 중단 | 그대로 두기(전제를 지키는 것이 배포자의 기억뿐), **Redis `SET NX`**(2026-09-05 에 한 번 채택했다가 정정 — 조정을 서비스 밖으로 내보내 발행 가용성이 Redis 에 묶였고 폴백 없는 예외를 §7.2 에 만들었다), 판정 불가를 팔로워로 접기(대시보드에서 정상과 장애가 구별되지 않는다), `partition_key` 해시 분할(인스턴스 수가 바뀌는 전환 구간에 같은 문제), Kafka EOS(ADR-006 기각 + 두 프로듀서의 순서를 정해 주지 않는다), 리더 선출 라이브러리(의존 추가), 풀에서 빌린 커넥션에 락 잡기(반납하면 락이 풀 안에 남는다) | [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md) |
 
 013·014는 Phase 0 스캐폴딩 중에, 015·016은 Phase 0 마감 감사 중에, 017은 Phase 1 리스너 설계 중에 확정되어 추가됐다. 020·021·022·023은 Phase 2 착수 시점에 — 코드보다 먼저 — 확정했다. 023은 022가 남긴 보존 문제를 닫으면서, ADR-020 의 지각 도착 경로에 상한이 없다는 것(20일 묵은 replay 가 새 배송 약속을 만든다)을 함께 잡았다. 021은 §16 표에 없던 항목으로, 부록 A 의 권역 60개가 지오코더의 출력을 덮지 못한다는 것을 <strong>세어 보고</strong> 알게 되어 추가했다. 024는 Phase 2-3 에서 `WaveStatus` 의 마지막 두 전이에 트리거가 없다는 것을 발견해 추가했다 — §5.2 의 수명주기와 §4.1 의 소비자 표가 어긋나 있었고, 그 어긋남이 ADR-023 의 정리 배치를 조용히 무한 보존으로 만들고 있었다.
 
@@ -1705,7 +1953,9 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
 
 ## 부록 A. 시드 데이터·시뮬레이션 시나리오
 
-- FC 3개, 캠프 10개(FC당 2·5·3), **권역 91개**(캠프당 6~13), 차량 200대(캠프당 20: 일반 14, 냉장 4, 대형 2), 기사 200명.
+- FC 3개, 캠프 10개(FC당 2·5·3), **권역 91개**(캠프당 6~13), 차량 200대(캠프당 20: 밴 14 · 트럭 6, 그중 냉장 8), 기사 200명.
+- **근무조는 둘이다** (2026-09-08, [ADR-030](adr/ADR-030-night-shift-seed.md)): 캠프당 **야간 8대(23:00–08:00)** · **주간 12대(09:00–22:00)**. 냉장·대형·위험물을 두 조에 걸쳐 나눈다 — 야간 냉장 3·트럭 3, 주간 냉장 5·트럭 3. **(2026-09-09 정정: 이 줄은 야간 냉장 5·주간 3 이라고 적고 있었는데, [ADR-031](adr/ADR-031-least-capable-first-tie-break.md) 에서 시드를 되돌릴 때 함께 고치지 못한 자리다. 시드가 기준이다.)** 냉장 비율은 야간 37% · 주간 42% 로 **둘 다** 주문의 냉장 비율(25%) 위에 있다 — 어느 조가 도는 시각에도 cold-chain 이 막다른 길이 아니어야 한다. **이전에는 200대 전부 06:00–22:00 이었다** — 「당일·새벽 배송」을 표방하면서 DAWN 티어의 약속 시간대(§2.2 익일 00:00–07:00)에 일하는 차량이 하나도 없었다. 이 부록의 누락이었다.
+- **위험물 허용은 차량의 20%, 그중 절반이 냉장이다** (2026-09-09, [ADR-033](adr/ADR-033-constraint-classes.md)): 캠프당 4대(주간 2 · 야간 2), 그중 냉장 ∧ 위험물 2대로 **조마다 한 대씩**. 이전에는 대수가 이 부록에 적혀 있지 않았고 시드는 캠프당 2대(그중 냉장 1대)였다 — **겹친 제약이 한 대에 몰리면 그 한 대가 고장 나거나 이미 찬 순간 그 수요는 어떤 알고리즘으로도 실을 수 없다.** 벤치마크에서 같은 결함이 `large` 미배정 89건으로 나타났고, 거기서 세운 기준(제약 조합별 수요 ≤ 그 조합 차량 용량의 80%)을 운영 시드로 옮긴 것이 이 대수다.
 - 좌표: 수도권(위도 37.16–37.78, 경도 126.61–127.22). 이 범위는 order-service 의 `PostalPrefixGeocoder`
   가 실제로 만들어 내는 좌표의 경계다 — 우편번호 앞 2자리 앵커 19개 × 세 번째 자리 10단계 × 주소
   해시 지터(±0.004°).

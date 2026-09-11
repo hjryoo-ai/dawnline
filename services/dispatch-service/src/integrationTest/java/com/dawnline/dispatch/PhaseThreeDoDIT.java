@@ -5,14 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
+import com.dawnline.dispatch.application.DispatchMetrics;
 import com.dawnline.dispatch.application.port.in.PlanView;
 import com.dawnline.dispatch.application.port.in.RunPlanCommand;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.domain.DispatchCandidate;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -21,6 +22,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -28,8 +30,6 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -49,55 +49,20 @@ import org.springframework.transaction.support.TransactionTemplate;
  * </ul>
  */
 @SpringBootTest(classes = DispatchApplication.class)
-@Import(PhaseThreeDoDIT.FixedClock.class)
+@Import(PlanningClock.class)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("PhaseThreeDoDIT — 마감 DoD")
 class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
-
-    /**
-     * 시계를 <strong>옮기되 멈추지는 않는다</strong> — 이 클래스의 수치가 문서로 옮겨지기 때문이다.
-     *
-     * <h2>왜 옮기는가</h2>
-     * 차량 근무창은 벽시계 {@code TIME}(06:00–22:00 KST)이고 어댑터가 <em>계획 날짜</em>에
-     * 붙인다({@code JdbcReferenceData.availableAt}). 실행 시각이 20시면 남은 근무창이 두 시간이라
-     * 오전에 돌린 것과 배정 수가 완전히 다르다. seed 를 고정하고 주문 id 를 결정적으로 만들어도
-     * 그 축은 남아 있었다 — 배정 906 · 898 · 922 (2026-09-05 측정). 09:00 KST 로 옮기면 근무창
-     * 한가운데에서 시작해 그 축이 사라진다.
-     *
-     * <h2>왜 멈추지 않는가</h2>
-     * {@link Clock#fixed}로 세우면 서비스가 재는 {@code planDurationMs} 가 <strong>0 이 된다</strong>
-     * (끝난 시각 − 시작 시각이므로). 그러면 "§6.7 목표 30초 이하" 어설션이 <em>언제나</em> 참이
-     * 되어 아무것도 검사하지 않는다 — 이 저장소가 세 번 데었던 공허한 테스트가 하나 더 는다.
-     * 그래서 {@link Clock#offset} 으로 <em>위치만</em> 옮기고 흐름은 그대로 둔다. 30초짜리 테스트가
-     * 근무창 안에서 30초 움직이는 것은 배정에 영향을 주지 않는다.
-     *
-     * <p>{@link Clock#tick} 으로 마이크로초에 맞추는 이유는 {@code libs/messaging} 의 기본 시계와
-     * 같은 정밀도를 쓰기 위해서다 — 저장 정밀도보다 고운 시각은 읽어 올 때 달라진다.
-     */
-    @TestConfiguration
-    static class FixedClock {
-
-        /** 2026-09-05 09:00 KST — 근무창(06:00–22:00) 한가운데. */
-        static final Instant PLAN_AT = Instant.parse("2026-09-05T00:00:00Z");
-
-        /**
-         * @return 09:00 KST 로 옮긴 <strong>흐르는</strong> 시계.
-         *         {@code @ConditionalOnMissingBean} 이라 이 빈이 자동설정을 이긴다
-         */
-        @Bean
-        Clock dawnlineClock() {
-            Clock system = Clock.systemUTC();
-            return Clock.tick(Clock.offset(system, Duration.between(system.instant(), PLAN_AT)),
-                    Duration.ofNanos(1_000));
-        }
-    }
 
     /** 시드의 첫 캠프 (서울 북부). 차량 20대가 여기 붙어 있다. */
     private static final UUID CAMP_ID = UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
     private static final GeoPoint CAMP = GeoPoint.of(37.640000, 127.030000);
 
-    /** §6.7 목표 — 기본 전략 계획 시간 p95 ≤ 30초. */
+    /** §6.7 목표 — 기본 전략 계획 시간 p95 ≤ 30초. <strong>알고리즘 예산이다</strong>(ADR-029). */
     private static final Duration BUDGET = Duration.ofSeconds(30);
+
+    /** §6.7 목표 — 같은 웨이브의 영속화 ≤ 3초 (ADR-029). 알고리즘 예산과 별개다. */
+    private static final Duration PERSIST_BUDGET = Duration.ofSeconds(3);
 
     @Autowired
     private RunPlanUseCase runPlan;
@@ -113,6 +78,9 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     /** 릴레이는 끈다 — 검사 대상은 발행이 아니다. 발행은 {@code PlanExecutionIT} 가 본다. */
     @DynamicPropertySource
@@ -149,7 +117,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
         UUID waveId = Ids.newId();
         Seeded seeded = seedMixedColdCandidates(waveId, 400);
 
-        tx().executeWithoutResult(status -> runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP)));
+        tx().executeWithoutResult(status -> runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null)));
 
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         List<PlanView.ExplanationView> assignedCold = plan.explanations().stream()
@@ -187,23 +155,33 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
         // 배정 수가 흔들린다 — 마감 문서에 옮겨 적을 수 없는 값이 된다.
         long startedNanos = System.nanoTime();
         tx().executeWithoutResult(status ->
-                runPlan.run(new RunPlanCommand(waveId, CAMP_ID, CAMP, null, null, 20260905L)));
+                runPlan.run(new RunPlanCommand(waveId, CAMP_ID, CAMP, null, null, 20260905L, null)));
         Duration wallClock = Duration.ofNanos(System.nanoTime() - startedNanos);
 
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
 
         // 측정값을 표준 출력에 남긴다. 마감 문서가 옮겨 적는 값이고, 어설션만 있으면 통과했다는
         // 사실만 남고 *얼마나* 는 사라진다 (§6.9 「환경 없는 수치」와 같은 이유).
-        System.out.printf("[Phase 3 DoD] 5,000건 통합 계획: 왕복 %d ms · 계획 %s ms · 라우트 %d · "
-                        + "배정 %d · 미배정 %d · 비용 %,d원%n",
-                wallClock.toMillis(), plan.planDurationMs(), plan.routes().size(),
-                plan.assignedCount(), plan.unassignedCount(), plan.totalCostKrw());
+        Duration persisted = Duration.ofMillis((long) meterRegistry
+                .get(DispatchMetrics.PLAN_PERSIST).timer().totalTime(TimeUnit.MILLISECONDS));
+        System.out.printf("[Phase 3 DoD] 5,000건 통합 계획: 왕복 %d ms · 계획 %s ms · 영속화 %d ms · "
+                        + "라우트 %d · 배정 %d · 미배정 %d · 비용 %,d원%n",
+                wallClock.toMillis(), plan.planDurationMs(), persisted.toMillis(),
+                plan.routes().size(), plan.assignedCount(), plan.unassignedCount(),
+                plan.totalCostKrw());
 
         assertThat(plan.status()).as("완주하지 못하면 시간은 의미가 없다").isEqualTo("PUBLISHED");
         assertThat(plan.planDurationMs()).isNotNull();
         assertThat(Duration.ofMillis(plan.planDurationMs()))
                 .as("§6.7 목표: 기본 전략 계획 시간 p95 ≤ 30초")
                 .isLessThan(BUDGET);
+        // §6.7 의 두 번째 행을 문서가 아니라 게이트로 만든다 (ADR-029). 실측 800 ms 이므로
+        // 여유는 3.7배다. 여기서 깨지면 둘 중 하나다 — 영속화 경로가 다시 ORM 을 지나기
+        // 시작했거나, 목표가 이 기계에서 현실적이지 않거나. **조용히 늘리지 않는다**:
+        // 어느 쪽인지 재서 ADR-029 재검토 지점에 적는다.
+        assertThat(persisted)
+                .as("§6.7 목표: 5,000건 영속화 ≤ 3초 (ADR-029). 실측 800 ms")
+                .isLessThan(PERSIST_BUDGET);
         assertThat(plan.assignedCount() + plan.unassignedCount())
                 .as("한 건도 잃지 않는다 — 배정되지 않았으면 미배정으로 세어져야 한다")
                 .isEqualTo(5_000);
@@ -246,7 +224,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
      * 합쳐지면 그 stop 은 통째로 냉장이 되고 검사가 흐려진다.
      */
     private Seeded seedMixedColdCandidates(UUID waveId, int count) {
-        Instant now = FixedClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(5)));
         Set<UUID> cold = new HashSet<>();
         Set<UUID> warm = new HashSet<>();
@@ -257,14 +235,14 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
                 (requiresCold ? cold : warm).add(orderId);
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                         GeoPoint.of(CAMP.lat() + 0.004d * (i % 8 + 1), CAMP.lng() + 0.005d * (i / 8 + 1)),
-                        30_000, 60_000, requiresCold, false, window, 60, 0, now));
+                        30_000, 60_000, requiresCold, false, window, 60, false, 0, now));
             }
         });
         return new Seeded(cold, warm);
     }
 
     private List<UUID> seedCandidates(UUID waveId, int count) {
-        Instant now = FixedClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(8)));
         List<UUID> orderIds = new ArrayList<>(count);
         tx().executeWithoutResult(status -> {
@@ -273,7 +251,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
                 orderIds.add(orderId);
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                         GeoPoint.of(CAMP.lat() + 0.0008d * (i % 71), CAMP.lng() + 0.0011d * (i / 71 % 71)),
-                        2_500, 6_000, false, false, window, 60, 0, now));
+                        2_500, 6_000, false, false, window, 60, false, 0, now));
             }
         });
         return orderIds;

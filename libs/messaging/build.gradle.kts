@@ -19,21 +19,17 @@ dependencies {
     implementation(libs.micrometer.core)
     compileOnly(libs.spring.boot.starter.actuator)
 
-    // 릴레이 리더 락만 Redis 를 쓴다 (ADR-027). compileOnly 인 이유: 이벤트를 발행하지 않는
-    // 서비스(ops-api)가 이 라이브러리 때문에 Redis 를 끌고 오면 안 된다. 자동설정이
-    // @ConditionalOnClass 로 조건을 걸고, 없는 채로 락을 켜면 기동에서 실패한다.
-    compileOnly(libs.spring.boot.starter.data.redis)
+    // 이 라이브러리는 Redis 를 참조하지 않는다. 릴레이 리더 락이 잠깐 Redis 를 썼고
+    // (ADR-027 원 결정) 그 의존은 compileOnly 였는데, advisory lock 으로 옮기면서
+    // 조정자가 이미 쓰고 있는 DataSource 가 되어 의존 자체가 사라졌다.
 
     // 이벤트 계약 검증 픽스처 — 서비스들의 계약 테스트가 재사용한다 (CLAUDE.md 불변규칙 8).
     testFixturesApi(libs.json.schema.validator)
     testFixturesApi(libs.jackson.databind)
 
     testImplementation(libs.spring.boot.starter.test)
-    testImplementation(libs.spring.boot.starter.data.redis)
 
     integrationTestImplementation(libs.spring.boot.starter.test)
-    integrationTestImplementation(libs.spring.boot.starter.data.redis)
-    integrationTestImplementation(libs.testcontainers.redis)
     integrationTestImplementation(libs.spring.boot.testcontainers)
     integrationTestImplementation(libs.testcontainers.junit.jupiter)
     integrationTestImplementation(libs.testcontainers.postgresql)
@@ -41,7 +37,10 @@ dependencies {
     integrationTestImplementation(libs.spring.boot.starter.flyway)
     integrationTestImplementation(libs.flyway.postgresql)
     integrationTestImplementation(libs.awaitility)
-    integrationTestRuntimeOnly(libs.postgresql)
+    // 런타임이 아니라 컴파일 의존이다 — OutboxLeaderLockIT 가 PGSimpleDataSource 를 직접 만든다.
+    // advisory lock 은 세션에 걸리므로 인스턴스마다 다른 커넥션이어야 하고, 그것을 스프링 없이
+    // 만들려면 드라이버의 DataSource 가 필요하다.
+    integrationTestImplementation(libs.postgresql)
 }
 
 // -----------------------------------------------------------------------------

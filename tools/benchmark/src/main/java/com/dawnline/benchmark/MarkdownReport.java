@@ -1,7 +1,9 @@
 package com.dawnline.benchmark;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -23,6 +25,8 @@ public final class MarkdownReport {
     private final Dataset dataset;
     private final long seed;
     private final int repeats;
+    private final PlanMode mode;
+    private final double budgetFactor;
     private final Instant generatedAt;
     private final SourceVersion source;
 
@@ -30,16 +34,46 @@ public final class MarkdownReport {
      * @param dataset     데이터셋
      * @param seed        문제 생성 seed
      * @param repeats     전략당 반복 횟수
+     * @param mode        실행 모드 (§6.7). FAST 로 낸 표와 FULL 로 낸 표는 <strong>같은 축이
+     *                    아니다</strong> — 헤더에 없으면 다음 사람이 그것을 알 방법이 없다
+     * @param budgetFactor 개선 예산 계수 (§6.7 사다리). 모드와 같은 이유로 헤더에 박는다 —
+     *                    계수가 다른 두 표는 같은 축이 아니다
      * @param generatedAt 생성 시각
      * @param source      이 리포트를 낸 소스의 커밋 (§6.9)
      */
-    public MarkdownReport(Dataset dataset, long seed, int repeats, Instant generatedAt,
-            SourceVersion source) {
+    public MarkdownReport(Dataset dataset, long seed, int repeats, PlanMode mode,
+            double budgetFactor, Instant generatedAt, SourceVersion source) {
         this.dataset = Objects.requireNonNull(dataset, "dataset");
         this.seed = seed;
         this.repeats = repeats;
+        this.mode = Objects.requireNonNull(mode, "mode");
+        this.budgetFactor = budgetFactor;
         this.generatedAt = Objects.requireNonNull(generatedAt, "generatedAt");
         this.source = Objects.requireNonNull(source, "source");
+    }
+
+    /**
+     * <strong>재현 조건의 마지막 한 줄</strong> — 이 실행은 수렴으로 끝났는가 (§6.9, [ADR-035] 4번).
+     *
+     * <p>예산이 물려 끊긴 실행은 코어 수 이전에 <em>기계가 다르면 잘리는 지점이 다르다.</em>
+     * 그런 표를 다른 표와 나란히 놓는 것은 알고리즘이 아니라 그날의 CPU 를 비교하는 일이라,
+     * 리포트가 그 사실을 <strong>스스로 말한다.</strong>
+     */
+    private static void renderConvergence(StringBuilder out, Map<String, StrategySummary> summaries) {
+        List<String> cut = summaries.values().stream()
+                .filter(StrategySummary::anyBudgetExhausted)
+                .map(StrategySummary::strategy)
+                .toList();
+        if (cut.isEmpty()) {
+            out.append("> **수렴 종료** — 어느 회차도 계획 마감(§6.7)에 잘리지 않았다. ")
+                    .append("이 수치는 재현 가능하다.\n\n");
+            return;
+        }
+        out.append("> ⚠ **마감에 잘린 회차가 있다**: ")
+                .append(cut.stream().map(name -> "`" + name + "`")
+                        .collect(java.util.stream.Collectors.joining(", ")))
+                .append(". 잘린 지점은 기계에 달렸으므로 **이 행들은 재현 대상이 아니다** ")
+                .append("(§6.9 재현 조건, [ADR-035] 4번).\n\n");
     }
 
     /**
@@ -55,10 +89,12 @@ public final class MarkdownReport {
                 .append(seed).append("` · 전략 ")
                 .append(summaries.keySet().stream().map(name -> "`" + name + "`")
                         .collect(java.util.stream.Collectors.joining(", ")))
-                .append(" · 전략당 ").append(repeats).append("회\n\n");
+                .append(" · 모드 **").append(mode).append("**(개선예산×").append(budgetFactor)
+                .append(") · 전략당 ").append(repeats).append("회\n\n");
         out.append("> 이 셋(커밋 · seed · 전략 이름)이 리포트의 신원이다. **다른 리포트의 절대 수치와\n");
         out.append("> 비교하기 전에 커밋이 같은지 먼저 본다** — 동결되는 것은 `baseline-nn` 클래스이지\n");
         out.append("> 그것이 쓰는 `StopMerger`·`CostModel`·거리 함수가 아니다 (§6.9).\n\n");
+        renderConvergence(out, summaries);
 
         out.append("| 전략 | 총비용(중앙값) | 미배정 | 주된 사유 | 차량 | 총거리 | 계획시간 p50 | p95 | 지각 stop | 평균 지각(분) |\n");
         out.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|\n");

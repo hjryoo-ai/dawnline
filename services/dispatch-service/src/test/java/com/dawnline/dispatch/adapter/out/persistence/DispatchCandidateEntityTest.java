@@ -29,7 +29,7 @@ class DispatchCandidateEntityTest {
 
     private static DispatchCandidate loaded() {
         return DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(), Ids.newId(),
-                LOCATION, 1_200, 8_000, true, false, WINDOW, 90, 3, NOW);
+                LOCATION, 1_200, 8_000, true, false, WINDOW, 90, true, 3, NOW);
     }
 
     @Test
@@ -59,7 +59,7 @@ class DispatchCandidateEntityTest {
     void 권역이_없는_후보도_왕복한다() {
         // zone_id 는 nullable 이다 — 권역 밖 주소가 캠프 직할로 들어오는 경우가 있다(§5.2).
         DispatchCandidate candidate = DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(),
-                null, LOCATION, 1_000, 2_000, false, false, WINDOW, 60, 0, NOW);
+                null, LOCATION, 1_000, 2_000, false, false, WINDOW, 60, false, 0, NOW);
 
         DispatchCandidate restored = DispatchCandidateEntity.from(candidate).toDomain();
 
@@ -72,7 +72,7 @@ class DispatchCandidateEntityTest {
         // 반올림되면, 같은 후보가 저장 전후로 다른 좌표를 갖는다.
         DispatchCandidate candidate = DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(),
                 Ids.newId(), GeoPoint.of(37.49791234, 127.02765678), 1_000, 2_000, false, false,
-                WINDOW, 60, 0, NOW);
+                WINDOW, 60, false, 0, NOW);
 
         GeoPoint restored = DispatchCandidateEntity.from(candidate).toDomain().location();
 

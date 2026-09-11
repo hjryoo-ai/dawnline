@@ -80,7 +80,9 @@ public final class PlanPruner {
                 lateStops, totalLateMinutes, before.planDurationMs());
 
         Money cost = routes.stream().map(PlannedRoute::cost).reduce(Money.ZERO, Money::plus);
-        return new PlanResult(routes, unassigned, cost, metrics, explanations);
+        // 마감 여부는 <strong>가지치기가 바꿀 수 없는 사실</strong>이라 그대로 옮긴다.
+        return new PlanResult(routes, unassigned, cost, metrics, explanations,
+                result.budgetExhausted());
     }
 
     /** 취소된 주문을 뺀 stop. 남은 주문이 없으면 {@code null}. */

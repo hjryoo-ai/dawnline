@@ -3,6 +3,7 @@ package com.dawnline.dispatch.adapter.out.persistence;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.domain.RoutePlan;
 import jakarta.persistence.EntityManager;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
@@ -29,6 +30,20 @@ public class JpaRoutePlanRepository implements RoutePlanRepository {
              WHERE p.status = com.dawnline.dispatch.domain.PlanStatus.PLANNING
                AND p.startedAt < :before
              ORDER BY p.startedAt
+            """;
+
+    /**
+     * 이 캠프의 마지막 발행 계획이 쓴 알고리즘 시간 (§6.7).
+     *
+     * <p>{@code status} 를 <strong>리터럴</strong>로 적는다(CLAUDE.md 코딩 컨벤션). 그리고
+     * 정렬 기준이 {@code finished_at} 인 이유는 <em>발행 순서</em>가 알고 싶은 것이기 때문이다 —
+     * {@code started_at} 으로 정렬하면 오래 걸린 계획이 그 뒤에 끝난 짧은 계획보다 뒤에 온다.
+     */
+    private static final String LAST_PUBLISHED_SQL = """
+            SELECT plan_duration_ms FROM route_plans
+             WHERE camp_id = ? AND status = 'PUBLISHED' AND plan_duration_ms IS NOT NULL
+             ORDER BY finished_at DESC
+             LIMIT 1
             """;
 
     private final EntityManager entityManager;
@@ -77,6 +92,19 @@ public class JpaRoutePlanRepository implements RoutePlanRepository {
                 .getResultList().stream()
                 .map(RoutePlanEntity::toDomain)
                 .toList();
+    }
+
+    @Override
+    public Optional<Duration> lastPublishedDuration(UUID campId) {
+        Objects.requireNonNull(campId, "campId");
+        // 네이티브 질의라 실행 전에 auto-flush 가 돈다(ADR-029). 이 시점 세션에 떠 있는 것은
+        // 계획 엔티티 하나뿐이다 — 후보는 읽기 전용 프로젝션으로 읽으므로 관리 대상이 아니다.
+        // 그 사실이 깨지면 20초짜리 더티 체크가 여기로 돌아온다.
+        List<?> rows = entityManager.createNativeQuery(LAST_PUBLISHED_SQL)
+                .setParameter(1, campId)
+                .getResultList();
+        return rows.isEmpty() ? Optional.empty()
+                : Optional.of(Duration.ofMillis(((Number) rows.getFirst()).longValue()));
     }
 
     @Override

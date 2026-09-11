@@ -9,6 +9,7 @@ import com.dawnline.dispatch.domain.optimizer.PlanAssembler;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
 import com.dawnline.dispatch.domain.optimizer.PlannedStop;
+import com.dawnline.dispatch.domain.optimizer.PlanningDeadline;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.Stop;
@@ -19,6 +20,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * §6.5 의 1~4단계 — 통합 → 스윕 클러스터링 → 탐욕 차량 할당 → 시간창 최근접 이웃
@@ -35,12 +37,25 @@ import java.util.Map;
  *       지각 페널티를 함께 최소화한다.</li>
  * </ol>
  *
- * <p>개선 단계(2-opt·Or-opt·relocate)는 여기 없다 — {@code sweep-greedy-nn+ls} 가 Phase 4 다.
+ * <h2>개선 단계는 켜고 끈다 — 두 축으로</h2>
+ * §6.5 5단계({@link LocalSearchImprover})가 붙은 것이 {@code sweep-greedy-nn+ls} 이고, 나머지는
+ * 전부 같다. <strong>두 클래스로 나누지 않는 이유</strong>는 1~4단계가 갈라지면 §6.9 의 비교표가
+ * "개선 단계의 값어치" 가 아니라 "두 구현의 차이" 를 재게 되기 때문이다.
+ *
+ * <p>축은 둘이다. <strong>전략 이름</strong>이 "이 계획에 개선 단계가 있는가" 를 정하고(§6.6 —
+ * 벤치마크가 값어치를 재는 자리), <strong>모드</strong>가 "지금 그것을 돌 여유가 있는가" 를
+ * 정한다(§6.7 — 운영이 밀릴 때 포기하는 자리). 둘을 한 축으로 접으면 열화가 전략 교체로 보이고,
+ * {@code dawnline_plan_duration_seconds} 의 {@code strategy}·{@code mode} 두 라벨이 같은 것을
+ * 두 번 말하게 된다. 그래서 FAST 로 돈 {@code +ls} 계획도 이름은 {@code +ls} 다 — 그 웨이브에
+ * <em>무엇을 쓰려 했는지</em>와 <em>무엇을 포기했는지</em>가 둘 다 남아야 한다.
  */
 public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
 
     /** 전략 이름 (§6.6). */
     public static final String NAME = "sweep-greedy-nn";
+
+    /** 개선 단계를 붙인 전략 이름 (§6.6, Phase 4-1). */
+    public static final String NAME_WITH_LOCAL_SEARCH = "sweep-greedy-nn+ls";
 
     /** 권역 경계 자르기를 허용하기 시작하는 클러스터 크기. */
     private static final int MIN_STOPS_BEFORE_ZONE_CUT = 8;
@@ -49,13 +64,33 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
     private final NearestNeighborSequencer sequencer = new NearestNeighborSequencer();
     private final GreedyAssigner assigner = new GreedyAssigner(sequencer);
 
+    private final @Nullable LocalSearchImprover improver;
+
+    /** 1~4단계만. */
+    public SweepGreedyNearestNeighbor() {
+        this(null);
+    }
+
+    private SweepGreedyNearestNeighbor(@Nullable LocalSearchImprover improver) {
+        this.improver = improver;
+    }
+
+    /** 5단계(국소 탐색)까지. */
+    public static SweepGreedyNearestNeighbor withLocalSearch() {
+        return new SweepGreedyNearestNeighbor(new LocalSearchImprover());
+    }
+
     @Override
     public String name() {
-        return NAME;
+        return improver == null ? NAME : NAME_WITH_LOCAL_SEARCH;
     }
 
     @Override
     public PlanResult plan(PlanningProblem problem) {
+        // 계획 <strong>전체</strong>의 마감이다 ([ADR-036]). 예전에는 이 자리가 개선 단계에만
+        // 쓰이는 스톱워치였고, 그래서 배정·재삽입은 마감 없이 돌았다 — overload 에서 개선은
+        // 예산을 정확히 지켰는데 계획이 43.2초였던 이유다.
+        PlanningDeadline deadline = PlanningDeadline.from(problem.budget());
         List<Stop> stops = StopMerger.merge(problem.candidates());
         DistanceProvider distance = problem.distance();
 
@@ -70,12 +105,34 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
 
         Map<Stop, Feasibility> refusals = new LinkedHashMap<>();
         List<Stop> unassigned = assigner.assign(clusters, routes, problem.depot(), distance,
-                problem.cost(), problem.startedAt(), refusals);
+                problem.cost(), problem.startedAt(), refusals, deadline);
+
+        // 3단계가 남긴 것을 규칙으로 다시 싣는다 (ADR-028). 클러스터 단위 배정은 "이 묶음이
+        // 이 차에 들어가는가" 만 묻기 때문에, 제약이 붙은 stop 하나 때문에 나머지가 통째로
+        // 밀려나는 일이 생긴다 — 그 stop 을 stop 단위로 다시 보는 것이 여기다.
+        UnassignedRepair.Outcome repaired =
+                UnassignedRepair.repair(problem, routes, unassigned, refusals, deadline);
+        List<RouteAccumulator> finished = repaired.routes();
+        unassigned = repaired.unassigned();
+
+        boolean improvementCut = false;
+        if (improver != null && problem.runsImprovement()) {
+            LocalSearchImprover.Outcome improved =
+                    improver.improve(problem, finished, deadline.elapsedNanos());
+            finished = improved.routes();
+            improvementCut = improved.budgetExhausted();
+            // 개선 단계는 <strong>자리를 만든다</strong> — 라우트가 짧아지면 근무창·약속창에
+            // 여유가 생긴다. 그래서 한 번 더 본다. 재삽입 자체는 개선이 아니라 값싼 탐욕이다.
+            UnassignedRepair.Outcome again =
+                    UnassignedRepair.repair(problem, finished, unassigned, refusals, deadline);
+            finished = again.routes();
+            unassigned = again.unassigned();
+        }
 
         List<PlannedRoute> planned = new ArrayList<>();
         List<Explanation> explanations = new ArrayList<>();
-        for (int i = 0; i < routes.size(); i++) {
-            RouteAccumulator route = routes.get(i);
+        for (int i = 0; i < finished.size(); i++) {
+            RouteAccumulator route = finished.get(i);
             if (route.isEmpty()) {
                 continue;                       // 빈 라우트는 만들지 않는다 (고정비를 물지 않는다)
             }
@@ -88,7 +145,10 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
             }
         }
 
-        return PlanAssembler.assemble(problem, planned, unassigned, refusals, explanations);
+        // 「마감 때문에 하지 못한 일이 있는가」 — 개선 단계의 예산 소진도 같은 사실이다.
+        // 이 값이 거짓일 때만 §6.9 의 수치가 재현 가능하다([ADR-035] 4번).
+        return PlanAssembler.assemble(problem, planned, unassigned, refusals, explanations,
+                deadline.hit() || improvementCut);
     }
 
     /** 가장 큰 차량의 용량. 클러스터가 이보다 크면 어떤 차도 실을 수 없다. */

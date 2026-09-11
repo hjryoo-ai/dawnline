@@ -3,6 +3,7 @@ package com.dawnline.benchmark;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Money;
+import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
@@ -32,7 +33,7 @@ class UnassignAllStrategyTest {
     private PlanningProblem problem(long seed) {
         RuleSet rules = RuleSet.of(
                 List.of(new UnassignedPenaltyRule("unassigned", 900, 30_000, 20_000)), 1);
-        return new DatasetGenerator(Dataset.SMALL, seed, START).generate(rules, BUDGET);
+        return new DatasetGenerator(Dataset.SMALL, seed, START).generate(rules, BUDGET, PlanMode.FULL, 1.0d);
     }
 
     @Test

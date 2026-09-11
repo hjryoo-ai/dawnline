@@ -1,5 +1,6 @@
 package com.dawnline.benchmark;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Money;
@@ -27,7 +28,8 @@ class MarkdownReportTest {
                 List.of(new RunOutcome(
                         new PlanMetrics(4, 480, 20, 4, 123_456, 7_200, 3, 45, 900),
                         Money.krw(1_234_567), 900))));
-        return new MarkdownReport(Dataset.SMALL, 42L, 5, AT, source).render(summaries);
+        return new MarkdownReport(Dataset.SMALL, 42L, 5, PlanMode.FULL, 1.0d, AT, source)
+                .render(summaries);
     }
 
     @Test

@@ -27,6 +27,8 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -40,6 +42,25 @@ import org.springframework.transaction.support.TransactionTemplate;
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("CandidateLoadingIT — fulfillment.planned 소비")
 class CandidateLoadingIT extends DispatchIntegrationTestBase {
+
+    /**
+     * 릴레이를 끈다 — 이 클래스는 발행을 보지 않는다.
+     *
+     * <p>끄는 것이 <strong>격리</strong>다. 리더 락이 advisory lock 이 된 뒤(ADR-027 후속 정정)
+     * 이 컨테이너의 한 데이터베이스에 대해 릴레이는 <em>한 컨텍스트만</em> 리더가 된다. 스프링은
+     * 컨텍스트를 캐시하므로 먼저 뜬 클래스의 릴레이가 락을 계속 쥐고, 그러면 실제로 발행을 보는
+     * {@code PlanExecutionIT} 가 팔로워가 되어 아무것도 못 본다. 순서에 달린 실패다.
+     *
+     * <p>이전에는 이 문제가 보이지 않았다 — 리더 락이 Redis 였고 이 컨텍스트들에는 Redis 가
+     * 없어서 전부 판정 불가(발행 안 함)였기 때문이다. <strong>격리가 락의 무력함에 기대고
+     * 있었다.</strong>
+     *
+     * @param registry 동적 속성 레지스트리
+     */
+    @DynamicPropertySource
+    static void relayOff(DynamicPropertyRegistry registry) {
+        registry.add("dawnline.messaging.outbox.enabled", () -> "false");
+    }
 
     private static final String TOPIC = "dawnline.fulfillment.planned.v1";
     private static final EventContracts CONTRACTS = EventContracts.load();
@@ -122,6 +143,31 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
                 assertThat(count("dispatch_candidates")).isEqualTo(1L));
     }
 
+    @Test
+    void 개정된_약속은_우선도로_남는다() {
+        // ADR-028 — 우선도는 계약의 필드가 아니라 계약의 <em>사실</em>에서 나온다.
+        // 브로커까지 도는 경로에서 그 파생이 실제로 일어나는지 본다: 단위 테스트는 점수표를,
+        // 계약 테스트는 매핑을 보지만, 둘을 잇는 배선이 빠져도 각각은 통과한다.
+        UUID plain = Ids.newId();
+        UUID revised = Ids.newId();
+
+        publish(plain, planned(plain, "PLANNED", false));
+        publish(revised, planned(revised, "PLANNED", true));
+
+        awaitCandidate(plain);
+        awaitCandidate(revised);
+        assertThat(findById(plain).orElseThrow().priority())
+                .as("전제: 개정되지 않은 주문은 0 이어야 한다 — 아니면 아래 2 는 우연일 수 있다")
+                .isZero();
+        assertThat(findById(revised).orElseThrow())
+                .satisfies(candidate -> {
+                    assertThat(candidate.promiseRevised()).as("근거를 함께 남긴다").isTrue();
+                    assertThat(candidate.priority())
+                            .as("promiseRevised 가중치 +2 (dawnline.dispatch.priority)")
+                            .isEqualTo(2);
+                });
+    }
+
     private void awaitCandidate(UUID orderId) {
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> assertThat(findById(orderId)).isPresent());
@@ -141,13 +187,18 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
         producer.flush();
     }
 
-    /** 계약 예시에서 orderId 와 outcome 만 바꾼다 — 나머지는 계약이 보증한 모양 그대로다. */
     private static String planned(UUID orderId, String outcome) {
+        return planned(orderId, outcome, false);
+    }
+
+    /** 계약 예시에서 orderId·outcome·promiseRevised 만 바꾼다 — 나머지는 계약이 보증한 모양이다. */
+    private static String planned(UUID orderId, String outcome, boolean promiseRevised) {
         var envelope = CONTRACTS.readTree(CONTRACTS.contractsDirectory()
                 .resolve(java.nio.file.Path.of("examples", "fulfillment.planned.v1.example.json")));
         var payload = (tools.jackson.databind.node.ObjectNode) envelope.get("payload");
         payload.put("orderId", orderId.toString());
         payload.put("outcome", outcome);
+        payload.put("promiseRevised", promiseRevised);
         var root = (tools.jackson.databind.node.ObjectNode) envelope;
         root.put("eventId", Ids.newId().toString());
         root.put("partitionKey", orderId.toString());

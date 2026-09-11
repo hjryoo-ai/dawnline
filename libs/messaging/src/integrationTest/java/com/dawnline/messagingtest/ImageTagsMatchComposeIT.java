@@ -37,7 +37,7 @@ class ImageTagsMatchComposeIT {
                 .as("Testcontainers 와 Compose 가 같은 Kafka 를 써야 한다")
                 .isEqualTo(env.get("KAFKA_IMAGE"));
         assertThat(MessagingIntegrationTestBase.REDIS_IMAGE)
-                .as("Testcontainers 와 Compose 가 같은 Redis 를 써야 한다 — 릴레이 리더 락(ADR-027)")
+                .as("Testcontainers 와 Compose 가 같은 Redis 를 써야 한다 — 서비스 IT 들이 쓴다")
                 .isEqualTo(env.get("REDIS_IMAGE"));
     }
 

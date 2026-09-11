@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.dawnline.common.GeoPoint;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
  * {@link JpaDispatchCandidateRepository} 가 만드는 SQL·JPQL.
@@ -41,6 +43,7 @@ class JpaDispatchCandidateRepositoryTest {
     private static final TimeWindow WINDOW = new TimeWindow(NOW, NOW.plus(Duration.ofHours(4)));
 
     private EntityManager entityManager;
+    private JdbcTemplate jdbc;
     private JpaDispatchCandidateRepository repository;
     private Query nativeQuery;
     private ArgumentCaptor<String> sql;
@@ -49,23 +52,22 @@ class JpaDispatchCandidateRepositoryTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         entityManager = mock(EntityManager.class);
-        repository = new JpaDispatchCandidateRepository(entityManager);
+        jdbc = mock(JdbcTemplate.class);
+        repository = new JpaDispatchCandidateRepository(entityManager, jdbc);
         sql = ArgumentCaptor.forClass(String.class);
 
         nativeQuery = mock(Query.class);
         when(nativeQuery.setParameter(anyInt(), any())).thenReturn(nativeQuery);
         when(entityManager.createNativeQuery(anyString())).thenReturn(nativeQuery);
 
-        TypedQuery<DispatchCandidateEntity> typed = mock(TypedQuery.class);
-        when(typed.setParameter(anyString(), any())).thenReturn(typed);
-        when(typed.getResultList()).thenReturn(List.of());
-        when(entityManager.createQuery(anyString(), eq(DispatchCandidateEntity.class)))
-                .thenReturn(typed);
+        // 계획 경로는 JdbcTemplate 로 간다 (ADR-029) — 영속성 컨텍스트를 지나지 않는다.
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any()))
+                .thenReturn(List.of());
     }
 
     private static DispatchCandidate candidate() {
         return DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(), Ids.newId(),
-                GeoPoint.of(37.4979, 127.0276), 1_200, 8_000, false, false, WINDOW, 90, 0, NOW);
+                GeoPoint.of(37.4979, 127.0276), 1_200, 8_000, false, false, WINDOW, 90, false, 0, NOW);
     }
 
     @Test
@@ -103,16 +105,32 @@ class JpaDispatchCandidateRepositoryTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void 계획_대상_조회는_술어를_리터럴로_적는다() {
         // 바인드 파라미터로 넣으면 플래너가 일반 계획에서 술어를 증명하지 못해
         // ix_cand_wave (wave_id, status) 의 뒤 컬럼을 못 쓴다 (CLAUDE.md 코딩 컨벤션).
         repository.findPlannableInWave(Ids.newId());
 
-        org.mockito.Mockito.verify(entityManager).createQuery(sql.capture(),
-                eq(DispatchCandidateEntity.class));
+        org.mockito.Mockito.verify(jdbc).query(sql.capture(),
+                any(org.springframework.jdbc.core.RowMapper.class), any());
         assertThat(sql.getValue())
-                .contains("CandidateStatus.PENDING")
-                .doesNotContain(":status");
+                .contains("status = 'PENDING'")
+                .doesNotContain("status = ?");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void 계획_대상_조회는_영속성_컨텍스트를_지나지_않는다() {
+        // ADR-029 의 요점이다. EntityManager 로 읽으면 후보 5,000개가 관리 상태가 되고,
+        // 그 뒤의 모든 네이티브 질의가 auto-flush 로 전수 더티 체크를 한다 — 측정된 대가는
+        // 21.9배였다. "JdbcTemplate 를 쓴다" 가 아니라 "EntityManager 를 쓰지 않는다" 가
+        // 검사 대상이라 이렇게 적는다.
+        repository.findPlannableInWave(Ids.newId());
+
+        org.mockito.Mockito.verify(jdbc).query(anyString(),
+                any(org.springframework.jdbc.core.RowMapper.class), any());
+        org.mockito.Mockito.verify(entityManager, org.mockito.Mockito.never())
+                .createQuery(anyString(), eq(DispatchCandidateEntity.class));
     }
 
     @Test
@@ -165,9 +183,32 @@ class JpaDispatchCandidateRepositoryTest {
 
     @Test
     void 엔티티매니저는_필수다() {
-        assertThatThrownBy(() -> new JpaDispatchCandidateRepository(null))
+        assertThatThrownBy(() -> new JpaDispatchCandidateRepository(null, jdbc))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("entityManager");
+    }
+
+    @Test
+    void JDBC_템플릿은_필수다() {
+        assertThatThrownBy(() -> new JpaDispatchCandidateRepository(entityManager, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("jdbc");
+    }
+
+    @Test
+    void 계획_결과가_비면_문장을_돌리지_않는다() {
+        // 빈 집합에 UPDATE 를 돌리면 왕복만 쓴다. 계획이 전부 배정하면 미배정 집합이 빈다.
+        assertThat(repository.recordPlanResult(List.of(), CandidateStatus.PLANNED, NOW)).isZero();
+        verifyNoInteractions(jdbc);
+    }
+
+    @Test
+    void 계획_결과는_PLANNED_나_UNASSIGNED_만_받는다() {
+        // 어댑터의 SQL 은 상태 머신을 지나지 않으므로(ADR-029) 여기서 막지 않으면
+        // CANCELLED 를 집합으로 쓰는 일이 조용히 가능해진다.
+        assertThatThrownBy(() -> repository.recordPlanResult(
+                List.of(Ids.newId()), CandidateStatus.CANCELLED, NOW))
+                .isInstanceOf(com.dawnline.common.error.ValidationException.class);
     }
 
     @Test

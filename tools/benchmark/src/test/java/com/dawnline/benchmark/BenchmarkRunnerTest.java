@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.common.Money;
+import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.DispatchStrategy;
 import com.dawnline.dispatch.domain.optimizer.PlanMetrics;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
@@ -36,7 +37,7 @@ class BenchmarkRunnerTest {
             new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3));
 
     private PlanningProblem problem(RuleSet rules) {
-        return new DatasetGenerator(Dataset.SMALL, 1L, START).generate(rules, BUDGET);
+        return new DatasetGenerator(Dataset.SMALL, 1L, START).generate(rules, BUDGET, PlanMode.FULL, 1.0d);
     }
 
     @Test
@@ -127,7 +128,8 @@ class BenchmarkRunnerTest {
             PlannedRoute route = new PlannedRoute(problem.vehicles().getFirst().id(), stops,
                     state.distanceWithReturn(), state.durationWithReturn(), Money.ZERO);
             return new PlanResult(List.of(route), List.of(), Money.ZERO,
-                    new PlanMetrics(1, 3, 0, 1, state.distanceWithReturn(), 0, 0, 0, 0), List.of());
+                    new PlanMetrics(1, 3, 0, 1, state.distanceWithReturn(), 0, 0, 0, 0), List.of(),
+                    false);
         }
     }
 }

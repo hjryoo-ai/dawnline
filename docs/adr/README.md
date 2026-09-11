@@ -17,7 +17,7 @@
 | 002 | DB-per-service + 폴링 Outbox 릴레이 | ✅ Accepted (2026-08-29) | [ADR-002](ADR-002-db-per-service-polling-outbox.md) |
 | 003 | JSON + JSON Schema 이벤트 계약 | ✅ Accepted (2026-08-29) | [ADR-003](ADR-003-json-schema-event-contracts.md) |
 | 004 | 자체 휴리스틱(`sweep-greedy-nn+ls`) 기본 + Timefold 비교 | ⏳ Phase 4 예정 | — |
-| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | ⏳ Phase 2 예정 | — |
+| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | ⏳ Phase 2 예정 | — (advisory lock 기각 사유에 [ADR-027 후속 정정](ADR-027-outbox-relay-leader-lock.md)의 각주가 붙었다 — **서비스 <em>간</em> 락에만 해당한다**) |
 | 006 | at-least-once + 멱등 소비자 (Kafka EOS 미사용) | ✅ Accepted (2026-08-29) | [ADR-006](ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제, 도메인/JPA 엔티티 분리 | ✅ Accepted (2026-08-29) | [ADR-007](ADR-007-hexagonal-architecture-archunit.md) |
 | 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | ⏳ Phase 4 예정 | — |
@@ -39,7 +39,17 @@
 | 024 | 웨이브 계획 완료는 `plan.completed.v1` 이 알린다 (`route.assigned` 가 아니라) | ✅ Accepted (2026-09-05) | [ADR-024](ADR-024-plan-completed-event.md) |
 | 025 | 웨이브 편입은 `FOR SHARE`, 마감만 `FOR UPDATE`. `order_count` 는 마감 시 집계 | ✅ Accepted (2026-09-05) | [ADR-025](ADR-025-wave-admission-share-lock.md) |
 | 026 | 취소는 최적화 트리거가 아니라 입력 변경 — stop 을 죽이고 시간만 재전파한다 | ✅ Accepted (2026-09-05) | [ADR-026](ADR-026-dispatch-cancellation-window.md) |
-| 027 | outbox 릴레이는 Redis 리더 락으로 단일 활성, 리더를 모르면 발행하지 않는다 | ✅ Accepted (2026-09-05) | [ADR-027](ADR-027-outbox-relay-leader-lock.md) |
+| 031 | 배정 동률은 「능력이 적은 차 먼저」 — id 순서는 결정이 아니라 우연이었다 | ✅ Accepted (2026-09-08) | [ADR-031](ADR-031-least-capable-first-tie-break.md) |
+| 037 | **재삽입은 들어갈 수 없는 자리를 시도하지 않는다** — 위치 무관 하드 룰로 라우트를 먼저 거른다(상한 96.8%). 정확한 변경이라 결과가 한 자리도 안 바뀐다 | ✅ Accepted (2026-09-12) | [ADR-037](ADR-037-reinsertion-prunes-what-cannot-fit.md) |
+| 036 | **마감은 계획 전체의 것이다** — 배정·재삽입·개선이 같은 마감 아래. 이것이 없으면 열화 사다리가 허구다 | ✅ Accepted (2026-09-12) | [ADR-036](ADR-036-deadline-belongs-to-the-plan.md) |
+| 035 | 병렬 단위는 **클러스터가 아니다** — 배정은 순차 의존, 개선의 88%는 라우트 쌍. 그리고 **벽시계가 물린 실행은 재현 대상이 아니다** | ✅ Accepted (2026-09-11) | [ADR-035](ADR-035-parallel-unit-is-not-the-cluster.md) |
+| 034 | 열화는 **사다리다** — 랙만 FAST, 예산 조건은 개선 예산 절반. 왜 열화했는지가 계획 행에 남는다 | ✅ Accepted + 후속 정정 (2026-09-10) | [ADR-034](ADR-034-degrade-mode.md) |
+| 033 | 겹친 제약은 한 대에 몰리지 않는다 — 기준 80% · 능력 분포 · 통합 키 | ✅ Accepted (2026-09-09) | [ADR-033](ADR-033-constraint-classes.md) |
+| 032 | 국소 탐색은 근사로 후보를 줄이고, 예산은 패스 단위로만 끊는다 | ✅ Accepted (2026-09-09) | [ADR-032](ADR-032-local-search-budget-and-approximations.md) |
+| 030 | 부록 A 에 야간 근무조(캠프당 8대 23:00–08:00) — 「새벽 배송」에 새벽 차량이 없었다 | ✅ Accepted (2026-09-08) | [ADR-030](ADR-030-night-shift-seed.md) |
+| 029 | 최적화기 I/O 경로(입력 적재·결과 저장)는 ORM 이 아니라 벌크 | ✅ Accepted (2026-09-08) | [ADR-029](ADR-029-optimizer-io-is-bulk-not-orm.md) |
+| 028 | 미배정 정책 — 우선도는 파생이고, 자리는 비싼 것부터 준다 | ✅ Accepted (2026-09-09) | [ADR-028](ADR-028-unassigned-policy.md) |
+| 027 | outbox 릴레이는 리더 락으로 단일 활성, 리더를 모르면 발행하지 않는다 | ✅ Accepted (2026-09-05) + **후속 정정 (2026-09-05)** — 조정자를 Redis → PostgreSQL advisory lock | [ADR-027](ADR-027-outbox-relay-leader-lock.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
@@ -51,6 +61,15 @@
 - **021은 §16 표에 없던 항목**이다. 부록 A 의 "권역 60개" 가 order-service 지오코더의 출력을 덮지
   못한다는 것을 세어 보고(91개) 알게 되어 추가했다. 덮지 못하면 그 주소의 주문이 전부
   `UNSERVICEABLE` 이 되는데, 그것이 설계된 실패 경로와 구별되지 않는다.
+- **027은 결정한 날 정정됐다.** 원 결정은 리더 락을 Redis `SET NX` 로 두고, 폴백이 없으니
+  fail-closed 라고 §7.2·§13 에 **예외**를 만들었다. 리뷰가 그 앞 단계를 짚었다 — 릴레이 리더
+  선출은 서비스 <em>내부</em> 조정이고 그 인스턴스들은 자기 outbox 가 있는 같은 DB 를 공유하므로,
+  `pg_try_advisory_lock` 이면 TTL·갱신·시계가 없고 **DB 가 죽으면 발행할 것도 없으니 딜레마
+  자체가 사라진다.** 즉 그것은 불변규칙 7 의 예외가 아니라 위반이었다. ADR-005 의 "advisory
+  lock 은 서비스별 DB 분리 시 범위 한계" 라는 기각 사유는 **서비스 간 락**에만 해당하는데, 이
+  시스템에는 서비스 간 락이 하나도 없다 — 일반 원칙을 개별 사례에 자동 적용한 것이 원인이었다.
+  같은 정정에서 §5.3 의 `lock:plan` 도 설계에서 뺐다(`route_plans.wave_id` UNIQUE 가 이미 그
+  안전장치다).
 - **023은 022가 남긴 보존 문제를 닫는다.** 그 과정에서 ADR-020 의 지각 도착 경로에 상한이 없다는
   것도 드러나 **ADR-020 에 후속 정정**을 붙였다(ADR-002 와 같은 방식 — 원문을 고쳐 쓰지 않는다).
   20일 묵은 `order.placed` 가 DLQ replay 로 들어오면 "다음 웨이브 + 약속 개정" 을 타서 오늘 날짜의

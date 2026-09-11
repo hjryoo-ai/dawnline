@@ -58,7 +58,7 @@ public class OutboxMetrics {
                 .register(registry);
 
         Gauge.builder(MessagingMetrics.OUTBOX_LEADER, leader, AtomicLong::doubleValue)
-                .description("릴레이 리더십. 1 리더 · 0 팔로워(정상) · -1 판정 불가(Redis 장애).")
+                .description("릴레이 리더십. 1 리더 · 0 팔로워(정상) · -1 판정 불가(DB 세션 장애).")
                 .tags(tags)
                 .register(registry);
     }

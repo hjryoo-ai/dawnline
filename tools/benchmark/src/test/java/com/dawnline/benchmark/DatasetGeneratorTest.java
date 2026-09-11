@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Haversine;
+import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
@@ -25,7 +26,7 @@ class DatasetGeneratorTest {
     private static final GeoPoint CAMP = GeoPoint.of(37.5663, 126.9779);
 
     private PlanningProblem generate(Dataset dataset, long seed) {
-        return new DatasetGenerator(dataset, seed, START).generate(RuleSet.empty(), BUDGET);
+        return new DatasetGenerator(dataset, seed, START).generate(RuleSet.empty(), BUDGET, PlanMode.FULL, 1.0d);
     }
 
     @Test

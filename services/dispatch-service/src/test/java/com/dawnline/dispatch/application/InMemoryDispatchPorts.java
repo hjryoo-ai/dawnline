@@ -101,6 +101,17 @@ final class InMemoryDispatchPorts {
         }
 
         @Override
+        public Optional<Duration> lastPublishedDuration(UUID campId) {
+            // 마지막으로 발행된 것 — 삽입 순서가 곧 발행 순서다(이 흉내에서는 한 번에 하나씩 돈다).
+            return byId.values().stream()
+                    .filter(plan -> plan.campId().equals(campId))
+                    .filter(plan -> plan.status() == PlanStatus.PUBLISHED)
+                    .flatMap(plan -> plan.planDurationMs().stream())
+                    .reduce((first, second) -> second)
+                    .map(Duration::ofMillis);
+        }
+
+        @Override
         public void update(RoutePlan plan) {
             byId.put(plan.id(), plan);
         }
@@ -137,6 +148,25 @@ final class InMemoryDispatchPorts {
         @Override
         public void update(DispatchCandidate candidate) {
             rows.put(candidate.orderId(), candidate);
+        }
+
+        /**
+         * <strong>애그리거트의 전이 규칙을 그대로 쓴다.</strong> 어댑터는 같은 규칙을
+         * {@code WHERE status = 'PENDING'} 으로 옮겨 적으므로(ADR-029), 이 대역이 SQL 을
+         * 흉내 내면 둘이 어긋나도 아무 테스트가 실패하지 않는다. 기준은 도메인이다.
+         */
+        @Override
+        public int recordPlanResult(java.util.Collection<UUID> orderIds,
+                com.dawnline.dispatch.domain.CandidateStatus target, java.time.Instant at) {
+            int changed = 0;
+            for (UUID orderId : orderIds) {
+                DispatchCandidate candidate = rows.get(orderId);
+                if (candidate != null && candidate.recordPlanResult(target, at)) {
+                    rows.put(orderId, candidate);
+                    changed++;
+                }
+            }
+            return changed;
         }
 
         /** 직접 넣는다. */
