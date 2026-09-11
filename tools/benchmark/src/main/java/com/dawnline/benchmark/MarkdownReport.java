@@ -77,9 +77,48 @@ public final class MarkdownReport {
     }
 
     /**
-     * @param summaries 전략별 요약 (등록 순서)
+     * <strong>불가능의 경계</strong>를 같은 표에 둔다 (§6.9, [ADR-038]).
+     *
+     * <p>「베이스라인보다 얼마나 나은가」만 적으면 다음 질문 — <em>최적해와 얼마나 먼가</em> —
+     * 에 답할 자리가 없다. 완화 문제의 고정비 하한은 그 답의 절반이고, 정직한 절반이다.
+     *
+     * <p>절반인 이유를 함께 적는다. 이것은 <strong>고정비의 하한이지 총비용의 하한이
+     * 아니다</strong> — 고정비를 하한까지 밀면 빈 좌석이 사라지고, 희소 능력을 요구하는 수요가
+     * 앉을 자리를 잃는다. `large` 에서 고정비를 410,000원 깎았더니 미배정이 1,630,000원 늘었다.
      */
-    public String render(Map<String, StrategySummary> summaries) {
+    private void renderFloor(StringBuilder out, Map<String, StrategySummary> summaries,
+            FixedCostFloor floor) {
+
+        out.append("\n### 고정비 하한 — 불가능의 경계 (§6.9 완화 문제)\n\n");
+        if (!floor.feasible()) {
+            out.append("> ⚠ **이 데이터셋은 총량으로 실현 불가다** — 전 차량으로도 덮지 못하는 축: ")
+                    .append(String.join(", ", floor.uncoverable()))
+                    .append(". 고정비 하한은 뜻이 없다(어떤 함대도 다 싣지 못한다).\n\n");
+            return;
+        }
+        out.append("| 전략 | 고정비 | 하한 | 격차 | 하한 대비 |\n|---|---:|---:|---:|---:|\n");
+        summaries.values().forEach(summary -> {
+            long fixed = summary.breakdown().fixedKrw();
+            out.append("| `").append(summary.strategy()).append("` | ")
+                    .append(String.format("%,d", fixed)).append(" | ")
+                    .append(String.format("%,d", floor.krw())).append(" | ")
+                    .append(String.format("%+,d", fixed - floor.krw())).append(" | ")
+                    .append(String.format("%.2f배", (double) fixed / Math.max(1L, floor.krw())))
+                    .append(" |\n");
+        });
+        out.append("\n무는 축은 **").append(floor.bindingAxis()).append("** 이다. 기하·시간·순서를 ")
+                .append("버리고 총량만 덮는 가장 싼 함대이므로 **이보다 적은 고정비는 불가능하다** ")
+                .append("(축을 따로 보는 완화라 실제 최적은 이 값보다 위에 있다).\n\n");
+        out.append("> **고정비의 하한이지 총비용의 하한이 아니다** ([ADR-038]). 빈 좌석은 낭비가\n");
+        out.append("> 아니라 희소 능력(위험물·냉장) 수요가 나중에 앉을 자리다 — 고정비를 하한까지\n");
+        out.append("> 밀면 그 자리가 사라지고 미배정 페널티가 그보다 크게 오른다.\n\n");
+    }
+
+    /**
+     * @param summaries 전략별 요약 (등록 순서)
+     * @param floor     완화 문제의 고정비 하한 (§6.9)
+     */
+    public String render(Map<String, StrategySummary> summaries, FixedCostFloor floor) {
         StringBuilder out = new StringBuilder();
         out.append("# 전략 비교 — ").append(dataset.cliName()).append("\n\n");
         out.append("생성 ").append(generatedAt).append(" · ").append(source.describe())
@@ -126,7 +165,9 @@ public final class MarkdownReport {
                     .append(breakdown.unassignedOrders()).append(" |\n");
         });
 
-        out.append("\n비용은 §6.1 의 목적함수다 — 차량 비용 + 미배정 페널티 + 소프트 룰 페널티.\n");
+        renderFloor(out, summaries, floor);
+
+        out.append("비용은 §6.1 의 목적함수다 — 차량 비용 + 미배정 페널티 + 소프트 룰 페널티.\n");
         out.append("**계획 시간은 기록만 하고 게이트에 넣지 않는다**(§6.9): 두 전략을 같은 실행 안에서\n");
         out.append("돌리므로 비용 비교는 러너 사양에 독립이지만, 시간은 러너에 따라 흔들린다.\n\n");
 

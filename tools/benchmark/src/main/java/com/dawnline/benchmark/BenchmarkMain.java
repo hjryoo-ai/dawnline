@@ -61,7 +61,7 @@ public final class BenchmarkMain {
 
         String report = new MarkdownReport(options.dataset(), options.seed(), options.repeats(),
                 options.mode(), options.budgetFactor(), startedAt, SourceVersion.detect())
-                .render(summaries);
+                .render(summaries, FixedCostFloor.of(problem));
         write(report, options.out());
 
         if (options.gate() != null) {

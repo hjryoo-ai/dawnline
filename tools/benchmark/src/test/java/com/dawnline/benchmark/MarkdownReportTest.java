@@ -29,7 +29,7 @@ class MarkdownReportTest {
                         new PlanMetrics(4, 480, 20, 4, 123_456, 7_200, 3, 45, 900),
                         Money.krw(1_234_567), 900))));
         return new MarkdownReport(Dataset.SMALL, 42L, 5, PlanMode.FULL, 1.0d, AT, source)
-                .render(summaries);
+                .render(summaries, new FixedCostFloor(1_000_000L, "전체 stop", List.of()));
     }
 
     @Test
