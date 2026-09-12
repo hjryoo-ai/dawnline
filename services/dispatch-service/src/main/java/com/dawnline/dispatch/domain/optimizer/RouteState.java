@@ -40,6 +40,7 @@ public final class RouteState {
     private final CampDepot depot;
     private final DistanceProvider distance;
     private final Instant startedAt;
+    private final Instant planStartedAt;
     private final @Nullable RouteState previous;
     private final @Nullable PlannedStop last;
     private final int stopCount;
@@ -50,14 +51,15 @@ public final class RouteState {
     private final int distanceM;
 
     private RouteState(VehicleSpec vehicle, CampDepot depot, DistanceProvider distance,
-            Instant startedAt, @Nullable RouteState previous, @Nullable PlannedStop last,
-            int stopCount, Set<String> zones, Parcel load, GeoPoint at, Instant time,
-            int distanceM) {
+            Instant startedAt, Instant planStartedAt, @Nullable RouteState previous,
+            @Nullable PlannedStop last, int stopCount, Set<String> zones, Parcel load, GeoPoint at,
+            Instant time, int distanceM) {
 
         this.vehicle = vehicle;
         this.depot = depot;
         this.distance = distance;
         this.startedAt = startedAt;
+        this.planStartedAt = planStartedAt;
         this.previous = previous;
         this.last = last;
         this.stopCount = stopCount;
@@ -89,7 +91,7 @@ public final class RouteState {
         // 모델에 없는 상태가 된다 (ADR-030).
         Instant departAt = startAt.isBefore(vehicle.shift().start())
                 ? vehicle.shift().start() : startAt;
-        return new RouteState(vehicle, depot, distance, departAt, null, null, 0, Set.of(),
+        return new RouteState(vehicle, depot, distance, departAt, startAt, null, null, 0, Set.of(),
                 Parcel.EMPTY, depot.point(), departAt, 0);
     }
 
@@ -104,9 +106,9 @@ public final class RouteState {
         Instant arrival = time.plusSeconds(travel.seconds());
         Instant departure = arrival.plusSeconds(stop.serviceSeconds());
         PlannedStop planned = new PlannedStop(stopCount + 1, stop, arrival, departure);
-        return new RouteState(vehicle, depot, distance, startedAt, this, planned, stopCount + 1,
-                withZone(stop.zone()), load.plus(stop.parcel()), stop.point(), departure,
-                Math.addExact(distanceM, travel.meters()));
+        return new RouteState(vehicle, depot, distance, startedAt, planStartedAt, this, planned,
+                stopCount + 1, withZone(stop.zone()), load.plus(stop.parcel()), stop.point(),
+                departure, Math.addExact(distanceM, travel.meters()));
     }
 
     /** 이 stop 을 붙였을 때의 <strong>도착</strong> 시각. 붙이지는 않는다. */
@@ -184,9 +186,21 @@ public final class RouteState {
         return time;
     }
 
-    /** 라우트 출발 시각. */
+    /** 라우트 출발 시각. 근무 시작이 계획보다 늦으면 그쪽으로 밀린다. */
     public Instant startedAt() {
         return startedAt;
+    }
+
+    /**
+     * <strong>계획</strong> 시작 시각 — 근무창으로 밀리기 <em>전</em>의 기준점이다.
+     *
+     * <p>{@link #startedAt()} 과 달리 <strong>계획 안의 모든 라우트가 같은 값</strong>을 본다.
+     * {@code PRIORITY_BOOST} 가 이 값을 기준으로 감쇠하는 이유가 그것이다([ADR-040]) — 라우트마다
+     * 다른 기준을 쓰면 「라우트를 쪼갤수록 첫 자리가 늘어난다」가 되어, 그 룰이 버린 {@code ÷
+     * position} 의 결함을 시각으로 다시 만든다.
+     */
+    public Instant planStartedAt() {
+        return planStartedAt;
     }
 
     /** 누적 이동 거리(m). 캠프 복귀분은 포함하지 않는다 — {@link #distanceWithReturn} 이 그 값이다. */

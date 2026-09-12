@@ -60,7 +60,7 @@
     "type": "PRIORITY_BOOST",
     "severity": "SOFT",
     "priority": 120,
-    "params": { "bonusKrw": 3000 }
+    "params": { "bonusKrw": 3000, "halfLifeMinutes": 12 }
   },
   {
     "name": "vehicle-preference",

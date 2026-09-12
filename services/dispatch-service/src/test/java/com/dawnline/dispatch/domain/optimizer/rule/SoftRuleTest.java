@@ -107,7 +107,9 @@ class SoftRuleTest {
     @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
     class 우선도_보너스 {
 
-        private final PriorityBoostRule rule = new PriorityBoostRule("priority", 120, 3_000);
+        private static final long HALF_LIFE = 12L;
+        private final PriorityBoostRule rule =
+                new PriorityBoostRule("priority", 120, 3_000, HALF_LIFE);
 
         @Test
         void 우선도가_0_이면_보너스가_없다() {
@@ -118,34 +120,93 @@ class SoftRuleTest {
         }
 
         @Test
-        void 보너스는_음수_페널티다() {
+        void 보너스는_음수_페널티이고_우선도에_비례한다() {
             VehicleSpec vehicle = RuleFixtures.vehicle();
-            Stop vip = RuleFixtures.stop(GANGNAM, Parcel.EMPTY, 2, 1);
+            RouteState state = RuleFixtures.emptyRoute(vehicle);
+            Stop one = RuleFixtures.stop(GANGNAM, Parcel.EMPTY, 1, 1);
+            Stop two = RuleFixtures.stop(GANGNAM, Parcel.EMPTY, 2, 1);
 
-            assertThat(rule.penalty(vip, vehicle, RuleFixtures.emptyRoute(vehicle)))
-                    .isEqualTo(Money.krw(-6_000));
+            Money single = rule.penalty(one, vehicle, state);
+            assertThat(single.krw()).isNegative();
+            assertThat(rule.penalty(two, vehicle, state).krw())
+                    .as("같은 자리·같은 시각이면 우선도만 값을 가른다")
+                    .isEqualTo(single.krw() * 2);
         }
 
         @Test
-        void 뒤로_갈수록_보너스가_줄어든다() {
-            // 상수 보너스는 총비용에서 순서를 구별하지 못한다 — "앞 순서에 두면" 이 값에 들어가려면
-            // 순번이 식에 있어야 한다.
+        void 반감기에서_절반이다() {
+            // τ 의 뜻이 이름 그대로인지 — t = τ 에서 정확히 절반이다.
+            VehicleSpec vehicle = RuleFixtures.vehicle();
+            RouteState state = RuleFixtures.emptyRoute(vehicle);
+            Stop vip = RuleFixtures.stop(GANGNAM, Parcel.EMPTY, 1, 1);
+            long elapsed = Duration.between(START, state.arrivalIfAppended(vip)).toMinutes();
+            assertThat(elapsed).as("도착이 계획 시작과 같으면 감쇠를 볼 수 없다").isPositive();
+
+            PriorityBoostRule atHalfLife = new PriorityBoostRule("priority", 120, 3_000, elapsed);
+
+            assertThat(atHalfLife.penalty(vip, vehicle, state)).isEqualTo(Money.krw(-1_500));
+        }
+
+        @Test
+        void 늦게_도착할수록_보너스가_줄어든다() {
+            VehicleSpec vehicle = RuleFixtures.vehicle();
+            Stop vip = RuleFixtures.stop(GANGNAM, Parcel.EMPTY, 1, 1);
+            RouteState early = RuleFixtures.emptyRoute(vehicle);
+            RouteState late = early.append(RuleFixtures.stop(YEOUIDO))
+                    .append(RuleFixtures.stop(CITY_HALL));
+
+            assertThat(rule.penalty(vip, vehicle, late).krw())
+                    .isGreaterThan(rule.penalty(vip, vehicle, early).krw());
+        }
+
+        @Test
+        void 순번이_달라도_도착_시각이_같으면_같은_보너스다() {
+            // 「앞 순서에」를 순번으로 재면 라우트를 쪼갤수록 보너스가 모인다 — 그것이
+            // ÷ position 을 버린 이유다([ADR-040]). 시각으로 재면 순번은 값에 없다.
             VehicleSpec vehicle = RuleFixtures.vehicle();
             Stop vip = RuleFixtures.stop(GANGNAM, Parcel.EMPTY, 1, 1);
             RouteState first = RuleFixtures.emptyRoute(vehicle);
-            RouteState second = first.append(RuleFixtures.stop(CITY_HALL));
-            RouteState fourth = second.append(RuleFixtures.stop(YEOUIDO))
-                    .append(RuleFixtures.stop(CITY_HALL));
+            RouteState fifth = first
+                    .append(RuleFixtures.weightlessStop(CITY_HALL))
+                    .append(RuleFixtures.weightlessStop(CITY_HALL))
+                    .append(RuleFixtures.weightlessStop(CITY_HALL))
+                    .append(RuleFixtures.weightlessStop(CITY_HALL));
+            assertThat(fifth.time()).as("시각이 같아야 순번만 남는다").isEqualTo(first.time());
+            assertThat(fifth.stopCount()).isEqualTo(4);
 
-            assertThat(rule.penalty(vip, vehicle, first)).isEqualTo(Money.krw(-3_000));
-            assertThat(rule.penalty(vip, vehicle, second)).isEqualTo(Money.krw(-1_500));
-            assertThat(rule.penalty(vip, vehicle, fourth)).isEqualTo(Money.krw(-750));
+            assertThat(rule.penalty(vip, vehicle, fifth))
+                    .isEqualTo(rule.penalty(vip, vehicle, first));
+        }
+
+        @Test
+        void 기준은_라우트_출발이_아니라_계획_시작이다() {
+            // 라우트 기준으로 재면 근무가 늦게 시작하는 차의 첫 자리가 만점이 되고, 「쪼개면
+            // 첫 자리가 늘어난다」가 시각으로 되살아난다.
+            VehicleSpec onTime = RuleFixtures.vehicle();
+            VehicleSpec lateShift =
+                    RuleFixtures.vehicleWithShiftStart(START.plus(Duration.ofHours(2)));
+            Stop vip = RuleFixtures.stop(GANGNAM, Parcel.EMPTY, 1, 1);
+            RouteState lateRoute = RuleFixtures.emptyRoute(lateShift);
+            assertThat(lateRoute.startedAt()).as("근무창이 출발을 밀어야 두 기준이 갈린다")
+                    .isAfter(lateRoute.planStartedAt());
+
+            assertThat(rule.penalty(vip, lateShift, lateRoute).krw())
+                    .isGreaterThan(rule.penalty(vip, onTime, RuleFixtures.emptyRoute(onTime)).krw());
         }
 
         @Test
         void 음수_보너스는_거부한다() {
             // 부호는 이 룰이 붙인다. 정의가 음수를 적으면 보너스가 페널티가 된다.
-            assertThatThrownBy(() -> new PriorityBoostRule("p", 120, -1))
+            assertThatThrownBy(() -> new PriorityBoostRule("p", 120, -1, HALF_LIFE))
+                    .isInstanceOf(ValidationException.class);
+        }
+
+        @Test
+        void 반감기가_0_이하면_거부한다() {
+            // 0 이면 보너스가 통째로 사라지고, 음수면 감쇠가 뒤집혀 늦을수록 상을 준다.
+            assertThatThrownBy(() -> new PriorityBoostRule("p", 120, 3_000, 0))
+                    .isInstanceOf(ValidationException.class);
+            assertThatThrownBy(() -> new PriorityBoostRule("p", 120, 3_000, -1))
                     .isInstanceOf(ValidationException.class);
         }
     }

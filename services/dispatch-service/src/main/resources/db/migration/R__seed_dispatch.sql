@@ -32,7 +32,9 @@ INSERT INTO dispatch_rules (id, camp_id, name, type, severity, params, priority,
   ('01a06edd-6c00-7000-8003-000000000008', NULL, 'zone-affinity', 'ZONE_AFFINITY', 'SOFT',
    '{"crossZonePenaltyKrw":2000}'::jsonb, 110, TRUE, 1, TIMESTAMPTZ '2026-09-05 00:00:00+09'),
   ('01a06edd-6c00-7000-8003-000000000009', NULL, 'priority-boost', 'PRIORITY_BOOST', 'SOFT',
-   '{"bonusKrw":3000}'::jsonb, 120, TRUE, 1, TIMESTAMPTZ '2026-09-05 00:00:00+09'),
+   -- 감쇠식이 순번에서 시각으로 바뀌었다 (ADR-040). 룰이 바뀌었으므로 rule_version 을 올린다
+   -- (§6.3) — 그래야 이 전후의 계획이 어떤 룰로 돌았는지 사후에 갈린다.
+   '{"bonusKrw":3000,"halfLifeMinutes":12}'::jsonb, 120, TRUE, 2, TIMESTAMPTZ '2026-09-12 00:00:00+09'),
   ('01a06edd-6c00-7000-8003-000000000010', NULL, 'vehicle-preference', 'VEHICLE_PREFERENCE', 'SOFT',
    '{"preferredTypes":["BIKE","VAN"],"penaltyKrw":4000}'::jsonb, 130, TRUE, 1, TIMESTAMPTZ '2026-09-05 00:00:00+09'),
   ('01a06edd-6c00-7000-8003-000000000011', NULL, 'unassigned', 'UNASSIGNED_PENALTY', 'SOFT',
