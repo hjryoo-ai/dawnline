@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 /**
  * 캠프 기준 극각으로 훑어 연속 구간을 클러스터로 자른다 (DESIGN.md §6.5 2단계).
@@ -31,8 +32,21 @@ import java.util.Objects;
  *
  * <p>차 한 대가 실을 수 있는 양은 <em>용량</em>이지 "전체를 차량 수로 나눈 값" 이 아니다.
  * 그래서 총수요를 가장 큰 차량의 용량으로 나눠 필요한 최소 클러스터 수를 구하고, 그보다 잘게
- * 자르지 않는다. {@code max-stops} 같은 룰이 더 잘라야 한다고 말하면 {@code GreedyAssigner} 가
- * 반으로 쪼개 다시 시도한다(§6.5 3단계) — 클러스터러가 룰의 속을 들여다보지 않아도 되는 이유다.
+ * 자르지 않는다.
+ *
+ * <h2>「수요」에는 stop 수도 들어간다 (2026-09-12 정정, [ADR-041])</h2>
+ * 한동안 그 나눗셈이 <strong>중량과 부피만</strong> 봤다. 그런데 이 데이터에서 <strong>무는 축은
+ * 언제나 stop 슬롯</strong>이었다 — 네 데이터셋의 클러스터 64개가 전부 stop 축에 묶였고([ADR-038]
+ * 의 고정비 하한이 같은 답을 냈다), 그 결과 `large` 의 클러스터가 <strong>상한 120 에 244~341
+ * stop</strong> 이었다. 차 두세 대 몫을 한 묶음으로 들고 간 것이다.
+ *
+ * <p>「그러면 {@code GreedyAssigner} 가 반으로 쪼개 다시 시도한다」가 예전의 답이었고 그것이
+ * <em>동작</em>은 했지만, 이분법은 클러스터러의 오류를 <strong>메우고 있었던</strong> 것이지
+ * 설계가 아니었다. 측정이 그것을 값으로 말했다 — 이분법을 빼면 `small` 에서 미배정이 3건 생긴다.
+ *
+ * <p>그래서 상한을 축에 넣는다. <strong>룰의 속을 들여다보는 것이 아니다</strong> — 룰이 답하는
+ * 질문({@code RuleSet.routeStopCap()}, [ADR-038])을 하나 더 묻는 것이고, 상한을 말하는 룰이
+ * 없으면 이 축은 없다.
  *
  * <h2>권역 경계에서 "우선" 자른다는 것의 뜻</h2>
  * §6.5 2단계는 "권역 경계를 넘을 때는 {@code ZONE_AFFINITY} 페널티를 고려해 자르기 우선" 이다.
@@ -70,17 +84,19 @@ public final class SweepClusterer {
      * @param depot       극각의 기준점
      * @param capacity    가장 큰 차량의 용량. 이보다 큰 클러스터는 어떤 차도 실을 수 없다
      * @param vehicleCount 차량 수. 목표 클러스터 크기를 정하는 데 쓴다
+     * @param stopCap     룰셋이 말하는 라우트당 stop 상한([ADR-038]). 비어 있으면 그 축은 없다
      */
     public List<List<Stop>> cluster(List<Stop> stops, CampDepot depot, Capacity capacity,
-            int vehicleCount) {
+            int vehicleCount, OptionalInt stopCap) {
 
         Objects.requireNonNull(stops, "stops");
         Objects.requireNonNull(depot, "depot");
         Objects.requireNonNull(capacity, "capacity");
+        Objects.requireNonNull(stopCap, "stopCap");
         if (vehicleCount < 1) {
             throw new IllegalArgumentException("차량 수는 1 이상이어야 합니다: " + vehicleCount);
         }
-        int targetClusters = targetClusters(stops, capacity, vehicleCount);
+        int targetClusters = targetClusters(stops, capacity, vehicleCount, stopCap);
         int targetSize = Math.max(1, Math.ceilDiv(stops.size(), targetClusters));
 
         List<Stop> swept = sweep(stops, depot.point());
@@ -118,16 +134,26 @@ public final class SweepClusterer {
     }
 
     /**
-     * 필요한 클러스터 수. <strong>총수요 ÷ 가장 큰 차량의 용량</strong>이다 — 중량과 부피 중
-     * 더 많이 요구하는 쪽을 쓴다. 차량 수를 상한으로 두는 이유는 클러스터가 차보다 많으면 남는
-     * 것이 이미 실은 차에 얹혀 부챗살 여럿을 오가는 지그재그가 되기 때문이다.
+     * 필요한 클러스터 수. <strong>총수요 ÷ 차 한 대 몫</strong>이고, 수요의 축은 <strong>셋</strong>
+     * 이다 — 중량 · 부피 · <strong>stop 슬롯</strong>. 가장 많이 요구하는 축을 쓴다.
+     *
+     * <p><strong>차량 수가 여전히 상한이다.</strong> 클러스터가 차보다 많으면 남는 것이 이미 실은
+     * 차에 얹혀 부챗살 여럿을 오가는 지그재그가 된다 — 그 상한을 함께 없앤 변형이 `peak` 에서
+     * 클러스터 121개(차량 88대)를 만들고 **+1,507,476원**을 냈다([ADR-041] 의 측정). 상한을
+     * 넘겨야 할 만큼 수요가 많으면 그것은 클러스터링이 아니라 용량의 문제다.
      */
-    private static int targetClusters(List<Stop> stops, Capacity capacity, int vehicleCount) {
+    private static int targetClusters(List<Stop> stops, Capacity capacity, int vehicleCount,
+            OptionalInt stopCap) {
+
         long weight = stops.stream().mapToLong(stop -> stop.parcel().weightG()).sum();
         long volume = stops.stream().mapToLong(stop -> stop.parcel().volumeCm3()).sum();
         long byWeight = Math.ceilDiv(weight, Math.max(1L, capacity.maxWeightG()));
         long byVolume = Math.ceilDiv(volume, Math.max(1L, capacity.maxVolumeCm3()));
-        return (int) Math.min(vehicleCount, Math.max(1L, Math.max(byWeight, byVolume)));
+        long byStops = stopCap.isPresent() && stopCap.getAsInt() > 0
+                ? Math.ceilDiv((long) stops.size(), stopCap.getAsInt())
+                : 1L;
+        long needed = Math.max(byStops, Math.max(byWeight, byVolume));
+        return (int) Math.min(vehicleCount, Math.max(1L, needed));
     }
 
     /**

@@ -99,9 +99,11 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
         SeatReservation seats =
                 SeatReservation.of(stops, problem.vehicles(), problem.rules().routeStopCap());
 
+        // 「차 한 대 몫」의 축에 stop 슬롯이 들어간다 ([ADR-041]) — 좌석 예약과 <strong>같은
+        // 질문</strong>을 룰에게 묻는다(§6.3 `routeStopCap()`).
         List<List<Stop>> clusters =
                 clusterer.cluster(stops, problem.depot(), largestCapacity(problem),
-                        problem.vehicles().size());
+                        problem.vehicles().size(), problem.rules().routeStopCap());
 
         List<RouteAccumulator> routes = problem.vehicles().stream()
                 .map(vehicle -> new RouteAccumulator(problem.rules(), vehicle, problem.depot(),
