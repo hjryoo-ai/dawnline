@@ -1,6 +1,7 @@
 package com.dawnline.dispatch.domain.optimizer.strategy;
 
 import com.dawnline.common.GeoPoint;
+import com.dawnline.dispatch.domain.optimizer.ConstraintClass;
 import com.dawnline.dispatch.domain.optimizer.Feasibility;
 import com.dawnline.dispatch.domain.optimizer.PlannedStop;
 import com.dawnline.dispatch.domain.optimizer.PlanningDeadline;
@@ -174,12 +175,24 @@ final class UnassignedRepair {
     }
 
     /**
-     * 비싼 것부터. 동률은 주문 수가 많은 쪽(통합 stop 하나를 못 실으면 그 안이 전부 미배정이다),
-     * 그다음은 주문 id — <strong>마지막 키가 id 인 것은 재현성 때문이다</strong>(불변규칙 12).
+     * 비싼 것부터. 동률이면 <strong>앉을 수 있는 자리가 적은 수요부터</strong>([ADR-039]),
+     * 그다음은 주문 수가 많은 쪽(통합 stop 하나를 못 실으면 그 안이 전부 미배정이다), 마지막은
+     * 주문 id — <strong>마지막 키가 id 인 것은 재현성 때문이다</strong>(불변규칙 12).
+     *
+     * <h2>둘째 키가 예약을 푸는 순서다</h2>
+     * 재삽입은 좌석 예약을 보지 않는다 — 예약은 배정 단계의 것이고 여기서 풀린다. 그런데 순서가
+     * 없으면 <strong>일반 수요가 먼저 그 자리를 채운다</strong>: 페널티가 같으면 동률이 주문 id
+     * 로 깨지기 때문이다(결정이 아니라 우연이다). 그러면 「기하 때문에 아무도 못 앉은 자리만
+     * 푼다」가 「누구든 먼저 온 쪽이 가진다」가 된다.
+     *
+     * <p>키의 방향은 §6.5 3단계 동률 규칙([ADR-031])의 <em>수요 쪽 쌍대</em>다. 그쪽은 「능력이
+     * 적은 차를 먼저 쓴다」이고 이쪽은 「자리가 적은 수요를 먼저 앉힌다」 — 둘 다 같은 문장이다:
+     * <strong>특수한 자원은 그것을 요구하는 수요에 남겨 둔다.</strong>
      */
     private static Comparator<Stop> byPenaltyDescending(PlanningProblem problem) {
         return Comparator
                 .comparingLong((Stop stop) -> problem.rules().unassignedPenalty(stop).krw())
+                .thenComparingInt(stop -> ConstraintClass.of(stop).specificity())
                 .thenComparingInt(Stop::orderCount)
                 .reversed()
                 .thenComparing(stop -> stop.orderIds().getFirst().value());

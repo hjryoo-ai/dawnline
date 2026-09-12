@@ -36,7 +36,8 @@ import java.util.Set;
 public final class NearestNeighborSequencer {
 
     /**
-     * 넣을 수 있는 것을 순서대로 넣고, 넣지 못한 것을 돌려준다.
+     * 넣을 수 있는 것을 순서대로 넣고, 넣지 못한 것을 돌려준다. 좌석 예약은 보지 않는다 —
+     * 예약은 배정 단계의 것이고, 재삽입·개선 단계는 <strong>풀린 뒤</strong>에 돈다([ADR-039]).
      *
      * @param route     쌓을 라우트
      * @param candidates 이 라우트에 넣어 볼 stop 들
@@ -45,15 +46,34 @@ public final class NearestNeighborSequencer {
     public Set<Stop> sequence(RouteAccumulator route, List<Stop> candidates,
             DistanceProvider distance) {
 
+        return sequence(route, candidates, distance, SeatGate.OPEN);
+    }
+
+    /**
+     * 같은 일을 하되 <strong>좌석 예약</strong>을 함께 본다 ([ADR-039], §6.5 3단계).
+     *
+     * <p>하드 룰과 문을 <em>따로</em> 묻는 이유는 둘이 다른 질문이기 때문이다 — 룰은 「이 차가
+     * 실을 수 있는가」이고 문은 「이 자리가 이 수요의 것인가」다. 섞으면 §6.3 의 설명에
+     * 「용량 초과」와 「예약된 자리」가 구별되지 않는다.
+     *
+     * @param route      쌓을 라우트
+     * @param candidates 이 라우트에 넣어 볼 stop 들
+     * @param distance   거리 제공자
+     * @param seats      좌석 예약의 문
+     */
+    Set<Stop> sequence(RouteAccumulator route, List<Stop> candidates, DistanceProvider distance,
+            SeatGate seats) {
+
         Objects.requireNonNull(route, "route");
         Objects.requireNonNull(distance, "distance");
+        Objects.requireNonNull(seats, "seats");
         Set<Stop> remaining = new LinkedHashSet<>(candidates);
 
         while (!remaining.isEmpty()) {
             Stop best = null;
             long bestCost = Long.MAX_VALUE;
             for (Stop stop : remaining) {
-                if (!route.check(stop).feasible()) {
+                if (!route.check(stop).feasible() || !seats.admits(stop).feasible()) {
                     continue;
                 }
                 long cost = costOf(route, stop, distance);
@@ -67,6 +87,7 @@ public final class NearestNeighborSequencer {
                 break;
             }
             route.append(best);
+            seats.seat(best);
             remaining.remove(best);
         }
         return remaining;

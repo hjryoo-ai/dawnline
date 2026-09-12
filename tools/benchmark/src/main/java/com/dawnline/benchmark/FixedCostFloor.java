@@ -1,5 +1,6 @@
 package com.dawnline.benchmark;
 
+import com.dawnline.dispatch.domain.optimizer.ConstraintClass;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import com.dawnline.dispatch.domain.optimizer.StopMerger;
@@ -66,48 +67,45 @@ public record FixedCostFloor(long krw, String bindingAxis, List<String> uncovera
         String binding = "—";
         List<String> uncoverable = new ArrayList<>();
 
-        // 조합을 손으로 나열하지 않는다 — 모델의 축에서 뽑는다(DatasetFeasibilityTest 와 같은 이유).
-        for (boolean cold : new boolean[] {false, true}) {
-            for (boolean hazmat : new boolean[] {false, true}) {
-                List<Stop> demand = stops.stream()
-                        .filter(stop -> !cold || stop.parcel().requiresCold())
-                        .filter(stop -> !hazmat || stop.parcel().hazmat())
-                        .toList();
-                if (demand.isEmpty()) {
-                    continue;
-                }
-                List<VehicleSpec> fleet = problem.vehicles().stream()
-                        .filter(vehicle -> !cold || vehicle.attrs().cold())
-                        .filter(vehicle -> !hazmat || vehicle.attrs().allowsHazmat())
-                        .toList();
-                String label = describe(cold, hazmat);
+        // 조합을 손으로 나열하지 않는다 — 모델의 축에서 뽑는다([ADR-033] 의 ConstraintClass).
+        for (ConstraintClass axis : ConstraintClass.all()) {
+            // 여기서 조합은 «정확히 이 조합» 이 아니라 «최소한 이것을 요구하는» <strong>문턱</strong>
+            // 이다. 하한은 「그 능력을 요구하는 수요」와 「그 능력을 갖춘 차량」을 맞대야 참이 된다 —
+            // 좌석 예약([ADR-039])이 조합을 <em>정확히</em> 보는 것과 다른 쓰임이라 이름도 다르다.
+            List<Stop> demand = stops.stream()
+                    .filter(stop -> ConstraintClass.of(stop).covers(axis))
+                    .toList();
+            if (demand.isEmpty()) {
+                continue;
+            }
+            List<VehicleSpec> fleet = problem.vehicles().stream().filter(axis::carriedBy).toList();
+            String label = describe(axis);
 
-                if (stopCap.isPresent()) {
-                    long slots = stopCap.getAsInt();
-                    long bound = cover(demand.size(), fleet, vehicle -> slots);
-                    if (bound < 0) {
-                        uncoverable.add(label + " stop");
-                    } else if (bound > best) {
-                        best = bound;
-                        binding = label + " stop";
-                    }
+            if (stopCap.isPresent()) {
+                long slots = stopCap.getAsInt();
+                long bound = cover(demand.size(), fleet, vehicle -> slots);
+                if (bound < 0) {
+                    uncoverable.add(label + " stop");
+                } else if (bound > best) {
+                    best = bound;
+                    binding = label + " stop";
                 }
-                long weight = demand.stream().mapToLong(stop -> stop.parcel().weightG()).sum();
-                long byWeight = cover(weight, fleet, vehicle -> vehicle.capacity().maxWeightG());
-                if (byWeight < 0) {
-                    uncoverable.add(label + " 중량");
-                } else if (byWeight > best) {
-                    best = byWeight;
-                    binding = label + " 중량";
-                }
-                long volume = demand.stream().mapToLong(stop -> stop.parcel().volumeCm3()).sum();
-                long byVolume = cover(volume, fleet, vehicle -> vehicle.capacity().maxVolumeCm3());
-                if (byVolume < 0) {
-                    uncoverable.add(label + " 부피");
-                } else if (byVolume > best) {
-                    best = byVolume;
-                    binding = label + " 부피";
-                }
+            }
+            long weight = demand.stream().mapToLong(stop -> stop.parcel().weightG()).sum();
+            long byWeight = cover(weight, fleet, vehicle -> vehicle.capacity().maxWeightG());
+            if (byWeight < 0) {
+                uncoverable.add(label + " 중량");
+            } else if (byWeight > best) {
+                best = byWeight;
+                binding = label + " 중량";
+            }
+            long volume = demand.stream().mapToLong(stop -> stop.parcel().volumeCm3()).sum();
+            long byVolume = cover(volume, fleet, vehicle -> vehicle.capacity().maxVolumeCm3());
+            if (byVolume < 0) {
+                uncoverable.add(label + " 부피");
+            } else if (byVolume > best) {
+                best = byVolume;
+                binding = label + " 부피";
             }
         }
         return new FixedCostFloor(best, binding, uncoverable);
@@ -143,13 +141,8 @@ public record FixedCostFloor(long krw, String bindingAxis, List<String> uncovera
         return -1L;
     }
 
-    private static String describe(boolean cold, boolean hazmat) {
-        if (cold && hazmat) {
-            return "냉장∧위험물";
-        }
-        if (cold) {
-            return "냉장";
-        }
-        return hazmat ? "위험물" : "전체";
+    /** 문턱이 «아무것도 요구하지 않음» 이면 그 축의 수요는 <strong>전체</strong>다. */
+    private static String describe(ConstraintClass axis) {
+        return axis.isNone() ? "전체" : axis.label();
     }
 }

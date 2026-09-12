@@ -136,8 +136,10 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
 
         // 공허함 방지 — 비냉장 차량이 **실제로 쓰였는가**. 계획이 냉장 차량만 열었다면 위
         // 어설션은 자동으로 참이 된다. 비냉장 차량도 열려 있는데 냉장 주문이 거기 없다는 것이
-        // 하드 룰의 효과다. (반대 방향인 "상온 주문이 냉장 차량에 실림" 은 위반이 아니다 —
-        // cold-chain 은 냉장 주문을 제한하지 냉장 차량을 예약하지 않는다.)
+        // 하드 룰의 효과다. (반대 방향인 "상온 주문이 냉장 차량에 실림" 은 룰 위반이 아니다 —
+        // cold-chain 은 냉장 주문을 제한한다. 다만 §6.5 3단계의 <strong>좌석 예약</strong>
+        // ([ADR-039])이 냉장 차량의 자리 일부를 배정 단계 동안 냉장 수요에 남겨 두므로, 이
+        // 어설션은 예약이 들어온 뒤 더 쉽게 참이 된다 — 공허함 방지의 방향은 바뀌지 않는다.)
         Set<UUID> usedVehicles = plan.routes().stream()
                 .map(PlanView.RouteSummary::vehicleId)
                 .collect(java.util.stream.Collectors.toSet());

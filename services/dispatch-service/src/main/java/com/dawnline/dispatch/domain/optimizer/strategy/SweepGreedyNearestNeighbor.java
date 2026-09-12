@@ -94,6 +94,11 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
         List<Stop> stops = StopMerger.merge(problem.candidates());
         DistanceProvider distance = problem.distance();
 
+        // 희소한 제약 조합의 좌석을 배정 단계 동안 닫아 둔다 ([ADR-039]). <strong>통합 후</strong>
+        // 의 조합을 <strong>계획 시작 시점에</strong> 한 번 센다 — 룰셋과 같은 스냅샷이다(§6.3).
+        SeatReservation seats =
+                SeatReservation.of(stops, problem.vehicles(), problem.rules().routeStopCap());
+
         List<List<Stop>> clusters =
                 clusterer.cluster(stops, problem.depot(), largestCapacity(problem),
                         problem.vehicles().size());
@@ -105,11 +110,15 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
 
         Map<Stop, Feasibility> refusals = new LinkedHashMap<>();
         List<Stop> unassigned = assigner.assign(clusters, routes, problem.depot(), distance,
-                problem.cost(), problem.startedAt(), refusals, deadline);
+                problem.cost(), problem.startedAt(), refusals, deadline, seats);
 
         // 3단계가 남긴 것을 규칙으로 다시 싣는다 (ADR-028). 클러스터 단위 배정은 "이 묶음이
         // 이 차에 들어가는가" 만 묻기 때문에, 제약이 붙은 stop 하나 때문에 나머지가 통째로
         // 밀려나는 일이 생긴다 — 그 stop 을 stop 단위로 다시 보는 것이 여기다.
+        //
+        // <strong>여기서 좌석 예약이 풀린다</strong> ([ADR-039]). 기하 때문에 아무도 앉지 못한
+        // 예약 좌석은 이 단계가 일반 수요로 채운다 — 그러지 않으면 [ADR-038] 이 배운 「빈 좌석」
+        // 의 교훈을 예약이 거꾸로 만든다. 그래서 예약은 미배정의 사유가 될 수 없다.
         UnassignedRepair.Outcome repaired =
                 UnassignedRepair.repair(problem, routes, unassigned, refusals, deadline);
         List<RouteAccumulator> finished = repaired.routes();
@@ -140,8 +149,13 @@ public final class SweepGreedyNearestNeighbor implements DispatchStrategy {
             planned.add(result);
             VehicleSpec vehicle = problem.vehicles().get(i);
             for (PlannedStop stop : result.stops()) {
-                stop.stop().orderIds().forEach(orderId -> explanations.add(
-                        Explanation.assigned(orderId, vehicle.id(), 0L)));
+                // 「왜 이 주문이 이 차인가」 — 예약 좌석에 막혀 밀려온 것이면 그 사실이 답의
+                // 일부다 (§6.3, [ADR-039]).
+                boolean blocked = seats.blocked(stop.stop());
+                stop.stop().orderIds().forEach(orderId -> explanations.add(blocked
+                        ? Explanation.assignedElsewhere(orderId, vehicle.id(), 0L,
+                                SeatReservation.RESERVED)
+                        : Explanation.assigned(orderId, vehicle.id(), 0L)));
             }
         }
 

@@ -60,6 +60,31 @@ public record Explanation(OrderId orderId, Outcome outcome, String ruleName, Veh
     }
 
     /**
+     * <strong>다른 차의 예약 좌석에 막혀</strong> 이 차로 온 배정 설명 ([ADR-039]).
+     *
+     * <p>결과는 배정이지만 「왜 이 차인가」의 답에 예약이 들어 있다 — 그것을 적지 않으면 운영자는
+     * 이 주문이 더 먼 차로 간 이유를 볼 수 없고, 좌석 예약은 <em>보이지 않는 정책</em>이 된다.
+     * §6.3 이 룰을 데이터로 둔 이유가 여기서도 같다.
+     *
+     * @param orderId      주문
+     * @param vehicle      실제로 배정된 차량
+     * @param marginalCost 이 배치의 한계비용
+     * @param blocked      막은 판정. 사유와 이름을 그대로 옮긴다
+     */
+    public static Explanation assignedElsewhere(OrderId orderId, VehicleId vehicle,
+            long marginalCost, Feasibility blocked) {
+
+        if (blocked.feasible()) {
+            throw ValidationException.field("blocked", blocked,
+                    "통과 판정으로는 밀려난 배정을 설명할 수 없습니다");
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("marginalCostKrw", marginalCost);
+        detail.put("reason", blocked.reason());
+        return new Explanation(orderId, Outcome.ASSIGNED, blocked.ruleName(), vehicle, detail);
+    }
+
+    /**
      * 미배정 설명. 사유가 곧 {@link Feasibility} 의 위반 내용이다.
      *
      * @param orderId       주문
