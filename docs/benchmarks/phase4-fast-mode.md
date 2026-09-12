@@ -8,6 +8,13 @@
 | 데이터셋 | seed `20260905`, 전략당 5회 (§6.9) |
 | 결정 | [ADR-034](../adr/ADR-034-degrade-mode.md) |
 
+> ⚠️ **2026-09-12 — 사다리의 첫 단은 이 문서 이후로 바뀌었다.** 좌석 예약
+> ([ADR-039](../adr/ADR-039-reserve-seats-by-constraint-class.md))이 개선 단계의 일을 줄여서
+> `large` 의 「개선 예산 절반」이 **더 이상 물지 않는다**(대가 +1.35% → **+0.00%**, 절반 예산
+> 안에 수렴). FAST 의 대가는 거의 그대로다(+9.39% → +9.35%). 사다리의 **근거**(두 조건은 다른
+> 것을 뜻하므로 처방도 다르다)는 그대로이고, **수치만** 4-5 에서 전 데이터셋으로 다시 낸다 —
+> 지금 확인된 `large` 값은 [`phase4-scarce-seats.md`](phase4-scarce-seats.md) §8.5 에 있다.
+
 > **이것은 재기준 기록이 아니다.** `baseline-nn` 수치는
 > [`phase4-constraint-classes.md`](phase4-constraint-classes.md) §4 오른쪽 열과 **같다** —
 > 공용 부품이 바뀌지 않았으므로 절대 수치가 그대로여야 하고, 실제로 그렇다(`large`
