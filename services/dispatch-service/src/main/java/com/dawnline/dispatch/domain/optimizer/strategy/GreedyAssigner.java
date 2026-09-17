@@ -101,8 +101,13 @@ public final class GreedyAssigner {
         return List.copyOf(unassigned);
     }
 
-    /** 이 stop 을 마지막으로 거절한 사유. 설명(§6.3)이 "실을 차가 없다" 로만 남지 않게 한다. */
-    private Feasibility lastRefusalFor(Stop stop, List<RouteAccumulator> routes) {
+    /**
+     * 이 stop 을 마지막으로 거절한 사유. 설명(§6.3)이 "실을 차가 없다" 로만 남지 않게 한다.
+     *
+     * <p>{@link SavingsClarkeWright} 도 이것을 쓴다 — 「미배정에 사유를 붙이는 방법」은 전략이
+     * 아니라 §6.3 의 정책이고, 두 벌로 두면 같은 상황에 두 가지 답이 나온다.
+     */
+    static Feasibility lastRefusalFor(Stop stop, List<RouteAccumulator> routes) {
         return routes.stream()
                 .map(route -> route.check(stop))
                 .filter(feasibility -> !feasibility.feasible())

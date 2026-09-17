@@ -25,6 +25,16 @@ import java.util.Objects;
  */
 final class Neighborhood {
 
+    /**
+     * stop 하나당 후보 이웃 수 (K) — <strong>이 표를 쓰는 곳이 모두 같은 값을 쓴다</strong>.
+     *
+     * <p>{@link LocalSearchImprover}(개선 단계, [ADR-032])와 {@link SavingsMerger}(savings 구성,
+     * [ADR-042])가 같은 상수를 본다. 둘이 각자 적으면 §6.9 의 비교표가 「구성 방식의 차이」가
+     * 아니라 「후보 표 크기의 차이」를 재게 된다 — 그것이 §6.6 이 뒤 단계를 공유하게 둔 이유와
+     * 같은 이유다.
+     */
+    static final int DEFAULT_K = 20;
+
     /** 위도 1도 ≈ 111.32 km. 8 km 반경에서는 평면 근사로 충분하다. */
     private static final double METERS_PER_DEGREE_LAT = 111_320.0d;
 

@@ -52,8 +52,8 @@ import org.jspecify.annotations.Nullable;
  */
 public final class LocalSearchImprover {
 
-    /** stop 하나당 후보 이웃 수 (K). */
-    private static final int NEIGHBORS = 20;
+    /** stop 하나당 후보 이웃 수 (K). savings 구성과 <strong>같은 표</strong>다 ([ADR-042]). */
+    private static final int NEIGHBORS = Neighborhood.DEFAULT_K;
 
     /** Or-opt·relocate 로 옮기는 묶음의 최대 길이. */
     private static final int MAX_SEGMENT = 3;
