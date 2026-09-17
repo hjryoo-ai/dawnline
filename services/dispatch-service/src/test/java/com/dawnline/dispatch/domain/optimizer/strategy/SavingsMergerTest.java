@@ -10,6 +10,7 @@ import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.CostModel;
+import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
 import com.dawnline.dispatch.domain.optimizer.Parcel;
@@ -18,6 +19,7 @@ import com.dawnline.dispatch.domain.optimizer.PlanningDeadline;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.Stop;
+import com.dawnline.dispatch.domain.optimizer.Travel;
 import com.dawnline.dispatch.domain.optimizer.VehicleAttrs;
 import com.dawnline.dispatch.domain.optimizer.VehicleCost;
 import com.dawnline.dispatch.domain.optimizer.VehicleId;
@@ -30,8 +32,10 @@ import com.dawnline.dispatch.domain.optimizer.rule.RuleType;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -94,9 +98,14 @@ class SavingsMergerTest {
     }
 
     private static PlanningProblem problem(List<VehicleSpec> vehicles, RuleSet rules) {
+        return problem(vehicles, rules, new HaversineDistance(1.3d, 25.0d));
+    }
+
+    private static PlanningProblem problem(List<VehicleSpec> vehicles, RuleSet rules,
+            DistanceProvider distance) {
         return new PlanningProblem(new WaveRef(Ids.newId(), CAMP_ID, "SAME_DAY", START),
                 new CampDepot(CAMP_ID, CAMP), List.of(), vehicles, rules, new CostModel(),
-                new HaversineDistance(1.3d, 25.0d),
+                distance,
                 new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)), PlanMode.FULL,
                 1.0d, START, 1L);
     }
@@ -232,6 +241,101 @@ class SavingsMergerTest {
         List<VehicleSpec> fleet = List.of(vehicle(10_000_000, true), vehicle(10_000_000, false));
 
         assertThat(merge(stops, fleet, rules(4))).isEqualTo(merge(stops, fleet, rules(4)));
+    }
+
+    @Test
+    void 끝점은_K_표_밖의_라우트도_잇는다() {
+        // [ADR-044]. 무리 하나가 22 stop 이면 어느 stop 의 최근접 20개도 자기 무리를 넘지
+        // 못한다 — 1단계의 savings 목록에는 두 무리를 잇는 쌍이 아예 없다. 그런데 1단계가
+        // 끝나면 라우트는 둘뿐이고, 이을 자리는 그 끝점뿐이다. 그 크기에서는 근사할 이유가 없다.
+        List<Stop> stops = new ArrayList<>();
+        for (int cluster = 0; cluster < 2; cluster++) {
+            for (int index = 0; index < 22; index++) {
+                stops.add(inCluster(cluster, index));
+            }
+        }
+
+        Neighborhood near = Neighborhood.of(stops, Neighborhood.DEFAULT_K);
+        for (int i = 0; i < stops.size(); i++) {
+            for (int j : near.of(i)) {
+                assertThat(j / 22)
+                        .as("전제: K=20 표는 무리를 넘지 않는다 — 그래서 1단계는 이 둘을 이을 "
+                                + "쌍을 만들지 못한다")
+                        .isEqualTo(i / 22);
+            }
+        }
+
+        List<List<Stop>> routes = merge(stops, List.of(vehicle(10_000_000, false)), rules(0));
+
+        assertThat(routes)
+                .as("그런데도 하나가 됐다면 이은 것은 2단계다 — 1단계에는 그 쌍이 없었다")
+                .singleElement(org.assertj.core.api.InstanceOfAssertFactories.LIST)
+                .hasSize(44);
+    }
+
+    @Test
+    void 라우트가_stop_수에_가까우면_끝점_쌍을_만들지_않는다() {
+        // 2단계의 쌍 예산: R(R−1) > n·K 면 돌지 않는다. 여기서는 30 × 29 = 870 > 30 × 20 = 600
+        // 이다. 그 구간에서는 끝점이 곧 전체 stop 이라 K 표가 이미 본 쌍이고, 값을 하지 않는
+        // 자리에서 O(n²) 를 쓰지 않겠다는 뜻이다 — 「잊었다」가 아니라 「검토하고 뺐다」이다.
+        // 세는 것은 거리 계산 횟수다. 1단계가 재는 것은 캠프 거리 n 개와 표의 쌍뿐이고,
+        // 용량이 모든 병합을 거절하므로 라우트를 쌓아 보는 호출도 없다.
+        List<Stop> stops = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            stops.add(inLine(i, HEAVY));
+        }
+        CountingDistance counting = new CountingDistance();
+
+        List<List<Stop>> routes = SavingsMerger.merge(
+                problem(List.of(vehicle(150_000, false)), rules(0), counting), stops, noDeadline());
+
+        assertThat(routes)
+                .as("전제: 100 kg 짜리 둘은 150 kg 차에 못 실린다 — 어떤 병합도 실행 가능하지 "
+                        + "않으므로 라우트는 stop 수 그대로 남는다")
+                .hasSize(30);
+        assertThat(counting.calls())
+                .as("2단계가 돌았다면 끝점 쌍 870개를 더 쟀을 것이다")
+                .isEqualTo(stops.size() + tablePairs(stops));
+    }
+
+    /** K-최근접 표가 담은 서로 다른 쌍의 수 — 1단계가 거리를 재는 횟수다. */
+    private static int tablePairs(List<Stop> stops) {
+        Neighborhood near = Neighborhood.of(stops, Neighborhood.DEFAULT_K);
+        Set<Long> pairs = new HashSet<>();
+        for (int i = 0; i < stops.size(); i++) {
+            for (int j : near.of(i)) {
+                pairs.add(((long) Math.min(i, j) << 32) | Math.max(i, j));
+            }
+        }
+        return pairs.size();
+    }
+
+    /**
+     * 캠프 북쪽 5 km 의 두 무리. 무리 안은 44 m 간격, 무리 사이는 2.6 km — 무리가 22 stop 이라
+     * 어느 stop 의 최근접 20개도 무리를 넘지 못한다.
+     */
+    private static Stop inCluster(int cluster, int index) {
+        GeoPoint point = GeoPoint.of(CAMP.lat() + 0.045d,
+                CAMP.lng() + cluster * 0.030d + index * 0.0005d);
+        return Stop.of(new Candidate(OrderId.of(Ids.newId()), point, LIGHT, WINDOW, 60, 0));
+    }
+
+    /** 잰 횟수를 세는 자. 2단계가 쌍을 만들었는지는 이 수가 말한다. */
+    private static final class CountingDistance implements DistanceProvider {
+
+        private final DistanceProvider delegate = new HaversineDistance(1.3d, 25.0d);
+
+        private int calls;
+
+        @Override
+        public Travel between(GeoPoint from, GeoPoint to) {
+            calls++;
+            return delegate.between(from, to);
+        }
+
+        int calls() {
+            return calls;
+        }
     }
 
     /** 냉장 둘 + 일반 여섯. 냉장 stop 을 양 끝이 아니라 사이에 둬 병합이 실제로 일어나게 한다. */

@@ -45,6 +45,22 @@ import org.jspecify.annotations.Nullable;
  * ({@link Neighborhood#DEFAULT_K}): 두 단계가 다른 표를 쓰면 §6.9 의 비교가 「구성 방식의 차이」가
  * 아니라 「표 크기의 차이」를 재게 된다.
  *
+ * <h2>그리고 끝점은 전부 본다 (2단계, [ADR-044])</h2>
+ * K-최근접은 <strong>stop 이 8,411개일 때</strong> 필요한 근사다. 1단계가 끝나면 라우트는
+ * {@code peak} 에서 216개뿐이고, <strong>이을 수 있는 자리는 그 라우트들의 끝점</strong>
+ * (꼬리 → 머리)밖에 없다 — 216 × 215 = 46,090 쌍이다. 그 크기에서는 근사할 이유가 없다.
+ *
+ * <p>근사를 계속하면 무엇을 잃는지도 쟀다({@code docs/benchmarks/phase4-endpoint-merges.md}).
+ * 1단계가 끝난 {@code peak} 의 라우트 216개 중 <strong>67개가 stop 하나짜리</strong>다 — 끝점의
+ * 최근접 20개가 <em>이미 같은 라우트에 들어간</em> stop 들로 채워져 이을 후보가 없어진 것이고,
+ * 그래서 1단계를 한 번 더 돌려도 한 건도 더 잇지 못한다(같은 K 안에서 이미 고정점). 끝점만 전부
+ * 보면 <strong>216 → 90</strong>, 차량 88대에 거의 맞는다.
+ *
+ * <p>쌍의 예산은 <strong>1단계보다 많이 만들지 않는다</strong>: {@code R(R−1) > n·K} 면 2단계를
+ * 돌지 않는다. 그 부등식이 참인 구간은 라우트가 stop 수에 가까운 구간이고, 거기서는 끝점이 곧
+ * 전체 stop 이라 <em>K 표가 이미 본 쌍</em>이다 — 값을 하지 않는 자리에서 {@code O(n²)} 를 쓰지
+ * 않겠다는 뜻이다.
+ *
  * <h2>병합 판정은 <strong>조합을 안다</strong></h2>
  * savings 는 stop 을 이어 붙이며 라우트의 <strong>제약 조합을 키운다</strong>. 냉장 ∧ 위험물 stop
  * 하나가 이웃 100개와 병합되면 그 라우트 전체가 조합 차량을 요구하고, 붙이는 시점의 좌석 예약
@@ -96,6 +112,12 @@ final class SavingsMerger {
 
     private final int stopCap;
 
+    /** 지금의 라우트 수 — 병합 하나가 하나를 줄인다. */
+    private int routeCount;
+
+    /** 캠프 ↔ stop 거리. 1단계와 2단계가 같은 값을 쓴다. */
+    private int @Nullable [] depotCache;
+
     // 라우트는 「연결 리스트 + 유니온-파인드」다. 병합이 O(1) 이고, 라우트의 stop 목록은
     // 필요할 때만 head 에서 걸어 만든다.
     private final int[] parent;
@@ -137,6 +159,7 @@ final class SavingsMerger {
         OptionalInt cap = problem.rules().routeStopCap();
         this.slotsActive = cap.isPresent() && cap.getAsInt() > 0;
         this.stopCap = slotsActive ? cap.getAsInt() : 0;
+        this.routeCount = n;
         this.classSlots = new long[CLASSES.size()];
         this.classLoad = new int[CLASSES.size()];
         for (int c = 0; c < CLASSES.size(); c++) {
@@ -175,6 +198,7 @@ final class SavingsMerger {
             }
             tryMerge(saving.left(), saving.right());
         }
+        endpointPass();
         List<List<Stop>> routes = new ArrayList<>();
         for (int i = 0; i < stops.size(); i++) {
             if (find(i) == i) {
@@ -185,6 +209,87 @@ final class SavingsMerger {
     }
 
     /**
+     * 2단계 — <strong>끝점 쌍을 전부 본다</strong> ([ADR-044]).
+     *
+     * <p>1단계가 끝나면 이을 수 있는 자리는 라우트의 끝점뿐이다(꼬리 → 머리, 라우트를 뒤집지
+     * 않으므로). 라우트가 {@code R} 개면 쌍은 {@code R(R−1)} 개이고, {@code R} 이 stop 수보다
+     * 훨씬 작은 구간에서는 그것이 1단계가 만든 쌍보다도 적다. 그 구간에서는 <strong>근사할
+     * 이유가 없다</strong>.
+     *
+     * <p>고정점까지 돈다 — 한 번 이으면 새 끝점이 생기기 때문이다. 실제로는 두 번째 패스가 한
+     * 건도 더 잇지 못하지만({@code large}·{@code peak} 둘 다), 그것은 <em>측정 결과</em>이지
+     * 성질이 아니다.
+     *
+     * <p>상한에 찬 라우트는 후보에서 뺀다. 어느 쪽으로 이어도 stop 상한을 넘으므로 쌍을 만들어
+     * 볼 필요가 없다 — {@code peak} 에서 그런 라우트가 12개다.
+     */
+    private void endpointPass() {
+        long pairBudget = (long) stops.size() * Neighborhood.DEFAULT_K;
+        while (!deadline.expired()) {
+            int[] roots = mergeableRoots();
+            if ((long) roots.length * (roots.length - 1) > pairBudget) {
+                return;     // 1단계보다 많은 쌍을 만들지 않는다 — 클래스 주석의 부등식
+            }
+            int before = routeCount;
+            for (Saving saving : endpointSavings(roots)) {
+                if (deadline.expired()) {
+                    break;
+                }
+                tryMerge(saving.left(), saving.right());
+            }
+            if (routeCount == before) {
+                return;     // 고정점
+            }
+        }
+    }
+
+    /** 아직 이을 수 있는 라우트들의 루트 — 인덱스 순이라 결과가 결정적이다(불변규칙 12). */
+    private int[] mergeableRoots() {
+        return IntStream.range(0, stops.size())
+                .filter(i -> find(i) == i)
+                .filter(i -> !slotsActive || sizes[i] < stopCap)
+                .toArray();
+    }
+
+    /** 끝점 쌍의 savings — 1단계와 같은 식, 같은 정렬, 같은 동률 규칙. */
+    private List<Saving> endpointSavings(int[] roots) {
+        int[] toDepot = depotDistances();
+        List<Saving> savings = new ArrayList<>();
+        for (int first : roots) {
+            int from = tail[first];
+            for (int second : roots) {
+                if (first == second) {
+                    continue;
+                }
+                int to = head[second];
+                int between = problem.distance()
+                        .between(stops.get(from).point(), stops.get(to).point()).meters();
+                long value = (long) toDepot[from] + toDepot[to] - between;
+                if (value > 0L) {
+                    savings.add(new Saving(from, to, value));
+                }
+            }
+        }
+        savings.sort(Comparator.comparingLong(Saving::meters).reversed()
+                .thenComparingInt(Saving::left).thenComparingInt(Saving::right));
+        return savings;
+    }
+
+    /** 캠프 ↔ stop 거리 (한 번만 잰다). */
+    private int[] depotDistances() {
+        int[] cached = depotCache;
+        if (cached == null) {
+            GeoPoint depot = problem.depot().point();
+            cached = new int[stops.size()];
+            for (int i = 0; i < stops.size(); i++) {
+                cached[i] = problem.distance().between(depot, stops.get(i).point()).meters();
+            }
+            depotCache = cached;
+        }
+        return cached;
+    }
+
+    /**
      * savings 목록 — 내림차순, 동률은 stop 인덱스 순.
      *
      * <p>{@code s ≤ 0} 인 쌍은 만들지 않는다. 이어 붙여서 아끼는 것이 없다는 뜻이라 병합할 이유가
@@ -192,11 +297,7 @@ final class SavingsMerger {
      */
     private List<Saving> savings() {
         Neighborhood near = Neighborhood.of(stops, Neighborhood.DEFAULT_K);
-        GeoPoint depot = problem.depot().point();
-        int[] toDepot = new int[stops.size()];
-        for (int i = 0; i < stops.size(); i++) {
-            toDepot[i] = problem.distance().between(depot, stops.get(i).point()).meters();
-        }
+        int[] toDepot = depotDistances();
 
         // 표는 대칭이 아니다 — j 가 i 의 최근접이어도 그 반대가 아닐 수 있다. 그래서 쌍을
         // (작은 인덱스, 큰 인덱스) 로 정규화해 한 번만 담는다.
@@ -273,6 +374,7 @@ final class SavingsMerger {
         next[tail[first]] = head[second];
         tail[first] = tail[second];
         parent[second] = first;
+        routeCount--;
         sizes[first] = size;
         loads[first] = load;
         klass[first] = merged;
