@@ -53,12 +53,21 @@ class FulfillmentPlannedPayloadTest {
     }
 
     @Test
-    void 계약에_우선도가_없어_모든_후보가_0_이다() {
-        // 그래서 §6.3 의 PRIORITY_BOOST 는 운영에서 한 번도 발화하지 않는다. 우선도의 출처를
-        // 정하는 것은 계약 변경이고, serviceTier 로 유추하면 "DAWN 이 곧 VIP" 라는 정책을
-        // 코드가 몰래 정하는 셈이다. 이 테스트는 그 사실을 눈에 보이게 고정한다.
+    void 계약에는_여전히_우선도가_없고_어댑터도_만들지_않는다() {
+        // ADR-028 — 우선도는 <strong>파생</strong>이다. 계약에 넣는 길은 두 가지로 막혀 있고
+        // (클라이언트 값은 신뢰할 수 없다 · 티어에서 뽑으면 한 웨이브 안에서 상수다), 어댑터가
+        // 만들면 정책이 계약과 코드 두 곳에 생긴다. 여기서는 계약에 <em>이미 있는 사실</em>만
+        // 옮긴다. 점수표를 적용하는 것은 LoadCandidateService 다.
+        //
+        // 두 예시를 <strong>둘 다</strong> 본다 — false 쪽만 보면 필드를 안 읽어도 통과한다.
         assertThat(FulfillmentPlannedPayload.toSnapshot(
-                payloadOf("fulfillment.planned.v1.example.json")).priority()).isZero();
+                payloadOf("fulfillment.planned.v1.example.json")).promiseRevised())
+                .as("개정되지 않은 주문")
+                .isFalse();
+        assertThat(FulfillmentPlannedPayload.toSnapshot(
+                payloadOf("fulfillment.planned.v1.revised.example.json")).promiseRevised())
+                .as("전제: 개정 예시는 계획 후보여야 한다 — 아니면 위 어설션 하나만 남는다")
+                .isTrue();
     }
 
     @Test

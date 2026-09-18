@@ -11,13 +11,19 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * <p>기본값은 전부 설계서에서 온 값이다. 임의로 고른 숫자는 없다.
  *
+ * <p><strong>{@code ignoreUnknownFields = false}</strong> — 모르는 키가 있으면 기동에서 실패한다.
+ * 2026-09-05 에 {@code dawnline.messaging.outbox.leader.*} 가 사라졌는데(ADR-027 후속 정정),
+ * 기본 동작대로면 그 키를 아직 들고 있는 설정 파일은 <em>조용히 무시된 채로</em> 뜬다. 없어진
+ * 스위치를 켜 두고 켜졌다고 믿는 것 — 이 정정이 출발한 자리가 정확히 그 형태였다. 이 서브트리에는
+ * 서비스 {@code application.yml} 이 설정하는 키가 하나도 없으므로(전부 기본값) 비용도 없다.
+ *
  * @param producer        봉투의 {@code producer}. 비워 두면 {@code spring.application.name} 을 쓴다.
  * @param outbox          outbox 릴레이 설정
  * @param consumer        소비자 백프레셔 설정
  * @param retry           재시도/DLQ 설정
  * @param processedEvents 멱등 기록 보존 설정
  */
-@ConfigurationProperties(prefix = "dawnline.messaging")
+@ConfigurationProperties(prefix = "dawnline.messaging", ignoreUnknownFields = false)
 public record DawnlineMessagingProperties(
         @Nullable String producer,
         @DefaultValue Outbox outbox,
@@ -40,7 +46,6 @@ public record DawnlineMessagingProperties(
      * @param pollIntervalMs     폴링 간격(ms) (§4.4)
      * @param metricsIntervalMs  게이지 갱신 간격(ms)
      * @param cleanupIntervalMs  정리 실행 간격(ms)
-     * @param leader             릴레이 리더 락 (§4.4, ADR-027)
      */
     public record Outbox(
             @DefaultValue("true") boolean enabled,
@@ -49,8 +54,7 @@ public record DawnlineMessagingProperties(
             @DefaultValue("7d") Duration retention,
             @DefaultValue("100") long pollIntervalMs,
             @DefaultValue("5000") long metricsIntervalMs,
-            @DefaultValue("3600000") long cleanupIntervalMs,
-            @DefaultValue Leader leader) {
+            @DefaultValue("3600000") long cleanupIntervalMs) {
 
         public Outbox {
             if (batchSize < 1) {
@@ -62,38 +66,9 @@ public record DawnlineMessagingProperties(
             if (retention.isNegative() || retention.isZero()) {
                 throw new IllegalArgumentException("dawnline.messaging.outbox.retention 은 양수여야 합니다");
             }
-            // 리더십은 배치 *전에* 확인하고 배치 *중에는* 확인하지 않는다. TTL 이 한 배치의 최대
-            // 소요(전송 타임아웃)보다 짧으면 배치 도중에 리더가 바뀔 수 있고, 그러면 이 락이
-            // 막으려던 바로 그 상황(두 인스턴스의 동시 발행)이 락을 켠 채로 일어난다.
-            if (leader.enabled() && leader.ttl().compareTo(sendTimeout) <= 0) {
-                throw new IllegalArgumentException(
-                        "dawnline.messaging.outbox.leader.ttl(%s)은 send-timeout(%s)보다 길어야 합니다"
-                                .formatted(leader.ttl(), sendTimeout));
-            }
-        }
-    }
-
-    /**
-     * 릴레이 리더 락 (§4.4, §7.2 {@code lock:relay:{service}}, ADR-027).
-     *
-     * <p>{@code enabled=false} 는 <strong>"이 배포는 인스턴스가 하나다" 라는 선언</strong>이다.
-     * 기본값이 아닌 이유는 그 전제가 조용히 성립하는 것과 적혀 있는 것이 다르기 때문이다 —
-     * 스케일아웃하는 사람이 이 줄을 보고 지워야 한다. 켜져 있는데 Redis 가 없으면
-     * <strong>기동에서 실패한다</strong>: 없는 락을 있다고 믿는 것이 가장 나쁘다.
-     *
-     * @param enabled 리더 락 사용 여부
-     * @param ttl     리더십 TTL. 리더가 죽으면 이 시간 뒤 다음 인스턴스가 이어받는다.
-     *                기본 30초는 §9.4 의 "outbox 지연 &gt; 30s" 알림과 같은 눈금이다 —
-     *                교체가 제때 되면 알림이 울리지 않고, 울리면 교체도 안 된 것이다.
-     */
-    public record Leader(
-            @DefaultValue("true") boolean enabled,
-            @DefaultValue("30s") Duration ttl) {
-
-        public Leader {
-            if (ttl.isNegative() || ttl.isZero()) {
-                throw new IllegalArgumentException("dawnline.messaging.outbox.leader.ttl 은 양수여야 합니다");
-            }
+            // 여기에 `leader.ttl > send-timeout` 검증이 있었다. 리더십이 임차(lease)였을 때
+            // 필요했던 것이고, advisory lock 으로 옮기면서 TTL 자체가 사라졌다
+            // (ADR-027 후속 정정 2026-09-05).
         }
     }
 

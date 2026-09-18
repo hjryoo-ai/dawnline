@@ -20,6 +20,33 @@ public final class PlanAssembler {
     }
 
     /**
+     * <strong>마감이 없는</strong> 전략의 조립 — {@code budgetExhausted} 는 언제나 {@code false} 다.
+     *
+     * <h2>왜 이 오버로드가 있는가</h2>
+     * {@link com.dawnline.dispatch.domain.optimizer.strategy.BaselineNearestNeighbor} 는 §6.9 의
+     * 게이트 규칙 1 에 따라 <strong>클래스 단위로 동결</strong>돼 있다({@code BaselineFrozenTest}
+     * 가 SHA-256 을 고정한다). 기준선이 움직이면 그때까지의 비교가 전부 무효가 되므로, 마감을
+     * 넣겠다고 그 파일을 고칠 수는 없다.
+     *
+     * <p>그래서 <strong>베이스라인은 계획 마감(§6.7, [ADR-036])의 대상이 아니다.</strong> 과부하
+     * 데이터셋에서 베이스라인이 예산을 넘겨 도는 일이 생길 수 있고, 그것은 결함이 아니라 동결의
+     * 대가다 — 그리고 비교를 유리하게 만들지도 않는다. 마감은 <em>기본 전략의</em> 개선을 끊어
+     * 기본 전략을 나쁘게 만들 뿐이다.
+     *
+     * @param problem      계획 입력
+     * @param routes       확정된 라우트들
+     * @param unassigned   배정되지 못한 stop 들
+     * @param refusals     stop 별 마지막 불가 사유
+     * @param explanations 배정 설명들
+     */
+    public static PlanResult assemble(PlanningProblem problem, List<PlannedRoute> routes,
+            List<Stop> unassigned, Map<Stop, Feasibility> refusals,
+            List<Explanation> explanations) {
+
+        return assemble(problem, routes, unassigned, refusals, explanations, false);
+    }
+
+    /**
      * 조립한다.
      *
      * @param problem      계획 입력
@@ -27,10 +54,11 @@ public final class PlanAssembler {
      * @param unassigned   배정되지 못한 stop 들
      * @param refusals     stop 별 마지막 불가 사유. 없으면 기본 사유를 쓴다
      * @param explanations 배정 설명들. 미배정 설명은 여기서 덧붙인다
+     * @param budgetExhausted 계획 마감 때문에 하지 못한 일이 있는가 (§6.7, [ADR-036])
      */
     public static PlanResult assemble(PlanningProblem problem, List<PlannedRoute> routes,
             List<Stop> unassigned, Map<Stop, Feasibility> refusals,
-            List<Explanation> explanations) {
+            List<Explanation> explanations, boolean budgetExhausted) {
 
         Objects.requireNonNull(problem, "problem");
         List<Explanation> allExplanations = new ArrayList<>(explanations);
@@ -64,6 +92,6 @@ public final class PlanAssembler {
 
         // §6.1 의 목적함수: 라우트 비용(고정·거리·시간 + 소프트 페널티) + 미배정 페널티.
         return new PlanResult(routes, unassignedOrders, routeCosts.plus(unassignedPenalty),
-                metrics, allExplanations);
+                metrics, allExplanations, budgetExhausted);
     }
 }

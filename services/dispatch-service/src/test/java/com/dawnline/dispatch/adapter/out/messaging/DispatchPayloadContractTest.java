@@ -8,6 +8,7 @@ import com.dawnline.common.Money;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.PlanMode;
+import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
 import com.dawnline.dispatch.domain.optimizer.Parcel;
@@ -40,7 +41,7 @@ class DispatchPayloadContractTest {
 
     private static RoutePlan publishedPlan() {
         RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId(), com.dawnline.common.GeoPoint.of(37.5663, 126.9779));
-        plan.begin("sweep-greedy-nn", PlanMode.FULL, 42L, 1, NOW);
+        plan.begin("sweep-greedy-nn", PlanMode.FULL, PlanModeReason.NONE, 42L, 1, NOW);
         plan.complete(Money.krw(1_500_000), 3, 1, 674, NOW.plusSeconds(1));
         return plan;
     }
@@ -142,7 +143,7 @@ class DispatchPayloadContractTest {
     void plan_completed_가_계약을_지킨다() {
         RoutePlan plan = publishedPlan();
         PlanResult result = new PlanResult(List.of(route()), List.of(), Money.krw(1_500_000),
-                new PlanMetrics(1, 2, 0, 1, 8_420, 2_340, 0, 0, 674), List.of());
+                new PlanMetrics(1, 2, 0, 1, 8_420, 2_340, 0, 0, 674), List.of(), false);
 
         CONTRACTS.validatePayload(PlanResultPayloads.COMPLETED_EVENT_TYPE,
                 PlanResultPayloads.SCHEMA_VERSION,
@@ -152,7 +153,7 @@ class DispatchPayloadContractTest {
     @Test
     void plan_failed_가_계약을_지킨다() {
         RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId(), com.dawnline.common.GeoPoint.of(37.5663, 126.9779));
-        plan.begin("sweep-greedy-nn", PlanMode.FULL, 1L, 1, NOW);
+        plan.begin("sweep-greedy-nn", PlanMode.FULL, PlanModeReason.NONE, 1L, 1, NOW);
         plan.fail("NO_CANDIDATES", NOW.plusSeconds(1));
 
         CONTRACTS.validatePayload(PlanResultPayloads.FAILED_EVENT_TYPE,
@@ -164,7 +165,7 @@ class DispatchPayloadContractTest {
     void 넓힌_사유도_계약을_지킨다() {
         // 2026-09-05 에 enum 을 넓혔다 (§4.7 — 같은 major 안에서 값 추가는 허용).
         RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId(), com.dawnline.common.GeoPoint.of(37.5663, 126.9779));
-        plan.begin("sweep-greedy-nn", PlanMode.FULL, 1L, 1, NOW);
+        plan.begin("sweep-greedy-nn", PlanMode.FULL, PlanModeReason.NONE, 1L, 1, NOW);
         plan.fail("RULE_VIOLATION", NOW.plusSeconds(1));
 
         CONTRACTS.validatePayload(PlanResultPayloads.FAILED_EVENT_TYPE,

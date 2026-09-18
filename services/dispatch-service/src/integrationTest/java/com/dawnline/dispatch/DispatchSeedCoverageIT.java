@@ -2,21 +2,31 @@ package com.dawnline.dispatch;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.dispatch.adapter.out.persistence.JdbcReferenceData;
+import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import jakarta.persistence.EntityManager;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -38,11 +48,33 @@ import tools.jackson.databind.ObjectMapper;
 @DisplayName("DispatchSeedCoverageIT — 시드와 계약 파일")
 class DispatchSeedCoverageIT extends DispatchIntegrationTestBase {
 
+    /**
+     * 릴레이를 끈다 — 이 클래스는 발행을 보지 않는다.
+     *
+     * <p>끄는 것이 <strong>격리</strong>다. 리더 락이 advisory lock 이 된 뒤(ADR-027 후속 정정)
+     * 이 컨테이너의 한 데이터베이스에 대해 릴레이는 <em>한 컨텍스트만</em> 리더가 된다. 스프링은
+     * 컨텍스트를 캐시하므로 먼저 뜬 클래스의 릴레이가 락을 계속 쥐고, 그러면 실제로 발행을 보는
+     * {@code PlanExecutionIT} 가 팔로워가 되어 아무것도 못 본다. 순서에 달린 실패다.
+     *
+     * <p>이전에는 이 문제가 보이지 않았다 — 리더 락이 Redis 였고 이 컨텍스트들에는 Redis 가
+     * 없어서 전부 판정 불가(발행 안 함)였기 때문이다. <strong>격리가 락의 무력함에 기대고
+     * 있었다.</strong>
+     *
+     * @param registry 동적 속성 레지스트리
+     */
+    @DynamicPropertySource
+    static void relayOff(DynamicPropertyRegistry registry) {
+        registry.add("dawnline.messaging.outbox.enabled", () -> "false");
+    }
+
     private static final Path RULES_CONTRACT = Path.of("../../contracts/seed/dispatch-rules.json");
     private static final ObjectMapper JSON = new ObjectMapper();
 
     /** fulfillment 의 {@code R__seed_fulfillment.sql} 이 쓰는 캠프 UUID 접두사. */
     private static final String CAMP_ID_PREFIX = "01a06edd-6c00-7000-8001-";
+
+    @Autowired
+    private JdbcReferenceData referenceData;
 
     @Autowired
     private EntityManager entityManager;
@@ -115,6 +147,46 @@ class DispatchSeedCoverageIT extends DispatchIntegrationTestBase {
 
     @Test
     @Transactional
+    void 위험물_허용은_캠프마다_20퍼센트이고_겹친_제약이_한_대에_몰리지_않는다() {
+        // 부록 A (2026-09-09, ADR-033). 위험물 허용 4/20 이고 그중 절반(2대)이 냉장이며,
+        // 근무조마다 냉장 ∧ 위험물이 한 대씩 있다.
+        //
+        // **캠프별·조별로 본다.** 전체 합만 보면 한 캠프에 몰려 있어도 통과하고, 조를 안 보면
+        // 야간에 냉장 ∧ 위험물이 0 대인 시각이 생긴다 — 그 시각의 계획에는 막다른 길이다.
+        // 벤치마크에서 같은 결함이 large 미배정 89건으로 나타났고, 거기서 세운 기준
+        // (제약 조합별 수요 ≤ 그 조합 차량 용량의 80%)을 운영 시드로 옮긴 것이 이 대수다.
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT camp_id::text,
+                       count(*),
+                       count(*) FILTER (WHERE allows_hazmat),
+                       count(*) FILTER (WHERE allows_hazmat AND is_cold),
+                       count(*) FILTER (WHERE allows_hazmat AND is_cold AND shift_end <= shift_start),
+                       count(*) FILTER (WHERE allows_hazmat AND is_cold AND shift_end >  shift_start)
+                  FROM vehicles WHERE active
+                 GROUP BY camp_id ORDER BY camp_id
+                """).getResultList();
+
+        assertThat(rows).as("전제: 캠프가 열이어야 한다").hasSize(10);
+        assertThat(rows).allSatisfy(row -> {
+            String camp = (String) row[0];
+            long total = ((Number) row[1]).longValue();
+            long hazmat = ((Number) row[2]).longValue();
+            long coldHazmat = ((Number) row[3]).longValue();
+            long nightColdHazmat = ((Number) row[4]).longValue();
+            long dayColdHazmat = ((Number) row[5]).longValue();
+
+            assertThat(hazmat).as("캠프 %s 위험물 허용 (차량 %d 대의 20%%)", camp, total)
+                    .isEqualTo(total / 5);
+            assertThat(coldHazmat).as("캠프 %s 냉장 ∧ 위험물 — 위험물의 절반", camp)
+                    .isEqualTo(hazmat / 2);
+            assertThat(nightColdHazmat).as("캠프 %s 야간조의 냉장 ∧ 위험물", camp).isPositive();
+            assertThat(dayColdHazmat).as("캠프 %s 주간조의 냉장 ∧ 위험물", camp).isPositive();
+        });
+    }
+
+    @Test
+    @Transactional
     void 차종이_섞여_있다() {
         @SuppressWarnings("unchecked")
         List<String> types = entityManager
@@ -135,5 +207,64 @@ class DispatchSeedCoverageIT extends DispatchIntegrationTestBase {
         } catch (IOException e) {
             throw new UncheckedIOException("룰 계약 파일을 읽을 수 없습니다: " + RULES_CONTRACT, e);
         }
+    }
+
+    /**
+     * <strong>어느 시각에 계획해도 실행 가능한 근무조가 있다</strong> (ADR-030).
+     *
+     * <p>2026-09-05 에는 아니었다. 200대 전부가 06:00–22:00 이라 근무 종료 한 시간 전부터 다음
+     * 날 근무 시작까지 실행 가능한 라우트가 하나도 없었고, `make demo` 와 CI 스모크가 **하루
+     * 8시간** 실패했다. 러너가 UTC 라 그 창은 13:00–21:00 UTC 였다.
+     *
+     * <p>이 테스트는 <strong>벽시계에 의존하지 않는다</strong> — 24시간을 한 시간씩 전부 돈다.
+     * 데모를 특정 시각에 돌려 보는 것으로는 그 창이 닫혔다는 것을 증명할 수 없다(그 시각에
+     * 통과했다는 것만 증명한다). 이 저장소가 여러 번 데인 형태다.
+     */
+    @Test
+    @Transactional
+    void 어느_시각에_계획해도_출발할_수_있는_차량이_있다() {
+        UUID campId = UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
+        // 근무는 KST 벽시계다 (JdbcReferenceData 의 ZONE). 그 시간대의 하루를 돈다.
+        LocalDate day = LocalDate.of(2026, 9, 8);
+        List<String> deadHours = new ArrayList<>();
+
+        for (int hour = 0; hour < 24; hour++) {
+            Instant planFor = day.atTime(hour, 0).atZone(ZoneId.of("Asia/Seoul")).toInstant();
+            List<VehicleSpec> fleet = referenceData.availableAt(campId, planFor);
+            // §6.3 은 복귀가 근무 종료 − 30분 버퍼 안이기를 요구한다. 출발은 근무 시작 이후로
+            // 밀리므로(RouteState.empty), 실제로 쓸 수 있는 시간은 아래와 같다.
+            boolean usable = fleet.stream().anyMatch(vehicle -> {
+                Instant departAt = planFor.isBefore(vehicle.shift().start())
+                        ? vehicle.shift().start() : planFor;
+                // 두 조건이 함께 있어야 한다. **출발이 곧이어야 하고**(약속창은 계획 시각
+                // 기준 몇 시간 안이다 — 내일 아침에 출발하는 차량은 TIME_WINDOW_LIMIT 에
+                // 전부 걸린다), 출발 뒤 근무가 남아 있어야 한다(§6.3 복귀 − 30분 버퍼).
+                // 앞의 조건을 빼면 이 테스트는 **공허해진다** — 어느 시각이든 "내일 근무" 가
+                // 있으므로 언제나 통과한다. 실제로 처음 판이 그랬고, 짝 테스트
+                // (시드에 자정을 넘는 근무조가 있다)가 그것을 잡았다.
+                return Duration.between(planFor, departAt).toHours() <= 1
+                        && Duration.between(departAt, vehicle.shift().end()).toMinutes() >= 60;
+            });
+            if (!usable) {
+                deadHours.add("%02d:00 KST".formatted(hour));
+            }
+        }
+
+        assertThat(deadHours)
+                .as("이 시각들에는 실행 가능한 라우트가 없다 — 하루 8시간 실패가 돌아왔다는 뜻이다")
+                .isEmpty();
+    }
+
+    /** 야간조가 실제로 자정을 넘는가. 위 테스트가 공허하지 않으려면 이것이 참이어야 한다. */
+    @Test
+    @Transactional
+    void 시드에_자정을_넘는_근무조가_있다() {
+        long night = ((Number) entityManager.createNativeQuery(
+                "SELECT count(*) FROM vehicles WHERE active AND shift_end <= shift_start")
+                .getSingleResult()).longValue();
+
+        assertThat(night)
+                .as("야간조가 없으면 위 테스트는 주간조 하나로 통과할 수 없다 — 전제다")
+                .isEqualTo(80L);
     }
 }

@@ -101,8 +101,8 @@ class JpaRoutePlanRepositoryTest {
     void depot_없이_되살아난_계획도_삽입할_수_있다() {
         // V2 컬럼은 nullable 이다 — 그 컬럼이 생기기 전에 만들어진 행이 있기 때문이다.
         RoutePlan legacy = RoutePlan.rehydrate(Ids.newId(), Ids.newId(), Ids.newId(),
-                PlanStatus.REQUESTED, null, null, null, null, null, null, null, null, null, null,
-                null, null, 0L);
+                PlanStatus.REQUESTED, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, 0L);
         when(nativeQuery.executeUpdate()).thenReturn(1);
 
         assertThat(repository.insertIfAbsent(legacy)).isTrue();

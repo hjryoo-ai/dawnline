@@ -38,7 +38,7 @@ class PlanPrunerTest {
         return new PlanResult(routes, unassigned, Money.krw(50_000L * routes.size()),
                 new PlanMetrics(routes.size(), assigned, unassigned.size(), routes.size(),
                         1_000L * routes.size(), 600L * routes.size(), 0, 0, 1_234),
-                List.of());
+                List.of(), false);
     }
 
     @Test

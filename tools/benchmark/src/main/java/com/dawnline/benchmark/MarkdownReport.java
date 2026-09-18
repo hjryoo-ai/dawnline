@@ -1,7 +1,9 @@
 package com.dawnline.benchmark;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -23,6 +25,8 @@ public final class MarkdownReport {
     private final Dataset dataset;
     private final long seed;
     private final int repeats;
+    private final PlanMode mode;
+    private final double budgetFactor;
     private final Instant generatedAt;
     private final SourceVersion source;
 
@@ -30,22 +34,91 @@ public final class MarkdownReport {
      * @param dataset     데이터셋
      * @param seed        문제 생성 seed
      * @param repeats     전략당 반복 횟수
+     * @param mode        실행 모드 (§6.7). FAST 로 낸 표와 FULL 로 낸 표는 <strong>같은 축이
+     *                    아니다</strong> — 헤더에 없으면 다음 사람이 그것을 알 방법이 없다
+     * @param budgetFactor 개선 예산 계수 (§6.7 사다리). 모드와 같은 이유로 헤더에 박는다 —
+     *                    계수가 다른 두 표는 같은 축이 아니다
      * @param generatedAt 생성 시각
      * @param source      이 리포트를 낸 소스의 커밋 (§6.9)
      */
-    public MarkdownReport(Dataset dataset, long seed, int repeats, Instant generatedAt,
-            SourceVersion source) {
+    public MarkdownReport(Dataset dataset, long seed, int repeats, PlanMode mode,
+            double budgetFactor, Instant generatedAt, SourceVersion source) {
         this.dataset = Objects.requireNonNull(dataset, "dataset");
         this.seed = seed;
         this.repeats = repeats;
+        this.mode = Objects.requireNonNull(mode, "mode");
+        this.budgetFactor = budgetFactor;
         this.generatedAt = Objects.requireNonNull(generatedAt, "generatedAt");
         this.source = Objects.requireNonNull(source, "source");
     }
 
     /**
-     * @param summaries 전략별 요약 (등록 순서)
+     * <strong>재현 조건의 마지막 한 줄</strong> — 이 실행은 수렴으로 끝났는가 (§6.9, [ADR-035] 4번).
+     *
+     * <p>예산이 물려 끊긴 실행은 코어 수 이전에 <em>기계가 다르면 잘리는 지점이 다르다.</em>
+     * 그런 표를 다른 표와 나란히 놓는 것은 알고리즘이 아니라 그날의 CPU 를 비교하는 일이라,
+     * 리포트가 그 사실을 <strong>스스로 말한다.</strong>
      */
-    public String render(Map<String, StrategySummary> summaries) {
+    private static void renderConvergence(StringBuilder out, Map<String, StrategySummary> summaries) {
+        List<String> cut = summaries.values().stream()
+                .filter(StrategySummary::anyBudgetExhausted)
+                .map(StrategySummary::strategy)
+                .toList();
+        if (cut.isEmpty()) {
+            out.append("> **수렴 종료** — 어느 회차도 계획 마감(§6.7)에 잘리지 않았다. ")
+                    .append("이 수치는 재현 가능하다.\n\n");
+            return;
+        }
+        out.append("> ⚠ **마감에 잘린 회차가 있다**: ")
+                .append(cut.stream().map(name -> "`" + name + "`")
+                        .collect(java.util.stream.Collectors.joining(", ")))
+                .append(". 잘린 지점은 기계에 달렸으므로 **이 행들은 재현 대상이 아니다** ")
+                .append("(§6.9 재현 조건, [ADR-035] 4번).\n\n");
+    }
+
+    /**
+     * <strong>불가능의 경계</strong>를 같은 표에 둔다 (§6.9, [ADR-038]).
+     *
+     * <p>「베이스라인보다 얼마나 나은가」만 적으면 다음 질문 — <em>최적해와 얼마나 먼가</em> —
+     * 에 답할 자리가 없다. 완화 문제의 고정비 하한은 그 답의 절반이고, 정직한 절반이다.
+     *
+     * <p>절반인 이유를 함께 적는다. 이것은 <strong>고정비의 하한이지 총비용의 하한이
+     * 아니다</strong> — 고정비를 하한까지 밀면 빈 좌석이 사라지고, 희소 능력을 요구하는 수요가
+     * 앉을 자리를 잃는다. `large` 에서 고정비를 410,000원 깎았더니 미배정이 1,630,000원 늘었다.
+     */
+    private void renderFloor(StringBuilder out, Map<String, StrategySummary> summaries,
+            FixedCostFloor floor) {
+
+        out.append("\n### 고정비 하한 — 불가능의 경계 (§6.9 완화 문제)\n\n");
+        if (!floor.feasible()) {
+            out.append("> ⚠ **이 데이터셋은 총량으로 실현 불가다** — 전 차량으로도 덮지 못하는 축: ")
+                    .append(String.join(", ", floor.uncoverable()))
+                    .append(". 고정비 하한은 뜻이 없다(어떤 함대도 다 싣지 못한다).\n\n");
+            return;
+        }
+        out.append("| 전략 | 고정비 | 하한 | 격차 | 하한 대비 |\n|---|---:|---:|---:|---:|\n");
+        summaries.values().forEach(summary -> {
+            long fixed = summary.breakdown().fixedKrw();
+            out.append("| `").append(summary.strategy()).append("` | ")
+                    .append(String.format("%,d", fixed)).append(" | ")
+                    .append(String.format("%,d", floor.krw())).append(" | ")
+                    .append(String.format("%+,d", fixed - floor.krw())).append(" | ")
+                    .append(String.format("%.2f배", (double) fixed / Math.max(1L, floor.krw())))
+                    .append(" |\n");
+        });
+        out.append("\n무는 축은 **").append(floor.bindingAxis()).append("** 이다. 기하·시간·순서를 ")
+                .append("버리고 총량만 덮는 가장 싼 함대이므로 **이보다 적은 고정비는 불가능하다** ")
+                .append("(축을 따로 보는 완화라 실제 최적은 이 값보다 위에 있다).\n\n");
+        out.append("> **고정비의 하한이지 총비용의 하한이 아니다** ([ADR-038]). 빈 좌석은 낭비가\n");
+        out.append("> 아니라 희소 능력(위험물·냉장) 수요가 나중에 앉을 자리다 — 고정비를 하한까지\n");
+        out.append("> 밀면 그 자리가 사라지고 미배정 페널티가 그보다 크게 오른다.\n\n");
+    }
+
+    /**
+     * @param summaries 전략별 요약 (등록 순서)
+     * @param floor     완화 문제의 고정비 하한 (§6.9)
+     */
+    public String render(Map<String, StrategySummary> summaries, FixedCostFloor floor) {
         StringBuilder out = new StringBuilder();
         out.append("# 전략 비교 — ").append(dataset.cliName()).append("\n\n");
         out.append("생성 ").append(generatedAt).append(" · ").append(source.describe())
@@ -55,10 +128,12 @@ public final class MarkdownReport {
                 .append(seed).append("` · 전략 ")
                 .append(summaries.keySet().stream().map(name -> "`" + name + "`")
                         .collect(java.util.stream.Collectors.joining(", ")))
-                .append(" · 전략당 ").append(repeats).append("회\n\n");
+                .append(" · 모드 **").append(mode).append("**(개선예산×").append(budgetFactor)
+                .append(") · 전략당 ").append(repeats).append("회\n\n");
         out.append("> 이 셋(커밋 · seed · 전략 이름)이 리포트의 신원이다. **다른 리포트의 절대 수치와\n");
         out.append("> 비교하기 전에 커밋이 같은지 먼저 본다** — 동결되는 것은 `baseline-nn` 클래스이지\n");
         out.append("> 그것이 쓰는 `StopMerger`·`CostModel`·거리 함수가 아니다 (§6.9).\n\n");
+        renderConvergence(out, summaries);
 
         out.append("| 전략 | 총비용(중앙값) | 미배정 | 주된 사유 | 차량 | 총거리 | 계획시간 p50 | p95 | 지각 stop | 평균 지각(분) |\n");
         out.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|\n");
@@ -90,7 +165,9 @@ public final class MarkdownReport {
                     .append(breakdown.unassignedOrders()).append(" |\n");
         });
 
-        out.append("\n비용은 §6.1 의 목적함수다 — 차량 비용 + 미배정 페널티 + 소프트 룰 페널티.\n");
+        renderFloor(out, summaries, floor);
+
+        out.append("비용은 §6.1 의 목적함수다 — 차량 비용 + 미배정 페널티 + 소프트 룰 페널티.\n");
         out.append("**계획 시간은 기록만 하고 게이트에 넣지 않는다**(§6.9): 두 전략을 같은 실행 안에서\n");
         out.append("돌리므로 비용 비교는 러너 사양에 독립이지만, 시간은 러너에 따라 흔들린다.\n\n");
 

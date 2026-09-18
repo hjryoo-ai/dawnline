@@ -16,8 +16,37 @@ public enum Dataset {
     MEDIUM(2_000, 20),
     /** Phase 3 DoD 의 "5,000건 통합 계획". */
     LARGE(5_000, 40),
-    /** Phase 7 피크. 기본 실행에는 넣지 않는다. */
-    PEAK(15_000, 60);
+
+    /**
+     * 실현 가능한 최대 규모. <strong>차량 수는 고르는 값이 아니라 기준이 정한 값이다</strong> —
+     * 통합 후 stop 8,411 개에 대해 {@code 0.8 × max-stops(120) × 차량 수 ≥ 8,411} 을 만족하는
+     * 최소 대수가 88 이다({@code DatasetFeasibilityTest}). 60 으로 두었던 것이 {@link #OVERLOAD}
+     * 이고, 둘은 <strong>같은 주문·같은 seed</strong> 라 차이가 오직 대수뿐이다.
+     */
+    PEAK(15_000, 88),
+
+    /**
+     * <strong>일부러 용량을 넘긴</strong> 웨이브 — 알고리즘이 아니라 <em>과부하 거동</em>을 재는
+     * 자리다. {@link #PEAK} 와 주문·seed 가 같고 차량만 60대라, 통합 후 stop 8,411 개가
+     * {@code 0.8 × 120 × 60 = 5,760} 슬롯을 <strong>46% 초과</strong>한다.
+     *
+     * <h2>무엇을 모델링하는가</h2>
+     * 웨이브는 (캠프, 티어, 컷오프) 단위다(§2.2·§5.2). 그러므로 <strong>15,000건 한 웨이브는
+     * 캠프 하루치를 통째로 한 웨이브에 넣은 것</strong>이지 정상적인 피크 웨이브가 아니다.
+     * 이 데이터셋을 「성수기의 정상 부하」로 읽으면 안 된다 — 재려는 것은 셋이다.
+     *
+     * <ol>
+     *   <li><strong>미배정 정책</strong>(ADR-028) — 다 못 실을 때 <em>누가</em> 빠지는가</li>
+     *   <li><strong>계획 시간의 상한</strong> — 마감이 없는 단계가 있으면 여기서 드러난다</li>
+     *   <li><strong>열화</strong>(§6.7) — FAST 가 실제로 무엇을 줄이는가</li>
+     * </ol>
+     *
+     * <p>실제로 그 셋을 다 드러냈다: 재삽입 O(n²)과 배정·재삽입에 마감이 없다는 사실
+     * ({@code docs/benchmarks/phase4-peak-gate.md}). 그래서 이 데이터셋은 «결함» 이 아니라
+     * <strong>도구</strong>다 — 다만 §6.9 비교표에서 실현 가능한 데이터셋과 <em>같은 절에
+     * 섞지 않는다.</em>
+     */
+    OVERLOAD(15_000, 60);
 
     private final int orders;
     private final int vehicles;

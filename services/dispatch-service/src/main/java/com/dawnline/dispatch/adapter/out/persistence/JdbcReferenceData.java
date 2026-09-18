@@ -16,6 +16,7 @@ import com.dawnline.dispatch.domain.optimizer.rule.RuleSeverity;
 import com.dawnline.dispatch.domain.optimizer.rule.RuleType;
 import jakarta.persistence.EntityManager;
 import java.sql.Time;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -72,12 +73,11 @@ public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLoo
         for (Object[] row : rows) {
             // shift_start/end 는 벽시계(TIME)다. 계획 날짜에 붙이는 일이 어댑터의 몫이고,
             // 순수 함수는 "몇 시" 가 아니라 "언제" 만 다룬다 (불변규칙 12).
-            Instant start = atDay(day, localTime(row[9]));
-            Instant end = atDay(day, localTime(row[10]));
+            TimeWindow shift = shiftAt(day, localTime(row[9]), localTime(row[10]), planFor);
             fleet.add(new VehicleSpec(VehicleId.of((UUID) row[0]),
                     new Capacity(((Number) row[2]).intValue(), ((Number) row[3]).intValue()),
                     new VehicleAttrs((String) row[1], (Boolean) row[4], (Boolean) row[5]),
-                    new TimeWindow(start, end),
+                    shift,
                     VehicleCost.krw(((Number) row[6]).longValue(), ((Number) row[7]).longValue(),
                             ((Number) row[8]).longValue())));
         }
@@ -138,6 +138,46 @@ public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLoo
 
     private static Instant atDay(LocalDate day, LocalTime time) {
         return day.atTime(time).atZone(ZONE).toInstant();
+    }
+
+    /**
+     * 벽시계 근무창을 <strong>아직 끝나지 않은 그 날의 근무</strong>로 옮긴다.
+     *
+     * <p>두 가지를 함께 처리한다.
+     *
+     * <ul>
+     *   <li><strong>자정을 넘는 근무조</strong>(예: 23:00–08:00). {@code end <= start} 면 종료는
+     *       다음 날이다. 이것을 보지 않으면 {@link TimeWindow} 가 "시작은 종료보다 앞서야" 로
+     *       거부한다 — 야간 근무조를 넣는 순간 기동이 아니라 계획이 깨진다.</li>
+     *   <li><strong>어느 날의 근무인가.</strong> 계획 날짜에 그냥 붙이면 새벽 계획이 잘못된 조를
+     *       고른다: 00:30 에 도는 계획에 23:00–08:00 조를 그날에 붙이면 <em>오늘 밤</em>(23:00)
+     *       것이 되는데, 실제로 그 시각에 일하고 있는 것은 <em>어젯밤</em> 시작한 조다.
+     *       그래서 어제와 오늘 두 후보 중 <strong>아직 끝나지 않은 첫 번째</strong>를 고른다.</li>
+     * </ul>
+     *
+     * <p>주간 근무조의 결과는 이 규칙에서도 전과 같다 — 어제 것은 이미 끝났으므로 오늘 것이 된다.
+     *
+     * @param day     계획 날짜 ({@code ZONE} 기준)
+     * @param start   근무 시작 벽시계
+     * @param end     근무 종료 벽시계
+     * @param planFor 계획 시각
+     */
+    private static TimeWindow shiftAt(LocalDate day, LocalTime start, LocalTime end,
+            Instant planFor) {
+
+        Duration length = Duration.between(start, end);
+        if (!length.isPositive()) {
+            length = length.plusDays(1);   // 자정을 넘는다
+        }
+        for (LocalDate candidate : List.of(day.minusDays(1), day)) {
+            Instant from = atDay(candidate, start);
+            Instant to = from.plus(length);
+            if (to.isAfter(planFor)) {
+                return new TimeWindow(from, to);
+            }
+        }
+        Instant from = atDay(day.plusDays(1), start);
+        return new TimeWindow(from, from.plus(length));
     }
 
     /**

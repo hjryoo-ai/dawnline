@@ -54,6 +54,7 @@ public final class UnassignAllStrategy implements DispatchStrategy {
         }
 
         PlanMetrics metrics = new PlanMetrics(0, 0, unassigned.size(), 0, 0L, 0L, 0, 0L, 0L);
-        return new PlanResult(List.of(), unassigned, total, metrics, explanations);
+        // 아무것도 싣지 않으므로 마감에 걸릴 일도 없다 — 언제나 「수렴으로 끝났다」다.
+        return new PlanResult(List.of(), unassigned, total, metrics, explanations, false);
     }
 }

@@ -9,6 +9,9 @@ import com.dawnline.dispatch.application.port.in.RunPlanCommand;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
+import com.dawnline.dispatch.domain.PlanMode;
+import com.dawnline.dispatch.domain.PlanModeReason;
+import com.dawnline.dispatch.domain.PlanModeSelector;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
@@ -25,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
@@ -41,13 +45,45 @@ class RunPlanServiceTest {
     private final InMemoryDispatchPorts.Events events = new InMemoryDispatchPorts.Events();
 
     private RunPlanService service(RuleSet rules, int vehicleCount) {
+        return service(rules, vehicleCount, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    /**
+     * 계획 한 번이 {@code step} 만큼 걸리는 것처럼 보이게 하는 시계.
+     *
+     * <p>{@code planDurationMs} 는 {@code clock.instant()} 두 번의 차이다 —
+     * {@code Clock.fixed} 면 언제나 0 ms 라 §6.7 의 예산 조건이 발화할 수 없다. 값을 손으로
+     * 밀어 넣는 대신 <strong>시간이 흐르게</strong> 해서 운영 코드가 그 수를 스스로 만들게 한다.
+     */
+    private static Clock stepping(Duration step) {
+        AtomicInteger calls = new AtomicInteger();
+        return new Clock() {
+            @Override
+            public java.time.ZoneId getZone() {
+                return ZoneOffset.UTC;
+            }
+
+            @Override
+            public Clock withZone(java.time.ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public Instant instant() {
+                return NOW.plus(step.multipliedBy(calls.getAndIncrement()));
+            }
+        };
+    }
+
+    private RunPlanService service(RuleSet rules, int vehicleCount, Clock clock) {
         return new RunPlanService(plans, candidates, routes, events,
                 InMemoryDispatchPorts.fleet(vehicleCount, NOW),
                 InMemoryDispatchPorts.rules(rules),
                 new HaversineDistance(1.3d, 25.0d),
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
-                Clock.fixed(NOW, ZoneOffset.UTC),
-                "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)));
+                clock,
+                "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
+                new PlanModeSelector(3L, 0.8d, 0.5d));
     }
 
     private List<UUID> seed(UUID waveId, int count) {
@@ -60,7 +96,7 @@ class RunPlanServiceTest {
             candidates.put(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                     GeoPoint.of(InMemoryDispatchPorts.CAMP.lat() + 0.004d * (i + 1),
                             InMemoryDispatchPorts.CAMP.lng() + 0.003d * (i + 1)),
-                    1_000, 2_000, false, false, window, 60, 0, NOW));
+                    1_000, 2_000, false, false, window, 60, false, 0, NOW));
         }
         return orderIds;
     }
@@ -70,7 +106,7 @@ class RunPlanServiceTest {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seed(waveId, 5);
 
-        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
+        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
 
         assertThat(events.routesAssigned).isNotEmpty();
@@ -84,7 +120,7 @@ class RunPlanServiceTest {
         UUID waveId = Ids.newId();
         seed(waveId, 3);
 
-        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
+        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
 
         assertThat(plans.findByWaveId(waveId)).hasValueSatisfying(plan -> {
             assertThat(plan.status()).isEqualTo(PlanStatus.PUBLISHED);
@@ -98,7 +134,7 @@ class RunPlanServiceTest {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seed(waveId, 3);
 
-        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
+        service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
 
         assertThat(orderIds).allSatisfy(orderId ->
                 assertThat(candidates.findById(orderId).orElseThrow().status())
@@ -112,9 +148,9 @@ class RunPlanServiceTest {
         seed(waveId, 3);
         RunPlanService service = service(RuleSet.empty(), 2);
 
-        service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
+        service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
 
-        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
+        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.ALREADY_PUBLISHED);
         assertThat(plans.size()).isEqualTo(1);
         assertThat(events.completed).as("두 번 발행하지 않는다").isEqualTo(1);
@@ -124,7 +160,7 @@ class RunPlanServiceTest {
     void 후보가_없으면_실패로_종결하고_plan_failed_를_낸다() {
         UUID waveId = Ids.newId();
 
-        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
+        assertThat(service(RuleSet.empty(), 2).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.NO_CANDIDATES);
 
         assertThat(events.failed).isEqualTo(1);
@@ -147,9 +183,10 @@ class RunPlanServiceTest {
                 new HaversineDistance(1.3d, 25.0d),
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)));
+                "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
+                new PlanModeSelector(3L, 0.8d, 0.5d));
 
-        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
+        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
         assertThat(events.ordersDispatched)
                 .as("취소된 주문은 order.dispatched 를 받지 않는다").doesNotContain(cancelled);
@@ -161,8 +198,8 @@ class RunPlanServiceTest {
         // 시각에서 유도하면 "재실행했더니 달라졌다" 가 버그인지 정상인지 구별할 수 없다.
         UUID waveId = Ids.newId();
 
-        assertThat(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP).effectiveSeed())
-                .isEqualTo(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP).effectiveSeed());
+        assertThat(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null).effectiveSeed())
+                .isEqualTo(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null).effectiveSeed());
     }
 
     @Test
@@ -170,12 +207,87 @@ class RunPlanServiceTest {
         // §5.3 "운영자 재실행 가능", ADR-024 결정 3.
         UUID waveId = Ids.newId();
         RunPlanService service = service(RuleSet.empty(), 2);
-        service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));       // 후보 없음 → FAILED
+        service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));       // 후보 없음 → FAILED
         seed(waveId, 3);
 
-        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP)))
+        assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
         assertThat(events.completed).isEqualTo(1);
+    }
+
+    @Test
+    void 랙이_밀리면_다음_계획이_열화하고_사유가_남는다() {
+        // §6.7 첫 조건. 랙은 명령이 싣고 온다 — 유스케이스는 Kafka 를 모른다 (ADR-034).
+        UUID waveId = Ids.newId();
+        seed(waveId, 3);
+
+        service(RuleSet.empty(), 2).run(new RunPlanCommand(waveId, CAMP_ID,
+                InMemoryDispatchPorts.CAMP, null, null, null, 9L));
+
+        assertThat(plans.findByWaveId(waveId)).hasValueSatisfying(plan -> {
+            assertThat(plan.mode()).contains(PlanMode.FAST);
+            assertThat(plan.modeReason()).contains(PlanModeReason.LAG);
+        });
+    }
+
+    @Test
+    void 랙을_모르면_그_사실이_사유로_남는다() {
+        // 웹 재실행·정체 회수에는 볼 파티션이 없다. 그때 FULL 은 "두 조건을 다 보고 아니었다"
+        // 가 아니라 "하나를 못 봤다" 이고, 둘을 같은 값으로 적으면 판단이 멈춘 것이 안 보인다.
+        UUID waveId = Ids.newId();
+        seed(waveId, 3);
+
+        service(RuleSet.empty(), 2)
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        assertThat(plans.findByWaveId(waveId)).hasValueSatisfying(plan -> {
+            assertThat(plan.mode()).contains(PlanMode.FULL);
+            assertThat(plan.modeReason()).contains(PlanModeReason.LAG_UNKNOWN);
+        });
+    }
+
+    @Test
+    void 운영자가_지정한_모드는_자동_판단을_이기고_열화로_세지_않는다() {
+        UUID waveId = Ids.newId();
+        seed(waveId, 3);
+
+        // 랙이 임계를 훌쩍 넘었는데도 사람이 FULL 을 지정했다.
+        service(RuleSet.empty(), 2).run(new RunPlanCommand(waveId, CAMP_ID,
+                InMemoryDispatchPorts.CAMP, null, PlanMode.FULL, null, 999L));
+
+        assertThat(plans.findByWaveId(waveId)).hasValueSatisfying(plan -> {
+            assertThat(plan.mode()).contains(PlanMode.FULL);
+            assertThat(plan.modeReason()).contains(PlanModeReason.REQUESTED);
+            assertThat(plan.modeReason().orElseThrow().isDegraded())
+                    .as("사람의 선택은 열화가 아니다").isFalse();
+        });
+    }
+
+    @Test
+    void 직전_계획이_예산을_넘겼으면_다음_계획은_개선을_덜_한다() {
+        // §6.7 사다리의 아랫단 (ADR-034 후속 정정). "직전" 은 같은 캠프의 마지막 발행 계획이고,
+        // 저장소가 답한다 — 인메모리 홀더면 재기동에 사라지고 인스턴스마다 달라진다.
+        // **FAST 가 아니다**: 예산을 다 썼다는 것은 개선이 배고프다는 뜻이지 처리량이 모자란다는
+        // 뜻이 아니고, 두 처방의 대가가 45배 차이다.
+        UUID slow = Ids.newId();
+        seed(slow, 3);
+        RunPlanService service = service(RuleSet.empty(), 2, stepping(Duration.ofSeconds(25)));
+        service.run(RunPlanCommand.of(slow, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        // 전제 둘. 직전 계획이 있어야 하고, 그것이 예산의 80%(24초)를 넘겨야 한다 —
+        // 넘지 않으면 아래 어설션은 조건이 아니라 기본값을 확인하게 된다.
+        assertThat(plans.lastPublishedDuration(CAMP_ID))
+                .as("전제: 같은 캠프의 직전 발행 계획이 있어야 이 조건이 발화한다")
+                .contains(Duration.ofSeconds(25));
+
+        UUID next = Ids.newId();
+        seed(next, 3);
+        service.run(RunPlanCommand.of(next, CAMP_ID, InMemoryDispatchPorts.CAMP, 0L));
+
+        assertThat(plans.findByWaveId(next)).hasValueSatisfying(plan -> {
+            assertThat(plan.mode()).as("개선을 끄지 않는다").contains(PlanMode.FULL);
+            assertThat(plan.modeReason()).contains(PlanModeReason.BUDGET);
+        });
     }
 
     @Test
@@ -187,7 +299,7 @@ class RunPlanServiceTest {
                 RuleType.MAX_STOPS_PER_ROUTE, RuleSeverity.HARD, 20, Map.of("max", 1))), 1);
 
         RunPlanUseCase.Outcome outcome =
-                service(impossible, 1).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP));
+                service(impossible, 1).run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
 
         // 차 한 대가 stop 하나만 실을 수 있으므로 나머지는 미배정이지만 계획 자체는 성립한다.
         assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
@@ -225,6 +337,12 @@ class RunPlanServiceTest {
         @Override
         public java.util.Optional<DispatchCandidate> findById(UUID orderId) {
             return candidates.findById(orderId);
+        }
+
+        @Override
+        public int recordPlanResult(java.util.Collection<UUID> orderIds,
+                com.dawnline.dispatch.domain.CandidateStatus target, java.time.Instant at) {
+            return candidates.recordPlanResult(orderIds, target, at);
         }
 
         @Override

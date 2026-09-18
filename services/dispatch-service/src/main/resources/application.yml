@@ -34,6 +34,11 @@ spring:
       pool-name: dispatch-service-pool
       maximum-pool-size: 10   # 인스턴스당 10 (DESIGN.md §8.2)
       minimum-idle: 2
+      data-source-properties:
+        # 배치 INSERT 를 다중 VALUES 로 다시 쓴다 (ADR-029). 이것이 없으면 batchUpdate 는
+        # 왕복만 줄이고 문장 수는 그대로다. URL 이 아니라 여기 두는 이유는 Compose 도
+        # Testcontainers 도 URL 을 각자 만들기 때문이다 — 한쪽에만 붙으면 측정과 운영이 갈린다.
+        reWriteBatchedInserts: true
 
   # --- JPA: 스키마 변경은 Flyway 만 한다 (DESIGN.md §7.1) ------------------
   jpa:
@@ -147,11 +152,19 @@ logging:
 # =============================================================================
 dawnline:
   dispatch:
+    # §6.3 우선도 점수표 (ADR-028). 우선도는 선언이 아니라 파생이다 — 계약의 사실에
+    # 이 표를 적용해 적재 시점에 계산한다. 「배송 실패 후 재배송」(+3)은 tracking 이
+    # 그 사실을 만드는 Phase 5 에서 사실과 함께 들어온다.
+    priority:
+      promise-revised: 2
+      requires-cold: 1
     plan:
       # §6.6 의 기본 전략. 새 전략은 인터페이스 구현 + 등록만으로 추가된다.
-      default-strategy: sweep-greedy-nn
-      # §6.7 시간 예산. large(5,000 주문) 실측이 674 ms 라 여유가 크다
-      # (docs/benchmarks/phase3-baseline.md).
+      # FAST 는 다른 전략이 아니라 **같은 전략의 5단계를 끈 것**이다 (ADR-032·ADR-034) —
+      # 전략 이름은 "무엇을 쓰려 했는가", 모드는 "무엇을 포기했는가" 를 따로 말한다.
+      default-strategy: sweep-greedy-nn+ls
+      # §6.7 시간 예산. large(5,000 주문) 실측 p95 가 5,829 ms 라 여유가 5배다
+      # (docs/benchmarks/phase4-constraint-classes.md §4).
       budget: 30s
       per-route-budget: 3s
       # §5.3 — 이만큼 지난 PLANNING 은 죽은 인스턴스가 남긴 것으로 본다.
@@ -159,6 +172,14 @@ dawnline:
       recover-batch: 20
       recover-interval-ms: 60000
       recover-initial-delay-ms: 60000
+    # §6.7 열화 **사다리** (ADR-034 + 후속 정정). 두 조건은 다른 것을 말하므로 처방도 다르다:
+    #   랙 > 3        → 처리량이 모자란다      → FAST (개선을 끈다, 대가 +9.4%)
+    #   직전 > 예산×0.8 → 개선이 예산을 다 썼다 → 개선 예산 × 0.5 (덜 한다, 대가 1% 대)
+    # 둘을 같은 처방(FAST)으로 묶었던 것이 45배 비싼 처방이었다 — phase4-fast-mode.md §7.
+    degrade:
+      max-backlog-waves: 3
+      budget-ratio: 0.8
+      budget-factor: 0.5
     distance:
       # §6.2 기본값. 캠프 설정값이라 코드에 상수를 두지 않는다.
       road-factor: 1.3

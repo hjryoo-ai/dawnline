@@ -1,5 +1,6 @@
 package com.dawnline.benchmark;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -12,8 +13,8 @@ import java.util.Objects;
  * ./gradlew :tools:benchmark:run --args='--dataset small --strategies baseline-nn,sweep-greedy-nn+ls'
  * </pre>
  *
- * <p>라이브러리를 쓰지 않고 손으로 읽는다 — 인자가 다섯 개이고, 이 하나를 위해 의존을 늘리는 것은
- * CLAUDE.md 의 "새 라이브러리 추가는 최소화" 에 어긋난다.
+ * <p>라이브러리를 쓰지 않고 손으로 읽는다 — 인자가 열 개 미만이고, 이 하나를 위해 의존을 늘리는
+ * 것은 CLAUDE.md 의 "새 라이브러리 추가는 최소화" 에 어긋난다.
  *
  * @param dataset    데이터셋
  * @param strategies 비교할 전략들 (등록 순서 아님 — 적은 순서대로 표에 나온다)
@@ -23,9 +24,15 @@ import java.util.Objects;
  * @param rulesFile  룰 시드 JSON. {@code null} 이면 {@link RuleSeed#locate()} 가 찾는다
  * @param out        리포트 출력 경로. 없으면 표준 출력
  * @param gate       회귀 게이트의 기준 전략. {@code null} 이면 게이트 없이 리포트만 낸다
+ * @param mode       실행 모드 (§6.7). {@code FAST} 면 개선 단계를 생략한다 — §6.7 의
+ *                   「같은 조건 fast mode ≤ 5초」를 <em>재는</em> 자리다
+ * @param budgetFactor 개선 예산에 곱하는 계수 (§6.7 사다리의 아랫단). 열화가 «개선을 끄는
+ *                   것»과 «덜 하는 것»으로 갈리므로, 그 둘의 대가를 나란히 재려면 이 축이
+ *                   필요하다. <strong>예산이 조이지 않으면 아무것도 하지 않는다</strong>
  */
 public record BenchmarkOptions(Dataset dataset, List<String> strategies, int repeats, long seed,
-        Duration budget, Path rulesFile, Path out, String gate) {
+        Duration budget, Path rulesFile, Path out, String gate, PlanMode mode,
+        double budgetFactor) {
 
     private static final Dataset DEFAULT_DATASET = Dataset.SMALL;
     private static final int DEFAULT_REPEATS = 5;
@@ -35,6 +42,11 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
     public BenchmarkOptions {
         Objects.requireNonNull(dataset, "dataset");
         Objects.requireNonNull(budget, "budget");
+        Objects.requireNonNull(mode, "mode");
+        if (!(budgetFactor > 0.0d) || budgetFactor > 1.0d) {
+            throw new IllegalArgumentException(
+                    "개선 예산 계수는 0 초과 1 이하여야 합니다: " + budgetFactor);
+        }
         strategies = List.copyOf(Objects.requireNonNull(strategies, "strategies"));
         if (strategies.isEmpty()) {
             throw new IllegalArgumentException("비교할 전략이 하나도 없습니다");
@@ -69,6 +81,8 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
         Path rules = null;
         Path out = null;
         String gate = null;
+        PlanMode mode = PlanMode.FULL;
+        double budgetFactor = 1.0d;
 
         for (int i = 0; i < args.length; i++) {
             String flag = args[i];
@@ -82,25 +96,32 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                 case "--rules" -> rules = Path.of(value(args, ++i, flag));
                 case "--out" -> out = Path.of(value(args, ++i, flag));
                 case "--gate" -> gate = value(args, ++i, flag);
+                case "--mode" -> mode = PlanMode.valueOf(
+                        value(args, ++i, flag).toUpperCase(java.util.Locale.ROOT));
+                case "--budget-factor" ->
+                        budgetFactor = Double.parseDouble(value(args, ++i, flag));
                 default -> throw new IllegalArgumentException(
                         "알 수 없는 인자: %s%n%s".formatted(flag, usage()));
             }
         }
-        return new BenchmarkOptions(dataset, strategies, repeats, seed, budget, rules, out, gate);
+        return new BenchmarkOptions(dataset, strategies, repeats, seed, budget, rules, out,
+                gate, mode, budgetFactor);
     }
 
     /** 사용법. */
     public static String usage() {
         return """
                 사용법: benchmark [옵션]
-                  --dataset <small|medium|large|peak>  기본 small
+                  --dataset <small|medium|large|peak|overload>  기본 small
                   --strategies <a,b,c>                 기본: 등록된 전략 전부
                   --repeats <n>                        기본 5 (§6.9)
                   --seed <n>                           기본 20260905
                   --budget-seconds <n>                 기본 30 (§6.7)
                   --rules <path>                       기본: 위로 올라가며 찾은 contracts/seed/dispatch-rules.json
                   --out <path>                         없으면 표준 출력
-                  --gate <strategy>                    이 전략보다 비싼 전략이 있으면 종료 코드 1 (§6.9)""";
+                  --gate <strategy>                    이 전략보다 비싼 전략이 있으면 종료 코드 1 (§6.9)
+                  --mode <full|fast>                   기본 full. fast 는 개선 단계를 생략한다 (§6.7)
+                  --budget-factor <0~1>                기본 1.0. 개선 예산에 곱한다 (§6.7 사다리)""";
     }
 
     private static String value(String[] args, int index, String flag) {

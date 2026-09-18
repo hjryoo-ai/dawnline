@@ -44,15 +44,33 @@ public record Candidate(OrderId id, GeoPoint point, Parcel parcel, TimeWindow pr
 
     /** 통합 키 — 같은 값끼리 한 {@link Stop} 이 된다 (§6.5 1단계). */
     public MergeKey mergeKey() {
-        return new MergeKey(point.geohash7(), promised);
+        return new MergeKey(point.geohash7(), promised, parcel.requiresCold(), parcel.hazmat());
     }
 
     /**
      * {@link Stop} 통합 키.
      *
-     * @param geohash7 약 153 m 격자
-     * @param promised 약속창
+     * <h2>왜 제약이 키에 들어가는가</h2>
+     * 통합은 "한 번에 배송할 수 있는 주문" 을 묶는 일이다. 좌표와 창이 같아도
+     * <strong>함께 탈 수 없는</strong> 주문이 있다 — 위험물 한 건이 섞이면 그 stop 전체가
+     * 위험물 차량만 탈 수 있게 되고, 옆의 평범한 아홉 건이 함께 그 차를 기다린다.
+     * <strong>희소한 능력 하나가 인질을 잡는다.</strong>
+     *
+     * <p>운영에서도 같은 일이 일어난다 — 냉장 ∧ 위험물 차량이 한 대 고장 난 날의 캠프가 정확히
+     * 이 상태다. 그래서 이것은 벤치마크의 문제가 아니라 <strong>모델의 문제</strong>이고,
+     * 고칠 곳은 데이터셋이 아니라 여기다 ([ADR-033]).
+     *
+     * <p>대가는 stop 수 증가다. 같은 좌표이므로 <em>이동 거리는 늘지 않고</em>, 하차·전달 시간은
+     * 원래 주문마다 더하므로(§6.5 1단계) 총 서비스 시간도 그대로다. 실제로 늘어나는 것은
+     * "그 주소를 두 번 취급한다" 는 사실이고, 그건 {@code MAX_STOPS_PER_ROUTE} 소비로 모델에
+     * 이미 반영돼 있다.
+     *
+     * @param geohash7     약 153 m 격자
+     * @param promised     약속창
+     * @param requiresCold 냉장 필요 — 같은 자리라도 냉장과 상온은 다른 stop 이다
+     * @param hazmat       위험물
      */
-    public record MergeKey(String geohash7, TimeWindow promised) {
+    public record MergeKey(String geohash7, TimeWindow promised, boolean requiresCold,
+            boolean hazmat) {
     }
 }

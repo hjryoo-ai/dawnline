@@ -71,6 +71,28 @@ curl -sf --max-time 3 -o /dev/null "$url" \
 
 [ -s "$WAVE_IDS_FILE" ] \
   || fail "웨이브 id 파일이 없다: $WAVE_IDS_FILE. phase2-demo.sh 를 먼저 돌려라(make demo)."
+
+# 전제: 근무조가 둘이어야 한다 — 그래야 이 데모가 시각에 의존하지 않는다.
+#
+# 2026-09-05 에는 200대 전부가 06:00–22:00 이었고, 그래서 21시 이후에 돌면 근무 종료까지 한
+# 시간이 안 남아 모든 계획이 NO_CANDIDATES 로 끝났다. CI 는 UTC 라 하루 8시간 빨갰다.
+# ADR-030 이 야간조(23:00–08:00)를 넣어 그 창을 닫았다 — 근무창은 **출발 하한**이지 계획
+# 시각의 제약이 아니므로(RouteState.empty), 22:10 에 도는 계획은 23:00 에 출발하는 야간
+# 라우트를 만든다.
+#
+# 그러니 이제 확인할 전제는 "지금이 근무창 안인가" 가 아니라 **"근무조가 둘인가"** 다.
+# 야간조가 시드에서 사라지면 8시간 창이 조용히 돌아오고, 그때 아래 1단계는 "PUBLISHED 계획 0
+# (기대 29)" 이라고만 말한다 — 그 문장은 원인을 가리키지 않는다.
+# 전제는 전제로 확인한다 (CLAUDE.md — 전제를 스스로 말한다).
+crews="$(dq "SELECT count(DISTINCT (shift_start, shift_end)) FROM vehicles WHERE active")"
+night="$(dq "SELECT count(*) FROM vehicles WHERE active AND shift_end <= shift_start")"
+now_kst="$(TZ=Asia/Seoul date +%H:%M)"
+printf '  %-22s %s개 (야간 %s대 · 지금 %s KST)\n' "차량 근무조" "$crews" "$night" "$now_kst"
+[ "${night:-0}" -gt 0 ] || fail "자정을 넘는 근무조(야간)가 시드에 없다. 야간 $night 대.
+  근무조가 주간뿐이면 근무 종료 한 시간 전부터 다음 날 근무 시작까지 실행 가능한 라우트가
+  없고, 이 데모와 CI 스모크가 하루 8시간 실패한다(2026-09-05 에 실제로 그랬다).
+  §2.2 의 DAWN 티어(익일 00:00–07:00)를 실을 차량이 없다는 뜻이기도 하다.
+  부록 A 와 R__seed_dispatch.sql 을 확인해라 (ADR-030)."
 wave_count="$(wc -l < "$WAVE_IDS_FILE" | tr -d ' ')"
 ids="$(sed "s/.*/'&'/" "$WAVE_IDS_FILE" | paste -sd, -)"
 printf '  %-22s %s\n' "이어받은 웨이브" "$wave_count"
@@ -136,9 +158,28 @@ printf '  %-46s %s\n' "비냉장 차량에 실린 냉장 주문 (0이어야 한�
 printf '  %-46s %s\n' "쓰인 비냉장 차량 (0이면 위 0은 공허하다)" "$warm_used"
 
 # 전제를 스스로 말한다 — 검사할 것이 없으면 통과가 아니라 실패다 (CLAUDE.md 「폴백 테스트」와 같은 규칙).
+#
+# "비냉장 차량이 쓰였다" 가 **운이 아니라 결과**가 되려면 전제 둘을 먼저 확인해야 한다:
+# 상온 주문이 있고, 그것을 실을 비냉장 차량이 그 캠프에 있다. 둘을 확인하지 않으면 이 검사는
+# "시각" 을 검사한다 — 남은 근무 시간이 짧아 두 대가 필요해지면 통과하고 한 대로 충분하면
+# 실패한다. 2026-09-08 에 실제로 그랬고, CI 의 이전 통과는 시각 운이었다(ADR-031).
+warm_orders="$(dq "SELECT count(*) FROM dispatch_candidates c
+                    WHERE c.wave_id IN ($ids) AND NOT c.requires_cold" | tr -d '[:space:]')"
+warm_fleet="$(dq "SELECT count(*) FROM vehicles v
+                   WHERE v.active AND NOT v.is_cold
+                     AND v.camp_id IN (SELECT DISTINCT camp_id FROM route_plans WHERE wave_id IN ($ids))" | tr -d '[:space:]')"
+printf '  %-46s %s\n' "상온 후보 (전제)" "$warm_orders"
+printf '  %-46s %s\n' "그 캠프들의 비냉장 차량 (전제)" "$warm_fleet"
+
 [ "$cold_total" -gt 0 ]    || fail "냉장 후보가 하나도 없다. cold-chain 룰이 검사되지 않았다 (sim 의 cold-ratio 확인)."
 [ "$cold_assigned" -gt 0 ] || fail "냉장 주문이 하나도 배정되지 않았다. 검사할 것이 없다."
-[ "$warm_used" -gt 0 ]     || fail "비냉장 차량이 한 대도 쓰이지 않았다 — '냉장 차량에만' 이 자동으로 참이 된다."
+[ "$warm_orders" -gt 0 ]   || fail "상온 주문이 하나도 없다. 그러면 비냉장 차량이 안 쓰이는 것이 정상이고,
+  아래 '비냉장 차량이 쓰였다' 는 검사할 수 없는 것을 검사하게 된다 (sim 의 cold-ratio 확인)."
+[ "$warm_fleet" -gt 0 ]    || fail "계획이 돈 캠프들에 비냉장 차량이 한 대도 없다.
+  그러면 '냉장 차량에만' 은 선택의 결과가 아니라 유일한 가능성이다 (부록 A · R__seed_dispatch)."
+[ "$warm_used" -gt 0 ]     || fail "비냉장 차량이 한 대도 쓰이지 않았다 — '냉장 차량에만' 이 자동으로 참이 된다.
+  상온 주문 $warm_orders 건과 비냉장 차량 $warm_fleet 대가 있는데도 그렇다면, 이것은 시드가 아니라
+  **할당기의 동률 규칙**이 깨진 것이다 (§6.5 3단계 least-capable-first, ADR-031)."
 [ "$violations" = "0" ]    || fail "냉장 주문 $violations 건이 비냉장 차량에 실렸다 (§6.3 cold-chain 하드 룰)."
 
 # -----------------------------------------------------------------------------

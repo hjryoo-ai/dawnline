@@ -14,9 +14,12 @@ import java.util.Objects;
  * @param unassignedReasons  미배정 사유별 주문 수. 수만 세면 "왜" 가 사라지고, 그러면 §6.3 이
  *                           설명을 요구한 이유가 리포트에서 없어진다
  * @param breakdown          비용 분해. 총비용만 보면 "왜 비싼가" 를 알 수 없다
+ * @param budgetExhausted    계획 마감(§6.7) 때문에 <strong>하지 못한 일이 있었는가</strong>.
+ *                           {@code true} 면 이 회차는 <em>재현 대상이 아니다</em> — 기계가
+ *                           다르면 잘리는 지점이 다르다([ADR-035] 4번, §6.9 재현 조건)
  */
 public record RunOutcome(PlanMetrics metrics, Money totalCost, long durationMs,
-        Map<String, Long> unassignedReasons, CostBreakdown breakdown) {
+        Map<String, Long> unassignedReasons, CostBreakdown breakdown, boolean budgetExhausted) {
 
     public RunOutcome {
         Objects.requireNonNull(metrics, "metrics");
@@ -24,10 +27,10 @@ public record RunOutcome(PlanMetrics metrics, Money totalCost, long durationMs,
         unassignedReasons = Map.copyOf(Objects.requireNonNull(unassignedReasons, "unassignedReasons"));
     }
 
-    /** 사유·분해가 필요 없는 자리(테스트)에서 쓴다. */
+    /** 사유·분해가 필요 없는 자리(테스트)에서 쓴다 — 수렴으로 끝난 회차다. */
     public RunOutcome(PlanMetrics metrics, Money totalCost, long durationMs) {
         this(metrics, totalCost, durationMs, Map.of(),
-                new CostBreakdown(0, 0, 0, 0, 0, 0, 0, 0));
+                new CostBreakdown(0, 0, 0, 0, 0, 0, 0, 0), false);
     }
 
     /** 가장 많은 사유. 미배정이 없으면 빈 문자열. */

@@ -5,8 +5,10 @@ import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.Feasibility;
+import com.dawnline.dispatch.domain.optimizer.PlanningDeadline;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.Stop;
+import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -38,11 +40,21 @@ import java.util.Objects;
  * 클러스터를 차 한 대 몫으로 자른 것이 그 근시안을 구조로 막으려는 장치이고, 빈 차 우선이 그
  * 장치를 실제로 작동시킨다.
  *
+ * <h2>희소한 조합의 좌석은 미리 비워 둔다</h2>
+ * 「한계비용이 가장 작은 차」는 <em>지금 붙이는 것</em>만 본다. 그래서 냉장 ∧ 위험물 차량이
+ * <strong>일반 수요로 먼저 찬다</strong> — 그 조합 차량이 실은 stop 의 94~100%가 일반 수요였다.
+ * {@link SeatReservation} 이 그 자리를 배정 단계 동안 닫아 둔다([ADR-039]). 하드 룰이 아니라
+ * <strong>배정 단계의 하드 용량</strong>이고, 배정이 끝나면 풀린다.
+ *
  * <h2>실을 차가 없으면 반으로 쪼갠다</h2>
  * §6.5 3단계 그대로다. 클러스터가 {@code max-stops} 를 넘거나 어떤 차의 용량에도 안 맞을 때,
  * 반으로 나누면 들어갈 수 있다. 더 쪼갤 수 없는 stop 하나가 여전히 안 들어가면 그때 미배정이다.
  */
 public final class GreedyAssigner {
+
+    /** 마감 때문에 시도하지 못한 stop 의 사유 ([ADR-036]). */
+    static final Feasibility DEADLINE = Feasibility.violated(
+            "plan-deadline", "계획 마감 시간이 지나 배정을 시도하지 못했습니다");
 
     private final NearestNeighborSequencer sequencer;
 
@@ -62,11 +74,13 @@ public final class GreedyAssigner {
      * @param distance  거리 제공자
      * @param cost      비용 산식
      * @param startedAt 계획 시작 시각
+     * @param deadline  계획 전체의 마감 ([ADR-036]). 지나면 남은 클러스터는 미배정이다
+     * @param seats     희소한 제약 조합을 위해 비워 둘 좌석 ([ADR-039])
      * @return 어떤 차에도 들어가지 못한 stop 들
      */
-    public List<Stop> assign(List<List<Stop>> clusters, List<RouteAccumulator> routes,
+    List<Stop> assign(List<List<Stop>> clusters, List<RouteAccumulator> routes,
             CampDepot depot, DistanceProvider distance, CostModel cost, Instant startedAt,
-            Map<Stop, Feasibility> refusals) {
+            Map<Stop, Feasibility> refusals, PlanningDeadline deadline, SeatReservation seats) {
 
         // 가장 이른 약속 마감 순으로 — 시간이 급한 것부터 자리를 잡아야 지각이 준다 (§6.5 3단계).
         List<List<Stop>> ordered = new ArrayList<>(clusters);
@@ -74,14 +88,26 @@ public final class GreedyAssigner {
 
         List<Stop> unassigned = new ArrayList<>();
         for (List<Stop> cluster : ordered) {
-            unassigned.addAll(place(cluster, routes, distance, cost, refusals));
+            if (deadline.expired()) {
+                // 마감이 오면 남은 것은 미배정으로 끝낸다 — 사유는 「시도하지 못했다」다.
+                // 「실을 차가 없다」로 적으면 §6.3 의 설명이 거짓말이 된다.
+                cluster.forEach(stop -> refusals.put(stop, DEADLINE));
+                unassigned.addAll(cluster);
+                continue;
+            }
+            unassigned.addAll(place(cluster, routes, distance, cost, refusals, seats));
         }
         unassigned.forEach(stop -> refusals.putIfAbsent(stop, lastRefusalFor(stop, routes)));
         return List.copyOf(unassigned);
     }
 
-    /** 이 stop 을 마지막으로 거절한 사유. 설명(§6.3)이 "실을 차가 없다" 로만 남지 않게 한다. */
-    private Feasibility lastRefusalFor(Stop stop, List<RouteAccumulator> routes) {
+    /**
+     * 이 stop 을 마지막으로 거절한 사유. 설명(§6.3)이 "실을 차가 없다" 로만 남지 않게 한다.
+     *
+     * <p>{@link SavingsClarkeWright} 도 이것을 쓴다 — 「미배정에 사유를 붙이는 방법」은 전략이
+     * 아니라 §6.3 의 정책이고, 두 벌로 두면 같은 상황에 두 가지 답이 나온다.
+     */
+    static Feasibility lastRefusalFor(Stop stop, List<RouteAccumulator> routes) {
         return routes.stream()
                 .map(route -> route.check(stop))
                 .filter(feasibility -> !feasibility.feasible())
@@ -90,7 +116,8 @@ public final class GreedyAssigner {
     }
 
     private List<Stop> place(List<Stop> cluster, List<RouteAccumulator> routes,
-            DistanceProvider distance, CostModel cost, Map<Stop, Feasibility> refusals) {
+            DistanceProvider distance, CostModel cost, Map<Stop, Feasibility> refusals,
+            SeatReservation seats) {
 
         // 빈 차를 먼저 본다. 규모가 커질수록 이쪽이 낫다 — 측정: large 에서 빈 차 우선
         // 15,904,839 vs 전체 비교 17,103,847, 계획 시간도 5.5초 vs 10.8초다. medium 에서는
@@ -98,38 +125,46 @@ public final class GreedyAssigner {
         // 7%에 계획 시간이 두 배라 큰 쪽을 기준으로 골랐다. 이 선택은 개선 단계(Phase 4)가
         // 들어오면 다시 재야 한다 — 지그재그를 뒤에서 펴 주면 전제가 바뀐다.
         List<RouteAccumulator> empty = routes.stream().filter(RouteAccumulator::isEmpty).toList();
-        List<Stop> result = tryOn(empty, cluster, distance, cost);
+        List<Stop> result = tryOn(empty, cluster, distance, cost, seats);
         if (result != null) {
             return result.isEmpty() ? List.of()
-                    : splitOrGiveUp(result, routes, distance, cost, refusals);
+                    : splitOrGiveUp(result, routes, distance, cost, refusals, seats);
         }
-        List<Stop> onLoaded = tryOn(
-                routes.stream().filter(route -> !route.isEmpty()).toList(), cluster, distance, cost);
+        List<Stop> onLoaded = tryOn(routes.stream().filter(route -> !route.isEmpty()).toList(),
+                cluster, distance, cost, seats);
         if (onLoaded != null) {
             return onLoaded.isEmpty() ? List.of()
-                    : splitOrGiveUp(onLoaded, routes, distance, cost, refusals);
+                    : splitOrGiveUp(onLoaded, routes, distance, cost, refusals, seats);
         }
-        return splitOrGiveUp(cluster, routes, distance, cost, refusals);
+        return splitOrGiveUp(cluster, routes, distance, cost, refusals, seats);
     }
 
     /** 이 후보 차량들에 실어 본다. 하나도 못 실으면 {@code null}. */
     private List<Stop> tryOn(List<RouteAccumulator> routes, List<Stop> cluster,
-            DistanceProvider distance, CostModel cost) {
+            DistanceProvider distance, CostModel cost, SeatReservation seats) {
 
         Map<RouteAccumulator, Trial> trials = new LinkedHashMap<>();
         for (RouteAccumulator route : routes) {
             RouteAccumulator trial = route.branch();
-            var leftover = sequencer.sequence(trial, cluster, distance);
+            // 문은 라우트의 <em>현재</em> 상태에서 만든다 — 사본과 시작점이 같아야 시험 배치와
+            // 확정 배치가 같은 답을 낸다.
+            var leftover = sequencer.sequence(trial, cluster, distance, seats.gateFor(route.state()));
             if (leftover.size() == cluster.size()) {
                 continue;                       // 한 개도 못 넣었다 — 이 차는 후보가 아니다
             }
             long marginal = trial.toRoute(cost).cost().krw() - currentCost(route, cost);
-            trials.put(route, new Trial(trial, leftover.size(), marginal));
+            trials.put(route, new Trial(trial, leftover.size(), marginal,
+                    route.state().vehicle()));
         }
 
         Trial best = trials.values().stream()
                 // 많이 넣는 쪽이 먼저다 — 절반만 넣고 싼 차보다 전부 넣는 차가 낫다.
-                .min(Comparator.comparingInt(Trial::leftover).thenComparingLong(Trial::marginalKrw))
+                // 셋째 키가 **동률 규칙**이다 (§6.5 3단계, ADR-031): 한계비용까지 같으면
+                // 능력이 적은 차를 고른다. 이것이 없으면 동률은 trials 의 순회 순서 —
+                // 즉 어댑터의 `ORDER BY code` — 로 깨진다. 결정이 아니라 우연이다.
+                .min(Comparator.comparingInt(Trial::leftover)
+                        .thenComparingLong(Trial::marginalKrw)
+                        .thenComparing(Trial::vehicle, VehicleSpec.LEAST_CAPABLE_FIRST))
                 .orElse(null);
         if (best == null) {
             return null;
@@ -138,19 +173,22 @@ public final class GreedyAssigner {
         // 시험 배치를 확정한다 — 같은 순서로 실제 라우트에 다시 넣는다.
         RouteAccumulator target = trials.entrySet().stream()
                 .filter(entry -> entry.getValue() == best).findFirst().orElseThrow().getKey();
-        return NearestNeighborSequencer.asList(sequencer.sequence(target, cluster, distance));
+        return NearestNeighborSequencer.asList(
+                sequencer.sequence(target, cluster, distance, seats.gateFor(target.state())));
     }
 
     /** 반으로 쪼개 다시 시도한다. 하나짜리는 더 쪼갤 수 없으므로 미배정이다. */
     private List<Stop> splitOrGiveUp(List<Stop> cluster, List<RouteAccumulator> routes,
-            DistanceProvider distance, CostModel cost, Map<Stop, Feasibility> refusals) {
+            DistanceProvider distance, CostModel cost, Map<Stop, Feasibility> refusals,
+            SeatReservation seats) {
 
         if (cluster.size() <= 1) {
             return cluster;
         }
         int half = cluster.size() / 2;
-        List<Stop> left = place(cluster.subList(0, half), routes, distance, cost, refusals);
-        List<Stop> right = place(cluster.subList(half, cluster.size()), routes, distance, cost, refusals);
+        List<Stop> left = place(cluster.subList(0, half), routes, distance, cost, refusals, seats);
+        List<Stop> right =
+                place(cluster.subList(half, cluster.size()), routes, distance, cost, refusals, seats);
         List<Stop> unassigned = new ArrayList<>(left);
         unassigned.addAll(right);
         return unassigned;
@@ -171,7 +209,9 @@ public final class GreedyAssigner {
      * @param route       사본
      * @param leftover    넣지 못한 stop 수
      * @param marginalKrw 이 배치로 오르는 비용
+     * @param vehicle     이 사본의 차량. 동률을 깨는 데 쓴다 (ADR-031)
      */
-    private record Trial(RouteAccumulator route, int leftover, long marginalKrw) {
+    private record Trial(RouteAccumulator route, int leftover, long marginalKrw,
+            VehicleSpec vehicle) {
     }
 }

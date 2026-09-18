@@ -34,6 +34,7 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -51,6 +52,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * outbox 까지만 쓰면 충분하다.
  */
 @SpringBootTest(classes = DispatchApplication.class)
+@Import(PlanningClock.class)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("DispatchAdminIT — 조회·재배정·참조 데이터 SQL")
 class DispatchAdminIT extends DispatchIntegrationTestBase {
@@ -163,7 +165,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     void 계획_조회가_라우트_요약과_설명을_함께_돌려준다() {
         UUID waveId = Ids.newId();
         List<UUID> orderIds = seedCandidates(waveId, 8);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
 
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
 
@@ -185,7 +187,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     void 같은_계획을_식별자로도_찾는다() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 4);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         UUID planId = tx().execute(status -> planQueries.findPlanByWave(waveId))
                 .orElseThrow().planId();
 
@@ -207,7 +209,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     void 라우트_조회가_stop_과_주문을_순서대로_돌려준다() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 8);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         UUID routeId = plan.routes().getFirst().routeId();
 
@@ -466,7 +468,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     private TwoRoutes twoRoutes() {
         UUID waveId = Ids.newId();
         seedCandidates(waveId, 40);
-        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP));
+        runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         assertThat(plan.routes()).as("재배정을 보려면 라우트가 둘 이상이어야 한다").hasSizeGreaterThan(1);
 
@@ -488,8 +490,16 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         return Ids.newId().toString().substring(24);
     }
 
+    /**
+     * 약속 창의 기준을 {@link PlanningClock#PLAN_AT} 에서 잡는다 — {@code Instant.now()} 가 아니다.
+     *
+     * <p>재배정은 "옮긴 뒤 복귀 시각이 근무 종료 − 30분 버퍼 안인가" 를 본다(§6.3). 21시에
+     * 돌리면 남은 근무창이 한 시간이라 어떤 이동도 그 검사를 통과하지 못하고, 세 테스트가
+     * {@code ConflictException} 으로 떨어진다 — 2026-09-05 에 실제로 그랬다. 이 클래스가 재는
+     * 것은 재배정 규칙이지 <em>지금 몇 시인가</em>가 아니다.
+     */
     private List<UUID> seedCandidates(UUID waveId, int count) {
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)),
                 now.plus(Duration.ofHours(5)));
         List<UUID> orderIds = new ArrayList<>(count);
@@ -500,7 +510,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
                         GeoPoint.of(CAMP.lat() + 0.004d * (i % 8 + 1),
                                 CAMP.lng() + 0.005d * (i / 8 + 1)),
-                        40_000, 80_000, false, false, window, 60, 0, now));
+                        40_000, 80_000, false, false, window, 60, false, 0, now));
             }
         });
         return orderIds;

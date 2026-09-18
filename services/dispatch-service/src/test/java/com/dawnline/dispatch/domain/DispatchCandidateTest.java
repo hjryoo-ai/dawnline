@@ -21,7 +21,7 @@ class DispatchCandidateTest {
 
     private static DispatchCandidate loaded() {
         return DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(), Ids.newId(),
-                GeoPoint.of(37.4979, 127.0276), 1_000, 2_000, false, false, WINDOW, 90, 0, NOW);
+                GeoPoint.of(37.4979, 127.0276), 1_000, 2_000, false, false, WINDOW, 90, false, 0, NOW);
     }
 
     @Test
@@ -82,7 +82,7 @@ class DispatchCandidateTest {
     @Test
     void 권역이_없을_수_있다() {
         DispatchCandidate candidate = DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(),
-                null, GeoPoint.of(37.5, 127.0), 1, 1, false, false, WINDOW, 60, 0, NOW);
+                null, GeoPoint.of(37.5, 127.0), 1, 1, false, false, WINDOW, 60, false, 0, NOW);
 
         assertThat(candidate.zoneId()).isEmpty();
     }
@@ -90,7 +90,7 @@ class DispatchCandidateTest {
     @Test
     void 음수_화물은_거부한다() {
         assertThatThrownBy(() -> DispatchCandidate.load(Ids.newId(), Ids.newId(), Ids.newId(), null,
-                GeoPoint.of(37.5, 127.0), -1, 1, false, false, WINDOW, 60, 0, NOW))
+                GeoPoint.of(37.5, 127.0), -1, 1, false, false, WINDOW, 60, false, 0, NOW))
                 .isInstanceOf(ValidationException.class);
     }
 }

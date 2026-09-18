@@ -4,6 +4,7 @@ import com.dawnline.common.Money;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalInt;
 
 /**
  * 한 계획에 적용되는 룰 묶음 (DESIGN.md §6.3).
@@ -70,6 +71,31 @@ public final class RuleSet {
     }
 
     /**
+     * <strong>위치와 무관한</strong> 하드 룰만 평가한다 ([ADR-037]).
+     *
+     * <p>«이 stop 이 이 라우트에 <em>들어갈 수 있기는 한가</em>» 를 묻는다. 거절이면 어느 자리도
+     * 볼 필요가 없으므로 재삽입이 그 라우트를 통째로 건너뛴다 — 시도해도 못 들어가는 자리를
+     * 시도하지 않는 것이라 <strong>결과가 바뀔 수 없다.</strong> 통과라고 해서 들어간다는
+     * 뜻은 아니다(근무창·약속창은 자리마다 다르다).
+     *
+     * @param stop    넣으려는 stop
+     * @param vehicle 라우트의 차량
+     * @param state   여기까지 쌓인 라우트 상태
+     */
+    public Feasibility checkPositionIndependent(Stop stop, VehicleSpec vehicle, RouteState state) {
+        for (HardRule rule : hard) {
+            if (!rule.positionIndependent()) {
+                continue;
+            }
+            Feasibility result = rule.check(stop, vehicle, state);
+            if (!result.feasible()) {
+                return result;
+            }
+        }
+        return Feasibility.ok();
+    }
+
+    /**
      * 소프트 룰을 <strong>모두</strong> 평가해 합산한다. 보너스가 있으므로 음수일 수 있다.
      *
      * @param stop    배치하려는 stop
@@ -102,6 +128,25 @@ public final class RuleSet {
     /** 미배정 룰들 (우선순위 순). */
     public List<UnassignedRule> unassignedRules() {
         return unassigned;
+    }
+
+    /**
+     * 이 룰셋이 라우트 하나에 허용하는 <strong>유효 stop 상한</strong> ([ADR-038]).
+     *
+     * <p>답하는 룰들의 <strong>최솟값</strong>이다 — 상한은 모두 동시에 성립해야 하므로 가장 작은
+     * 것이 실제로 무는 값이고, 아무도 답하지 않으면 상한이 없다. 클러스터러가 「차 한 대 몫」을
+     * 자를 때 쓴다(§6.5 2단계): 묶는 축이 stop 인데 적재로만 재면 클러스터가 stop 축에서
+     * 두세 대 몫이 되어 배정에서 쪼개진다.
+     *
+     * <p>이 값은 <strong>계획 시작 시점 스냅샷</strong>의 것이다 — 캠프 오버라이드는 이 묶음이
+     * 만들어지기 전에 이미 병합됐다(§6.3). 계획 도중에 룰이 바뀌어도 이 계획은 자기 상한을 쓴다.
+     */
+    public OptionalInt routeStopCap() {
+        return hard.stream()
+                .map(HardRule::routeStopCap)
+                .filter(OptionalInt::isPresent)
+                .mapToInt(OptionalInt::getAsInt)
+                .min();
     }
 
     /** 하드 룰들 (우선순위 순). {@link PlanValidator} 가 최종 라우트에 다시 돌린다. */

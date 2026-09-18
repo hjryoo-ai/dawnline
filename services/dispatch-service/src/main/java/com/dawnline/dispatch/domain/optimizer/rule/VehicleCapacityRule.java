@@ -19,6 +19,12 @@ public record VehicleCapacityRule(String name, int priority) implements HardRule
         return new VehicleCapacityRule(definition.name(), definition.priority());
     }
 
+    /** 누적 적재는 순서와 무관하다 — 덧셈은 교환법칙을 따른다. */
+    @Override
+    public boolean positionIndependent() {
+        return true;
+    }
+
     @Override
     public Feasibility check(Stop stop, VehicleSpec vehicle, RouteState state) {
         Parcel after = state.load().plus(stop.parcel());

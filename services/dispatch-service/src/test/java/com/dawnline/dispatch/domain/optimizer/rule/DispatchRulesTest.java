@@ -21,7 +21,7 @@ class DispatchRulesTest {
         // switch 가 enum 을 전부 다루는지는 컴파일러가 보지만, 각 분기가 실제로 동작하는지는
         // 파라미터가 맞아야 알 수 있다.
         for (RuleType type : RuleType.values()) {
-            DispatchRule rule = DispatchRules.of(definitionFor(type));
+            DispatchRule rule = DispatchRules.of(RuleFixtures.definitionFor(type));
             assertThat(rule.name()).isEqualTo(type.name().toLowerCase(java.util.Locale.ROOT));
         }
     }
@@ -70,9 +70,9 @@ class DispatchRulesTest {
     @Test
     void 묶음은_심각도별로_갈리고_버전을_들고_있다() {
         RuleSet rules = DispatchRules.ruleSet(List.of(
-                definitionFor(RuleType.VEHICLE_CAPACITY),
-                definitionFor(RuleType.TIME_WINDOW_PENALTY),
-                definitionFor(RuleType.UNASSIGNED_PENALTY)), 7);
+                RuleFixtures.definitionFor(RuleType.VEHICLE_CAPACITY),
+                RuleFixtures.definitionFor(RuleType.TIME_WINDOW_PENALTY),
+                RuleFixtures.definitionFor(RuleType.UNASSIGNED_PENALTY)), 7);
 
         assertThat(rules.hardRules()).hasSize(1);
         assertThat(rules.softRules()).hasSize(1);
@@ -80,22 +80,4 @@ class DispatchRulesTest {
         assertThat(rules.version()).isEqualTo(7);
     }
 
-    private static RuleDefinition definitionFor(RuleType type) {
-        String name = type.name().toLowerCase(java.util.Locale.ROOT);
-        Map<String, Object> params = switch (type) {
-            case VEHICLE_ATTRIBUTE_MATCH ->
-                    Map.of("orderFlag", "requiresCold", "vehicleFlag", "isCold");
-            case VEHICLE_CAPACITY -> Map.of();
-            case MAX_STOPS_PER_ROUTE -> Map.of("max", 120);
-            case SHIFT_WINDOW -> Map.of("bufferMinutes", 30);
-            case TIME_WINDOW_LIMIT -> Map.of("hardLimitMinutes", 60);
-            case TIME_WINDOW_PENALTY -> Map.of("penaltyPerMinuteKrw", 50);
-            case ZONE_AFFINITY -> Map.of("crossZonePenaltyKrw", 2_000);
-            case PRIORITY_BOOST -> Map.of("bonusKrw", 3_000);
-            case VEHICLE_PREFERENCE ->
-                    Map.of("preferredTypes", List.of("VAN"), "penaltyKrw", 4_000);
-            case UNASSIGNED_PENALTY -> Map.of("baseKrw", 30_000, "perPriorityKrw", 20_000);
-        };
-        return RuleFixtures.definition(name, type, 10, params);
-    }
 }

@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.domain.optimizer;
 
+import com.dawnline.dispatch.domain.PlanMode;
 import static com.dawnline.dispatch.domain.optimizer.OptimizerFixtures.GANGNAM;
 import static com.dawnline.dispatch.domain.optimizer.OptimizerFixtures.START;
 import static com.dawnline.dispatch.domain.optimizer.OptimizerFixtures.YEOUIDO;
@@ -70,7 +71,7 @@ class PlanValidatorTest {
     private PlanResult resultOf(PlannedRoute route) {
         return new PlanResult(List.of(route), List.of(), Money.ZERO,
                 new PlanMetrics(1, route.orderCount(), 0, 1, route.distanceM(), 0, 0, 0, 0),
-                List.of());
+                List.of(), false);
     }
 
     @Test
@@ -151,7 +152,7 @@ class PlanValidatorTest {
 
         PlanningProblem problem = new PlanningProblem(OptimizerFixtures.wave(), depot, List.of(),
                 List.of(vehicle), RuleSet.empty(), new CostModel(), distance,
-                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)), START, 1L);
+                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)), PlanMode.FULL, 1.0d, START, 1L);
 
         assertThat(validator.validate(problem, resultOf(route))).isEmpty();
     }
@@ -159,7 +160,7 @@ class PlanValidatorTest {
     private PlanningProblem problem(CampDepot depot, VehicleSpec vehicle, HardRule rule) {
         return new PlanningProblem(OptimizerFixtures.wave(), depot, List.of(), List.of(vehicle),
                 RuleSet.of(List.of(rule), 1), new CostModel(), distance,
-                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)),
+                new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(5)), PlanMode.FULL, 1.0d,
                 Instant.from(START), 1L);
     }
 }

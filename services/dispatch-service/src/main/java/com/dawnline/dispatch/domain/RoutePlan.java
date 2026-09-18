@@ -35,6 +35,8 @@ public final class RoutePlan {
     private PlanStatus status;
     private @Nullable String strategy;
     private @Nullable PlanMode mode;
+    /** 왜 그 모드였는가 (§6.7, V5). 카운터 라벨은 집계지 개별 답이 아니다. */
+    private @Nullable PlanModeReason modeReason;
     private @Nullable Long seed;
     private @Nullable Integer ruleVersion;
     private @Nullable Instant startedAt;
@@ -69,7 +71,8 @@ public final class RoutePlan {
 
     /** 저장된 상태에서 되살린다. */
     public static RoutePlan rehydrate(UUID id, UUID waveId, UUID campId, PlanStatus status,
-            @Nullable String strategy, @Nullable PlanMode mode, @Nullable Long seed,
+            @Nullable String strategy, @Nullable PlanMode mode,
+            @Nullable PlanModeReason modeReason, @Nullable Long seed,
             @Nullable Integer ruleVersion, @Nullable Instant startedAt, @Nullable Instant finishedAt,
             @Nullable Money totalCost, @Nullable Integer assignedCount,
             @Nullable Integer unassignedCount, @Nullable Integer planDurationMs,
@@ -79,6 +82,7 @@ public final class RoutePlan {
         plan.depot = depot;
         plan.strategy = strategy;
         plan.mode = mode;
+        plan.modeReason = modeReason;
         plan.seed = seed;
         plan.ruleVersion = ruleVersion;
         plan.startedAt = startedAt;
@@ -97,14 +101,17 @@ public final class RoutePlan {
      *
      * @param strategy    전략 이름
      * @param mode        실행 모드
+     * @param modeReason  그 모드를 고른 근거 (§6.7). 모드만 남기면 "왜 FAST 였나" 에 답할 수 없다
      * @param seed        난수 seed (같으면 같은 결과, 불변규칙 12)
      * @param ruleVersion 시작 시점의 룰 버전. 진행 중 계획은 이 스냅샷을 쓴다 (§6.3)
      * @param at          시작 시각
      */
-    public void begin(String strategy, PlanMode mode, long seed, int ruleVersion, Instant at) {
+    public void begin(String strategy, PlanMode mode, PlanModeReason modeReason, long seed,
+            int ruleVersion, Instant at) {
         status = status.transitionTo(PlanStatus.PLANNING);
         this.strategy = Objects.requireNonNull(strategy, "strategy");
         this.mode = Objects.requireNonNull(mode, "mode");
+        this.modeReason = Objects.requireNonNull(modeReason, "modeReason");
         this.seed = seed;
         this.ruleVersion = ruleVersion;
         this.startedAt = Objects.requireNonNull(at, "at");
@@ -203,6 +210,13 @@ public final class RoutePlan {
     /** 실행 모드. */
     public Optional<PlanMode> mode() {
         return Optional.ofNullable(mode);
+    }
+
+    /**
+     * 그 모드를 고른 근거 (§6.7). 이 컬럼이 생기기 전(V5 이전)의 행이면 비어 있다.
+     */
+    public Optional<PlanModeReason> modeReason() {
+        return Optional.ofNullable(modeReason);
     }
 
     /** 난수 seed. */

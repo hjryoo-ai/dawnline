@@ -1,6 +1,7 @@
 package com.dawnline.dispatch.domain.optimizer;
 
 import com.dawnline.dispatch.domain.optimizer.strategy.BaselineNearestNeighbor;
+import com.dawnline.dispatch.domain.optimizer.strategy.SavingsClarkeWright;
 import com.dawnline.dispatch.domain.optimizer.strategy.SweepGreedyNearestNeighbor;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,6 +29,9 @@ public final class DispatchStrategies {
         Map<String, Supplier<DispatchStrategy>> strategies = new LinkedHashMap<>();
         strategies.put(BaselineNearestNeighbor.NAME, BaselineNearestNeighbor::new);
         strategies.put(SweepGreedyNearestNeighbor.NAME, SweepGreedyNearestNeighbor::new);
+        strategies.put(SweepGreedyNearestNeighbor.NAME_WITH_LOCAL_SEARCH,
+                SweepGreedyNearestNeighbor::withLocalSearch);
+        strategies.put(SavingsClarkeWright.NAME, SavingsClarkeWright::new);
         return Map.copyOf(strategies);
     }
 

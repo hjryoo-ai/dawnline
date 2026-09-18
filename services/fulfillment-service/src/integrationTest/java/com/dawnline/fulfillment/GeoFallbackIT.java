@@ -17,6 +17,7 @@ import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Zone;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.search.MeterNotFoundException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -51,7 +52,22 @@ import org.springframework.test.context.DynamicPropertySource;
 @DisplayName("GeoFallbackIT — Redis 없이도 성립하는 FC 선택")
 class GeoFallbackIT extends FulfillmentIntegrationTestBase {
 
-    private static final Instant NOW = Instant.parse("2026-09-05T00:00:00Z");
+    /**
+     * 컷오프는 <strong>애플리케이션의 시계</strong>에서 뽑는다 — 리터럴로 적으면 안 된다.
+     *
+     * <p>이 클래스는 주입된 {@link FcSelection} 빈을 그대로 쓴다(그래야 "애플리케이션이 Redis 없이
+     * 성립한다" 를 증명한다). 그 빈의 시계는 진짜 시스템 시계이고, {@code FcSelection} 은 컷오프가
+     * 24시간을 넘으면 {@code STALE} 로 배차 불가를 낸다(ADR-020 후속 정정). 그래서 컷오프를
+     * {@code Instant.parse("2026-09-05T…")} 로 적어 두면 이 테스트는 <strong>작성한 날로부터
+     * 25시간짜리</strong>가 된다 — 실제로 2026-09-07 에 열 캠프 전부가 배차 불가로 터졌고,
+     * 실패 메시지는 캠프 코드 열 줄이라 원인이 Redis 인지 시각인지 말해 주지 않았다.
+     *
+     * <p>옆의 {@code GeoEquivalenceIT} 는 자기 {@code FcSelection} 을 {@code Clock.fixed} 로
+     * 만들어 써서 같은 리터럴을 갖고도 안전하다. 여기서는 빈을 바꿀 수 없으니 반대로 간다:
+     * 픽스처를 시계에서 뽑는다.
+     */
+    @Autowired
+    private Clock clock;
 
     @Autowired
     private ReferenceData referenceData;
@@ -140,11 +156,16 @@ class GeoFallbackIT extends FulfillmentIntegrationTestBase {
 
     @Test
     void 모든_캠프에서_FC_가_선택된다() {
+        Instant cutoffAt = clock.instant().plusSeconds(3600);
+        assertThat(selection.isStale(cutoffAt))
+                .as("전제: 이 주문은 STALE 이 아니다. STALE 이면 Redis 와 무관하게 전부 배차 불가가 "
+                        + "되어, 이 테스트는 폴백이 아니라 컷오프 상한을 재게 된다")
+                .isFalse();
         List<String> failures = new java.util.ArrayList<>();
 
         for (Camp camp : referenceData.findAllCamps()) {
             OrderToPlan order = new OrderToPlan(UUID.randomUUID(), ServiceTier.SAME_DAY, false,
-                    List.of(new OrderLine("SKU-00001", 1)), NOW.plusSeconds(3600));
+                    List.of(new OrderLine("SKU-00001", 1)), cutoffAt);
             List<CandidateFc> candidates = assembler.forCamp(camp, order.lines());
 
             assertThat(candidates)

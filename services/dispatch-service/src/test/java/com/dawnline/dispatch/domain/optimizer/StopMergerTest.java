@@ -59,15 +59,38 @@ class StopMergerTest {
     }
 
     @Test
-    void 냉장과_위험물은_전파된다() {
-        // 한 건이라도 냉장이면 그 stop 전체가 냉장 차량을 요구한다 — 통합이 제약을 옮긴다.
+    void 함께_탈_수_없는_주문은_같은_자리라도_다른_stop_이다() {
+        // **2026-09-09 에 뒤집힌 성질이다** (ADR-033). 이전에는 통합이 제약을 <em>전파</em>했다 —
+        // 한 건이라도 위험물이면 stop 전체가 위험물이 되고, 옆의 평범한 주문이 함께 위험물
+        // 차량을 기다렸다. large 에서 미배정 stop 18개가 주문 89건을 안고 있었던 것이 그 값이다.
+        //
+        // 통합의 질문은 "한 번에 배송할 수 있는가" 이고, 차량이 막으면 답은 아니오다.
         List<Stop> stops = StopMerger.merge(List.of(
                 at(GANGNAM, MORNING, new Parcel(1, 1, false, false), 0),
                 at(GANGNAM, MORNING, new Parcel(1, 1, true, true), 0)));
 
-        assertThat(stops).singleElement().satisfies(stop -> {
+        assertThat(stops).as("좌표도 창도 같지만 제약이 다르다").hasSize(2);
+        assertThat(stops).anySatisfy(stop -> {
+            assertThat(stop.parcel().requiresCold()).isFalse();
+            assertThat(stop.parcel().hazmat()).isFalse();
+        });
+        assertThat(stops).anySatisfy(stop -> {
             assertThat(stop.parcel().requiresCold()).isTrue();
             assertThat(stop.parcel().hazmat()).isTrue();
+        });
+    }
+
+    @Test
+    void 제약이_같으면_여전히_묶인다() {
+        // 위 테스트가 "통합이 아예 안 된다" 로 통과하지 않는다는 것을 보인다.
+        List<Stop> stops = StopMerger.merge(List.of(
+                at(GANGNAM, MORNING, new Parcel(1, 1, true, false), 0),
+                at(GANGNAM, MORNING, new Parcel(2, 2, true, false), 0)));
+
+        assertThat(stops).singleElement().satisfies(stop -> {
+            assertThat(stop.orderCount()).isEqualTo(2);
+            assertThat(stop.parcel().requiresCold()).isTrue();
+            assertThat(stop.parcel().weightG()).isEqualTo(3);
         });
     }
 
