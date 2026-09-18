@@ -779,7 +779,27 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      아래다. **재검토 조건은 「캠프 100개」 또는 「`route_plans` 100만 행」.**
    - `small` 에서 FAST 는 베이스라인보다 **+6.09%** 비싸다. 숨기지 않는다 — 다만 `small` 은 FULL 로도
      p95 가 270 ms 라 애초에 열화 조건에 닿지 않는다.
-5. 벤치마크: 4개 데이터셋 × 3~4 전략 × 5회, 중앙값·p95, `docs/benchmarks/<date>-strategies.md`. README에 표 링크.
+5. **벤치마크 마감 리포트 — ✅ 완료** (2026-09-18, [측정](benchmarks/phase4-strategies.md)).
+
+   계획 문장은 「4개 데이터셋 × 3~4 전략 × 5회」였고, **다섯 데이터셋 × 네 전략**으로 냈다
+   (`overload` 는 **16-a** 가 갈라낸 과부하 절이라 같은 표에
+   놓지 않는다). 파일 이름은 계획의 `<date>-strategies.md` 가 아니라 **`phase4-strategies.md`** 다 —
+   저장소의 `docs/benchmarks/` 가 전부 `phase<N>-<주제>.md` 이고, 같은 주제를 다시 잰 문서를
+   나란히 놓으려면 날짜보다 주제가 낫다. §6.9 의 문장도 그 규약으로 고쳤다.
+
+   | 절 | 내용 |
+   |---|---|
+   | §1 | 실현 가능한 네 데이터셋 — 총비용·미배정·차량·거리·p50/p95·지각 + **비용 분해** |
+   | §2 | 과부하 `overload` 별도 절 (비용의 85~93%가 미배정 페널티다) |
+   | §3 | **고정비 하한** — 불가능의 경계, 전략별 두 열 |
+   | §4 | **사다리 두 단** — 윗단 FAST 의 대가가 **전략마다 3배 다르다**, 아랫단은 [ADR-041](adr/ADR-041-cluster-target-counts-stop-slots.md) 뒤 첫 재측정 |
+   | §5 | **재기준 이력 여섯 줄** + 동결 계약이 지키는 것과 지키지 않는 것 |
+   | §6 | **알려진 레짐 둘** — 첫째(sweep `small`)는 닫혔고 둘째(savings `small`)는 열려 있다 |
+   | §7 | **§6.9 방법론** — 그림자 계측 원장 여덟 줄 · 짝 문장 셋 · 마지막 계측(클러스터 여유, 닫음) |
+   | §8 | Phase 4 DoD 대조 |
+
+   **다섯 데이터셋 · 네 전략이 전부 「수렴 종료」다** — 어느 회차도 계획 마감에 잘리지 않았고,
+   그래서 이 표의 비용은 재현 가능하다(§6.9 재현 조건).
 6. (선택) `timefold` 전략 실험 → ADR-004 결론에 수치 반영. 기본 경로에 포함하지 않는다.
 7. ADR-004, 008 확정.
 8. **`small` 레짐 격차 — ✅ 닫혔다** (2026-09-09, [측정](benchmarks/phase4-local-search.md) §4).
@@ -1115,6 +1135,15 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
   - **정정 둘째**: 이전에 여기 적혀 있던 "`sweep-greedy-nn` 이 그 모드의 기본이다" 는 틀렸다.
     FAST 는 **전략을 바꾸지 않는다** — 같은 전략의 §6.5 5단계를 끄는 것이고, 계획 행의 전략
     이름은 `sweep-greedy-nn+ls` 로 남는다.
+  - **2026-09-18 재측정** (4-5, [측정](benchmarks/phase4-strategies.md) §4): ADR-039·040·041 이
+    개선 단계의 일을 줄여서 **5초 예산에서는 아랫단 조건이 켜지지 않는다**(`large` FULL 3,453 ms
+    = 예산의 69%). 켜지는 첫 예산은 **4초**이고 대가는 **+1.06%**, 하드 룰 5회 통과다 — DoD 가
+    요구한 성질(*예산이 조이면 열화가 일어나고 하드 룰은 그대로*)은 그대로 성립하고 **자리만
+    옮겨졌다.** 윗단의 대가는 **전략마다 다르다**(`large` 기본 +13.08% 대 savings +4.29%).
+    그리고 **다섯 데이터셋 전부에서 기본 전략의 FAST 결과가 `sweep-greedy-nn` 의 FULL 과 한
+    자리도 다르지 않다** — 「전략을 바꾸지 않는다」의 다섯 번째 확인이다.
+- **벤치마크 리포트**(4-5) — ✅ [`phase4-strategies.md`](benchmarks/phase4-strategies.md).
+  DoD 대조는 그 문서 §8, Phase 작업 대조는 아래 **마감 대조표**.
 
 15. **안 훑기 — 라우트 사이 스캔의 97.6%가 헛스캔이다** (2026-09-11 측정, [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) 5번 · [측정](benchmarks/phase4-where-the-time-is.md)).
 
@@ -1478,6 +1507,17 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
     열었다. [ADR-043](adr/ADR-043-default-strategy-stays-until-peak-converges.md) 의 남은 전환
     조건이 이 항목에 걸려 있다).
 
+    **⏸ Phase 4 백로그로 이월한다** (2026-09-18 결정). 그림자 계획(a·b·c)은 그대로 두고
+    **Phase 7-4 의 peak-day 시뮬레이션이 이 항목을 다시 연다.** 이월의 근거는 측정이 아니라
+    **종료 조건**이다 — 「비용을 바꾸는 항목은 리포트 앞」이라는 규칙에는 끝이 없다. 측정할수록
+    다음 손잡이가 나오는 것은 방법론이 작동한다는 뜻이지 리포트를 미룰 이유가 아니고, 리포트는
+    **커밋 SHA 에 귀속되는 스냅샷**이라 마지막 말이 아니다(§6.9).
+
+    **(a) 의 방향이 맞다는 것은 지금도 적어 둘 수 있다.** `large` 의 분해가 그것을 보였다 —
+    2단계가 거리를 **−36 km** 줄이는데 총비용은 **+105,502** 이고 움직인 항은 **시간비
+    +147,689 · 소프트 +104,910** 이다([측정](benchmarks/phase4-endpoint-merges.md) §5).
+    **라우트가 큰 2단계에서 거리는 더 이상 변동비의 대리 변수가 아니다.**
+
     savings 의 수락 기준은 `s(i,j) = d(0,i) + d(0,j) − d(i,j)` — **거리**다. 1단계에서는 그것이
     목적함수의 좋은 대리 변수다(라우트가 짧아 도착 시각이 이르고, 고정비는 라우트 수에 걸린다).
     **2단계에서는 아니다.** 4-19 의 손해가 난 자리가 그것을 말한다 — `large` 에서 거리는 −36 km
@@ -1496,6 +1536,54 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
     **판정 기준은 다섯 데이터셋 전부다.** 4-19 가 하나(`peak`)를 고치고 하나(`small`)를 깬 것이
     이 기준을 세운 이유다.
+
+
+### Phase 4 마감 대조표
+
+기준일 **2026-09-18**. CLAUDE.md 「작업 방식」 — *기억이 아니라 표로 확인한다*. **빠진 항목은
+표에 남긴다**(지우지 않는다: Phase 1 의 레이트 리밋이 그렇게 빠질 뻔했다).
+
+> **커밋 열은 브랜치 `phase4/relay-advisory-lock` 의 것이다.** squash 머지가 이 SHA 들을
+> 갈아치우므로, 머지 뒤에는 `main` 의 커밋으로 다시 적는다(§6.9 — 브랜치 커밋을 적었다가 참조가
+> 하루 만에 죽은 적이 있다).
+
+| # | 작업 (계획 문장) | 상태 | 커밋 / 근거 |
+|---|---|---|---|
+| 0 | 릴레이 리더 락을 PostgreSQL advisory lock 으로 | ✅ | `bd536ee`(ADR-027 후속 정정) · `c3ca8ca`(구현) · `6333ce9`(데모 전제 어설션) · `7dad296`(격리 축 둘) · `cbb48f6`(순서 결정) |
+| 1 | `LocalSearchImprover` — §6.5 5단계 | ✅ | `70f0f32`([ADR-032](adr/ADR-032-local-search-budget-and-approximations.md)) · `49f0903`([ADR-031](adr/ADR-031-least-capable-first-tie-break.md) 동률) · [측정](benchmarks/phase4-local-search.md) |
+| 2 | `savings-cw+ls` 전략 | ✅ | `5cb820a`([ADR-042](adr/ADR-042-savings-merges-are-class-aware.md)) · `ea831cd`([측정](benchmarks/phase4-savings-cw.md)) · `b2aa3ee`([ADR-043](adr/ADR-043-default-strategy-stays-until-peak-converges.md)) |
+| 3 | 병렬화 (ForkJoin + 가상 스레드) | ⏸ **이월** | `9c3bcd0`([ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md)) · `8846272`([측정](benchmarks/phase4-peak-gate.md)). **병렬 단위가 클러스터가 아니었다** — 상한을 먼저 쟀고 만들 값이 없었다. 재검토 조건은 ADR-035 |
+| 4 | FAST 열화 모드 | ✅ | `a7a0717`([ADR-034](adr/ADR-034-degrade-mode.md)) · `6af4eee`(후속 정정 — 사다리 두 단) · [측정](benchmarks/phase4-fast-mode.md) |
+| **5** | 벤치마크 리포트 · README 표 링크 | ✅ | **이 커밋** — [`phase4-strategies.md`](benchmarks/phase4-strategies.md). 다섯 데이터셋 × 네 전략 · 사다리 두 단 · 고정비 하한 · 재기준 이력 · 그림자 계측 원장 |
+| 6 | (선택) `timefold` 전략 실험 → ADR-004 에 수치 반영 | ⬜ **미구현** | **하지 않았다.** 선택 항목이고 기본 경로 밖이다(`ADR-004` 는 「자체 휴리스틱 기본 + Timefold 비교」). 재검토 지점: 비교의 값이 「우리 휴리스틱이 얼마나 먼가」인데 그 물음에는 **고정비 하한 열**(§6.9, [ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md))이 부분적으로 답했다 — 남은 것은 *상계* 가 아니라 *하계* 쪽이다 |
+| 7 | ADR-004, 008 확정 | ⏸ **이월 → Phase 7-6** | 두 ADR 은 아직 파일이 없다(`docs/adr/` 에 004·008 없음, DESIGN §16 표에 「Phase 4 예정」). 008(가상 스레드 + ForkJoin 분리)은 **3번이 이월되면서 근거가 바뀌었다** — ADR-035 가 「병렬 단위는 클러스터가 아니다」를 이미 확정했으므로, 확정은 Phase 7-6 의 「ADR 전체 확정(001–012)」에서 그 결과를 안고 쓴다 |
+| 8 | `small` 레짐 격차 | ✅ **닫혔다** | `70f0f32`(개선 단계) · `15fa48f`([ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) — **진짜 원인은 좌석이었다**) · `b36c96e`(축 재측정) · `a1cc31e`+`4721c6c`([ADR-041](adr/ADR-041-cluster-target-counts-stop-slots.md)). 지금 `small` 은 `sweep-greedy-nn` −15.80% · 기본 전략 −26.60%. **게이트는 `medium` 으로 둔다**(근거가 결과가 아니라 자유도다) |
+| 9 | 테스트 격리 — 픽스처가 정하지 않은 축 | ◐ **부분** | `7dad296`(플래너 통계·컷오프 상한) · `49f0903`(배정 동률) · `7f2bc9d`(검사 대상 집합). **남은 둘**: ① **시드 행**(`DispatchAdminIT` 가 시드를 고치고 `@AfterEach` 로 되돌린다 — DESIGN §13 표에 「아직 안 깨졌다(기록만)」) ② **릴레이 리더의 fulfillment 쪽**(`FulfillmentPublishIT`·`WaveLifecycleIT` 둘이 발행에 의존하는데 근거가 클래스 시작 순서다). **Phase 5 로 가져간다** |
+| 10·11 | 미배정 정책 + 우선도 파생 + 재삽입 | ✅ | `d7b4c79`([ADR-028](adr/ADR-028-unassigned-policy.md)) · [측정](benchmarks/phase4-unassigned-policy.md). 셋을 **하나의 결정**으로 묶었다. 「재배송 +3」은 사실을 만드는 **Phase 5** 로 미뤘다 |
+| 12 | `make demo`·CI 스모크가 하루 8시간 실패한다 | ✅ | `f71e9a3`([ADR-030](adr/ADR-030-night-shift-seed.md) — 부록 A 에 야간 근무조) · `c086c0d`(야간조 냉장 배분 정정) |
+| 13 | 계획 영속화 20초 | ✅ | `6f72c1a`([ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) — 20.4초 → 800 ms) · `76082e1`([측정](benchmarks/phase4-plan-roundtrip-breakdown.md)) |
+| 14 | 겹친 제약은 한 대에 몰리지 않는다 | ✅ | `c485831`([ADR-033](adr/ADR-033-constraint-classes.md)) · [측정](benchmarks/phase4-constraint-classes.md) |
+| 15 | 안 훑기 — 라우트 쌍 dirty 플래그 | ⛔ **종료(만들지 않는다)** | `8846272`([측정](benchmarks/phase4-peak-gate.md) §3 — 상한 4.0~17.2%, 잘못된 건너뛰기 0) · `154e361`(§6.9 규칙화). **«측정했고, 만들 이유가 측정되지 않았다»** |
+| 16 | `peak` 이 드러낸 셋 (16-a·b·c) | ✅ | `de04f15`(16-a 데이터셋 둘로 + 실현 가능성 stop 축) · `3a303ee`(16-b [ADR-036](adr/ADR-036-deadline-belongs-to-the-plan.md) 계획 전체의 마감) · `545c669`(16-c [ADR-037](adr/ADR-037-reinsertion-prunes-what-cannot-fit.md) 재삽입 가지치기) |
+| **17** | 희소 능력 좌석 — 좌석은 능력이 아니라 **제약 조합**에 예약한다 | ✅ **구현** | `a533c95`(그림자 계측 ⓐⓑⓒ) · `1a10f0b`+`edc6ff4`+`aac442b`([ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md) · `routeStopCap` · 고정비 하한 열) · `f19df5f`(귀속 정정) · `15fa48f`([ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md)) · `c99cf3b`([재기준](benchmarks/phase4-scarce-seats.md) — **상한이 아래쪽으로 틀렸다**) |
+| **18** | `priority-boost` 의 `÷ position` — 룰 설계 검토 | ✅ **구현(자를 바꿨다)** | `426eca9`(순서를 앞당긴 근거) · `de5ae73`([그림자 계측](benchmarks/phase4-priority-boost.md) — 재는 자가 재려는 차이보다 크게 흔들렸다) · `3313504`([ADR-040](adr/ADR-040-priority-boost-decays-in-time.md)) · `2e41380`(전 데이터셋 재기준, `baseline-nn` 절대값 포함) |
+| **19** | `peak` 의 216 라우트 — 끝점 이웃을 넓히면 | ✅ **구현** | `c565188`([ADR-044](adr/ADR-044-endpoints-are-few-enough-to-see-all.md) — 끝점 전부, 라우트 216 → 90) · `1db33b9`([판정](benchmarks/phase4-endpoint-merges.md) — 조건 충족, **그리고 `small` 이 깨졌다**) |
+| **20** | 구성이 거리만 보는 것 — 2단계의 수락 기준 | ⏸ **이월(Phase 4 백로그)** | 커밋 없음. **Phase 7-4 의 peak-day 시뮬레이션이 다시 연다.** 그림자 계획(a·b·c)은 20번 항목에 그대로 있고, **(a) 비용 인식 수락의 방향이 맞다**는 것은 `large` 의 분해가 이미 보였다(거리 −36 km · 시간비 +147,689) |
+
+**대조표가 잡은 것 셋**
+
+1. **6번과 7번은 표가 없었으면 조용히 넘어갔다.** 둘 다 「하지 않았다」가 결론인데, 그것이
+   *검토한 결과* 라는 사실은 표에만 남는다. 특히 7번은 **3번이 이월되면서 근거가 바뀐** 항목이다.
+2. **9번은 ✅ 가 아니라 ◐ 다.** 여섯 축 중 넷을 고쳤고 둘이 남았다. 남은 둘은 「지금 깨지지
+   않는 이유가 테스트에 적혀 있지 않다」는 같은 부류이고, **Phase 5 의 tracking IT 가 같은
+   DB·같은 릴레이를 쓰기 시작하면 ②가 먼저 깨진다.**
+3. **20번은 Phase 4 의 마지막 측정이 연 항목이고, 닫히지 않은 채로 넘어간다.** 열려 있는 것을
+   열린 채로 적는 것이 이 표의 목적이다 — [ADR-043](adr/ADR-043-default-strategy-stays-until-peak-converges.md)
+   의 남은 전환 조건(「`small` 에서 savings ≤ 기본」)이 거기에 걸려 있다.
+
+**DoD 대조는 [`phase4-strategies.md`](benchmarks/phase4-strategies.md) §8 에 있다** — 네 줄 중
+첫 줄(`large` ≥ 15%)이 **기본 전략에서는 미달(−14.93%, 6,353원 부족)** 이고 비교 전략이 −18.20%
+로 넘는다. **두 수를 함께 적는 것이 그 줄의 규칙이다.**
 
 ---
 
@@ -1571,6 +1659,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 2. 트레이싱 검증: 주문 1건 traceId로 4개 서비스 span이 Tempo에서 연결됨(스크린샷 README).
 3. 카오스 스크립트: `make chaos-kafka`, `make chaos-redis`, `make chaos-kill dispatch`. 각 실행 후 검증 SQL(주문 수 = 후보 수 + 취소 수, 라우트 stop 주문 중복 0, processed_events 중복 0)을 자동 실행.
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
+   **이 항목이 Phase 4-20 을 다시 연다** (2026-09-18 이월 — 「구성이 거리만 보는 것」).
+   peak-day 는 `peak` 규모의 웨이브를 **실제 파이프라인에서** 도는 첫 자리이고, 4-20 의 판정
+   기준이 「다섯 데이터셋 전부」이므로 그때의 수치가 판정의 입력이다. 남은 전환 조건은
+   「`small` 에서 `savings-cw+ls` ≤ 기본 전략」이다
+   ([ADR-043](adr/ADR-043-default-strategy-stays-until-peak-converges.md) ·
+   [마감 리포트](benchmarks/phase4-strategies.md) §6.2).
    **`dawnline_promise_revised_total` 을 시간축으로 함께 기록하고 lag-aware grace 판정을 내린다**
    (Phase 2 「Phase 7 로 이월 (조건부)」, [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 5).
    컷오프 직후에 뭉쳐서 튀면 grace 를 컨슈머 랙에 연동하고, 흩어져 있으면 고정 90초를 유지한다.
