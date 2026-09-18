@@ -238,11 +238,11 @@ class CancelOrderServiceTest {
 
         List<InMemoryDispatchPorts.CancellableRoutes.StopRow> stops = new ArrayList<>();
         stops.add(new InMemoryDispatchPorts.CancellableRoutes.StopRow(
-                1, NEAR, 60, NOW.plus(Duration.ofMinutes(10)), List.of(first)));
+                1, NEAR, 60, NOW.plus(Duration.ofMinutes(10)), List.of(first), WINDOW));
         stops.add(new InMemoryDispatchPorts.CancellableRoutes.StopRow(
-                2, MID, 60, NOW.plus(Duration.ofMinutes(30)), List.of(middle)));
+                2, MID, 60, NOW.plus(Duration.ofMinutes(30)), List.of(middle), WINDOW));
         stops.add(new InMemoryDispatchPorts.CancellableRoutes.StopRow(
-                3, FAR, 120, NOW.plus(Duration.ofMinutes(50)), merged));
+                3, FAR, 120, NOW.plus(Duration.ofMinutes(50)), merged, WINDOW));
         UUID routeId = routes.route(plan.id(), vehicleId, stops);
         return new Published(routeId, first, middle, merged);
     }

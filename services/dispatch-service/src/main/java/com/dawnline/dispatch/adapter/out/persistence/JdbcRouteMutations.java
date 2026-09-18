@@ -305,7 +305,7 @@ public class JdbcRouteMutations implements RouteMutations {
 
         List<Object[]> rows = entityManager.createNativeQuery("""
                 SELECT s.id, s.seq, s.lat, s.lng, s.planned_arrival, s.service_s, s.status,
-                       o.order_id, c.status
+                       o.order_id, c.status, s.promised_start, s.promised_end
                   FROM route_stops s
                   JOIN route_stop_orders o ON o.stop_id = s.id
                   JOIN dispatch_candidates c ON c.order_id = o.order_id
@@ -319,7 +319,11 @@ public class JdbcRouteMutations implements RouteMutations {
                     ((Number) row[1]).intValue(),
                     ((BigDecimal) row[2]).doubleValue(), ((BigDecimal) row[3]).doubleValue(),
                     (Instant) row[4], ((Number) row[5]).intValue(),
-                    "CANCELLED".equals((String) row[6])));
+                    "CANCELLED".equals((String) row[6]),
+                    // V6 이전 행은 둘 다 NULL 이다. 후보 테이블에서 끌어오지 않는다 —
+                    // 그 출처는 다른 애그리거트의 보존 정책에 매달린다(§5.3).
+                    row[9] == null || row[10] == null
+                            ? null : new TimeWindow((Instant) row[9], (Instant) row[10])));
             builder.add((UUID) row[7], "CANCELLED".equals((String) row[8]));
         }
 
@@ -353,11 +357,13 @@ public class JdbcRouteMutations implements RouteMutations {
         private final Instant arrival;
         private final int serviceSeconds;
         private final boolean cancelled;
+        private final @Nullable TimeWindow promised;
         private final List<UUID> orderIds = new ArrayList<>();
         private final List<UUID> cancelledOrderIds = new ArrayList<>();
 
         private SnapshotBuilder(int seq, double lat, double lng, Instant arrival,
-                int serviceSeconds, boolean cancelled) {
+                int serviceSeconds, boolean cancelled, @Nullable TimeWindow promised) {
+            this.promised = promised;
             this.seq = seq;
             this.lat = lat;
             this.lng = lng;
@@ -375,7 +381,7 @@ public class JdbcRouteMutations implements RouteMutations {
 
         private RouteSnapshot.StopSnapshot build() {
             return new RouteSnapshot.StopSnapshot(seq, orderIds, cancelledOrderIds, lat, lng,
-                    arrival, serviceSeconds, cancelled);
+                    arrival, serviceSeconds, cancelled, promised);
         }
     }
 

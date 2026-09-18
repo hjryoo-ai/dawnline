@@ -28,7 +28,8 @@
         "lat": 37.4979,
         "lng": 127.0276,
         "plannedArrival": "2026-08-29T15:41:00Z",
-        "serviceSeconds": 90
+        "serviceSeconds": 90,
+        "promisedWindow": { "start": "2026-08-29T15:00:00Z", "end": "2026-08-29T18:00:00Z" }
       },
       {
         "seq": 2,
@@ -36,7 +37,8 @@
         "lat": 37.5038,
         "lng": 127.0249,
         "plannedArrival": "2026-08-29T15:47:30Z",
-        "serviceSeconds": 90
+        "serviceSeconds": 90,
+        "promisedWindow": { "start": "2026-08-29T15:00:00Z", "end": "2026-08-29T18:00:00Z" }
       },
       {
         "seq": 3,
@@ -47,7 +49,8 @@
         "lat": 37.4921,
         "lng": 127.0365,
         "plannedArrival": "2026-08-29T15:55:10Z",
-        "serviceSeconds": 180
+        "serviceSeconds": 180,
+        "promisedWindow": { "start": "2026-08-29T15:00:00Z", "end": "2026-08-29T16:00:00Z" }
       }
     ]
   }

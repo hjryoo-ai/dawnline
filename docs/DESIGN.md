@@ -818,7 +818,9 @@ CREATE TABLE route_plans (id UUID PK, wave_id UUID NOT NULL UNIQUE, camp_id UUID
 CREATE TABLE routes (id UUID PK, plan_id UUID REFERENCES route_plans, vehicle_id UUID, driver_id UUID, seq_no SMALLINT,
   status VARCHAR(16), stop_count INTEGER, distance_m INTEGER, duration_s INTEGER, cost_krw INTEGER, version BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE route_stops (id UUID PK, route_id UUID REFERENCES routes, seq SMALLINT NOT NULL, lat NUMERIC(9,6), lng NUMERIC(9,6),
-  planned_arrival TIMESTAMPTZ, planned_departure TIMESTAMPTZ, service_s INTEGER, status VARCHAR(16), UNIQUE (route_id, seq));
+  planned_arrival TIMESTAMPTZ, planned_departure TIMESTAMPTZ, service_s INTEGER, status VARCHAR(16),
+  promised_start TIMESTAMPTZ, promised_end TIMESTAMPTZ,  -- 이 stop 의 약속창 (V6, Phase 5-1a)
+  UNIQUE (route_id, seq));
 CREATE TABLE route_stop_orders (stop_id UUID REFERENCES route_stops, order_id UUID, PRIMARY KEY (stop_id, order_id));
 CREATE TABLE dispatch_rules (id UUID PK, camp_id UUID NULL, name VARCHAR(64) NOT NULL, type VARCHAR(48) NOT NULL,
   severity VARCHAR(8) NOT NULL CHECK (severity IN ('HARD','SOFT')), params JSONB NOT NULL, priority SMALLINT NOT NULL,
@@ -827,6 +829,19 @@ CREATE TABLE plan_explanations (id UUID PK, plan_id UUID NOT NULL, order_id UUID
   outcome VARCHAR(16), detail JSONB);
 CREATE INDEX ix_expl_plan_order ON plan_explanations (plan_id, order_id);
 ```
+
+**`route_stops` 의 약속창은 발행이 요구한 컬럼이다** (2026-09-18, Phase 5-1a). `route.assigned.v1`
+의 stop 은 `promisedWindow` 를 **required** 로 싣는다 — tracking 이 at-risk 를 판정하려면 필요하고
+(§5.4), 불변규칙 4 에 따라 그 이벤트가 유일한 정보원이다. 최초 발행은 계획 결과(`PlannedStop` →
+`Stop.promised()`)에서 값이 나오지만, **§6.10 의 개정 발행은 저장된 라우트에서 만든다** — 취소된
+stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatch-cancellation-window.md)
+결정 4). 그래서 그 경로에는 DB 가 값의 출처여야 한다.
+
+> **버린 대안: 발행 시점에 `dispatch_candidates` 를 조인해 창을 끌어온다.** 컬럼이 늘지 않지만
+> 출처가 *다른 애그리거트의 보존 정책*에 매달린다 — 후보 행이 정리되면 개정 발행이 조용히
+> required 필드를 잃는다. 그리고 「이 stop 의 약속창」은 계획이 정한 사실이지 후보 테이블의
+> 파생이 아니다: `StopMerger` 의 병합 키가 「같은 약속창」이므로(§6.5 1단계) 그 값은 stop 이
+> 만들어지는 순간 확정된다.
 
 **Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시), `route:{id}:progress` (HASH: nextSeq, completed, failed).
 

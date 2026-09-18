@@ -1,6 +1,7 @@
 package com.dawnline.dispatch.adapter.out.messaging;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
@@ -38,6 +39,9 @@ class DispatchPayloadContractTest {
 
     private static final EventContracts CONTRACTS = EventContracts.load();
     private static final Instant NOW = Instant.parse("2026-09-06T01:00:00Z");
+
+    /** 개정 스냅샷의 약속창. V6 이후 행은 언제나 값을 갖는다 (§5.3). */
+    private static final TimeWindow PROMISED = new TimeWindow(NOW, NOW.plus(Duration.ofHours(4)));
 
     private static RoutePlan publishedPlan() {
         RoutePlan plan = RoutePlan.request(Ids.newId(), Ids.newId(), Ids.newId(), com.dawnline.common.GeoPoint.of(37.5663, 126.9779));
@@ -81,9 +85,9 @@ class DispatchPayloadContractTest {
         UUID alsoDead = Ids.newId();
         return new RouteSnapshot(Ids.newId(), Ids.newId(), 5_900, 1_600, 17_400, List.of(
                 new RouteSnapshot.StopSnapshot(1, List.of(dead), List.of(dead),
-                        37.4979, 127.0276, NOW.plusSeconds(600), 90, true),
+                        37.4979, 127.0276, NOW.plusSeconds(600), 90, true, PROMISED),
                 new RouteSnapshot.StopSnapshot(2, List.of(kept, alsoDead), List.of(alsoDead),
-                        37.4921, 127.0365, NOW.plusSeconds(900), 180, false)));
+                        37.4921, 127.0365, NOW.plusSeconds(900), 180, false, PROMISED)));
     }
 
     @Test
@@ -92,6 +96,35 @@ class DispatchPayloadContractTest {
 
         CONTRACTS.validatePayload(RouteAssignedPayload.EVENT_TYPE,
                 RouteAssignedPayload.SCHEMA_VERSION, CONTRACTS.json().toTree(payload));
+    }
+
+    @Test
+    void 계획_발행의_stop_은_자기_약속창을_싣는다() {
+        // tracking 의 at-risk 판정 기준이다(§5.4). 값의 출처는 StopMerger 의 병합 키가
+        // 「같은 약속창」이라 stop 당 하나로 정해지는 그 창이다(§6.5 1단계).
+        var payload = RouteAssignedPayload.of(publishedPlan(), Ids.newId(), Ids.newId(), route(), 1);
+
+        assertThat(payload.stops()).allSatisfy(stop -> {
+            assertThat(stop.promisedWindow().start()).isEqualTo(NOW.toString());
+            assertThat(stop.promisedWindow().end())
+                    .isEqualTo(NOW.plus(Duration.ofHours(4)).toString());
+        });
+    }
+
+    @Test
+    void 약속창_없는_행으로는_개정을_발행하지_않는다() {
+        // V6 이전에 저장된 route_stops 행은 promised_start/end 가 NULL 이다(§5.3). 지어낸 창으로
+        // required 필드를 채우면 tracking 의 at-risk 가 거짓 위에서 돌고, 받는 쪽은 그 거짓을
+        // 구별할 수 없다 — 그래서 발행을 멈춘다. outbox 에 행이 남지 않는다.
+        RouteSnapshot legacy = new RouteSnapshot(Ids.newId(), Ids.newId(), 5_900, 1_600, 17_400,
+                List.of(new RouteSnapshot.StopSnapshot(1, List.of(Ids.newId()), List.of(),
+                        37.4979, 127.0276, NOW.plusSeconds(600), 90, false, null)));
+
+        assertThatThrownBy(() ->
+                RouteAssignedPayload.of(publishedPlan(), legacy, Ids.newId(), 2))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("약속창")
+                .hasMessageContaining("seq=1");
     }
 
     @Test

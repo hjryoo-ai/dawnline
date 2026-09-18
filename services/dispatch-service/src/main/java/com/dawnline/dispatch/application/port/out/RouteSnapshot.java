@@ -1,8 +1,10 @@
 package com.dawnline.dispatch.application.port.out;
 
+import com.dawnline.common.TimeWindow;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 import java.util.UUID;
 
 /**
@@ -41,10 +43,14 @@ public record RouteSnapshot(UUID routeId, UUID vehicleId, int distanceM, int dur
      * @param plannedArrival    계획 도착 시각
      * @param serviceSeconds    하차·전달 시간(초)
      * @param cancelled         stop 자체가 취소됐는가 ({@code route_stops.status})
+     * @param promised          이 stop 의 약속창. <strong>V6 이전에 저장된 행은 {@code null}</strong>
+     *                          이다 — 지어낸 기본값 대신 없음을 그대로 들고 온다. 그 값으로
+     *                          {@code route.assigned} 의 required 필드를 채울 수 없으므로 발행이
+     *                          소리 내어 실패한다({@code RouteAssignedPayload})
      */
     public record StopSnapshot(int seq, List<UUID> orderIds, List<UUID> cancelledOrderIds,
             double lat, double lng, Instant plannedArrival, int serviceSeconds,
-            boolean cancelled) {
+            boolean cancelled, @Nullable TimeWindow promised) {
 
         public StopSnapshot {
             orderIds = List.copyOf(Objects.requireNonNull(orderIds, "orderIds"));

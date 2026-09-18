@@ -73,6 +73,16 @@
     }
   },
   "$defs": {
+    "timeWindow": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": true,
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      },
+      "description": "닫힌 시간 구간. start < end 는 도메인 불변식이며 JSON Schema 로는 표현하지 않는다 — TimeWindow 값 객체 생성자에서 검증한다 (libs/common)."
+    },
     "uuid": {
       "type": "string",
       "format": "uuid",
@@ -80,7 +90,7 @@
     },
     "plannedStop": {
       "type": "object",
-      "required": ["seq", "orderIds", "lat", "lng", "plannedArrival", "serviceSeconds"],
+      "required": ["seq", "orderIds", "lat", "lng", "plannedArrival", "serviceSeconds", "promisedWindow"],
       "additionalProperties": true,
       "properties": {
         "seq": {
@@ -107,6 +117,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "이 stop 에서 소요될 하차·전달 시간(초). 통합된 주문 수에 따라 커진다."
+        },
+        "promisedWindow": {
+          "$ref": "#/$defs/timeWindow",
+          "description": "이 stop 의 약속창. stop 하나에 창이 하나로 정해지는 근거는 StopMerger 의 병합 키가 '같은 geohash7 + 같은 약속창 + 같은 제약' 이기 때문이다 (§6.5 1단계) — 창이 다르면 애초에 같은 stop 이 아니다. tracking 은 이 값으로 shipments.promised_end 를 채우고 at-risk(eta > promised_end − 15분, §5.4)를 판정한다. 개정된 약속(ADR-020)이 반영된 값이다 — '고객이 처음 받은 약속' 기준의 정시율은 tracking 이 아니라 ops-api 읽기 모델이 order.placed 원본과 이어서 낸다 (§5.5)."
         },
         "cancelledOrderIds": {
           "type": "array",
