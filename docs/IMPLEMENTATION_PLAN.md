@@ -801,7 +801,10 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    **다섯 데이터셋 · 네 전략이 전부 「수렴 종료」다** — 어느 회차도 계획 마감에 잘리지 않았고,
    그래서 이 표의 비용은 재현 가능하다(§6.9 재현 조건).
 6. (선택) `timefold` 전략 실험 → ADR-004 결론에 수치 반영. 기본 경로에 포함하지 않는다.
-7. ADR-004, 008 확정.
+   — **⛔ 범위에서 뺀다** (2026-09-18, [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)). 비교 대상을 외부 솔버에서 **완화 하한**으로
+   옮겼다. Phase 7-6 에 여유가 있으면 `medium` 한 개만, 공정성 셋(같은 목적함수·하드 룰·예산·seed)을
+   맞춘 채로.
+7. ADR-004, 008 확정. — **004 ✅ 확정**(2026-09-18), **008 ⏸ Phase 7-6**(3번 이월로 근거가 바뀌었다).
 8. **`small` 레짐 격차 — ✅ 닫혔다** (2026-09-09, [측정](benchmarks/phase4-local-search.md) §4).
    `sweep-greedy-nn+ls` 가 `small` 에서 `baseline-nn` 보다 **−3.90%** 다(스윕 단독은 +8.8% 였다).
    **14번의 재기준 뒤에는 −2.68% 다** — 통합 키에 제약이 들어가면서 여유가 얇아졌다.
@@ -1555,8 +1558,8 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 3 | 병렬화 (ForkJoin + 가상 스레드) | ⏸ **이월** | `9c3bcd0`([ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md)) · `8846272`([측정](benchmarks/phase4-peak-gate.md)). **병렬 단위가 클러스터가 아니었다** — 상한을 먼저 쟀고 만들 값이 없었다. 재검토 조건은 ADR-035 |
 | 4 | FAST 열화 모드 | ✅ | `a7a0717`([ADR-034](adr/ADR-034-degrade-mode.md)) · `6af4eee`(후속 정정 — 사다리 두 단) · [측정](benchmarks/phase4-fast-mode.md) |
 | **5** | 벤치마크 리포트 · README 표 링크 | ✅ | **이 커밋** — [`phase4-strategies.md`](benchmarks/phase4-strategies.md). 다섯 데이터셋 × 네 전략 · 사다리 두 단 · 고정비 하한 · 재기준 이력 · 그림자 계측 원장 |
-| 6 | (선택) `timefold` 전략 실험 → ADR-004 에 수치 반영 | ⬜ **미구현** | **하지 않았다.** 선택 항목이고 기본 경로 밖이다(`ADR-004` 는 「자체 휴리스틱 기본 + Timefold 비교」). 재검토 지점: 비교의 값이 「우리 휴리스틱이 얼마나 먼가」인데 그 물음에는 **고정비 하한 열**(§6.9, [ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md))이 부분적으로 답했다 — 남은 것은 *상계* 가 아니라 *하계* 쪽이다 |
-| 7 | ADR-004, 008 확정 | ⏸ **이월 → Phase 7-6** | 두 ADR 은 아직 파일이 없다(`docs/adr/` 에 004·008 없음, DESIGN §16 표에 「Phase 4 예정」). 008(가상 스레드 + ForkJoin 분리)은 **3번이 이월되면서 근거가 바뀌었다** — ADR-035 가 「병렬 단위는 클러스터가 아니다」를 이미 확정했으므로, 확정은 Phase 7-6 의 「ADR 전체 확정(001–012)」에서 그 결과를 안고 쓴다 |
+| 6 | (선택) `timefold` 전략 실험 → ADR-004 에 수치 반영 | ⛔ **범위 제외(결정으로 닫았다)** | `f65c8b2` 시점에는 「⬜ 미구현」이었고, **표가 그것을 들고 있었기 때문에 결정이 됐다** — [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)(2026-09-18): 비교 대상을 다른 솔버가 아니라 **불가능의 경계**로 둔다. 근거 셋은 고정비 하한 열(상시, [ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md)) · 그림자 원장 여덟 줄 · 구성 계열이 다른 두 전략 비교. **다시 여는 조건 셋**과 한정 실행(Phase 7-6 `medium` 한 개)을 ADR 이 적는다 |
+| 7 | ADR-004, 008 확정 | ◐ **부분** — 004 ✅ / 008 ⏸ Phase 7-6 | **004 확정**: [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)(2026-09-18) — Phase 4 의 마지막 커밋. **008 이월**(가상 스레드 + ForkJoin 분리): **3번이 이월되면서 근거가 바뀌었다** — [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) 가 「병렬 단위는 클러스터가 아니다」를 이미 확정했으므로, 확정은 Phase 7-6 의 「ADR 전체 확정(001–012)」에서 그 결과를 안고 쓴다 |
 | 8 | `small` 레짐 격차 | ✅ **닫혔다** | `70f0f32`(개선 단계) · `15fa48f`([ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) — **진짜 원인은 좌석이었다**) · `b36c96e`(축 재측정) · `a1cc31e`+`4721c6c`([ADR-041](adr/ADR-041-cluster-target-counts-stop-slots.md)). 지금 `small` 은 `sweep-greedy-nn` −15.80% · 기본 전략 −26.60%. **게이트는 `medium` 으로 둔다**(근거가 결과가 아니라 자유도다) |
 | 9 | 테스트 격리 — 픽스처가 정하지 않은 축 | ◐ **부분** | `7dad296`(플래너 통계·컷오프 상한) · `49f0903`(배정 동률) · `7f2bc9d`(검사 대상 집합). **남은 둘**: ① **시드 행**(`DispatchAdminIT` 가 시드를 고치고 `@AfterEach` 로 되돌린다 — DESIGN §13 표에 「아직 안 깨졌다(기록만)」) ② **릴레이 리더의 fulfillment 쪽**(`FulfillmentPublishIT`·`WaveLifecycleIT` 둘이 발행에 의존하는데 근거가 클래스 시작 순서다). **Phase 5 로 가져간다** |
 | 10·11 | 미배정 정책 + 우선도 파생 + 재삽입 | ✅ | `d7b4c79`([ADR-028](adr/ADR-028-unassigned-policy.md)) · [측정](benchmarks/phase4-unassigned-policy.md). 셋을 **하나의 결정**으로 묶었다. 「재배송 +3」은 사실을 만드는 **Phase 5** 로 미뤘다 |
@@ -1574,6 +1577,9 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 1. **6번과 7번은 표가 없었으면 조용히 넘어갔다.** 둘 다 「하지 않았다」가 결론인데, 그것이
    *검토한 결과* 라는 사실은 표에만 남는다. 특히 7번은 **3번이 이월되면서 근거가 바뀐** 항목이다.
+   **그리고 6번은 표에만 남지 않았다** — 마감 검토가 「⬜ 미구현」을 집어 [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)
+   로 닫았다(2026-09-18). 조건 없는 이월은 결정이 아니라 기억에 맡기는 일이라, 기각에
+   **다시 여는 조건 셋**을 붙였다. 7번의 004 도 같은 커밋에서 확정된다.
 2. **9번은 ✅ 가 아니라 ◐ 다.** 여섯 축 중 넷을 고쳤고 둘이 남았다. 남은 둘은 「지금 깨지지
    않는 이유가 테스트에 적혀 있지 않다」는 같은 부류이고, **Phase 5 의 tracking IT 가 같은
    DB·같은 릴레이를 쓰기 시작하면 ②가 먼저 깨진다.**
@@ -1670,6 +1676,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    컷오프 직후에 뭉쳐서 튀면 grace 를 컨슈머 랙에 연동하고, 흩어져 있으면 고정 90초를 유지한다.
 5. 런북 RB-01~06, `docs/postmortems/2026-xx-peak-simulation.md`(가상 장애: 컷오프 시 계획 지연 → FAST 전환 → 원인·재발 방지, 실제 측정치 기반).
 6. ADR 전체 확정(001–012), README 완성(아키텍처 그림, 데모 GIF, 벤치마크 표, 실행 방법, 면접 스토리 링크).
+   - **004 는 여기서 재확인 대상이 아니라 입력이다** — [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md) 가 Phase 4 마감에
+     확정됐다(2026-09-18). 남은 것은 **한정 실행**뿐이다: 여유가 있으면 `timefold` 를 **`medium`
+     한 개만** 돌린다. 조건은 §6.6 의 공정성 셋 — 같은 목적함수(§6.1) · 같은 하드 룰(§6.3) · 같은
+     예산(30초) · 같은 seed 의 같은 데이터셋. **하나라도 어긋나면 리포트에 싣지 않는다**(그 수는
+     알고리즘의 차이가 아니라 번역의 차이를 잰다). 결과가 결정을 바꾸는 것은 ADR-004 의 조건
+     (a)~(c) 를 건드릴 때뿐이다.
+   - **008(가상 스레드 + ForkJoin 분리)은 Phase 4-3 의 이월을 안고 쓴다** —
+     [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) 가 병렬 단위를 이미 정정했다.
 7. release.yml(GHCR 푸시, SBOM). (선택) `deploy/k8s` 매니페스트 + kind 스모크.
 
 **DoD**

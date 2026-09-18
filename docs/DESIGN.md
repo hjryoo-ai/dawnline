@@ -36,7 +36,7 @@
 | 시스템 아키텍처 설계·안정적 운영 | 4개 코어 서비스 + 운영 API의 이벤트 드리븐 MSA, 장애 모드 표, 런북, SLO | §3, §8, §9 |
 | Java 기반 Front/Back office 웹 서비스 | 고객향 주문 API(front) + 운영자 콘솔 API·UI(back office) | §5.1, §5.5 |
 | 여러 도메인 간 dependency 도출·시스템 연동 | 주문→풀필먼트→디스패치→트래킹 의존성 그래프, 이벤트 계약(contracts/), 소비자 호환성 테스트 | §3.3, §4 |
-| 새로운 기술 도입 검토 | 자체 휴리스틱 vs Timefold vs OR-Tools 비교 ADR, 벤치마크 하네스 | §6.6, ADR-004 |
+| 새로운 기술 도입 검토 | 자체 휴리스틱을 **불가능의 경계**와 재는 ADR(외부 솔버 도입을 *조건과 함께* 기각), 벤치마크 하네스 | §6.6, §6.9, ADR-004 |
 | **룰 기반 최소 비용·최속 배송 최적 알고리즘** | 하드/소프트 룰 엔진 + 비용 모델 + 클러스터링→할당→시퀀싱→개선 파이프라인, 설명 가능성(explanation) | §6 |
 | Java + Spring, 관계형 DB, 객체지향 설계 | Java 25 / Spring Boot 4.1, PostgreSQL 18, 헥사고날 아키텍처 + DDD 애그리거트 | §3.4, §5, §7, §11 |
 | MSA, 클라우드 환경 | DB-per-service, 컨테이너화, 헬스/레디니스 프로브, k8s 매니페스트(선택) | §3, §14 |
@@ -1297,9 +1297,24 @@ public interface DispatchStrategy {
 | `sweep-greedy-nn` | §6.5의 1~4단계 | fast mode 기본 |
 | `sweep-greedy-nn+ls` | §6.5 전체 (2-opt/Or-opt/relocate) | **기본 전략** |
 | `savings-cw+ls` | Clarke-Wright savings로 라우트 구성 후 LS | 비교 전략 — **네 데이터셋에서 더 싸고 `peak` 에서 예산에 잘린다** ([ADR-043](adr/ADR-043-default-strategy-stays-until-peak-converges.md)) |
-| `timefold` | Timefold Solver(Community) VRPTW 모델 | 선택(Phase 4 stretch), ADR-004 비교용 |
+| ~~`timefold`~~ | Timefold Solver(Community) VRPTW 모델 | **등록하지 않는다** ([ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)) — 다시 여는 조건 셋은 그 ADR 결정 3 |
 
 전략은 `PlanRunner`가 `strategy` 파라미터로 선택하며 기본값은 설정 `dawnline.dispatch.plan.default-strategy`. 새 전략 추가는 인터페이스 구현 + 등록만으로 가능해야 한다.
+
+**위 표의 마지막 줄이 예약하던 자리는 닫혔다** (2026-09-18, Phase 4 마감,
+[ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)). 이 문서는 자체
+휴리스틱을 고르면서 「비교 대상이 필요하다」고 적었고 그 대상이 `timefold` 였다. Phase 4 는 그
+실험 대신 **세 가지 다른 근거**를 만들었다 — §6.9 의 **고정비 하한 열**(상시, 실행마다 나온다 ·
+[ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md)), **그림자 계측 원장 여덟
+줄**([리포트 §7.1](benchmarks/phase4-strategies.md)), 그리고 **구성 계열이 다른 두 전략**의 같은
+조건 비교(위 공정성 셋). 다른 솔버와의 비교는 *그 솔버가 얼마나 좋은지에 의존하는 상대값*이지만
+완화 하한은 **어떤 계획도 그 아래로 갈 수 없다**는 절대적인 문장이다.
+
+> **대신 이 결정은 자기 한계를 적는다** — 그 열이 재는 것은 목적함수 다섯 항 중 **고정비
+> 하나**다([ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md)). 나머지 넷에는
+> 경계가 없고, 그래서 ADR-004 는 **다시 여는 조건 셋**을 미리 적었다(시간비가 지배하는 레짐 ·
+> 라우트 구조를 바꾸는 제약 · 분 단위 예산). Phase 7-6 에 여유가 있으면 `medium` 한 개만,
+> 공정성 셋을 맞춘 채로 돌린다 — 맞지 않으면 리포트에 싣지 않는다.
 
 **`savings-cw+ls` 의 구성은 제약 조합을 안다** (2026-09-17,
 [ADR-042](adr/ADR-042-savings-merges-are-class-aware.md) · [측정](benchmarks/phase4-savings-cw.md)).
@@ -1953,7 +1968,7 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
-| 최적화(선택) | Timefold Solver Community | 최신 안정 | ADR-004 비교 실험용, 기본 경로 아님 |
+| 최적화(선택) | Timefold Solver Community | — | **도입하지 않는다** ([ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md), 2026-09-18). 비교 대신 §6.9 의 **고정비 하한 열**. Phase 7-6 에 여유가 있으면 `medium` 한 개 한정 |
 | 프론트 | React 19 + Vite + TypeScript, Leaflet | 최신 안정 | ops-web 최소 범위 |
 | 컨테이너 | Docker Compose; (선택) kind + Kubernetes 매니페스트 | 최신 안정 | 로컬 전체 스택 1명령 기동 |
 | CI/CD | GitHub Actions, GHCR | — | §14 |
@@ -2165,7 +2180,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 001 | Gradle 멀티모듈 모노레포 | 서비스별 저장소 (포트폴리오 가독성 저하) | [ADR-001](adr/ADR-001-gradle-multi-module-monorepo.md) |
 | 002 | DB-per-service + 폴링 Outbox 릴레이 | Debezium CDC(운영 복잡도), 2PC(불가) | [ADR-002](adr/ADR-002-db-per-service-polling-outbox.md) |
 | 003 | JSON + JSON Schema 이벤트 계약 | Avro/Protobuf + Schema Registry(로컬 복잡도, 확장 경로만 기술) | [ADR-003](adr/ADR-003-json-schema-event-contracts.md) |
-| 004 | 자체 휴리스틱(sweep-greedy-nn+ls) 기본 + Timefold 비교 | OR-Tools(JNI·배포 부담), Timefold 단독(블랙박스로는 알고리즘 역량 증명 약함) | — (Phase 4 예정) |
+| 004 | **비교 대상은 다른 솔버가 아니라 불가능의 경계다** — 자체 휴리스틱(`sweep-greedy-nn+ls`) 기본, `timefold` 는 등록하지 않는다. 대신 고정비 하한 열(상시) · 그림자 원장 여덟 줄 · 구성 계열이 다른 두 전략 비교. **다시 여는 조건 셋을 미리 적는다** | OR-Tools(JNI·배포 부담), Timefold 단독(블랙박스로는 알고리즘 역량 증명 약함), Phase 4 안에서 비교 강행(번역 검증 비용 > 비교의 값 — 모델의 차이를 재게 된다), 조건 없이 Phase 7 stretch 로 이월(기억에 맡기는 일) | [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md) |
 | 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | PostgreSQL advisory lock(**서비스 <em>간</em> 락에 한한 기각 사유다** — 2026-09-05 각주), Redisson | — (Phase 2 예정) |
 | 006 | at-least-once + 멱등 소비자 | Kafka 트랜잭션/EOS(DB 쓰기와 원자성 불가) | [ADR-006](adr/ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제 | 계층형(경계 침식) | [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) |
@@ -2230,9 +2245,8 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 |---|---|---|
 | 4 | Redis vs Valkey | Redis 8로 진행, 라이선스 이슈 발생 시 재검토(명령 호환) |
 | 5 | ops-web 지도 타일 서버 정책 | Phase 6 |
-| 6 | Timefold 실험 포함 여부 | Phase 4 stretch (ADR-004와 함께) |
 
-**해소된 항목**: (1) 도메인 모델과 JPA 엔티티 분리 → **분리한다**, ADR-007로 확정. (2) 고객 주문 API 키 → **생략한다**(무인증), Phase 1 착수 시 확정 — 근거와 그 대가는 §10. Phase 6 이월도 고르지 않았다: 나중에 붙이면 k6·sim-runner·통합 테스트를 소급 수정해야 한다. (3) 이미지 빌드 Jib vs Buildpacks → **Buildpacks**, ADR-013으로 확정.
+**해소된 항목**: (1) 도메인 모델과 JPA 엔티티 분리 → **분리한다**, ADR-007로 확정. (2) 고객 주문 API 키 → **생략한다**(무인증), Phase 1 착수 시 확정 — 근거와 그 대가는 §10. Phase 6 이월도 고르지 않았다: 나중에 붙이면 k6·sim-runner·통합 테스트를 소급 수정해야 한다. (3) 이미지 빌드 Jib vs Buildpacks → **Buildpacks**, ADR-013으로 확정. (4) Timefold 실험 포함 여부 → **포함하지 않는다**, [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)로 확정(2026-09-18, Phase 4 마감) — 비교 대상을 외부 솔버에서 **완화 하한**으로 옮겼고, 다시 열 조건 셋을 그 ADR 이 적는다.
 
 Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원래 `[결정 필요]` 목록에는 없던 항목이다): outbox 발행 측 독약 행 처리 → ADR-015, 레디니스의 Kafka 조건 → ADR-016.
 
@@ -2264,7 +2278,7 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
 | 대용량·고가용성 | §8 피크 모델·장애 모드·멱등성 지점, 카오스 검증 |
 | 도메인 모델링·JPA | 애그리거트 경계, 낙관적 락, N+1 카운터 테스트 |
 | 운영·관측성 | traceId 한 줄 추적 데모, 런북, 포스트모템 |
-| 새 기술 검토 | ADR-004(Timefold/OR-Tools 비교), ADR-010(OSRM) |
+| 새 기술 검토 | ADR-004(**도입하지 않는 결정** + 되돌릴 조건 셋), ADR-010(OSRM) |
 | 코드 품질·자동화 | ArchUnit, 커버리지 게이트, CI 스모크, 벤치마크 회귀 |
 
 ## 부록 C. 용어집 보충

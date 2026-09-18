@@ -16,7 +16,7 @@
 | 001 | Gradle 멀티모듈 모노레포 | ✅ Accepted (2026-08-29) | [ADR-001](ADR-001-gradle-multi-module-monorepo.md) |
 | 002 | DB-per-service + 폴링 Outbox 릴레이 | ✅ Accepted (2026-08-29) | [ADR-002](ADR-002-db-per-service-polling-outbox.md) |
 | 003 | JSON + JSON Schema 이벤트 계약 | ✅ Accepted (2026-08-29) | [ADR-003](ADR-003-json-schema-event-contracts.md) |
-| 004 | 자체 휴리스틱(`sweep-greedy-nn+ls`) 기본 + Timefold 비교 | ⏳ Phase 4 예정 | — |
+| 004 | **비교 대상은 다른 솔버가 아니라 불가능의 경계다** — `timefold` 는 등록하지 않고, 다시 여는 조건 셋을 적는다 | ✅ Accepted (2026-09-18) | [ADR-004](ADR-004-compare-against-the-boundary-not-another-solver.md) |
 | 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | ⏳ Phase 2 예정 | — (advisory lock 기각 사유에 [ADR-027 후속 정정](ADR-027-outbox-relay-leader-lock.md)의 각주가 붙었다 — **서비스 <em>간</em> 락에만 해당한다**) |
 | 006 | at-least-once + 멱등 소비자 (Kafka EOS 미사용) | ✅ Accepted (2026-08-29) | [ADR-006](ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제, 도메인/JPA 엔티티 분리 | ✅ Accepted (2026-08-29) | [ADR-007](ADR-007-hexagonal-architecture-archunit.md) |
@@ -59,6 +59,12 @@
   **016 에는 Phase 2-4 에 후속 정정을 붙였다** — §8.6 이 레디니스 조건으로 남겨 둔 "(fulfillment)
   GEO 적재 완료" 가 같은 종류의 모순이었다. `geo:fc`·`geo:camp` 에는 §7.2 가 폴백을 정해 두었는데,
   적재 완료를 레디니스에 넣으면 Redis 장애가 곧 트래픽 차단이 되어 폴백을 만든 이유가 사라진다.
+- **004는 「도입하지 않는다」가 결정인 첫 ADR이다** (2026-09-18, Phase 4 마감). §16 의 원문은
+  「자체 휴리스틱 기본 + **Timefold 비교**」였고, 비교는 「우리가 얼마나 먼가」에 답하기 위한
+  외부 기준이었다. Phase 4 가 같은 물음에 다른 답 셋을 만들었다 — 고정비 하한 열(상시),
+  그림자 계측 원장 여덟 줄, 구성 계열이 다른 두 전략 비교. **그래서 이 ADR 의 내용 절반은
+  자기 한계다**: 그 열은 목적함수 다섯 항 중 하나만 덮는다. 기각을 «영원히» 로 적지 않기 위해
+  **다시 여는 조건 셋**과 한정 실행(`medium` 한 개, Phase 7-6)을 함께 적었다.
 - **021은 §16 표에 없던 항목**이다. 부록 A 의 "권역 60개" 가 order-service 지오코더의 출력을 덮지
   못한다는 것을 세어 보고(91개) 알게 되어 추가했다. 덮지 못하면 그 주소의 주문이 전부
   `UNSERVICEABLE` 이 되는데, 그것이 설계된 실패 경로와 구별되지 않는다.
@@ -103,7 +109,7 @@
 | 3 | 이미지 빌드 Jib vs Buildpacks | ✅ **Buildpacks** — [ADR-013](ADR-013-container-image-buildpacks.md) (§14 본문도 갱신됨) |
 | 4 | Redis vs Valkey | ⏳ 미결 (Redis 8로 진행, 라이선스 이슈 발생 시 재검토 — 명령 호환) |
 | 5 | ops-web 지도 타일 | ⏳ 미결 (Phase 6에서 결정) |
-| 6 | Timefold 실험 포함 여부 | ⏳ 미결 (Phase 4 stretch, ADR-004와 함께 결정) |
+| 6 | Timefold 실험 포함 여부 | ✅ **포함하지 않는다** — [ADR-004](ADR-004-compare-against-the-boundary-not-another-solver.md) (2026-09-18, Phase 4 마감). 비교 대신 §6.9 의 고정비 하한 열. Phase 7-6 여유 시 `medium` 한 개 한정 |
 
 `[결정 필요]` 목록 밖에서 확정된 결정도 있다 — 설계서 내부 모순을 해소한 경우다.
 
