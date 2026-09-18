@@ -10,6 +10,7 @@ import com.dawnline.fulfillment.application.port.in.PlacedOrderSnapshot;
 import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import com.dawnline.messaging.contract.EventContracts;
+import com.dawnline.messaging.outbox.RelayLeadership;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -64,19 +65,37 @@ class FulfillmentPublishIT extends FulfillmentIntegrationTestBase {
     @Autowired
     private com.dawnline.messaging.outbox.OutboxRelay relay;
 
+    @Autowired
+    private RelayLeadership leadership;
+
     /**
-     * <strong>전제: 릴레이가 실제로 돌고 있다.</strong>
+     * <strong>전제 둘: 릴레이가 켜져 있고, 그리고 이 세션이 지금 리더다.</strong>
      *
      * <p>이 클래스가 보는 것은 "outbox 행이 브로커까지 간다" 이므로, 릴레이가 꺼져 있으면 아무것도
      * 증명하지 못한 채 60초를 기다리다 실패한다 — 실제로 그렇게 실패했다(기반 클래스의
      * {@code @DynamicPropertySource} 가 릴레이를 끄고 있었고, 두 등록의 순서는 보장되지 않는다).
      *
+     * <p><strong>그런데 "켜져 있다" 로는 부족하다</strong> (2026-09-18, Phase 5-0). [ADR-027]
+     * 후속 정정 이후 발행 여부를 정하는 것은 빈의 존재가 아니라 <em>advisory lock 을 쥔
+     * 세션</em>이고, 락은 한 세션만 쥔다. 릴레이 빈이 둘 이상 뜨면(컨텍스트가 둘이면 그렇게 된다)
+     * 하나는 {@code FOLLOWER} 가 되어 아무것도 발행하지 않는다 — 그리고 <strong>어느 쪽이
+     * 리더인가는 클래스 시작 순서가 정한다.</strong> 그것이 이 클래스가 통과하던 실제 근거였고,
+     * 테스트가 말하지 않는 근거는 근거가 아니다(IMPLEMENTATION_PLAN Phase 4-9 축 ②).
+     *
+     * <p>그래서 전제를 <em>리더십 판정 자체</em>로 묻는다. {@link RelayLeadership#lead()} 는
+     * 릴레이가 매 폴링마다 부르는 바로 그 메서드이고, 이미 쥐고 있으면 {@code pg_locks} 로 확인만
+     * 하므로(재진입 참조 수를 쌓지 않는다) 여기서 불러도 상태를 바꾸지 않는다.
+     *
      * <p>CLAUDE.md 의 규칙대로 전제를 첫 어설션으로 둔다. 폴백 테스트에서 배운 것과 같은 형태다 —
      * 전제가 조용히 무너지면 테스트는 아무것도 검사하지 않는다.
      */
     @BeforeEach
-    void 전제_릴레이가_돈다() {
+    void 전제_릴레이가_돌고_이_세션이_리더다() {
         assertThat(relay).as("릴레이 빈이 없으면 발행 경로가 통째로 없다").isNotNull();
+        assertThat(leadership.lead())
+                .as("이 세션이 advisory lock 을 쥐고 있어야 발행한다 — FOLLOWER 면 다른 컨텍스트의 "
+                        + "릴레이가 리더이고 여기서는 한 행도 나가지 않는다 (ADR-027)")
+                .isEqualTo(RelayLeadership.State.LEADER);
     }
 
     @Autowired

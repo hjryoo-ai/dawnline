@@ -104,11 +104,15 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     /** 이 테스트가 만든 차량·기사. 참조 데이터는 {@link #clean()} 이 지우지 않는다. */
     private final List<UUID> created = new ArrayList<>();
 
-    /** 이 테스트가 고친 룰의 원래 값. */
-    private @org.jspecify.annotations.Nullable RuleBackup ruleBackup;
-
-    private record RuleBackup(UUID id, String params, boolean enabled, int ruleVersion) {
-    }
+    /**
+     * 이 테스트가 만든 <strong>픽스처 룰</strong>.
+     *
+     * <p>예전에는 여기에 {@code RuleBackup}(시드 룰의 원래 값)이 있었다. 시드를 고치고 되돌리는
+     * 형태였는데, 되돌리기는 <em>순차 실행에 기대는 장치</em>다 — 2026-09-18 (Phase 5-0)에
+     * 자기 행을 만들어 쓰는 형태로 바꿨다. 지우는 것은 되돌리는 것과 달리 무엇을 덮을지
+     * 고민할 필요가 없다.
+     */
+    private final List<UUID> createdRules = new ArrayList<>();
 
     @BeforeEach
     void clean() {
@@ -124,19 +128,22 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     }
 
     /**
-     * 참조 데이터를 원래대로 돌려놓는다.
+     * 이 클래스가 <strong>만든</strong> 참조 데이터 행을 지운다.
      *
      * <p>{@link #clean()} 은 계획 산출물만 지운다 — 시드(룰·차량·기사)는 <em>픽스처</em>이고,
      * {@code DispatchSeedCoverageIT} 가 그것이 계약 파일과 정확히 같은지 본다. 이 클래스가
-     * 만들거나 고친 것을 남겨 두면 그 IT 가 실행 순서에 따라 깨진다 — 실제로 그렇게 깨뜨렸다.
+     * 만든 것을 남겨 두면 그 IT 가 실행 순서에 따라 깨진다 — 실제로 그렇게 깨뜨렸다.
      *
-     * <p><strong>이 되돌리기는 순차 실행에 기대고 있다.</strong> 통합 테스트가 병렬로 돌기
-     * 시작하면 두 테스트가 같은 시드 행을 동시에 보게 되고, 그때는 되돌려도 늦다. 옳은 형태는
-     * 시드를 고치는 대신 <em>자기 픽스처 행</em>을 만들어 쓰는 것이고, 그 전환은
-     * IMPLEMENTATION_PLAN Phase 4-9 에 적어 두었다.
+     * <p><strong>2026-09-18 (Phase 5-0): 이제 되돌리지 않고 지우기만 한다.</strong> 예전에는
+     * 룰 하나를 <em>시드 행에서</em> 고치고 여기서 원래 값으로 되돌렸는데, 되돌리기는 순차
+     * 실행에 기대는 장치다 — 통합 테스트가 병렬로 돌기 시작하면 두 테스트가 같은 시드 행을
+     * 동시에 보고, 그때는 되돌려도 늦다. 게다가 그 행은 {@code camp_id IS NULL} 인
+     * <strong>전역</strong> 룰이라 되돌리기가 한 번만 어긋나도 모든 캠프의 계획이 바뀐다.
+     * 지금은 자기 픽스처 행을 만들어 쓰므로 지우는 것으로 끝난다(축 ①,
+     * IMPLEMENTATION_PLAN Phase 4-9).
      */
     @org.junit.jupiter.api.AfterEach
-    void restoreReferenceData() {
+    void 자기가_만든_참조_데이터를_지운다() {
         tx().executeWithoutResult(status -> {
             for (UUID id : created) {
                 entityManager.createNativeQuery("DELETE FROM drivers WHERE id = ? OR vehicle_id = ?")
@@ -144,19 +151,45 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
                 entityManager.createNativeQuery("DELETE FROM vehicles WHERE id = ?")
                         .setParameter(1, id).executeUpdate();
             }
-            if (ruleBackup != null) {
-                entityManager.createNativeQuery("""
-                        UPDATE dispatch_rules
-                           SET params = cast(? as jsonb), enabled = ?, rule_version = ?
-                         WHERE id = ?
-                        """)
-                        .setParameter(1, ruleBackup.params()).setParameter(2, ruleBackup.enabled())
-                        .setParameter(3, ruleBackup.ruleVersion()).setParameter(4, ruleBackup.id())
-                        .executeUpdate();
+            for (UUID id : createdRules) {
+                entityManager.createNativeQuery("DELETE FROM dispatch_rules WHERE id = ?")
+                        .setParameter(1, id).executeUpdate();
             }
         });
         created.clear();
-        ruleBackup = null;
+        createdRules.clear();
+    }
+
+    /**
+     * 이 클래스 전용 룰 행을 만든다 — <strong>캠프 범위</strong>({@code camp_id = CAMP_ID})이고
+     * 이름이 시드와 겹치지 않는다({@code UNIQUE (camp_id, name)}).
+     *
+     * <p>시드 룰을 고르지 않는 이유는 위 {@link #자기가_만든_참조_데이터를_지운다()} 에 있다.
+     * {@code updated_at} 은 {@link PlanningClock#PLAN_AT} 에서 뽑는다 — 시각 리터럴도
+     * {@code Instant.now()} 도 아니고, DB 의 {@code now()} 도 아니다(§13 「시계는 하나다」).
+     */
+    private UUID 픽스처_룰을_만든다() {
+        UUID id = Ids.newId();
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery("""
+                INSERT INTO dispatch_rules
+                       (id, camp_id, name, type, severity, params,
+                        priority, enabled, rule_version, updated_at)
+                VALUES (?, ?, ?, 'MAX_STOPS_PER_ROUTE', 'HARD', cast(? as jsonb),
+                        900, TRUE, 1, ?)
+                """)
+                .setParameter(1, id)
+                .setParameter(2, CAMP_ID)
+                .setParameter(3, "it-max-stops-" + id)
+                .setParameter(4, "{\"max\":120}")
+                .setParameter(5, PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS))
+                .executeUpdate());
+        createdRules.add(id);
+        return id;
+    }
+
+    private ResourceViews.RuleView 룰을_읽는다(UUID id) {
+        return tx().execute(status -> resources.listRules(CAMP_ID))
+                .stream().filter(view -> view.id().equals(id)).findFirst().orElseThrow();
     }
 
     // ---------------------------------------------------------------- 조회
@@ -368,9 +401,13 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     @Test
     void 룰을_고치면_버전이_오른다() {
         // rule_version 이 오르지 않으면 계획이 어떤 룰로 돌았는지 사후에 알 수 없다(§6.9).
-        ResourceViews.RuleView rule = tx().execute(status -> resources.listRules(CAMP_ID))
-                .getFirst();
-        ruleBackup = new RuleBackup(rule.id(), rule.params(), rule.enabled(), rule.ruleVersion());
+        //
+        // 고치는 대상은 **이 테스트가 만든 행**이다. 예전에는 listRules(CAMP_ID).getFirst() —
+        // camp_id IS NULL 인 전역 시드 룰 — 을 고치고 되돌렸다(축 ①).
+        ResourceViews.RuleView rule = 룰을_읽는다(픽스처_룰을_만든다());
+        assertThat(rule.campId())
+                .as("전제: 고치는 것은 시드가 아니라 이 테스트의 캠프 범위 픽스처 행이다")
+                .isEqualTo(CAMP_ID);
 
         int next = tx().execute(status -> resources.updateRule(rule.id(),
                 new ResourceViews.UpdateRule(Map.of("maxStops", 90), false)));
