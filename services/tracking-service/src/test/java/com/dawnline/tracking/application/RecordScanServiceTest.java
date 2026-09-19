@@ -63,6 +63,7 @@ class RecordScanServiceTest {
 
     private InMemoryShipments shipments;
     private FixedRevisions revisions;
+    private RecordingDelivery delivery;
     private RecordingEvents events;
     private MeterRegistry meters;
     private RecordScanService service;
@@ -73,7 +74,8 @@ class RecordScanServiceTest {
         events = new RecordingEvents();
         meters = new SimpleMeterRegistry();
         revisions = new FixedRevisions();
-        service = new RecordScanService(shipments, events,
+        delivery = new RecordingDelivery();
+        service = new RecordScanService(shipments, events, delivery,
                 new EtaPropagator(shipments, revisions), new TrackingMetrics(meters),
                 new Ids(CLOCK, RandomGenerator.getDefault()));
     }
@@ -288,6 +290,49 @@ class RecordScanServiceTest {
         }
     }
 
+    // --- delivery.status 발행 (Phase 5-1b) --------------------------------------
+
+    @Test
+    void 옮겨진_주문만_한_건으로_발행한다() {
+        // stop 단위 한 건이다. 주문마다 내보내면 한 번의 방문이 여러 사건으로 쪼개지고,
+        // 소비자가 그것을 다시 합쳐야 한다 (§4.1, §6.5 1단계).
+        shipments.put(scheduled(ORDER));
+        shipments.put(scheduled(SIBLING));
+
+        service.record(scan(ScanType.COMPLETED));
+
+        assertThat(delivery.sent).singleElement().satisfies(sent -> {
+            assertThat(sent.routeId()).isEqualTo(ROUTE);
+            assertThat(sent.stopSeq()).isEqualTo(SEQ);
+            assertThat(sent.orderIds()).containsExactlyInAnyOrder(ORDER, SIBLING);
+            assertThat(sent.type()).isEqualTo(ScanType.COMPLETED);
+            assertThat(sent.occurredAt()).isEqualTo(NOW);
+        });
+    }
+
+    @Test
+    void 캠프_출발은_브로커로_나가지_않는다() {
+        // 한 사실을 stop 수만큼 반복해 말하는 꼴이고, order-service 의 상태 머신은
+        // DISPATCHED 로 그 구간을 이미 덮는다 (ScanType.isPublished()).
+        shipments.put(scheduled(ORDER));
+
+        service.record(new ScanCommand(ROUTE, SEQ, ScanType.DEPARTED_CAMP, NOW, null, null, null));
+
+        assertThat(delivery.sent).isEmpty();
+    }
+
+    @Test
+    void 아무것도_옮기지_못한_스캔은_발행하지_않는다() {
+        // 전부 STALE 이거나 AFTER_CANCEL 이다 — 소비자에게 말할 새 사실이 없다.
+        shipments.put(scheduled(ORDER));
+        service.record(scan(ScanType.COMPLETED));
+        delivery.sent.clear();
+
+        service.record(scan(ScanType.COMPLETED));
+
+        assertThat(delivery.sent).isEmpty();
+    }
+
     // --- 캠프 출발과 편차 전파 (Phase 5-1b) -------------------------------------
 
     @Test
@@ -356,6 +401,24 @@ class RecordScanServiceTest {
         Shipment shipment = scheduled(orderId);
         shipment.cancel();
         return shipment;
+    }
+
+    /** 발행된 {@code delivery.status} 한 건. */
+    private record Published(UUID routeId, int stopSeq, List<UUID> orderIds, ScanType type,
+            Instant occurredAt, String failureReason) {
+    }
+
+    private static final class RecordingDelivery
+            implements com.dawnline.tracking.application.port.out.DeliveryEvents {
+
+        private final List<Published> sent = new ArrayList<>();
+
+        @Override
+        public void deliveryStatus(UUID routeId, int stopSeq, List<UUID> orderIds, ScanType type,
+                Instant occurredAt, String failureReason) {
+            sent.add(new Published(routeId, stopSeq, List.copyOf(orderIds), type, occurredAt,
+                    failureReason));
+        }
     }
 
     /** 라우트당 계획값. 이 테스트에서 바뀌지 않는다 — 보는 것은 편차 계산이지 저장이 아니다. */

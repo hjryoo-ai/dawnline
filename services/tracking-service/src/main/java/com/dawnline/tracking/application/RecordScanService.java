@@ -5,6 +5,7 @@ import com.dawnline.common.error.NotFoundException;
 import com.dawnline.common.error.ValidationException;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase;
 import com.dawnline.tracking.application.EtaPropagator.Propagation;
+import com.dawnline.tracking.application.port.out.DeliveryEvents;
 import com.dawnline.tracking.application.port.out.ShipmentEvents;
 import com.dawnline.tracking.application.port.out.ShipmentRepository;
 import com.dawnline.tracking.domain.ScanOutcome;
@@ -14,6 +15,7 @@ import com.dawnline.tracking.domain.ShipmentEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,6 +56,7 @@ public class RecordScanService implements RecordScanUseCase {
 
     private final ShipmentRepository shipments;
     private final ShipmentEvents events;
+    private final DeliveryEvents delivery;
     private final EtaPropagator eta;
     private final TrackingMetrics metrics;
     private final Ids ids;
@@ -61,14 +64,16 @@ public class RecordScanService implements RecordScanUseCase {
     /**
      * @param shipments 배송 저장소
      * @param events    사건 적재
+     * @param delivery  {@code delivery.status} 발행 (outbox, 불변규칙 1)
      * @param eta       편차 전파 (§5.4)
      * @param metrics   §9.1 카운터
      * @param ids       UUIDv7 생성기 (불변규칙 10·12)
      */
     public RecordScanService(ShipmentRepository shipments, ShipmentEvents events,
-            EtaPropagator eta, TrackingMetrics metrics, Ids ids) {
+            DeliveryEvents delivery, EtaPropagator eta, TrackingMetrics metrics, Ids ids) {
         this.shipments = Objects.requireNonNull(shipments, "shipments");
         this.events = Objects.requireNonNull(events, "events");
+        this.delivery = Objects.requireNonNull(delivery, "delivery");
         this.eta = Objects.requireNonNull(eta, "eta");
         this.metrics = Objects.requireNonNull(metrics, "metrics");
         this.ids = Objects.requireNonNull(ids, "ids");
@@ -93,6 +98,7 @@ public class RecordScanService implements RecordScanUseCase {
         }
         List<OrderScan> outcomes = new ArrayList<>(targets.size());
         List<ShipmentEvent> appended = new ArrayList<>(targets.size());
+        List<UUID> moved = new ArrayList<>(targets.size());
         int afterCancel = 0;
 
         for (Shipment shipment : targets) {
@@ -101,6 +107,7 @@ public class RecordScanService implements RecordScanUseCase {
                 case APPLIED -> {
                     shipments.update(shipment);
                     appended.add(eventOf(command, shipment));
+                    moved.add(shipment.orderId());
                 }
                 case AFTER_CANCEL -> afterCancel++;
                 case STALE -> {
@@ -118,6 +125,7 @@ public class RecordScanService implements RecordScanUseCase {
                 command.stopSeq(), command.occurredAt());
 
         events.appendAll(appended);
+        publish(command, moved);
         metrics.countScanAfterCancel(afterCancel);
 
         // 사유도 좌표도 남기지 않는다 (§9.3 — 고객 식별 정보 금지).
@@ -129,6 +137,22 @@ public class RecordScanService implements RecordScanUseCase {
 
         return new ScanResult(command.routeId(), command.stopSeq(), command.type(),
                 command.occurredAt(), outcomes);
+    }
+
+    /**
+     * {@code delivery.status} 를 stop 하나에 <strong>한 번</strong> 내보낸다 (§4.1).
+     *
+     * <p>내보내지 않는 두 경우가 있고 둘 다 「소비자에게 새 사실이 없다」는 같은 이유다.
+     * {@code DEPARTED_CAMP} 는 계약의 {@code status} 셋에 없고(라우트의 사건이다,
+     * {@link ScanType#isPublished()}), 옮겨진 주문이 없으면 {@code STALE}·{@code AFTER_CANCEL}
+     * 뿐이라 상태가 움직이지 않았다.
+     */
+    private void publish(ScanCommand command, List<UUID> moved) {
+        if (!command.type().isPublished() || moved.isEmpty()) {
+            return;
+        }
+        delivery.deliveryStatus(command.routeId(), command.stopSeq(), moved, command.type(),
+                command.occurredAt(), command.failureReason());
     }
 
     private ShipmentEvent eventOf(ScanCommand command, Shipment shipment) {

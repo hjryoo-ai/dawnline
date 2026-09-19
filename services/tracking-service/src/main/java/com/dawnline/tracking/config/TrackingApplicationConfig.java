@@ -9,12 +9,15 @@ import com.dawnline.tracking.adapter.out.persistence.JdbcRouteRevisions;
 import com.dawnline.tracking.adapter.out.persistence.JdbcShipmentEvents;
 import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
 import com.dawnline.tracking.application.ApplyRouteAssignmentService;
+import com.dawnline.messaging.outbox.OutboxAppender;
+import com.dawnline.tracking.adapter.out.messaging.OutboxDeliveryEvents;
 import com.dawnline.tracking.application.EtaPropagator;
 import com.dawnline.tracking.application.RecordScanService;
 import com.dawnline.tracking.application.ShipmentEventPartitions;
 import com.dawnline.tracking.application.TrackingMetrics;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase;
+import com.dawnline.tracking.application.port.out.DeliveryEvents;
 import com.dawnline.tracking.application.port.out.EventPartitions;
 import com.dawnline.tracking.application.port.out.RouteRevisions;
 import com.dawnline.tracking.application.port.out.ShipmentEvents;
@@ -128,18 +131,29 @@ public class TrackingApplicationConfig {
     }
 
     /**
+     * {@code delivery.status} 발행 포트 (불변규칙 1).
+     *
+     * @param outbox 이벤트 발행의 유일한 진입점
+     */
+    @Bean
+    public DeliveryEvents deliveryEvents(OutboxAppender outbox) {
+        return new OutboxDeliveryEvents(outbox);
+    }
+
+    /**
      * 스캔 적용 유스케이스 (§5.4).
      *
      * @param shipments 배송 저장소
      * @param events    사건 적재
+     * @param delivery  {@code delivery.status} 발행
      * @param eta       편차 전파
      * @param metrics   §9.1 카운터
      * @param ids       UUIDv7 생성기 (불변규칙 10)
      */
     @Bean
     public RecordScanUseCase recordScanUseCase(ShipmentRepository shipments, ShipmentEvents events,
-            EtaPropagator eta, TrackingMetrics metrics, Ids ids) {
-        return new RecordScanService(shipments, events, eta, metrics, ids);
+            DeliveryEvents delivery, EtaPropagator eta, TrackingMetrics metrics, Ids ids) {
+        return new RecordScanService(shipments, events, delivery, eta, metrics, ids);
     }
 
     // --- shipment_events 일 파티션 (§5.4) -------------------------------------
