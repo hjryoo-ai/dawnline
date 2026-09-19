@@ -1638,6 +1638,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    없으므로, tracking 의 컨슈머 그룹은 `latest` 에서 시작하거나 그 토픽을 재생성한다 — 적지 않으면
    첫 기동에서 DLQ 가 찬다.
 
+   **스키마 둘이 붙었다** (2026-09-19). ① `route_revisions` — §8.5 의 「routeId + revision」
+   비교는 라우트당 마지막 개정을 알아야 성립하고, `shipments` 에서 MAX 로 유도하면 §6.8 의
+   `relocate` 가 라우트를 비웠을 때 비교할 값이 사라진다(§5.4 의 버린 대안 둘).
+   ② `shipment_events` 의 일 파티션은 **DEFAULT 파티션 없이** 마이그레이션의 함수 둘이
+   만들고 스케줄러가 부른다 — 범위 밖 행이 조용히 쌓이면 그 날짜의 파티션 생성이 며칠
+   뒤에 실패한다. 생성이 멈춘 것은 `dawnline_shipment_partitions_ahead`(§9.1)가 말하고 알림은
+   2 에서 걸린다(§9.4).
+
    **원 약속 대비 정시율은 tracking 이 내지 않는다.** `order.placed`(원본)와 `delivery.status`
    (완료 시각)를 잇는 곳은 **ops-api 의 읽기 모델**이다(§5.5 — Phase 2 가 예약해 둔 「두 정시율」의
    자리를 여기서 확정한다). tracking 은 자기가 가진 약속(개정본)만 본다.

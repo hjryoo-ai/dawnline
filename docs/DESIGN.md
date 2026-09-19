@@ -851,20 +851,69 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
 
 **책임**: 라우트별 배송 진행, ETA, 지연 위험 감지, 상태 통지.
 
-- `route.assigned` 수신 → stop마다 `shipments` 생성(status `SCHEDULED`, `eta_at = planned_arrival`).
+- `route.assigned` 수신 → stop마다 `shipments` 생성(status `SCHEDULED`, `eta_at = planned_arrival`, `promised_end = promisedWindow.end`).
 - 기사 스캔 API `POST /api/v1/routes/{id}/stops/{seq}/events` (DEPARTED_CAMP, ARRIVED, COMPLETED, FAILED, 위치 포함). 시뮬레이터가 호출.
 - ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17).
 - **at-risk 규칙**: 어떤 stop의 `eta > promised_end − 15분`이면 `delivery.at-risk` 1회 발행(라우트당 5분 쿨다운, Redis `SET NX`). 페이로드에 남은 stop 목록·편차 포함.
-- 상태 머신: `SCHEDULED → OUT_FOR_DELIVERY → ARRIVED → COMPLETED | FAILED`. 역행 이벤트는 거부(멱등).
+- 상태 머신: `SCHEDULED → OUT_FOR_DELIVERY → ARRIVED → COMPLETED | FAILED`, 그리고
+  `SCHEDULED`·`OUT_FOR_DELIVERY` → `CANCELLED`. 축 규칙의 **셋째 자리**다(order·fulfillment 와
+  같은 규칙, 다른 자리 — §13): 역행은 무시하고, 미래 상태로의 건너뜀은 받아들이며
+  (`SCHEDULED` 에 `COMPLETED` 가 오면 완료다 — 도착 스캔을 기사가 빼먹은 것이지 배송이
+  안 된 것이 아니다), **`CANCELLED` 뒤에 오는 스캔은 무시하되 센다**
+  (`dawnline_scan_after_cancel_total`, §9.1). 마지막 하나는 기사가 취소를 못 받고 배송한
+  경우이고 dispatch 의 `dawnline_cancel_too_late_total`(§6.10)과 한 쌍이다 — 저쪽은 「배송이
+  끝난 주문에 취소가 왔다」, 이쪽은 「취소된 주문이 배송됐다」 를 센다.
 
 ```sql
 CREATE TABLE shipments (order_id UUID PK, route_id UUID NOT NULL, stop_seq SMALLINT NOT NULL, status VARCHAR(20) NOT NULL,
-  planned_arrival TIMESTAMPTZ, eta_at TIMESTAMPTZ, promised_end TIMESTAMPTZ, delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0);
+  planned_arrival TIMESTAMPTZ NOT NULL, eta_at TIMESTAMPTZ NOT NULL, promised_end TIMESTAMPTZ NOT NULL,
+  delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0);
 CREATE INDEX ix_ship_route ON shipments (route_id, stop_seq);
+-- 개정 비교의 자리 (§8.5 의 「routeId + revision」). 라우트당 한 행.
+CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), applied_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHAR(20), occurred_at TIMESTAMPTZ NOT NULL,
   lat NUMERIC(9,6), lng NUMERIC(9,6), payload JSONB, PRIMARY KEY (occurred_at, id)) PARTITION BY RANGE (occurred_at);
 -- 일 단위 파티션, 보존 30일 (pg_partman 없이 Flyway + 스케줄러로 생성/삭제)
 ```
+
+**세 칸이 `NOT NULL` 인 것은 계약이 정했다.** `planned_arrival`·`eta_at`·`promised_end` 의 출처는
+`route.assigned.v1` 의 `plannedArrival` 과 `promisedWindow` 둘뿐이고 둘 다 **required** 다(Phase 5-1a
+계약). NULL 이 들어올 경로가 없는 칸을 NULL 허용으로 두면 at-risk 판정에 「창을 모르는 stop」
+분기가 생기고, 그 분기는 한 번도 실행되지 않으면서 리뷰마다 읽힌다.
+
+**개정 비교는 라우트 단위다.** §8.5 는 `route.assigned` 소비의 멱등 키를 「routeId + revision」
+으로 적었고, 그 비교는 **라우트당 마지막으로 적용한 개정**을 알아야 성립한다. 그래서
+`route_revisions` 에 라우트당 한 줄을 둔다. 버린 대안 둘:
+
+> **(1) `shipments` 에 `route_revision` 컬럼을 두고 `MAX(...) WHERE route_id = ?` 로 유도.**
+> §6.8 의 `relocate` 가 한 라우트의 미완료 stop 을 전부 다른 라우트로 옮기면 그 라우트에
+> 행이 남지 않는다. 그 상태에서 예전 개정이 DLQ replay 로 돌아오면 비교할 값이 없어
+> **이미 옮겨간 주문들이 되돌아온다.**
+>
+> **(2) shipment 행마다 비교.** 개정 번호는 라우트마다 독립이라(A 가 5, B 가 1) 주문이
+> A→B 로 옮겨갈 때 정당한 이벤트가 「낮은 번호」로 보여 버려진다. 번호를 라우트 밖에서
+> 비교하는 순간 그 번호는 순서를 뜻하지 않는다.
+
+**파티션은 함수 하나가 만들고 스케줄러가 부른다.** `shipment_events` 에 **DEFAULT 파티션을 두지
+않는다.** 두면 범위 밖 행이 조용히 거기 쌓이고, 나중에 그 날짜의 파티션을 만들 때
+PostgreSQL 이 DEFAULT 를 스캔해 겹치는 행을 발견하고 **그때** 실패한다 — 생성이 멈췄다는 사실이
+며칠 뒤 다른 얼굴로 나타난다. 파티션이 없으면 INSERT 가 그 자리에서 실패하고
+(`no partition of relation "shipment_events" found for row`) 원인이 곧 메시지다.
+
+이름 규칙은 마이그레이션의 함수 둘(`tracking_ensure_event_partitions(from, days)` ·
+`tracking_drop_event_partitions(before)`)에만 있다. 스케줄러는 **주입된 시계에서 뽑은 날짜**를
+넘길 뿐이다(불변규칙 12) — 이름을 자바에서도 만들면 규칙이 두 곳이 되고 둘은 갈라진다.
+마이그레이션은 기동 직후에도 쓸 수 있도록 `CURRENT_DATE − 1` 부터 9일치를 미리 만든다(빈
+파티션뿐이다).
+
+생성이 멈춘 것은 조용하면 안 된다. `dawnline_shipment_partitions_ahead`(§9.1)가 **오늘을 포함해
+앞으로 덮여 있는 날 수**를 재고, 스케줄러가 죽으면 이 값이 날마다 1씩 줄다가 0 에서 INSERT 가
+실패한다. 알림은 2 에서 걸린다(§9.4) — 막히기 하루 전에 사람이 본다.
+
+**원 약속 대비 정시율은 여기서 내지 않는다.** tracking 의 `promised_end` 는 `route.assigned` 가 준
+값 하나이고, 그것이 원래 약속인지 개정된 약속인지 이 서비스는 모른다(§9.1 의 같은 문단).
+두 기준은 **ops-api 의 읽기 모델**이 `order.placed`(원 약속)과 `delivery.status`(완료 시각)을
+이어서 낸다 — §5.5 의 결정이다.
 
 **Redis**: `driver:{id}:pos` (GEO), `route:{id}:atrisk:cooldown`.
 
@@ -877,7 +926,8 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
 
 ```sql
 CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR(16), status VARCHAR(20), camp_id UUID, wave_id UUID,
-  route_id UUID, promised_end TIMESTAMPTZ, eta_at TIMESTAMPTZ, delivered_at TIMESTAMPTZ, on_time BOOLEAN, updated_at TIMESTAMPTZ);
+  route_id UUID, promised_end_original TIMESTAMPTZ, promised_end_revised TIMESTAMPTZ, eta_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ, on_time_promised BOOLEAN, on_time_revised BOOLEAN, updated_at TIMESTAMPTZ);
 CREATE TABLE rm_waves (wave_id UUID PK, camp_id UUID, service_tier VARCHAR(16), cutoff_at TIMESTAMPTZ, status VARCHAR(16),
   order_count INTEGER, plan_id UUID, plan_duration_ms INTEGER, total_cost_krw BIGINT, unassigned_count INTEGER);
 CREATE TABLE rm_routes (route_id UUID PK, plan_id UUID, camp_id UUID, vehicle_id UUID, driver_id UUID, status VARCHAR(16),
@@ -888,14 +938,24 @@ CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), targ
   request JSONB, result VARCHAR(16), created_at TIMESTAMPTZ);
 ```
 
-**Phase 6 메모 — `rm_orders` 는 약속을 <em>두 개</em> 들어야 한다.** §8.1 의 정시율은 "고객이 처음
-받은 약속" 기준으로 재는데, order-service 의 `promised_start/end` 는 개정 경로에서 **덮인다**
+**결정 — `rm_orders` 는 약속을 <em>두 개</em> 든다** (2026-09-19, Phase 5-1a 에서 메모를
+결정으로 올렸다). §8.1 의 정시율은 "고객이 처음 받은 약속" 기준으로 재는데,
+order-service 의 `promised_start/end` 는 개정 경로에서 **덮인다**
 ([ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 3 — 덮는 것이 맞다,
 고객에게 보여 줄 값은 지금 유효한 약속이다). 그러면 원 약속을 아는 곳은 `order.placed` 이벤트뿐이고,
-그것을 보관해 두 기준을 모두 낼 수 있는 곳은 **여기**다. 위 DDL 의 `promised_end` 한 칸으로는
+그것을 보관해 두 기준을 모두 낼 수 있는 곳은 **여기**다. `promised_end` 한 칸으로는
 `dawnline_delivery_on_time_ratio{basis}`(§9.1)의 두 값을 낼 수 없다 — 그 SLO 는 개정으로 정시율을
 세탁할 수 없게 하려고 두 값으로 낸 것인데, 한 칸만 두면 정확히 그 세탁이 가능해진다.
-Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
+Phase 2-7 에서 order-service 쪽을 구현하며 드러났고, Phase 5-1a 에서 tracking 의 `promised_end` 가
+「개정 여부를 모르는 한 칸」이라는 것이 다시 확인되어 결정으로 올렸다.
+
+위 DDL 의 네 칸이 두 기준을 든다 — `promised_end_original` 은 `order.placed` 가 준 원본이고
+`promised_end_revised` 는 `fulfillment.planned` 의 `promiseRevised` 가 덮은 값이다(개정이 없으면
+둘은 같다). 완료 시각은 `delivery.status` 의 `occurredAt` 이고, 그 둘을 이은 결과가
+`on_time_promised`·`on_time_revised` 다. `basis` 라벨의 `promised`·`revised` 와 이름을 맞춰 둔다 —
+메트릭과 컬럼 이름이 어긋나면 「어느 칸이 어느 라벨인가」를 읽는 사람이 매번 다시 맞춰야 한다.
+**tracking 은 이 계산을 하지 않는다**(§5.4) — 알려면 fulfillment 의 데이터를 끌어와야 하고
+그것이 불변규칙 4 가 막는 것이다.
 
 `rm_waves` 의 `plan_id`·`plan_duration_ms`·`total_cost_krw`·`unassigned_count` 를 채우는 것은
 `plan.completed` 다([ADR-024](adr/ADR-024-plan-completed-event.md)). 이 네 칸은 웨이브 단위 값이라
@@ -1906,6 +1966,8 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | `dawnline_plan_backlog_unknown_total` | counter | dispatch | camp — 랙을 **모른 채** 내린 자동 모드 판단. 모름은 0 이 아니다(§6.7) — 이 값이 오르는 동안 열화 판단은 조건 둘 중 하나만 보고 있고, 그 사실이 안 보이면 「랙 조건이 한 번도 발화하지 않았다」가 건강의 증거처럼 읽힌다. `dawnline_geo_lookups_total{outcome=bypassed}` 와 같은 어휘다 — **폴백은 조용히 일어나면 안 된다.** 운영자 재실행·정체 회수는 볼 파티션이 없어 정상적으로 오르므로, 0 이어야 하는 값이 아니라 **비율**을 보는 값이다 |
 | `dawnline_cancel_too_late_total` | counter | dispatch | camp — 이미 `ARRIVED`/`COMPLETED` 인 stop 에 도착해 **거부한** `order.cancelled` (§6.10, [ADR-026](adr/ADR-026-dispatch-cancellation-window.md)). order-service 의 축 밖 거부 카운터와 **한 쌍**이다 — 저쪽은 "취소된 주문에 배차가 왔다", 이쪽은 "배송된 주문에 취소가 왔다" 를 세고 둘 다 같은 경합 창의 양 끝이다. 오르면 볼 곳은 dispatch 가 아니라 order-service 의 `order.dispatched` 컨슈머 랙이다 |
 | `dawnline_at_risk_total` | counter | tracking | camp — campId 는 `route.assigned` 가 싣고 오지만(필수 필드) §5.4 의 `shipments` 에는 컬럼이 없다. **Phase 5 에서 보관해야 이 라벨을 붙일 수 있다** |
+| `dawnline_scan_after_cancel_total` | counter | tracking | 라벨 없음 — `CANCELLED` 인 shipment 에 도착해 **무시한** 기사 스캔 (§5.4). 기사가 취소를 못 받고 배송한 것이다. dispatch 의 `dawnline_cancel_too_late_total` 과 **한 쌍**이고 둘은 같은 경합 창의 양 끝이다 — 저쪽은 「배송된 주문에 취소가 왔다」, 이쪽은 「취소된 주문이 배송됐다」. camp 라벨을 붙이지 않는 이유는 `shipments` 에 칸이 없기 때문이다 — `dawnline_at_risk_total` 이 camp 를 갖게 되는 시점에 같이 붙인다 |
+| `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
@@ -1942,7 +2004,7 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%, **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10)
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%, **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06)
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
