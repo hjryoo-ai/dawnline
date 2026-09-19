@@ -1,16 +1,27 @@
 package com.dawnline.tracking.config;
 
+import com.dawnline.messaging.idempotency.IdempotentConsumer;
+import com.dawnline.messaging.json.EventJson;
+import com.dawnline.tracking.adapter.in.messaging.RouteAssignedListener;
 import com.dawnline.tracking.adapter.out.persistence.JdbcEventPartitions;
+import com.dawnline.tracking.adapter.out.persistence.JdbcRouteRevisions;
+import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
+import com.dawnline.tracking.application.ApplyRouteAssignmentService;
 import com.dawnline.tracking.application.ShipmentEventPartitions;
+import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.out.EventPartitions;
+import com.dawnline.tracking.application.port.out.RouteRevisions;
+import com.dawnline.tracking.application.port.out.ShipmentRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.persistence.EntityManagerFactory;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
@@ -23,6 +34,59 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableConfigurationProperties(TrackingProperties.class)
 @EnableScheduling
 public class TrackingApplicationConfig {
+
+    // --- route.assigned 소비 (§5.4, §8.5) ------------------------------------
+
+    /**
+     * {@code shipments} 포트의 JPA 구현.
+     *
+     * @param entityManagerFactory 이 서비스의 EMF. 공유 프록시를 만들어 넘긴다 —
+     *                             트랜잭션마다 올바른 EntityManager 가 물린다
+     */
+    @Bean
+    public ShipmentRepository shipmentRepository(EntityManagerFactory entityManagerFactory) {
+        return new JpaShipmentRepository(
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+    }
+
+    /**
+     * {@code route_revisions} 포트 (ADR-045).
+     *
+     * @param jdbc 같은 트랜잭션에 참여하는 JDBC 템플릿
+     */
+    @Bean
+    public RouteRevisions routeRevisions(JdbcTemplate jdbc) {
+        return new JdbcRouteRevisions(jdbc);
+    }
+
+    /**
+     * 개정 반영 유스케이스 (§5.4).
+     *
+     * @param shipments 배송 저장소
+     * @param revisions 개정 저장소
+     * @param clock     {@code applied_at} 시각 출처 (불변규칙 12)
+     */
+    @Bean
+    public ApplyRouteAssignmentUseCase applyRouteAssignmentUseCase(ShipmentRepository shipments,
+            RouteRevisions revisions, Clock clock) {
+        return new ApplyRouteAssignmentService(shipments, revisions, clock);
+    }
+
+    /**
+     * {@code route.assigned} 리스너 (§4.1).
+     *
+     * @param consumer             멱등 게이트
+     * @param applyRouteAssignment 개정 반영 유스케이스
+     * @param json                 이벤트 JSON 코덱
+     * @param meters               Micrometer 레지스트리
+     */
+    @Bean
+    public RouteAssignedListener routeAssignedListener(IdempotentConsumer consumer,
+            ApplyRouteAssignmentUseCase applyRouteAssignment, EventJson json, MeterRegistry meters) {
+        return new RouteAssignedListener(consumer, applyRouteAssignment, json, meters);
+    }
+
+    // --- shipment_events 일 파티션 (§5.4) -------------------------------------
 
     /**
      * 파티션 포트의 PostgreSQL 구현.

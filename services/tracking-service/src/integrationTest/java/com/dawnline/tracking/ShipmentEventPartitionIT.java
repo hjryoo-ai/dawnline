@@ -64,6 +64,8 @@ class ShipmentEventPartitionIT extends TrackingIntegrationTestBase {
      *       advisory lock 만 쥐고 있게 된다 — {@code GeoFallbackIT} 가 그랬다(Phase 5-0).</li>
      *   <li>파티션 스케줄러: 생성 시점을 테스트가 정한다. 스케줄러가 먼저 돌면 "만들기 전" 상태를
      *       볼 수 없고, 그 실패는 실행 순서에 따라 나타났다 사라진다.</li>
+     *   <li>Kafka 리스너 컨테이너: 이 IT 는 브로커를 띄우지 않는다. 켜 두면 컨슈머가 없는 주소로
+     *       영원히 재접속하며 로그를 채우고, 진짜 실패가 그 안에 묻힌다 (2026-09-19, 5-1a 소비).</li>
      * </ul>
      *
      * @param registry 동적 속성 레지스트리
@@ -72,6 +74,7 @@ class ShipmentEventPartitionIT extends TrackingIntegrationTestBase {
     static void 공유_자원을_끈다(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         registry.add("dawnline.tracking.partitions.initial-delay-ms", () -> "3600000");
+        registry.add("spring.kafka.listener.auto-startup", () -> "false");
     }
 
     @BeforeEach

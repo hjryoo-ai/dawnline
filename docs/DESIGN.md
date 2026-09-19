@@ -896,6 +896,18 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
 > A→B 로 옮겨갈 때 정당한 이벤트가 「낮은 번호」로 보여 버려진다. 번호를 라우트 밖에서
 > 비교하는 순간 그 번호는 순서를 뜻하지 않는다.
 
+비교와 기록은 **한 문장**이다(`ON CONFLICT … DO UPDATE … WHERE revision < EXCLUDED.revision`).
+읽고-비교하고-쓰면 그 사이가 창이 되고, 같은 라우트의 두 개정이 동시에 들어올 때 둘 다 자기가
+최신이라고 읽는다. 버려진 개정은 `dawnline_event_stale_total{eventType="route.assigned"}`(§9.1)
+로 센다 — 거부가 아니라 순서 역전 흡수이므로 DLQ 로 보내지 않는다.
+
+**그리고 이 개정에 <em>없는</em> 배송은 건드리지 않는다.** §6.8 의 `relocate` 가 주문을 A → B 로
+옮기면 A 의 개정(그 주문이 빠진)과 B 의 개정(그 주문이 실린)은 서로 다른 파티션으로 나가 순서가
+없다. 「이 라우트의 shipment 중 개정에 없는 것을 정리」하는 한 줄은 A 의 개정이 먼저 처리될 때
+아직 옮겨가지 않은 그 주문을 죽이고, 뒤에 온 B 의 개정은 종결 상태를 만나 아무것도 못 한다 —
+**이동이 영영 사라진다.** 부재는 값이 아니다(ADR-026); 여기서는 그것이 경합 방어선이고, 두
+도착 순서를 각각 보는 IT 둘이 지킨다.
+
 **개정은 종결 상태를 되돌리지 않는다 — 되돌릴 것이 있어서가 아니라 갱신할 것이 없어서다.**
 새 개정이 오면 `COMPLETED`·`FAILED`·`CANCELLED` 인 shipment 는 그대로 두고, 나머지만
 `route_id`·`stop_seq`·`planned_arrival`·`eta_at`·`promised_end` 를 갱신한다. 앞의 둘은 §6.8 의
@@ -1985,7 +1997,7 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_outbox_leader` | gauge | 전 서비스 | service — 릴레이 리더십([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)). **1** 리더(발행 중) · **0** 팔로워(정상, 다른 인스턴스가 리더) · **-1** 판정 불가(DB 세션 장애). 0 과 -1 을 합치지 않는 이유는 발행을 멈추는 결정은 같아도 <em>봐야 할 곳</em>이 정반대이기 때문이다. 이 값에 별도 알림을 걸지 않는다 — 결과가 `dawnline_outbox_lag_seconds` 로 곧바로 나타나고 그 알림이 §9.4 에 이미 있다. 이 게이지는 <em>왜</em> 지연이 오르는지를 말한다 |
 | `dawnline_event_processed_total` | counter | 전 소비자 | consumer, eventType, outcome(ok/dup/rejected/dlq) |
 | `dawnline_event_rejected_total` | counter | 전 소비자 | **consumer, eventType, reason** — 비즈니스 규칙 위반으로 무시한 이벤트 (§4.6). `outcome=rejected` 가 "몇 번" 을 세고 이쪽이 "왜" 를 센다. 예약해 둔 라벨 확장을 Phase 2-8 에서 붙였다 — 거부하는 소비자가 order·fulfillment 둘이 되어 "누가 무엇을" 이 필요해졌다. **세 라벨은 이 카운터를 올리는 모든 곳이 같이 써야 한다**(`IdempotentConsumer`·두 리스너): Prometheus 는 같은 이름의 미터가 같은 라벨 키 집합을 갖기를 요구하므로 한쪽만 붙이면 다른 쪽 등록이 실패한다 |
-| `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — 이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017) |
+| `dawnline_event_stale_total` | counter | 전 소비자 | consumer, eventType — **순서 역전을 흡수하느라 무시한 이벤트**. 둘이 같은 이름을 쓴다: ① 이미 지나온 지점으로의 전이([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md) 축 규칙) ② 이미 적용한 개정보다 낮거나 같은 `route.assigned`(tracking, [ADR-045](adr/ADR-045-revision-comparison-is-per-route.md)). 둘 다 「처리하지 못했다」가 아니라 <em>설계된 동작</em>이라 `dawnline_event_rejected_total` 을 올리지 않는다 — 구별이 필요하면 `eventType` 으로 갈린다 |
 | `dawnline_wave_orders` | gauge | fulfillment | camp, tier — 마감 시점의 편입 주문 수. `waves.order_count` 는 마감 전 0 이므로([ADR-025](adr/ADR-025-wave-admission-share-lock.md)) 이 값이 편입량의 유일한 관측 경로다. 스크레이프마다 집계하지 않고 **마감할 때 이미 센 값**을 남긴다 — 관측이 §8.2 피크에 부하가 되면 안 된다 |
 | `dawnline_fc_fallback_total` | counter | fulfillment | camp, reason(tier/cold/inventory) — 캠프의 홈 FC 가 §5.2 1~3단계 필터에서 떨어져 대체 FC 를 고른 횟수. 계속 오르는 캠프는 홈 FC 배정이 잘못됐거나 그 FC 의 역량이 부족한 것이다 |
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |

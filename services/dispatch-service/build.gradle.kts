@@ -49,3 +49,14 @@ dependencies {
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.testcontainers.redis)
 }
+
+// -----------------------------------------------------------------------------
+// 계약 파일을 단위 테스트의 입력으로 선언한다 (불변규칙 8).
+// DispatchPayloadContractTest 가 contracts/events 를 런타임에 읽는데 이 선언이 없어서, 스키마나
+// 예시만 고친 빌드에서 test 가 UP-TO-DATE 로 건너뛰고 있었다 (2026-09-19 발견 — order·fulfillment
+// 에는 있었고 여기만 빠져 있었다, DESIGN.md §13 규칙 3).
+tasks.named<Test>("test") {
+    inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
+            .withPropertyName("eventContracts")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
