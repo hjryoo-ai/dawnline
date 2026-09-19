@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -225,16 +226,19 @@ final class InMemoryDispatchPorts {
             final GeoPoint point;
             final int serviceSeconds;
             final List<UUID> orderIds;
+            /** 이 stop 의 약속창. 개정 발행이 required 로 싣는다 (§5.3, Phase 5-1a). */
+            final TimeWindow promised;
             Instant arrival;
             String status = "PLANNED";
 
             StopRow(int seq, GeoPoint point, int serviceSeconds, Instant arrival,
-                    List<UUID> orderIds) {
+                    List<UUID> orderIds, TimeWindow promised) {
                 this.seq = seq;
                 this.point = point;
                 this.serviceSeconds = serviceSeconds;
                 this.arrival = arrival;
                 this.orderIds = List.copyOf(orderIds);
+                this.promised = Objects.requireNonNull(promised, "promised");
             }
 
             boolean cancelled() {
@@ -341,7 +345,7 @@ final class InMemoryDispatchPorts {
                                             .orElse(false))
                                     .toList(),
                             row.point.lat(), row.point.lng(), row.arrival, row.serviceSeconds,
-                            row.cancelled()))
+                            row.cancelled(), row.promised))
                     .toList();
             return Optional.of(new RouteSnapshot(routeId, header.vehicleId(),
                     summary == null ? 0 : summary.distanceM(),

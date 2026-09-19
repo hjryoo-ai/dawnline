@@ -1546,9 +1546,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 기준일 **2026-09-18**. CLAUDE.md 「작업 방식」 — *기억이 아니라 표로 확인한다*. **빠진 항목은
 표에 남긴다**(지우지 않는다: Phase 1 의 레이트 리밋이 그렇게 빠질 뻔했다).
 
-> **커밋 열은 브랜치 `phase4/relay-advisory-lock` 의 것이다.** squash 머지가 이 SHA 들을
-> 갈아치우므로, 머지 뒤에는 `main` 의 커밋으로 다시 적는다(§6.9 — 브랜치 커밋을 적었다가 참조가
-> 하루 만에 죽은 적이 있다).
+> **커밋 열의 SHA 는 `main` 에서 그대로 유효하다** (2026-09-18 확인). 원래 이 자리에는 「브랜치
+> `phase4/relay-advisory-lock` 의 것이므로 squash 머지 뒤에 다시 적는다」고 적혀 있었다(§6.9 —
+> 브랜치 커밋을 적었다가 참조가 하루 만에 죽은 적이 있다). **그래서 이 PR 만 머지 커밋으로
+> 넣었다**(`4ebfa3f`, PR #35): 44 커밋이 하나로 접히면 이 표의 30개 SHA 가 전부 `#35 <하나>` 가
+> 되어 **항목별 귀속이 사라진다** — 표를 두는 이유 자체가 없어진다. 저장소의 다른 PR 은
+> squash 그대로다(Phase 3 대조표의 `#30 2960d9b` 형태).
 
 | # | 작업 (계획 문장) | 상태 | 커밋 / 근거 |
 |---|---|---|---|
@@ -1561,7 +1564,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 6 | (선택) `timefold` 전략 실험 → ADR-004 에 수치 반영 | ⛔ **범위 제외(결정으로 닫았다)** | `f65c8b2` 시점에는 「⬜ 미구현」이었고, **표가 그것을 들고 있었기 때문에 결정이 됐다** — [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)(2026-09-18): 비교 대상을 다른 솔버가 아니라 **불가능의 경계**로 둔다. 근거 셋은 고정비 하한 열(상시, [ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md)) · 그림자 원장 여덟 줄 · 구성 계열이 다른 두 전략 비교. **다시 여는 조건 셋**과 한정 실행(Phase 7-6 `medium` 한 개)을 ADR 이 적는다 |
 | 7 | ADR-004, 008 확정 | ◐ **부분** — 004 ✅ / 008 ⏸ Phase 7-6 | **004 확정**: [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)(2026-09-18) — Phase 4 의 마지막 커밋. **008 이월**(가상 스레드 + ForkJoin 분리): **3번이 이월되면서 근거가 바뀌었다** — [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) 가 「병렬 단위는 클러스터가 아니다」를 이미 확정했으므로, 확정은 Phase 7-6 의 「ADR 전체 확정(001–012)」에서 그 결과를 안고 쓴다 |
 | 8 | `small` 레짐 격차 | ✅ **닫혔다** | `70f0f32`(개선 단계) · `15fa48f`([ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) — **진짜 원인은 좌석이었다**) · `b36c96e`(축 재측정) · `a1cc31e`+`4721c6c`([ADR-041](adr/ADR-041-cluster-target-counts-stop-slots.md)). 지금 `small` 은 `sweep-greedy-nn` −15.80% · 기본 전략 −26.60%. **게이트는 `medium` 으로 둔다**(근거가 결과가 아니라 자유도다) |
-| 9 | 테스트 격리 — 픽스처가 정하지 않은 축 | ◐ **부분** | `7dad296`(플래너 통계·컷오프 상한) · `49f0903`(배정 동률) · `7f2bc9d`(검사 대상 집합). **남은 둘**: ① **시드 행**(`DispatchAdminIT` 가 시드를 고치고 `@AfterEach` 로 되돌린다 — DESIGN §13 표에 「아직 안 깨졌다(기록만)」) ② **릴레이 리더의 fulfillment 쪽**(`FulfillmentPublishIT`·`WaveLifecycleIT` 둘이 발행에 의존하는데 근거가 클래스 시작 순서다). **Phase 5 로 가져간다** |
+| 9 | 테스트 격리 — 픽스처가 정하지 않은 축 | ◐ **부분(Phase 4 안에서)** → **Phase 5-0 에서 닫혔다** | `7dad296`(플래너 통계·컷오프 상한) · `49f0903`(배정 동률) · `7f2bc9d`(검사 대상 집합). **남은 둘은 Phase 5-0 (2026-09-18)**: ① **시드 행** — 고치던 것이 `camp_id IS NULL` 인 **전역** 시드 룰이었다(전제 어설션이 `but was: null` 로 잡았다). 캠프 범위 픽스처 행으로 바꿨다 ② **릴레이 리더의 fulfillment 쪽** — 둘째 컨텍스트(`GeoFallbackIT`)가 릴레이를 켠 채 같은 advisory lock 을 두고 겨뤘다. 발행을 보지 않는 IT 가 끄고, 보는 둘은 `lead()` 를 첫 어설션으로 묻는다. **커밋은 Phase 5-0** (브랜치 SHA 는 squash 로 죽으므로 항목으로 가리킨다, §6.9) |
 | 10·11 | 미배정 정책 + 우선도 파생 + 재삽입 | ✅ | `d7b4c79`([ADR-028](adr/ADR-028-unassigned-policy.md)) · [측정](benchmarks/phase4-unassigned-policy.md). 셋을 **하나의 결정**으로 묶었다. 「재배송 +3」은 사실을 만드는 **Phase 5** 로 미뤘다 |
 | 12 | `make demo`·CI 스모크가 하루 8시간 실패한다 | ✅ | `f71e9a3`([ADR-030](adr/ADR-030-night-shift-seed.md) — 부록 A 에 야간 근무조) · `c086c0d`(야간조 냉장 배분 정정) |
 | 13 | 계획 영속화 20초 | ✅ | `6f72c1a`([ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) — 20.4초 → 800 ms) · `76082e1`([측정](benchmarks/phase4-plan-roundtrip-breakdown.md)) |
@@ -1595,9 +1598,69 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 ## Phase 5 — tracking-service + 기사 시뮬레이션 + 재계획
 
+**작업 순서** (2026-09-18 승인) — **0 → 1a → 1b → 2 → 5 → 3**. 4(테스트)는 각 항목 안에서.
+근거 넷: ① **0번은 다음 Phase 의 첫 IT 에서 먼저 깨진다**(Phase 4 마감 대조표 9번) ② ETA·at-risk 는
+3번의 **트리거**라 3번 앞에 있어야 하고, 골격이 아니라 tracking 의 핵심 동작이다 — 그래서 1번을
+**1a·1b 로 가른다** ③ 2번 시뮬레이터가 **1b 의 입력**을 만든다 ④ 5번이 3번의 전제(「미완료 stop 만」)를
+만든다.
+
 **작업**
-1. `Shipment` 상태 머신, `route.assigned` 소비(revision 비교), 스캔 이벤트 API, ETA 갱신, at-risk 규칙·쿨다운, `delivery.status`/`delivery.at-risk` 발행. Flyway(§5.4, 일 파티션 생성 스케줄러).
+0. **테스트 격리 축 둘 — Phase 4-9 이월** (✅ 2026-09-18).
+   ① **시드 행**: `DispatchAdminIT` 가 고치던 것은 `camp_id IS NULL` 인 **전역** 시드 룰이었다.
+   되돌리는 대신 **캠프 범위 픽스처 행**을 만들어 고치고 지운다 — 되돌리기는 순차 실행에 기대는
+   장치이고, 지우기는 「무엇을 덮는가」를 묻지 않는다.
+   ② **릴레이 리더(fulfillment)**: 자기 `@DynamicPropertySource` 를 가진 `GeoFallbackIT` 가 둘째
+   컨텍스트라 릴레이가 둘이었고 advisory lock 은 하나다([ADR-027](adr/ADR-027-outbox-relay-leader-lock.md)
+   후속 정정). 발행을 보지 않는 IT 가 자기 자리에서 끄고, 보는 IT 둘(`FulfillmentPublishIT`·
+   `WaveLifecycleIT`)은 **`lead()` 가 `LEADER` 인가**를 첫 어설션으로 묻는다 — 예전 전제
+   「릴레이 빈이 있다」는 리더십을 한 마디도 말하지 않았다.
+1a. **tracking 골격**: `Shipment` 상태 머신, `route.assigned` 소비(revision 비교), 스캔 이벤트 API,
+   Flyway(§5.4, 일 파티션 생성 스케줄러).
+
+   **상태 머신에 `CANCELLED` 가 있다** — `SCHEDULED`·`OUT_FOR_DELIVERY` → `CANCELLED`
+   (`route.assigned` 의 `cancelledOrderIds`·`status:CANCELLED` 를 반영하므로 받을 상태가 있어야
+   한다). 축 규칙의 **tracking 자리**도 여기서 정한다: 미래 상태 건너뜀은 수용, 역행은 무시,
+   그리고 **`CANCELLED` 뒤에 오는 스캔은 무시하되 센다**(`dawnline_scan_after_cancel_total`) —
+   기사가 취소를 받지 못하고 배송한 경우이고, dispatch 의 `dawnline_cancel_too_late_total`(§6.10
+   넷째 분기)과 **한 쌍**이다.
+
+   **revision 은 종결 상태를 되돌리지 않는다.** §6.8 의 부분 재계획은 완료 stop 을 고정하지만,
+   tracking 은 그것을 페이로드가 아니라 **자기 규칙으로** 지킨다 — `COMPLETED`/`FAILED` 인
+   shipment 는 새 revision 이 와도 그대로 두고, 나머지만 `plannedArrival`·`eta` 를 갱신한다.
+   5번 전에는 dispatch 가 진행 상황을 모르므로 **이 규칙이 tracking 쪽의 유일한 방어선**이다.
+
+   **조건은 「완료했는가」가 아니라 「종결인가」다** (2026-09-19 정정 — 코드가 옳고 이 문장이
+   좁았다). `CANCELLED` 도 같은 줄에 걸린다. 앞의 둘과 이유는 다르다: 되돌릴 것이 있어서가
+   아니라 **갱신할 것이 없어서**다 — 취소된 배송의 계획 도착 시각을 옮기는 일은 아무 물음에도
+   답하지 않는다. 그래서 구현은 `ShipmentStatus.isTerminal()` 한 번이고, 상태가 늘어도
+   그 줄은 그대로다(§5.4).
+
+   **계약 변경 하나 — `route.assigned.v1` 의 stop 에 `promisedWindow`(required)**. tracking 이
+   정시 여부와 at-risk(`eta > promised_end − 15분`, §5.4)를 판정하려면 stop 마다 약속창이
+   필요한데 `plannedStop` 에 없다. dispatch 는 갖고 있다 — `StopMerger` 의 병합 키가
+   「같은 geohash7 + **같은 약속창** + 같은 제약」이라 stop 당 창이 하나로 정해진다(§6.5 1단계).
+   `required` 인 근거는 `contracts/events/README.md` §5 의 예외 조건 셋이고, 그 표에 한 줄
+   남긴다. **운영 메모**: 개발 볼륨의 Kafka 에 남은 이전 `route.assigned` 이벤트에는 이 필드가
+   없으므로, tracking 의 컨슈머 그룹은 `latest` 에서 시작하거나 그 토픽을 재생성한다 — 적지 않으면
+   첫 기동에서 DLQ 가 찬다.
+
+   **스키마 둘이 붙었다** (2026-09-19). ① `route_revisions` — §8.5 의 「routeId + revision」
+   비교는 라우트당 마지막 개정을 알아야 성립하고, `shipments` 에서 MAX 로 유도하면 §6.8 의
+   `relocate` 가 라우트를 비웠을 때 비교할 값이 사라진다(§5.4 의 버린 대안 둘).
+   ② `shipment_events` 의 일 파티션은 **DEFAULT 파티션 없이** 마이그레이션의 함수 둘이
+   만들고 스케줄러가 부른다 — 범위 밖 행이 조용히 쌓이면 그 날짜의 파티션 생성이 며칠
+   뒤에 실패한다. 생성이 멈춘 것은 `dawnline_shipment_partitions_ahead`(§9.1)가 말하고 알림은
+   2 에서 걸린다(§9.4).
+
+   **원 약속 대비 정시율은 tracking 이 내지 않는다.** `order.placed`(원본)와 `delivery.status`
+   (완료 시각)를 잇는 곳은 **ops-api 의 읽기 모델**이다(§5.5 — Phase 2 가 예약해 둔 「두 정시율」의
+   자리를 여기서 확정한다). tracking 은 자기가 가진 약속(개정본)만 본다.
+1b. **ETA·at-risk**: ETA 재계산·전파, at-risk 판정, 쿨다운(라우트당 5분, Redis `SET NX`),
+   `delivery.status`/`delivery.at-risk` 발행.
 2. `sim-runner` 기사 시뮬레이터: `route.assigned` 구독 → stop 순회(이동 시간 = 계획 시간 × (1 + 지연 확률·크기)), 실패 확률, 위치 보고.
+   **seed 결정론**: 지연·실패 주입도 전부 seed 에서 뽑는다(불변규칙 12). 그리고 여기서 처음 흐르는
+   `delivery.status` 에는 Phase 1 8단계 규칙대로 **브로커 도착 IT** 가 붙는다(`OrderPublishIT`·
+   `FulfillmentPublishIT` 와 같은 형태).
 3. dispatch 재계획(§6.8): `delivery.at-risk` 리스너, 미완료 stop 부분 재계획, `revision` 증가 발행, 쿨다운.
 4. 테스트: 역행 스캔 거부, at-risk 1회 발행(쿨다운), 재계획 후 tracking이 새 revision만 반영.
 5. **dispatch 의 `delivery.status` 소비 — `route_stops.status` 전이** (2026-09-05 결정,
@@ -1616,6 +1679,11 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 **DoD**
 - `late-injection` 시나리오에서 at-risk → 재계획 → revision 반영이 로그·DB로 확인되고, 정시율이 `rm_kpi`/메트릭에 집계됨.
+- **5번에서 소비자 처리량을 다시 잰다.** Phase 4-0 이 조건을 걸어 둔 항목이다 —
+  [측정](benchmarks/phase4-plan-roundtrip-breakdown.md) §3 이 **1,638 건/초**(§8.2 피크 600 rps 의
+  **2.7배**)를 내면서 「소비 경로가 무거워지면(Phase 5-5 의 `delivery.status` 소비가 같은 서비스에
+  붙는다) 다시 재야 한다」고 적었다. 5번은 dispatch 에 리스너를 하나 더 붙이고 그 이벤트는
+  **stop 단위**라 주문 수의 몇 배가 된다. 그 여유가 어디로 가는지가 §8.2 판정의 입력이다.
 
 ---
 

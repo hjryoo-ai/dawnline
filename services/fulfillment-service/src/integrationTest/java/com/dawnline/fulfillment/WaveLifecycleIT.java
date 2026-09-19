@@ -17,6 +17,7 @@ import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.fulfillment.domain.WaveStatus;
 import com.dawnline.messaging.contract.EventContracts;
+import com.dawnline.messaging.outbox.RelayLeadership;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Duration;
@@ -127,6 +128,9 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
     @Autowired
     private ReferenceData referenceData;
 
+    @Autowired
+    private RelayLeadership leadership;
+
     @BeforeAll
     static void connect() {
         consumer = new KafkaConsumer<>(Map.of(
@@ -151,6 +155,26 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
 
     private TransactionTemplate tx() {
         return new TransactionTemplate(transactionManager);
+    }
+
+    /**
+     * <strong>전제: 이 세션이 지금 릴레이 리더다.</strong>
+     *
+     * <p>이 클래스의 첫 열 — {@code wave.closed} 가 <em>브로커에</em> 도착한다 — 은 outbox 릴레이가
+     * 이 컨텍스트에서 실제로 발행할 때만 성립한다. [ADR-027] 후속 정정 이후 그것을 정하는 것은
+     * 릴레이 빈의 존재가 아니라 <strong>advisory lock 을 쥔 세션</strong>이고, 락은 한 세션만
+     * 쥔다. 컨텍스트가 둘 이상이면 하나는 {@code FOLLOWER} 가 되어 한 행도 내보내지 않는데,
+     * <strong>어느 쪽이 리더인가를 정하던 것은 클래스 시작 순서였다</strong>
+     * (IMPLEMENTATION_PLAN Phase 4-9 축 ②, 2026-09-18 Phase 5-0 에서 닫는다).
+     *
+     * <p>순서는 테스트가 말하는 것이 아니므로 근거가 될 수 없다. 여기서는 판정 자체를 묻고,
+     * 발행이 필요 없는 IT 는 자기 자리에서 릴레이를 끈다({@link GeoFallbackIT}).
+     */
+    @BeforeEach
+    void 전제_이_세션이_릴레이_리더다() {
+        assertThat(leadership.lead())
+                .as("이 세션이 advisory lock 을 쥐고 있어야 wave.closed 가 브로커까지 간다 (ADR-027)")
+                .isEqualTo(RelayLeadership.State.LEADER);
     }
 
     @BeforeEach

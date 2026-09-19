@@ -108,6 +108,27 @@ class GeoFallbackIT extends FulfillmentIntegrationTestBase {
     }
 
     /**
+     * <strong>릴레이를 끈다 — 이 클래스는 발행을 보지 않기 때문이다.</strong>
+     *
+     * <p>끄지 않으면 이 클래스가 다른 IT 들의 발행을 <em>조용히 막는다.</em> fulfillment 의 IT 중
+     * 자기 {@code @DynamicPropertySource} 를 가진 것은 이 클래스뿐이라, 컨텍스트가 둘이 되고
+     * 릴레이 빈도 둘이 된다. 그런데 리더십은 <strong>같은 DB 의 advisory lock 한 개</strong>이고
+     * ([ADR-027] 후속 정정) 락은 한 세션만 쥔다 — 먼저 시작한 컨텍스트가 이긴다. 이 클래스가
+     * 이기면 {@code FulfillmentPublishIT}·{@code WaveLifecycleIT} 의 릴레이는 {@code FOLLOWER} 가
+     * 되어 <em>아무것도 발행하지 않고</em>, 그 둘은 브로커를 기다리다 타임아웃으로 죽는다.
+     *
+     * <p>즉 <strong>지금 그 둘이 통과하는 근거는 클래스 시작 순서였다</strong>
+     * (IMPLEMENTATION_PLAN Phase 4-9 의 남은 축 ②). 순서는 테스트가 말하는 것이 아니므로 근거가
+     * 될 수 없다. 끄는 자리가 여기인 이유는 기반 클래스가 이 속성에 <em>의견을 갖지 않기로</em>
+     * 했기 때문이다({@link FulfillmentIntegrationTestBase} javadoc) — 기반이 끄면 켜고 싶은 IT 가
+     * 이길 방법이 없다.
+     */
+    @DynamicPropertySource
+    static void noRelay(DynamicPropertyRegistry registry) {
+        registry.add("dawnline.messaging.outbox.enabled", () -> "false");
+    }
+
+    /**
      * <strong>이 클래스의 전제를 매번 스스로 확인한다: Redis 를 쓸 수 없다.</strong>
      *
      * <p>폴백 테스트는 의존성이 실제로 불가할 때만 무언가를 증명한다. 전제가 조용히 무너지면

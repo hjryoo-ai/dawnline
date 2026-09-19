@@ -53,8 +53,9 @@ public class JdbcPlannedRouteRepository implements PlannedRouteRepository {
 
     private static final String INSERT_STOP = """
             INSERT INTO route_stops (id, route_id, seq, lat, lng, planned_arrival,
-                                     planned_departure, service_s, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED')
+                                     planned_departure, service_s, status,
+                                     promised_start, promised_end)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', ?, ?)
             """;
 
     private static final String INSERT_STOP_ORDER =
@@ -116,11 +117,16 @@ public class JdbcPlannedRouteRepository implements PlannedRouteRepository {
             UUID routeId = routeIds.get(i);
             for (PlannedStop planned : routes.get(i).stops()) {
                 UUID stopId = Ids.newId();
+                // 약속창은 stop 이 만들어지는 순간 확정된다 — StopMerger 의 병합 키가
+                // 「같은 약속창」이라 stop 당 하나다(§6.5 1단계). §6.10 개정 발행은 계획 결과가
+                // 아니라 이 행을 읽으므로, 여기서 쓰지 않으면 그쪽이 required 필드를 잃는다.
                 stopRows.add(new Object[] {stopId, routeId, (short) planned.seq(),
                         planned.stop().point().lat(), planned.stop().point().lng(),
                         planned.arrival().atOffset(ZoneOffset.UTC),
                         planned.departure().atOffset(ZoneOffset.UTC),
-                        planned.stop().serviceSeconds()});
+                        planned.stop().serviceSeconds(),
+                        planned.stop().promised().start().atOffset(ZoneOffset.UTC),
+                        planned.stop().promised().end().atOffset(ZoneOffset.UTC)});
                 for (OrderId orderId : planned.stop().orderIds()) {
                     stopOrderRows.add(new Object[] {stopId, orderId.value()});
                 }

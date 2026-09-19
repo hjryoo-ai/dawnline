@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.adapter.out.messaging;
 
+import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
@@ -58,10 +59,23 @@ public record RouteAssignedPayload(UUID routeId, UUID planId, UUID waveId, UUID 
      * @param lng               경도
      * @param plannedArrival    계획 도착 시각
      * @param serviceSeconds    하차·전달 시간(초)
+     * @param promisedWindow    이 stop 의 약속창. <strong>required</strong> 다 — tracking 이
+     *                          at-risk 를 판정하는 기준이고(§5.4), 불변규칙 4 에 따라 이 이벤트가
+     *                          그쪽의 유일한 정보원이다
      * @param status            {@code PLANNED} 또는 {@code CANCELLED} (ADR-026)
      */
     public record StopPayload(int seq, List<String> orderIds, List<String> cancelledOrderIds,
-            double lat, double lng, String plannedArrival, int serviceSeconds, String status) {
+            double lat, double lng, String plannedArrival, int serviceSeconds,
+            Window promisedWindow, String status) {
+    }
+
+    /**
+     * 약속창.
+     *
+     * @param start 시작
+     * @param end   끝. tracking 의 at-risk 기준이다 ({@code eta > end − 15분})
+     */
+    public record Window(String start, String end) {
     }
 
     /**
@@ -99,8 +113,8 @@ public record RouteAssignedPayload(UUID routeId, UUID planId, UUID waveId, UUID 
     public static RouteAssignedPayload of(RoutePlan plan, RouteSnapshot snapshot, UUID driverId,
             int revision) {
 
-        List<StopPayload> stops = snapshot.stops().stream().map(RouteAssignedPayload::stopOf)
-                .toList();
+        List<StopPayload> stops = snapshot.stops().stream()
+                .map(stop -> stopOf(snapshot.routeId(), stop)).toList();
         return new RouteAssignedPayload(snapshot.routeId(), plan.id(), plan.waveId(), plan.campId(),
                 snapshot.vehicleId(), driverId,
                 plan.strategy().orElseThrow(() -> new IllegalStateException("전략 없이 발행할 수 없습니다")),
@@ -118,14 +132,26 @@ public record RouteAssignedPayload(UUID routeId, UUID planId, UUID waveId, UUID 
                 List.of(),
                 planned.stop().point().lat(), planned.stop().point().lng(),
                 planned.arrival().toString(), planned.stop().serviceSeconds(),
+                new Window(planned.stop().promised().start().toString(),
+                        planned.stop().promised().end().toString()),
                 "PLANNED");
     }
 
-    private static StopPayload stopOf(RouteSnapshot.StopSnapshot stop) {
+    private static StopPayload stopOf(UUID routeId, RouteSnapshot.StopSnapshot stop) {
+        TimeWindow promised = stop.promised();
+        if (promised == null) {
+            // V6 이전에 저장된 행이다. 지어낸 창으로 required 필드를 채우면 tracking 의 at-risk
+            // 판정이 거짓 위에서 돌고, 그 거짓은 이벤트를 받은 쪽에서 구별할 수 없다.
+            // 여기서 멈추면 outbox 에 행이 남지 않고 원인이 이 한 줄로 드러난다.
+            throw new IllegalStateException(
+                    "약속창 없이 개정을 발행할 수 없습니다 (V6 이전 행): routeId=%s seq=%d"
+                            .formatted(routeId, stop.seq()));
+        }
         return new StopPayload(stop.seq(),
                 stop.orderIds().stream().map(UUID::toString).toList(),
                 stop.cancelledOrderIds().stream().map(UUID::toString).toList(),
                 stop.lat(), stop.lng(), stop.plannedArrival().toString(), stop.serviceSeconds(),
+                new Window(promised.start().toString(), promised.end().toString()),
                 stop.cancelled() ? "CANCELLED" : "PLANNED");
     }
 }

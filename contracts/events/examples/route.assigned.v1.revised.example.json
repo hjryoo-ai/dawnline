@@ -31,6 +31,7 @@
         "lng": 127.0276,
         "plannedArrival": "2026-08-29T15:41:00Z",
         "serviceSeconds": 90,
+        "promisedWindow": { "start": "2026-08-29T15:00:00Z", "end": "2026-08-29T18:00:00Z" },
         "status": "PLANNED"
       },
       {
@@ -42,6 +43,7 @@
         "lng": 127.0249,
         "plannedArrival": "2026-08-29T15:47:30Z",
         "serviceSeconds": 90,
+        "promisedWindow": { "start": "2026-08-29T15:00:00Z", "end": "2026-08-29T18:00:00Z" },
         "status": "CANCELLED",
         "cancelledOrderIds": [
           "01a04dad-80da-7fa7-ad00-3d1829eed7c6"
@@ -57,6 +59,7 @@
         "lng": 127.0365,
         "plannedArrival": "2026-08-29T15:45:20Z",
         "serviceSeconds": 180,
+        "promisedWindow": { "start": "2026-08-29T15:00:00Z", "end": "2026-08-29T16:00:00Z" },
         "status": "PLANNED",
         "cancelledOrderIds": [
           "01a04dad-80da-7411-a096-70abfdde82ff"

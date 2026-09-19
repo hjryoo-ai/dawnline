@@ -13,3 +13,17 @@ dependencies {
     // test 스코프 전용이므로 main 은 프레임워크 비의존 그대로다 (불변규칙 5).
     testImplementation(libs.spring.boot.starter.kafka)
 }
+
+// -----------------------------------------------------------------------------
+// AdrIndexConsistencyTest 는 저장소의 문서를 읽는다(파일 · DESIGN §16 · adr/README).
+// 입력으로 선언하지 않으면 **문서만 바꾼 실행에서 Gradle 이 test 를 UP-TO-DATE 로 건너뛴다** —
+// 검사가 돌지 않는데 초록이고, 그것이 바로 이 테스트가 막으려는 모양이다 (DESIGN.md §13).
+// -----------------------------------------------------------------------------
+tasks.named<Test>("test") {
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+        .withPropertyName("designDocument")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.layout.projectDirectory.dir("docs/adr"))
+        .withPropertyName("adrDirectory")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
