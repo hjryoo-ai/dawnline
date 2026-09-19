@@ -13,9 +13,8 @@ import org.jspecify.annotations.Nullable;
  * {@code route.assigned} v1 중 <strong>tracking 이 읽는 필드만</strong>
  * ({@code contracts/events/route.assigned.v1.schema.json}).
  *
- * <p>계약의 {@code planId}·{@code waveId}·{@code campId}·{@code vehicleId}·{@code driverId}·
- * {@code strategy}·{@code summary} 와 stop 의 {@code lat}·{@code lng}·{@code serviceSeconds} 는
- * 여기 없다. 이 서비스가 쓰지 않기 때문이고, {@code EventJson} 이 모르는 필드를 무시하므로(§4.7)
+ * <p>계약의 {@code planId}·{@code waveId}·{@code vehicleId}·{@code driverId}·{@code strategy}·
+ * {@code summary} 와 stop 의 {@code lat}·{@code lng}·{@code serviceSeconds} 는 여기 없다. 이 서비스가 쓰지 않기 때문이고, {@code EventJson} 이 모르는 필드를 무시하므로(§4.7)
  * 발행자가 필드를 더해도 깨지지 않는다 — 소비자가 자기가 읽는 것만 선언하는 것이 소비자 주도
  * 계약의 요점이다.
  *
@@ -27,9 +26,12 @@ import org.jspecify.annotations.Nullable;
  *
  * @param routeId  라우트 id
  * @param revision 개정 번호. 최초 확정이 1
+ * @param campId   이 라우트의 캠프. 읽는 이유는 하나다 — {@code route_revisions} 에 남아
+ *                 at-risk 메트릭의 {@code camp} 라벨이 된다 (§9.1)
  * @param stops    방문 순서대로의 stop 들
  */
-public record RouteAssignedPayload(UUID routeId, int revision, List<StopPayload> stops) {
+public record RouteAssignedPayload(UUID routeId, int revision, UUID campId,
+        List<StopPayload> stops) {
 
     /** {@code status} 의 취소 값 (ADR-026). */
     private static final String CANCELLED = "CANCELLED";
@@ -72,7 +74,8 @@ public record RouteAssignedPayload(UUID routeId, int revision, List<StopPayload>
      * @throws IllegalStateException 약속창 없는 stop 이 있으면 (위 운영 메모)
      */
     public RouteAssignment toAssignment() {
-        return new RouteAssignment(routeId, revision, stops.stream().map(this::stopOf).toList());
+        return new RouteAssignment(routeId, revision, campId,
+                stops.stream().map(this::stopOf).toList());
     }
 
     private AssignedStop stopOf(StopPayload stop) {

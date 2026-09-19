@@ -870,7 +870,7 @@ CREATE TABLE shipments (order_id UUID PK, route_id UUID NOT NULL, stop_seq SMALL
   delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0);
 CREATE INDEX ix_ship_route ON shipments (route_id, stop_seq);
 -- 개정 비교의 자리 (§8.5 의 「routeId + revision」). 라우트당 한 행.
-CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), applied_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), camp_id UUID NOT NULL, applied_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHAR(20), occurred_at TIMESTAMPTZ NOT NULL,
   lat NUMERIC(9,6), lng NUMERIC(9,6), payload JSONB, PRIMARY KEY (occurred_at, id)) PARTITION BY RANGE (occurred_at);
 -- 일 단위 파티션, 보존 30일 (pg_partman 없이 Flyway + 스케줄러로 생성/삭제)
@@ -2029,7 +2029,7 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_plan_degraded_total` | counter | dispatch | camp, reason(LAG/BUDGET) — **자동 열화만** 센다([ADR-034](adr/ADR-034-degrade-mode.md)). 운영자가 `mode=FAST` 를 지정한 계획은 들어가지 않는다 — 사람이 고른 것은 시스템이 밀려서 포기한 것이 아니고, 섞으면 이 값이 「성수기에 무엇을 포기했나」가 아니라 「누가 FAST 를 몇 번 썼나」가 된다. 개별 답은 `route_plans.mode_reason` 이 든다 |
 | `dawnline_plan_backlog_unknown_total` | counter | dispatch | camp — 랙을 **모른 채** 내린 자동 모드 판단. 모름은 0 이 아니다(§6.7) — 이 값이 오르는 동안 열화 판단은 조건 둘 중 하나만 보고 있고, 그 사실이 안 보이면 「랙 조건이 한 번도 발화하지 않았다」가 건강의 증거처럼 읽힌다. `dawnline_geo_lookups_total{outcome=bypassed}` 와 같은 어휘다 — **폴백은 조용히 일어나면 안 된다.** 운영자 재실행·정체 회수는 볼 파티션이 없어 정상적으로 오르므로, 0 이어야 하는 값이 아니라 **비율**을 보는 값이다 |
 | `dawnline_cancel_too_late_total` | counter | dispatch | camp — 이미 `ARRIVED`/`COMPLETED` 인 stop 에 도착해 **거부한** `order.cancelled` (§6.10, [ADR-026](adr/ADR-026-dispatch-cancellation-window.md)). order-service 의 축 밖 거부 카운터와 **한 쌍**이다 — 저쪽은 "취소된 주문에 배차가 왔다", 이쪽은 "배송된 주문에 취소가 왔다" 를 세고 둘 다 같은 경합 창의 양 끝이다. 오르면 볼 곳은 dispatch 가 아니라 order-service 의 `order.dispatched` 컨슈머 랙이다 |
-| `dawnline_at_risk_total` | counter | tracking | camp — campId 는 `route.assigned` 가 싣고 오지만(필수 필드) §5.4 의 `shipments` 에는 컬럼이 없다. **Phase 5 에서 보관해야 이 라벨을 붙일 수 있다** |
+| `dawnline_at_risk_total` | counter | tracking | camp — `route_revisions.camp_id` 가 그 출처다(§5.4). **`shipments` 가 아니라 여기인 이유**: 캠프는 라우트의 성질이고 at-risk 판정도 라우트 단위라 결이 같다. 주문 단위 표에 두면 라우트 속성을 행 수만큼 비정규화하게 된다. 라벨 집합은 나중에 바꿀 수 없으므로(같은 이름의 미터가 라벨 키를 바꾸면 등록이 실패한다 — `dawnline_event_rejected_total` 의 같은 문단) **카운터가 처음 등록되는 Phase 5-1b 전에** 보관을 먼저 넣었다 |
 | `dawnline_scan_after_cancel_total` | counter | tracking | 라벨 없음 — `CANCELLED` 인 shipment 에 도착해 **무시한** 기사 스캔 (§5.4). 기사가 취소를 못 받고 배송한 것이다. dispatch 의 `dawnline_cancel_too_late_total` 과 **한 쌍**이고 둘은 같은 경합 창의 양 끝이다 — 저쪽은 「배송된 주문에 취소가 왔다」, 이쪽은 「취소된 주문이 배송됐다」. camp 라벨을 붙이지 않는 이유는 `shipments` 에 칸이 없기 때문이다 — `dawnline_at_risk_total` 이 camp 를 갖게 되는 시점에 같이 붙인다 |
 | `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다 |

@@ -21,10 +21,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class JdbcRouteRevisions implements RouteRevisions {
 
     private static final String CLAIM_SQL = """
-            INSERT INTO route_revisions (route_id, revision, applied_at)
-            VALUES (?, ?, ?)
+            INSERT INTO route_revisions (route_id, revision, camp_id, applied_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT (route_id) DO UPDATE
-               SET revision = EXCLUDED.revision, applied_at = EXCLUDED.applied_at
+               SET revision = EXCLUDED.revision,
+                   camp_id = EXCLUDED.camp_id,
+                   applied_at = EXCLUDED.applied_at
              WHERE route_revisions.revision < EXCLUDED.revision
             """;
 
@@ -38,13 +40,15 @@ public class JdbcRouteRevisions implements RouteRevisions {
     }
 
     @Override
-    public boolean claim(UUID routeId, int revision, Instant appliedAt) {
+    public boolean claim(UUID routeId, int revision, UUID campId, Instant appliedAt) {
         Objects.requireNonNull(routeId, "routeId");
+        Objects.requireNonNull(campId, "campId");
         Objects.requireNonNull(appliedAt, "appliedAt");
         if (revision < 1) {
             throw new IllegalArgumentException("revision 은 1 이상이어야 합니다: " + revision);
         }
         // TIMESTAMPTZ 에는 OffsetDateTime 으로 넘긴다 — 드라이버가 Instant 를 직접 받지 않는다.
-        return jdbc.update(CLAIM_SQL, routeId, revision, appliedAt.atOffset(ZoneOffset.UTC)) > 0;
+        return jdbc.update(CLAIM_SQL, routeId, revision, campId,
+                appliedAt.atOffset(ZoneOffset.UTC)) > 0;
     }
 }

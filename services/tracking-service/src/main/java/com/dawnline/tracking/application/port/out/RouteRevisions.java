@@ -20,10 +20,16 @@ public interface RouteRevisions {
      * 적혀 있고({@code route.assigned.v1} 의 {@code revision}), 같은 번호의 재발행은
      * 새 정보를 담지 않는다.
      *
+     * <p>{@code campId} 를 함께 쓴다 — 캠프는 라우트의 성질이고, 이 표가 라우트당 한 행이라
+     * 그 값이 사는 자리다(§9.1 {@code dawnline_at_risk_total\u007bcamp\u007d}). 갱신될 때도 같이
+     * 덮는다: 라우트의 캠프가 바뀌는 일은 없지만, 「선점한 개정이 말하는 캠프」와 저장된 값이
+     * 갈라질 자리를 남기지 않는 편이 낫다.
+     *
      * @param routeId   라우트 id
      * @param revision  이 이벤트의 개정 번호 (1 이상)
+     * @param campId    이 라우트의 캠프 (계약에서 {@code required})
      * @param appliedAt 적용 시각 — 주입된 시계에서 온 값이다 (불변규칙 12)
      * @return 선점했으면 {@code true}. {@code false} 면 이 이벤트는 지난 개정이다
      */
-    boolean claim(UUID routeId, int revision, Instant appliedAt);
+    boolean claim(UUID routeId, int revision, UUID campId, Instant appliedAt);
 }

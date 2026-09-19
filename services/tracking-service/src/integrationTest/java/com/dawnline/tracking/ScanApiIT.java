@@ -53,6 +53,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 @DisplayName("기사 스캔 API")
 class ScanApiIT extends TrackingIntegrationTestBase {
 
+    /** 캠프는 라우트의 성질이다 — route_revisions 에 남는다 (§9.1 camp 라벨). */
+    private static final UUID CAMP = UUID.randomUUID();
+
     private static final String SCAN_PATH = "/api/v1/routes/%s/stops/%d/events";
 
     @Autowired
@@ -351,7 +354,8 @@ class ScanApiIT extends TrackingIntegrationTestBase {
 
     private void assign(UUID routeId, int revision, AssignedStop... stops) {
         transactions.executeWithoutResult(status ->
-                applyRouteAssignment.apply(new RouteAssignment(routeId, revision, List.of(stops))));
+                applyRouteAssignment.apply(
+                        new RouteAssignment(routeId, revision, CAMP, List.of(stops))));
     }
 
     private AssignedStop stop(int seq, List<UUID> orderIds, Set<UUID> cancelled) {

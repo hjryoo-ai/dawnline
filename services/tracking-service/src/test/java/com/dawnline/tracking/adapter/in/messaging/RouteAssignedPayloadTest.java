@@ -104,7 +104,7 @@ class RouteAssignedPayloadTest {
         // Phase 5-1a 이전에 발행된 이벤트다. 창을 지어내면 at-risk 판정이 거짓 위에서 돌고,
         // 그 거짓은 이벤트를 받은 쪽에서 구별할 수 없다 (§5.4, contracts/events/README.md §5).
         RouteAssignedPayload payload = new RouteAssignedPayload(UUID.randomUUID(), 1,
-                List.of(new RouteAssignedPayload.StopPayload(1, List.of(UUID.randomUUID()), null,
+                UUID.randomUUID(), List.of(new RouteAssignedPayload.StopPayload(1, List.of(UUID.randomUUID()), null,
                         Instant.parse("2026-08-29T15:41:00Z"), null, "PLANNED")));
 
         assertThatThrownBy(payload::toAssignment)

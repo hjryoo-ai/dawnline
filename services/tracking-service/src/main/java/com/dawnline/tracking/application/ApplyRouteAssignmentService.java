@@ -59,7 +59,8 @@ public class ApplyRouteAssignmentService implements ApplyRouteAssignmentUseCase 
     public Outcome apply(RouteAssignment assignment) {
         Objects.requireNonNull(assignment, "assignment");
 
-        if (!revisions.claim(assignment.routeId(), assignment.revision(), clock.instant())) {
+        if (!revisions.claim(assignment.routeId(), assignment.revision(), assignment.campId(),
+                clock.instant())) {
             return Outcome.stale();
         }
 

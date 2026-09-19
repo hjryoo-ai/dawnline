@@ -45,6 +45,7 @@ class ApplyRouteAssignmentServiceTest {
     private static final Instant PROMISED_END = NOW.plus(Duration.ofHours(3));
 
     private static final UUID ROUTE = UUID.randomUUID();
+    private static final UUID CAMP = UUID.randomUUID();
     private static final UUID ORDER = UUID.randomUUID();
     private static final UUID OTHER_ORDER = UUID.randomUUID();
 
@@ -76,11 +77,12 @@ class ApplyRouteAssignmentServiceTest {
     }
 
     @Test
-    void 선점은_라우트와_개정_번호와_주입된_시각으로_한다() {
+    void 선점은_라우트와_개정_번호와_캠프와_주입된_시각으로_한다() {
         service.apply(assignment(4, stop(1, List.of(ORDER), Set.of())));
 
+        // 캠프가 여기로 들어가는 것이 at-risk 메트릭의 camp 라벨이 사는 유일한 경로다 (§9.1).
         assertThat(revisions.calls).singleElement()
-                .isEqualTo(new Claim(ROUTE, 4, NOW));
+                .isEqualTo(new Claim(ROUTE, 4, CAMP, NOW));
     }
 
     // --- 새 배송 -------------------------------------------------------------
@@ -130,7 +132,7 @@ class ApplyRouteAssignmentServiceTest {
         UUID newRoute = UUID.randomUUID();
         shipments.put(Shipment.scheduled(ORDER, ROUTE, 5, ARRIVAL, PROMISED_END));
 
-        Outcome outcome = service.apply(new RouteAssignment(newRoute, 2,
+        Outcome outcome = service.apply(new RouteAssignment(newRoute, 2, CAMP,
                 List.of(stop(9, List.of(ORDER), Set.of(), ARRIVAL.plus(Duration.ofMinutes(20)),
                         PROMISED_END.plus(Duration.ofMinutes(20))))));
 
@@ -219,7 +221,7 @@ class ApplyRouteAssignmentServiceTest {
     // --- 픽스처 --------------------------------------------------------------
 
     private static RouteAssignment assignment(int revision, AssignedStop... stops) {
-        return new RouteAssignment(ROUTE, revision, List.of(stops));
+        return new RouteAssignment(ROUTE, revision, CAMP, List.of(stops));
     }
 
     private static AssignedStop stop(int seq, List<UUID> orderIds, Set<UUID> cancelled) {
@@ -238,7 +240,7 @@ class ApplyRouteAssignmentServiceTest {
     }
 
     /** 선점 호출 하나. */
-    private record Claim(UUID routeId, int revision, Instant appliedAt) {
+    private record Claim(UUID routeId, int revision, UUID campId, Instant appliedAt) {
     }
 
     private static final class RecordingRevisions implements RouteRevisions {
@@ -247,8 +249,8 @@ class ApplyRouteAssignmentServiceTest {
         private boolean grant = true;
 
         @Override
-        public boolean claim(UUID routeId, int revision, Instant appliedAt) {
-            calls.add(new Claim(routeId, revision, appliedAt));
+        public boolean claim(UUID routeId, int revision, UUID campId, Instant appliedAt) {
+            calls.add(new Claim(routeId, revision, campId, appliedAt));
             return grant;
         }
     }

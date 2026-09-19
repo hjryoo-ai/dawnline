@@ -29,12 +29,16 @@ public interface ApplyRouteAssignmentUseCase {
      *
      * @param routeId  라우트 id
      * @param revision 개정 번호. 최초 확정이 1 (§6.8 4단계)
+     * @param campId   이 라우트의 캠프. {@code route_revisions} 에 남아 at-risk 메트릭의
+     *                 {@code camp} 라벨이 된다 (§9.1) — 라우트의 성질이라 stop 이 아니라
+     *                 라우트에 붙는다
      * @param stops    방문 순서대로의 stop 들. 취소된 stop 도 들어 있다 (ADR-026)
      */
-    record RouteAssignment(UUID routeId, int revision, List<AssignedStop> stops) {
+    record RouteAssignment(UUID routeId, int revision, UUID campId, List<AssignedStop> stops) {
 
         public RouteAssignment {
             Objects.requireNonNull(routeId, "routeId");
+            Objects.requireNonNull(campId, "campId");
             if (revision < 1) {
                 throw new IllegalArgumentException("revision 은 1 이상이어야 합니다: " + revision);
             }

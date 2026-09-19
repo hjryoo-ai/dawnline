@@ -49,6 +49,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 @DisplayName("route.assigned 반영")
 class RouteAssignmentIT extends TrackingIntegrationTestBase {
 
+    /** 캠프는 라우트의 성질이다 — route_revisions 에 남아 at-risk 메트릭의 camp 라벨이 된다 (§9.1). */
+    private static final UUID CAMP = UUID.randomUUID();
+
     @Autowired
     private ApplyRouteAssignmentUseCase applyRouteAssignment;
 
@@ -113,7 +116,7 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         UUID first = newOrder();
         UUID second = newOrder();
 
-        Outcome outcome = apply(new RouteAssignment(route, 1, List.of(
+        Outcome outcome = apply(new RouteAssignment(route, 1, CAMP, List.of(
                 stop(1, List.of(first), Set.of()),
                 stop(2, List.of(second), Set.of()))));
 
@@ -138,7 +141,7 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         UUID first = newOrder();
         UUID second = newOrder();
 
-        apply(new RouteAssignment(route, 1, List.of(stop(3, List.of(first, second), Set.of()))));
+        apply(new RouteAssignment(route, 1, CAMP, List.of(stop(3, List.of(first, second), Set.of()))));
 
         assertThat(shipment(first).stopSeq()).isEqualTo(3);
         assertThat(shipment(second).stopSeq()).isEqualTo(3);
@@ -150,10 +153,10 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
     void 지난_개정은_아무것도_바꾸지_않는다() {
         UUID route = newRoute();
         UUID order = newOrder();
-        apply(new RouteAssignment(route, 2, List.of(stop(1, List.of(order), Set.of()))));
+        apply(new RouteAssignment(route, 2, CAMP, List.of(stop(1, List.of(order), Set.of()))));
 
         Instant movedArrival = arrival.plus(Duration.ofHours(2));
-        Outcome outcome = apply(new RouteAssignment(route, 1,
+        Outcome outcome = apply(new RouteAssignment(route, 1, CAMP,
                 List.of(stop(9, List.of(order), Set.of(), movedArrival, promisedEnd))));
 
         assertThat(outcome.kind()).isEqualTo(Outcome.Kind.STALE);
@@ -169,9 +172,9 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         // 같은 번호의 재발행은 새 정보를 담지 않는다 (route.assigned.v1 의 revision 설명).
         UUID route = newRoute();
         UUID order = newOrder();
-        apply(new RouteAssignment(route, 3, List.of(stop(1, List.of(order), Set.of()))));
+        apply(new RouteAssignment(route, 3, CAMP, List.of(stop(1, List.of(order), Set.of()))));
 
-        Outcome outcome = apply(new RouteAssignment(route, 3,
+        Outcome outcome = apply(new RouteAssignment(route, 3, CAMP,
                 List.of(stop(4, List.of(order), Set.of()))));
 
         assertThat(outcome.kind()).isEqualTo(Outcome.Kind.STALE);
@@ -184,8 +187,8 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         UUID route = newRoute();
         UUID order = newOrder();
 
-        apply(new RouteAssignment(route, 1, List.of(stop(1, List.of(order), Set.of()))));
-        apply(new RouteAssignment(route, 2, List.of(stop(1, List.of(order), Set.of()))));
+        apply(new RouteAssignment(route, 1, CAMP, List.of(stop(1, List.of(order), Set.of()))));
+        apply(new RouteAssignment(route, 2, CAMP, List.of(stop(1, List.of(order), Set.of()))));
 
         Integer rows = jdbc.queryForObject(
                 "SELECT count(*) FROM route_revisions WHERE route_id = ?", Integer.class, route);
@@ -212,20 +215,20 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         UUID stayed = newOrder();
 
         // 1) A 의 최초 확정 — 둘 다 A 에 있다.
-        apply(new RouteAssignment(routeA, 1, List.of(
+        apply(new RouteAssignment(routeA, 1, CAMP, List.of(
                 stop(1, List.of(moved), Set.of()),
                 stop(2, List.of(stayed), Set.of()))));
 
         // 2) B 의 개정이 먼저 도착해 moved 를 가져간다.
         Instant movedArrival = arrival.plus(Duration.ofMinutes(45));
-        apply(new RouteAssignment(routeB, 1,
+        apply(new RouteAssignment(routeB, 1, CAMP,
                 List.of(stop(1, List.of(moved), Set.of(), movedArrival, promisedEnd))));
         assertThat(shipment(moved).routeId())
                 .as("전제 — 이동이 실제로 일어났다")
                 .isEqualTo(routeB);
 
         // 3) 그 다음 A 의 개정이 도착한다. moved 는 이 페이로드에 없다.
-        Outcome outcome = apply(new RouteAssignment(routeA, 2,
+        Outcome outcome = apply(new RouteAssignment(routeA, 2, CAMP,
                 List.of(stop(1, List.of(stayed), Set.of()))));
 
         assertThat(outcome.kind()).isEqualTo(Outcome.Kind.APPLIED);
@@ -249,19 +252,19 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         UUID routeB = newRoute();
         UUID moved = newOrder();
         UUID stayed = newOrder();
-        apply(new RouteAssignment(routeA, 1, List.of(
+        apply(new RouteAssignment(routeA, 1, CAMP, List.of(
                 stop(1, List.of(moved), Set.of()),
                 stop(2, List.of(stayed), Set.of()))));
 
         // 1) A 의 개정이 먼저 — moved 가 빠졌다. 아직 moved 의 route_id 는 A 다.
-        apply(new RouteAssignment(routeA, 2, List.of(stop(1, List.of(stayed), Set.of()))));
+        apply(new RouteAssignment(routeA, 2, CAMP, List.of(stop(1, List.of(stayed), Set.of()))));
         assertThat(shipment(moved).status())
                 .as("A 의 개정에서 빠진 것은 「취소」가 아니다 — 아직 아무 일도 일어나지 않았다")
                 .isEqualTo("SCHEDULED");
 
         // 2) 그 다음 B 의 개정이 도착해 데려간다.
         Instant movedArrival = arrival.plus(Duration.ofMinutes(45));
-        Outcome outcome = apply(new RouteAssignment(routeB, 1,
+        Outcome outcome = apply(new RouteAssignment(routeB, 1, CAMP,
                 List.of(stop(1, List.of(moved), Set.of(), movedArrival, promisedEnd))));
 
         assertThat(outcome.keptTerminal())
@@ -280,13 +283,13 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         UUID route = newRoute();
         UUID delivered = newOrder();
         UUID pending = newOrder();
-        apply(new RouteAssignment(route, 1, List.of(
+        apply(new RouteAssignment(route, 1, CAMP, List.of(
                 stop(1, List.of(delivered), Set.of()),
                 stop(2, List.of(pending), Set.of()))));
         markCompleted(delivered);
 
         Instant movedArrival = arrival.plus(Duration.ofHours(1));
-        Outcome outcome = apply(new RouteAssignment(route, 2, List.of(
+        Outcome outcome = apply(new RouteAssignment(route, 2, CAMP, List.of(
                 stop(5, List.of(delivered), Set.of(), movedArrival, promisedEnd),
                 stop(6, List.of(pending), Set.of(), movedArrival, promisedEnd))));
 
@@ -306,9 +309,9 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         UUID route = newRoute();
         UUID cancelled = newOrder();
         UUID alive = newOrder();
-        apply(new RouteAssignment(route, 1, List.of(stop(1, List.of(cancelled, alive), Set.of()))));
+        apply(new RouteAssignment(route, 1, CAMP, List.of(stop(1, List.of(cancelled, alive), Set.of()))));
 
-        Outcome outcome = apply(new RouteAssignment(route, 2,
+        Outcome outcome = apply(new RouteAssignment(route, 2, CAMP,
                 List.of(stop(1, List.of(cancelled, alive), Set.of(cancelled)))));
 
         assertThat(outcome.cancelled()).isEqualTo(1);
@@ -323,9 +326,9 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         // 취소된 stop 은 페이로드에서 지우지 않으므로 개정마다 계속 실려 온다 (ADR-026).
         UUID route = newRoute();
         UUID order = newOrder();
-        apply(new RouteAssignment(route, 1, List.of(stop(1, List.of(order), Set.of(order)))));
+        apply(new RouteAssignment(route, 1, CAMP, List.of(stop(1, List.of(order), Set.of(order)))));
 
-        Outcome outcome = apply(new RouteAssignment(route, 2,
+        Outcome outcome = apply(new RouteAssignment(route, 2, CAMP,
                 List.of(stop(1, List.of(order), Set.of(order)))));
 
         assertThat(outcome.keptTerminal()).isEqualTo(1);
@@ -341,10 +344,10 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         // 다른 검사는 전부 통과한다 — 덮어쓰기는 경합이 있을 때만 드러난다.
         UUID route = newRoute();
         UUID order = newOrder();
-        apply(new RouteAssignment(route, 1, List.of(stop(1, List.of(order), Set.of()))));
+        apply(new RouteAssignment(route, 1, CAMP, List.of(stop(1, List.of(order), Set.of()))));
         long created = shipment(order).version();
 
-        apply(new RouteAssignment(route, 2, List.of(stop(2, List.of(order), Set.of()))));
+        apply(new RouteAssignment(route, 2, CAMP, List.of(stop(2, List.of(order), Set.of()))));
 
         assertThat(shipment(order).version()).isGreaterThan(created);
     }

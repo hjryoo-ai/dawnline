@@ -48,11 +48,19 @@ COMMENT ON COLUMN shipments.eta_at IS
 CREATE TABLE route_revisions (
   route_id   UUID PRIMARY KEY,
   revision   INTEGER NOT NULL CHECK (revision >= 1),   -- 최초 확정이 1 (§6.8 4단계)
+  -- camp 는 라우트의 성질이고 at-risk 도 라우트 단위라 여기가 그 자리다(§9.1
+  -- dawnline_at_risk_total{camp}). shipments 에 두면 주문 단위 표에 라우트 속성을
+  -- 비정규화하는 것이 된다.
+  camp_id    UUID NOT NULL,
   applied_at TIMESTAMPTZ NOT NULL
 );
 
 COMMENT ON TABLE route_revisions IS
   'route.assigned 를 라우트당 마지막으로 적용한 개정. 이보다 낮거나 같은 revision 은 무시한다(§6.8 4단계).';
+COMMENT ON COLUMN route_revisions.camp_id IS
+  'route.assigned.v1 의 campId(required). NOT NULL 인 것은 그 계약이 정했다 — NULL 이 올 경로가 '
+  '없는 칸을 널 허용으로 두면 메트릭 라벨에 「캠프를 모르는 라우트」 분기가 생기고, 그 분기는 '
+  '한 번도 실행되지 않으면서 리뷰마다 읽힌다(§5.4 의 세 칸과 같은 이유).';
 
 -- --- 스캔 이벤트 (일 파티션, 보존 30일) ---------------------------------------
 --
