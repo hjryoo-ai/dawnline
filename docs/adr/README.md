@@ -51,6 +51,13 @@
 | 029 | 최적화기 I/O 경로(입력 적재·결과 저장)는 ORM 이 아니라 벌크 | ✅ Accepted (2026-09-08) | [ADR-029](ADR-029-optimizer-io-is-bulk-not-orm.md) |
 | 028 | 미배정 정책 — 우선도는 파생이고, 자리는 비싼 것부터 준다 | ✅ Accepted (2026-09-09) | [ADR-028](ADR-028-unassigned-policy.md) |
 | 027 | outbox 릴레이는 리더 락으로 단일 활성, 리더를 모르면 발행하지 않는다 | ✅ Accepted (2026-09-05) + **후속 정정 (2026-09-05)** — 조정자를 Redis → PostgreSQL advisory lock | [ADR-027](ADR-027-outbox-relay-leader-lock.md) |
+| 045 | **개정 번호는 라우트의 것이다** — tracking 은 `route_revisions` 한 줄과 비교한다. `shipments` 에서 MAX 로 유도하는 안은 `relocate` 가 비운 라우트에서 무너진다 | ✅ Accepted (2026-09-19) | [ADR-045](ADR-045-revision-comparison-is-per-route.md) |
+| 044 | **끝점은 전부 본다** — 근사는 stop 이 많을 때의 것이지 라우트가 적을 때의 것이 아니다 (`peak` 라우트 216 → 90) | ✅ Accepted (2026-09-17) | [ADR-044](ADR-044-endpoints-are-few-enough-to-see-all.md) |
+| 043 | 기본 전략은 `peak` 이 수렴할 때까지 바꾸지 않는다 — 바꾸는 조건을 **미리** 적는다(벽시계가 아니라 구조) | ✅ Accepted (2026-09-17) | [ADR-043](ADR-043-default-strategy-stays-until-peak-converges.md) |
+| 042 | savings 의 병합은 제약 조합을 안다 — 좌석 불변식을 구성 단계로 | ✅ Accepted (2026-09-17) | [ADR-042](ADR-042-savings-merges-are-class-aware.md) |
+| 041 | 「차 한 대 몲」에는 stop 슬롯이 들어간다 (그리고 클러스터 수 상한은 남긴다) | ✅ Accepted (2026-09-12) | [ADR-041](ADR-041-cluster-target-counts-stop-slots.md) |
+| 040 | `priority-boost` 는 순번이 아니라 **시각**으로 감쇠한다 (τ = 12분) | ✅ Accepted (2026-09-12) | [ADR-040](ADR-040-priority-boost-decays-in-time.md) |
+| 039 | 좌석은 능력이 아니라 **제약 조합**에 예약한다 — 예약은 배정 단계의 것이라 미배정의 사유가 될 수 없다 | ✅ Accepted (2026-09-12) | [ADR-039](ADR-039-reserve-seats-by-constraint-class.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
@@ -59,6 +66,11 @@
   **016 에는 Phase 2-4 에 후속 정정을 붙였다** — §8.6 이 레디니스 조건으로 남겨 둔 "(fulfillment)
   GEO 적재 완료" 가 같은 종류의 모순이었다. `geo:fc`·`geo:camp` 에는 §7.2 가 폴백을 정해 두었는데,
   적재 완료를 레디니스에 넣으면 Redis 장애가 곧 트래픽 차단이 되어 폴백을 만든 이유가 사라진다.
+- **039–044 에는 이 표에 줄이 없었다 — 2026-09-19 에 채웠다.** 파일과 `docs/DESIGN.md` §16 은
+  있었고 여기만 비어 있었다. 이 표가 §16 과 「같은 내용」이라고 적어 둔 이상, 빈 줄은 「아직
+  없는 ADR」로 읽힐 수밖에 없다 — §13 의 「꺼 둔 검증은 실패하지 않는다」 와 같은 모양이다.
+  045 를 넣으려다 번호를 세면서 드러났다.
+
 - **004는 「도입하지 않는다」가 결정인 첫 ADR이다** (2026-09-18, Phase 4 마감). §16 의 원문은
   「자체 휴리스틱 기본 + **Timefold 비교**」였고, 비교는 「우리가 얼마나 먼가」에 답하기 위한
   외부 기준이었다. Phase 4 가 같은 물음에 다른 답 셋을 만들었다 — 고정비 하한 열(상시),
