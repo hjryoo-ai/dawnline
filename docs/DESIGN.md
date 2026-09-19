@@ -853,8 +853,13 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
 
 - `route.assigned` 수신 → stop마다 `shipments` 생성(status `SCHEDULED`, `eta_at = planned_arrival`, `promised_end = promisedWindow.end`).
 - 기사 스캔 API `POST /api/v1/routes/{id}/stops/{seq}/events` (DEPARTED_CAMP, ARRIVED, COMPLETED, FAILED, 위치 포함). 시뮬레이터가 호출.
-- ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17).
+- ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17). 부호를 지우지 않는다 — 일찍 도착하면 음수로 당겨진다. 「늦은 것만 민다」로 적으면 앞서 가는 라우트의 ETA 가 낡은 채로 남고 ops 화면이 그 값을 읽는다.
+- **`DEPARTED_CAMP` 는 라우트의 사건이다** (Phase 5-1b). 경로의 `{seq}` 를 무시하고 그 라우트의 배송 <em>전부</em>를 `OUT_FOR_DELIVERY` 로 옮긴다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다. stop 하나만 옮기면 나머지는 `SCHEDULED` 로 남아 「아직 출발하지 않은 배송」처럼 보인다. 그리고 이 갈래가 **첫 편차의 출처**다: 기준값은 `route_revisions.planned_departure`(= `route.assigned.v1` 의 `summary.plannedDeparture`, required)이고, 늦은 출발은 가장 흔한 지연 원인이면서 **첫 `ARRIVED` 스캔 전에 이미 알 수 있다.** 브로커로는 나가지 않는다 — 한 사실을 stop 수만큼 반복해 말하는 것이고 order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다(`ScanType.isPublished()`). 운영자가 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 **첫 소비자가 나타나는 Phase 6 에서 소비자 주도로** 정한다.
+- **편차 전파는 애그리거트 밖이다** (`EtaPropagator`). 편차는 <em>라우트</em>의 성질이다 — 어느 stop 에서 얼마가 벌어졌고 그것이 누구에게 옮겨 가는지는 방문 순서를 아는 쪽만 안다. `Shipment` 는 주문 하나만 알고, 받는 것은 결과값 하나(`projectEta`)다. 종결 상태를 옮기지 않는 판단만 애그리거트의 것이다 — 「어디서 움직이는가」의 답이 하나여야 한다.
 - **at-risk 규칙**: 어떤 stop의 `eta > promised_end − 15분`이면 `delivery.at-risk` 1회 발행(라우트당 5분 쿨다운, Redis `SET NX`). 페이로드에 남은 stop 목록·편차 포함.
+  **이것은 사건이지 상태가 아니다**([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 위험이 계속되면 다시 알리고(쿨다운이 그 주기다) **사라지는 경우는 알리지 않는다** — dispatch 가 이미 시작한 재계획을 취소할 방법이 없고, 해소된 ETA 는 ops 의 읽기 모델(§5.5)이 그대로 보여 준다. 소비자는 「위험 해제」를 기다리지 않는다.
+  페이로드의 `remainingStops` 에는 **위험한 stop 만이 아니라 남은 전부**가 들어간다 — §6.8 이 다시 푸는 대상은 남은 구간이다. stop 마다 `atRisk` 를 함께 싣는 이유는 여유(15분)가 tracking 의 정책이기 때문이다: 소비자가 다시 계산하면 두 곳이 갈라진다. `campId` 도 싣는다 — dispatch 는 자기 `routes` 로 알 수 있지만 ops 는 이 이벤트만 본다(불변규칙 4).
+  **쿨다운이 지키는 것은 알림 수이지 정확성이 아니다.** Redis 가 죽으면 쿨다운 없이 발행하고(fail-open, `dawnline_at_risk_cooldown_bypassed_total`), 중복이 *재계획 두 번*이 되지 않게 하는 것은 dispatch 의 DB 쿨다운이다(§6.8 `routes.last_replanned_at`). 멱등 소비자는 막지 못한다 — 두 at-risk 는 `eventId` 가 다르다.
 - 상태 머신: `SCHEDULED → OUT_FOR_DELIVERY → ARRIVED → COMPLETED | FAILED`, 그리고
   `SCHEDULED`·`OUT_FOR_DELIVERY` → `CANCELLED`. 축 규칙의 **셋째 자리**다(order·fulfillment 와
   같은 규칙, 다른 자리 — §13): 역행은 무시하고, 미래 상태로의 건너뜀은 받아들이며
@@ -870,7 +875,7 @@ CREATE TABLE shipments (order_id UUID PK, route_id UUID NOT NULL, stop_seq SMALL
   delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0);
 CREATE INDEX ix_ship_route ON shipments (route_id, stop_seq);
 -- 개정 비교의 자리 (§8.5 의 「routeId + revision」). 라우트당 한 행.
-CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), camp_id UUID NOT NULL, applied_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), camp_id UUID NOT NULL, planned_departure TIMESTAMPTZ NOT NULL, applied_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHAR(20), occurred_at TIMESTAMPTZ NOT NULL,
   lat NUMERIC(9,6), lng NUMERIC(9,6), payload JSONB, PRIMARY KEY (occurred_at, id)) PARTITION BY RANGE (occurred_at);
 -- 일 단위 파티션, 보존 30일 (pg_partman 없이 Flyway + 스케줄러로 생성/삭제)
@@ -2296,7 +2301,7 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 | 4 | **플래너 통계** | 통계 없는 테이블에서 플래너가 *짐작으로* 인덱스를 골랐다 — 50행에서 순차 스캔이 옳다 | CI 에서 autoanalyze 가 먼저 돌아 |
 | 5 | **컷오프 상한** | `GeoFallbackIT` 의 시각 리터럴이 `isStale` 24시간을 넘겼다 — 작성한 날로부터 25시간짜리 | 이틀 뒤 열 캠프 전부 배차 불가 |
 | 6 | **배정 동률** | 한계비용이 같을 때 `ORDER BY code` 순서로 차를 골랐다. cold-chain 공허성 검사의 통과·실패가 **시각과 시드 배분**에 달려 있었고, **CI 의 이전 통과는 시각 운이었다** | 근무조를 나누자 한 대가 웨이브를 흡수하게 되어([ADR-030](adr/ADR-030-night-shift-seed.md)) 드러남 |
-| 8 | **실행 순서** | 클래스·컨텍스트의 **시작 순서가 보장된다**고 암묵적으로 기대했다 — 축 3 의 fulfillment 쪽이 그 위에 서 있었다 | **순서 자체가 실행마다 달랐다** (2026-09-18, Phase 5-0): 같은 두 클래스를 두 번 돌렸더니 `GeoFallbackIT`→`WaveLifecycleIT` 와 그 반대가 각각 나왔다. 즉 초록의 근거는 「순서」보다도 얇은 **타이밍**이었다. 음성 표본은 그 타이밍을 고정해 만든다 — 앞 컨텍스트가 `lead()` 로 락을 확실히 쥐게 하자 뒤 클래스 일곱 개가 전부 `LEADER` 대 `FOLLOWER` 로 실패했다 |
+| 8 | **실행 순서** | 클래스·컨텍스트의 **시작 순서가 보장된다**고 암묵적으로 기대했다 — 축 3 의 fulfillment 쪽이 그 위에 서 있었다 | **순서 자체가 실행마다 달랐다** (2026-09-18, Phase 5-0): 같은 두 클래스를 두 번 돌렸더니 `GeoFallbackIT`→`WaveLifecycleIT` 와 그 반대가 각각 나왔다. 즉 초록의 근거는 「순서」보다도 얇은 **타이밍**이었다. 음성 표본은 그 타이밍을 고정해 만든다 — 앞 컨텍스트가 `lead()` 로 락을 확실히 쥐게 하자 뒤 클래스 일곱 개가 전부 `LEADER` 대 `FOLLOWER` 로 실패했다. **같은 축이 Phase 5-1b 에서 한 번 더 나왔다** (2026-09-19): `ShipmentEventPartitionIT` 의 회전 검사가 2035년 기준 시계로 `rotate()` 를 부르며 보존 경계보다 앞선 파티션을 **전부** 드롭한다 — 오늘 것까지. `ScanApiIT` 가 그동안 통과한 근거는 **클래스 이름 순서**(`S-c` < `S-h`)뿐이었고, 뒤에 붙은 `TrackingPublishIT` 는 그 운이 없어 `no partition of relation "shipment_events" found for row` 셋으로 드러났다. 고친 방식은 축 1·2 와 같다 — **쓰는 쪽이 자기 자리에서 만든다**(`ensure` 는 멱등이다). 되돌리거나 지우는 쪽을 고치지 않는 이유는 그 드롭이 그 테스트의 <em>검사 대상</em>이기 때문이다 |
 | 7 | **검사 대상 집합** | 실현 가능성 기준이 `{SMALL, MEDIUM, LARGE}` 를 **열거**했다 — `peak` 은 목록에 없었고, 목록에 없다는 사실은 어디에도 나타나지 않았다 | 병렬화 게이트를 재려고 `peak` 을 돌렸더니 총비용의 88%가 미배정 페널티(stop 8,411 > 슬롯 7,200) |
 | 9 | **환경이 결함을 가린다** | 검사가 보려는 성질을 **환경이 기본값으로 만족**시키고 있었다. 둘은 같은 얼굴이다 — ① Phase 1: 개발 기계의 `Clock.systemUTC()` 가 나노초를 내지 않아 저장 정밀도(마이크로초) 불일치가 숨어 있었다 ② Phase 5-1a: 컨테이너 세션이 UTC 라 파티션 경계 검사가 **함수가 세션 존을 써도 그대로 통과**했다 | **환경을 일부러 어긋나게 만들어 드러낸다** (2026-09-19): 같은 커넥션에서 `SET TIME ZONE 'Asia/Seoul'` 로 만들었더니 경계가 `FROM ('2035-05-09 15:00:00+00')` 로 나와 검사가 실패했다. Phase 1 쪽의 대응은 저장 정밀도로 자른 `Clock` 빈을 `libs/messaging` 한 곳에 둔 것이다 — 양쪽 다 **기본값이 맞춰 주던 것을 검사가 직접 말하게** 하는 형태다. **반대 방향도 있다**: 환경이 바뀌어 결함이 *사라진* 경우다 — [ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 3 의 음성 표본(`/actuator/health` 의 세그먼트를 버전으로 파싱해 프로브가 깨진다)은 Boot 4.1.x 에서 재현되지 않는다(2026-09-19). 그때 남는 것은 **초록인 채로 아무 말도 하지 않는 검사**이고, 이쪽의 대응은 결정을 방어적으로 유지하되 그것을 지킨다고 *말하던* 줄의 범위를 좁히는 것이다 |
 

@@ -1657,11 +1657,38 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    자리를 여기서 확정한다). tracking 은 자기가 가진 약속(개정본)만 본다.
 1b. **ETA·at-risk**: ETA 재계산·전파, at-risk 판정, 쿨다운(라우트당 5분, Redis `SET NX`),
    `delivery.status`/`delivery.at-risk` 발행.
+
+   **전파는 애그리거트 밖이다**(`EtaPropagator`) — 편차는 라우트의 성질이고 「어디서 움직이는가」의
+   답이 하나여야 한다. 애그리거트가 받는 것은 결과값 하나(`Shipment.projectEta`)이고, 종결 상태를
+   옮기지 않는 판단만 그쪽의 것이다.
+
+   **첫 편차의 출처는 출발이다** (2026-09-19 추가). 늦게 출발하는 것이 가장 흔한 지연 원인이고
+   그것은 첫 `ARRIVED` 스캔 <em>전에</em> 이미 알 수 있다. 그래서 `DEPARTED_CAMP` 에서
+   `d = 실제 출발 − 계획 출발` 을 전 stop 에 전파하고 그 자리에서 at-risk 를 판정한다. 계획 출발
+   시각은 `route.assigned.v1` 의 `summary.plannedDeparture` 로 온다(**additive required**, 조건
+   셋은 `promisedWindow` 때와 같다 — `contracts/events/README.md` §5 예외 표). 값은 dispatch 가
+   이미 갖고 있었다: `RouteState` 의 출발 앵커이고 `PlannedRoute` 로 굳히면서 버려지고 있었다.
+
+   **`DEPARTED_CAMP` 는 브로커로 나가지 않는다.** 라우트의 사건을 stop 수만큼 반복해 말하는
+   꼴이고, order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다. 운영자가 출발
+   사실을 화면에서 원하면 라우트 단위 이벤트 하나를 **Phase 6 에서** 정한다(아래 6-0 옆의 메모).
+
+   **at-risk 는 사건이지 상태가 아니다**([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 위험이
+   사라지는 경우는 알리지 않는다 — 재계획을 취소할 방법이 없다. 그리고 **이 쿨다운이 지키는 것은
+   알림 수이지 정확성이 아니다**: 재계획 중복을 막는 쿨다운은 dispatch 의 DB 에 있고, 그것은
+   아래 3번의 몫이다.
 2. `sim-runner` 기사 시뮬레이터: `route.assigned` 구독 → stop 순회(이동 시간 = 계획 시간 × (1 + 지연 확률·크기)), 실패 확률, 위치 보고.
    **seed 결정론**: 지연·실패 주입도 전부 seed 에서 뽑는다(불변규칙 12). 그리고 여기서 처음 흐르는
    `delivery.status` 에는 Phase 1 8단계 규칙대로 **브로커 도착 IT** 가 붙는다(`OrderPublishIT`·
    `FulfillmentPublishIT` 와 같은 형태).
 3. dispatch 재계획(§6.8): `delivery.at-risk` 리스너, 미완료 stop 부분 재계획, `revision` 증가 발행, 쿨다운.
+
+   **쿨다운은 첫 커밋에 함께 넣는다** — `routes.last_replanned_at` 을 재계획 트랜잭션 안에서
+   비교·갱신한다([ADR-046](adr/ADR-046-at-risk-is-an-event.md) 결정 3). tracking 의 Redis
+   쿨다운은 **알림 수**를 지키지 정확성을 지키지 않는다: Redis 가 죽으면 중복 at-risk 가 나가고
+   (§7.2 가 허용으로 정한 폴백), 두 at-risk 는 `eventId` 가 달라 `processed_events` 가 막지
+   못한다. **「쿨다운은 이미 있으니 됐다」가 이 자리의 함정이다** — 그 말이 나오면 재계획 중복은
+   아무도 막지 않는다.
 4. 테스트: 역행 스캔 거부, at-risk 1회 발행(쿨다운), 재계획 후 tracking이 새 revision만 반영.
 5. **dispatch 의 `delivery.status` 소비 — `route_stops.status` 전이** (2026-09-05 결정,
    §4.1 소비자 목록 변경 완료). dispatch 리스너(`IdempotentConsumer`) → `route_stops.status` 를
@@ -1684,6 +1711,10 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
   **2.7배**)를 내면서 「소비 경로가 무거워지면(Phase 5-5 의 `delivery.status` 소비가 같은 서비스에
   붙는다) 다시 재야 한다」고 적었다. 5번은 dispatch 에 리스너를 하나 더 붙이고 그 이벤트는
   **stop 단위**라 주문 수의 몇 배가 된다. 그 여유가 어디로 가는지가 §8.2 판정의 입력이다.
+  **그 배수는 5-1b 의 `TrackingPublishIT` 이 어설션으로 못 박아 둔다** — 스캔 하나가
+  `delivery.status` 한 건이고 `DEPARTED_CAMP` 는 **0 건**이므로 라우트당 이벤트 수는
+  `2 × stop 수`(도착 + 완료)다. 문서에 적으면 코드가 바뀔 때 함께 바뀌지 않으므로 수치는
+  그 IT 에 있다.
 
 ---
 
@@ -1697,6 +1728,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 > Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
 
 **작업**
+0-b. **(선결) `delivery.route-departed` 를 정할지 결정한다** (Phase 5-1b 이월). tracking 은
+   `DEPARTED_CAMP` 를 브로커로 내보내지 않는다 — 라우트의 사건을 stop 수만큼 반복하는 꼴이고,
+   order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다(§5.4). **ops 화면이 「출발했는가」를
+   보여야 한다면** 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 그때
+   소비자 주도로 정한다. 지금 정하지 않는 이유는 소비자가 없기 때문이다 — 소비자 없는 이벤트는
+   무엇을 실어야 하는지 정할 근거가 없고, 그 상태로 만든 계약은 첫 소비자가 나타나는 순간
+   바뀐다. ops 가 `rm_routes` 프로젝션으로 충분하면 **정의하지 않는 것이 결정**이고 그것도 적는다.
+
 0. **(선결, 6-0) dispatch OpenAPI 생성물 + 오류·성공 본문 검사.** `contracts/openapi/dispatch-service.yaml`
    과 `OpenApiContractIT` 를 만들고, 오류 본문은 `ProblemDetail`·성공 본문은 이름 있는 타입인지
    본다(§11, `libs/common` 의 `OpenApiResponses`). **ops-api 가 그 문서로 코어 위임 클라이언트를
