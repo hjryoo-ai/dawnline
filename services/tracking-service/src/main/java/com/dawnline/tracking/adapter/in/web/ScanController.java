@@ -59,17 +59,24 @@ public class ScanController {
     /**
      * 스캔 하나를 보고한다.
      *
+     * <p><strong>{@code DEPARTED_CAMP} 만 범위가 다르다</strong> — 캠프 출발은 라우트의 사건이라
+     * {@code stopSeq} 를 무시하고 그 라우트의 배송 전부에 적용된다(§5.4). 단말은 아무 순번으로나
+     * 보내면 되고, 응답의 {@code orders[]} 에는 라우트의 모든 주문이 들어온다.
+     *
      * @param routeId 라우트 id
-     * @param stopSeq stop 순번 (1부터)
+     * @param stopSeq stop 순번 (1부터). {@code DEPARTED_CAMP} 에서는 쓰이지 않는다
      * @param request 스캔 내용
-     * @return stop 에 묶인 주문마다의 결과
+     * @return stop 에 묶인 주문마다의 결과 ({@code DEPARTED_CAMP} 는 라우트 전체)
      */
     @PostMapping
     @ApiResponses({
             @ApiResponse(responseCode = "200",
                     description = "받았다. `orders[]` 의 `outcome` 이 주문마다의 결과다 — "
                             + "`APPLIED`(상태가 옮겨졌다) · `STALE`(이미 지나온 지점, 중복 스캔) · "
-                            + "`AFTER_CANCEL`(취소된 주문이라 무시했다). **재시도해도 안전하다**"),
+                            + "`AFTER_CANCEL`(취소된 주문이라 무시했다). **재시도해도 안전하다**. "
+                            + "`DEPARTED_CAMP` 는 `{stopSeq}` 를 무시하고 **라우트 전체**에 "
+                            + "적용되므로 `orders[]` 에 그 라우트의 모든 주문이 들어온다 — "
+                            + "기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다"),
             // 오류 본문의 스키마를 명시한다. 적지 않으면 springdoc 이 <메서드 반환 타입>을
             // 모든 응답에 붙여, 문서가 "404 의 본문은 ScanResult 다" 라고 말한다 — 그 문서를
             // 보고 만든 단말은 오류를 파싱하지 못한다.
@@ -78,7 +85,8 @@ public class ScanController {
                             + "어긋난 필드가 모두 들어온다. 지원하지 않는 API 버전도 여기로 온다",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "404",
-                    description = "그 라우트의 그 순번에 배송이 없다. 아직 `route.assigned` 를 받지 "
+                    description = "그 라우트의 그 순번에 배송이 없다(`DEPARTED_CAMP` 는 그 "
+                            + "라우트에 배송이 하나도 없다). 아직 `route.assigned` 를 받지 "
                             + "못한 창일 수 있으므로 **잠시 후 같은 요청을 다시 보내도 된다**",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "409",

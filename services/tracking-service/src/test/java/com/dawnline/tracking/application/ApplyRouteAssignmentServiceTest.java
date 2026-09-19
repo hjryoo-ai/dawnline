@@ -46,6 +46,8 @@ class ApplyRouteAssignmentServiceTest {
 
     private static final UUID ROUTE = UUID.randomUUID();
     private static final UUID CAMP = UUID.randomUUID();
+    /** 계획 출발 시각. 첫 stop 도착보다 앞이면 된다 — 이 테스트가 보는 것은 「전달되는가」다. */
+    private static final Instant DEPARTURE = ARRIVAL.minus(Duration.ofMinutes(10));
     private static final UUID ORDER = UUID.randomUUID();
     private static final UUID OTHER_ORDER = UUID.randomUUID();
 
@@ -82,7 +84,7 @@ class ApplyRouteAssignmentServiceTest {
 
         // 캠프가 여기로 들어가는 것이 at-risk 메트릭의 camp 라벨이 사는 유일한 경로다 (§9.1).
         assertThat(revisions.calls).singleElement()
-                .isEqualTo(new Claim(ROUTE, 4, CAMP, NOW));
+                .isEqualTo(new Claim(ROUTE, 4, CAMP, DEPARTURE, NOW));
     }
 
     // --- 새 배송 -------------------------------------------------------------
@@ -132,7 +134,7 @@ class ApplyRouteAssignmentServiceTest {
         UUID newRoute = UUID.randomUUID();
         shipments.put(Shipment.scheduled(ORDER, ROUTE, 5, ARRIVAL, PROMISED_END));
 
-        Outcome outcome = service.apply(new RouteAssignment(newRoute, 2, CAMP,
+        Outcome outcome = service.apply(new RouteAssignment(newRoute, 2, CAMP, DEPARTURE,
                 List.of(stop(9, List.of(ORDER), Set.of(), ARRIVAL.plus(Duration.ofMinutes(20)),
                         PROMISED_END.plus(Duration.ofMinutes(20))))));
 
@@ -221,7 +223,7 @@ class ApplyRouteAssignmentServiceTest {
     // --- 픽스처 --------------------------------------------------------------
 
     private static RouteAssignment assignment(int revision, AssignedStop... stops) {
-        return new RouteAssignment(ROUTE, revision, CAMP, List.of(stops));
+        return new RouteAssignment(ROUTE, revision, CAMP, DEPARTURE, List.of(stops));
     }
 
     private static AssignedStop stop(int seq, List<UUID> orderIds, Set<UUID> cancelled) {
@@ -240,7 +242,8 @@ class ApplyRouteAssignmentServiceTest {
     }
 
     /** 선점 호출 하나. */
-    private record Claim(UUID routeId, int revision, UUID campId, Instant appliedAt) {
+    private record Claim(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
+            Instant appliedAt) {
     }
 
     private static final class RecordingRevisions implements RouteRevisions {
@@ -249,9 +252,16 @@ class ApplyRouteAssignmentServiceTest {
         private boolean grant = true;
 
         @Override
-        public boolean claim(UUID routeId, int revision, UUID campId, Instant appliedAt) {
-            calls.add(new Claim(routeId, revision, campId, appliedAt));
+        public boolean claim(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
+                Instant appliedAt) {
+            calls.add(new Claim(routeId, revision, campId, plannedDeparture, appliedAt));
             return grant;
+        }
+
+        @Override
+        public java.util.Optional<RoutePlanned> find(UUID routeId) {
+            // 이 유스케이스는 읽지 않는다 — 선점 한 문장이 전부다.
+            throw new UnsupportedOperationException("개정 반영은 route_revisions 를 읽지 않습니다");
         }
     }
 
@@ -276,6 +286,11 @@ class ApplyRouteAssignmentServiceTest {
         public List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq) {
             // 이 유스케이스는 stop 으로 찾지 않는다 — 개정은 주문 id 로 온다.
             throw new UnsupportedOperationException("개정 반영은 stop 으로 찾지 않습니다");
+        }
+
+        @Override
+        public List<Shipment> findByRouteFrom(UUID routeId, int fromSeq) {
+            throw new UnsupportedOperationException("개정 반영은 순번으로 찾지 않습니다");
         }
 
         @Override

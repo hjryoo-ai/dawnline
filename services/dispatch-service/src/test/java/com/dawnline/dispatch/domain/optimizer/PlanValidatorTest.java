@@ -65,7 +65,8 @@ class PlanValidatorTest {
         for (Stop stop : stops) {
             state = state.append(stop);
         }
-        return new PlannedRoute(vehicle.id(), state.stops(), state.distanceM(), 0, Money.ZERO);
+        return new PlannedRoute(vehicle.id(), state.stops(), state.startedAt(), state.distanceM(), 0,
+                Money.ZERO);
     }
 
     private PlanResult resultOf(PlannedRoute route) {

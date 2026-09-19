@@ -51,13 +51,18 @@
     },
     "summary": {
       "type": "object",
-      "required": ["stopCount", "distanceM", "durationS", "costKrw"],
+      "required": ["stopCount", "distanceM", "durationS", "costKrw", "plannedDeparture"],
       "additionalProperties": true,
       "description": "라우트 요약. stopCount 는 stops 배열 길이와 같아야 하며(도메인 불변식), JSON Schema 로는 표현하지 않고 계약 테스트가 검사한다.",
       "properties": {
         "stopCount": { "type": "integer", "minimum": 1, "description": "stop 수. stops 배열 길이와 같다." },
         "distanceM": { "type": "integer", "minimum": 0, "description": "총 이동 거리(m). 캠프 출발·복귀 포함." },
         "durationS": { "type": "integer", "minimum": 0, "description": "총 소요 시간(초). 이동 + 서비스 시간." },
+        "plannedDeparture": {
+          "type": "string",
+          "format": "date-time",
+          "description": "캠프 출발 계획 시각. tracking 이 DEPARTED_CAMP 스캔에서 편차 d = 실제 출발 − 계획 출발 을 뽑아 뒤따르는 stop 전부의 ETA 에 전파하고, 그 자리에서 at-risk 를 판정한다 (DESIGN.md §5.4, Phase 5-1b). 늦게 출발하는 것이 가장 흔한 지연 원인이고 첫 ARRIVED 스캔 전에 이미 알 수 있다 — 이 값이 없으면 tracking 은 첫 도착까지 아무 위험도 감지하지 못한다. stop 이 아니라 요약에 있는 이유는 라우트당 하나이기 때문이다. 값은 근무창 시작과 계획 시작 중 늦은 쪽이고(§6.3, ADR-030) 첫 stop 의 도착에서 이동 시간을 빼서 되돌릴 수 있는 값이 아니다. required 로 넣은 근거는 contracts/events/README.md §5 의 예외 표에 있다."
+        },
         "costKrw": {
           "type": "integer",
           "minimum": 0,

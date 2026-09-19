@@ -56,6 +56,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
     /** 캠프는 라우트의 성질이다 — route_revisions 에 남는다 (§9.1 camp 라벨). */
     private static final UUID CAMP = UUID.randomUUID();
 
+
     private static final String SCAN_PATH = "/api/v1/routes/%s/stops/%d/events";
 
     @Autowired
@@ -78,6 +79,8 @@ class ScanApiIT extends TrackingIntegrationTestBase {
 
     private TransactionTemplate transactions;
     private Instant arrival;
+    /** 계획 출발 시각. DEPARTED_CAMP 편차의 기준이다 (§5.4). */
+    private Instant departure;
     private Instant promisedEnd;
     private final Set<UUID> createdOrders = new LinkedHashSet<>();
     private final Set<UUID> createdRoutes = new LinkedHashSet<>();
@@ -98,10 +101,24 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
     }
 
+    @Autowired
+    private com.dawnline.tracking.application.port.out.EventPartitions partitions;
+
     @BeforeEach
     void setUp() {
+        // 전제: 오늘 쓸 파티션이 있다. shipment_events 에는 DEFAULT 파티션이 없어서(§5.4)
+        // 범위 밖 INSERT 는 그 자리에서 실패한다 — 그것이 설계다. 마이그레이션이 기동 시점에
+        // 창을 만들지만, 같은 컨테이너를 쓰는 ShipmentEventPartitionIT 의 회전 검사가 2035년
+        // 기준 시계로 rotate() 를 부르며 보존 경계보다 앞선 파티션을 전부 드롭한다 — 오늘 것을
+        // 포함해서. 지금 이 클래스가 통과하는 근거는 **클래스 이름 순서**뿐이고(S-c < S-h),
+        // 순서가 근거이면 그 통과는 통과가 아니다(§13 여덟째 축). 쓰는 쪽이 자기 자리에서
+        // 만든다 — ensure 는 멱등이다.
+        partitions.ensure(java.time.LocalDate.now(java.time.ZoneOffset.UTC).minusDays(1), 3);
         transactions = new TransactionTemplate(transactionManager);
         arrival = clock.instant().plus(Duration.ofMinutes(30));
+        // 계획 출발은 첫 도착보다 앞이다. 리터럴을 쓰지 않는 이유는 이 값이 스캔 시각과
+        // 비교되기 때문이다 — 편차가 거기서 나온다 (CLAUDE.md 「픽스처에 시각 리터럴…」).
+        departure = clock.instant().plus(Duration.ofMinutes(5));
         promisedEnd = clock.instant().plus(Duration.ofHours(3));
     }
 
@@ -355,7 +372,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
     private void assign(UUID routeId, int revision, AssignedStop... stops) {
         transactions.executeWithoutResult(status ->
                 applyRouteAssignment.apply(
-                        new RouteAssignment(routeId, revision, CAMP, List.of(stops))));
+                        new RouteAssignment(routeId, revision, CAMP, departure, List.of(stops))));
     }
 
     private AssignedStop stop(int seq, List<UUID> orderIds, Set<UUID> cancelled) {

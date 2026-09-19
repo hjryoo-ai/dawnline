@@ -35,7 +35,7 @@ class PlannedRouteTest {
     void 주문_수는_stop_수가_아니라_통합된_주문_수다() {
         PlannedRoute route = new PlannedRoute(VehicleId.of(Ids.newId()),
                 List.of(planned(1, stopWith(2), START), planned(2, stopWith(3), START)),
-                1_000, 600, Money.krw(10_000));
+                START, 1_000, 600, Money.krw(10_000));
 
         assertThat(route.stops()).hasSize(2);
         assertThat(route.orderCount()).isEqualTo(5);
@@ -46,7 +46,7 @@ class PlannedRouteTest {
         PlannedRoute route = new PlannedRoute(VehicleId.of(Ids.newId()),
                 List.of(planned(1, stopWith(1), PROMISED.end().minusSeconds(60)),
                         planned(2, stopWith(1), PROMISED.end().plus(Duration.ofMinutes(10)))),
-                1_000, 600, Money.krw(10_000));
+                START, 1_000, 600, Money.krw(10_000));
 
         assertThat(route.lateStopCount()).isEqualTo(1L);
     }
@@ -56,13 +56,13 @@ class PlannedRouteTest {
         // seq 는 1부터 연속이어야 한다 — route.assigned 계약의 불변식이기도 하다.
         assertThatThrownBy(() -> new PlannedRoute(VehicleId.of(Ids.newId()),
                 List.of(planned(1, stopWith(1), START), planned(3, stopWith(1), START)),
-                1_000, 600, Money.ZERO))
+                START, 1_000, 600, Money.ZERO))
                 .isInstanceOf(ValidationException.class);
     }
 
     @Test
     void 빈_라우트는_만들지_않는다() {
-        assertThatThrownBy(() -> new PlannedRoute(VehicleId.of(Ids.newId()), List.of(), 0, 0, Money.ZERO))
+        assertThatThrownBy(() -> new PlannedRoute(VehicleId.of(Ids.newId()), List.of(), START, 0, 0, Money.ZERO))
                 .isInstanceOf(ValidationException.class);
     }
 }

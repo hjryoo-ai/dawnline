@@ -210,6 +210,8 @@ final class InMemoryDispatchPorts {
         private final Map<UUID, List<StopRow>> rows = new LinkedHashMap<>();
         private final Map<UUID, Integer> revisions = new LinkedHashMap<>();
         private final Map<UUID, PlannedRoute> summaries = new LinkedHashMap<>();
+        /** 계획 출발 시각. 개정 발행이 required 로 싣는다 (§5.3 V7, Phase 5-1b). */
+        private final Map<UUID, Instant> departures = new LinkedHashMap<>();
 
         /** 시각을 다시 쓴 결과. {@code null} 이면 살아 있는 stop 이 하나도 없었다는 뜻이다. */
         final Map<UUID, PlannedRoute> retimed = new LinkedHashMap<>();
@@ -251,6 +253,8 @@ final class InMemoryDispatchPorts {
             headers.put(routeId, new RouteHeader(routeId, planId, vehicleId));
             rows.put(routeId, new ArrayList<>(stops));
             revisions.put(routeId, 1);
+            // 첫 stop 도착보다 앞이면 된다 — 값 자체가 아니라 「있다」가 계약이다.
+            departures.put(routeId, stops.getFirst().arrival.minusSeconds(600));
             return routeId;
         }
 
@@ -350,7 +354,7 @@ final class InMemoryDispatchPorts {
             return Optional.of(new RouteSnapshot(routeId, header.vehicleId(),
                     summary == null ? 0 : summary.distanceM(),
                     summary == null ? 0 : summary.durationS(),
-                    summary == null ? 0L : summary.cost().krw(), stops));
+                    summary == null ? 0L : summary.cost().krw(), departures.get(routeId), stops));
         }
 
         @Override

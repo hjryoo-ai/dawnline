@@ -30,7 +30,8 @@ class PlanPrunerTest {
             planned.add(new PlannedStop(i + 1, stops.get(i), START.plusSeconds(600L * i),
                     START.plusSeconds(600L * i + 90)));
         }
-        return new PlannedRoute(VehicleId.of(Ids.newId()), planned, 1_000, 600, Money.krw(50_000));
+        return new PlannedRoute(VehicleId.of(Ids.newId()), planned, START, 1_000, 600,
+                Money.krw(50_000));
     }
 
     private static PlanResult resultOf(List<PlannedRoute> routes, List<Unassigned> unassigned) {

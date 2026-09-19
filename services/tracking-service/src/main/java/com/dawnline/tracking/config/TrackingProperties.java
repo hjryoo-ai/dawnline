@@ -10,9 +10,47 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * 켜 두고 켜졌다고 믿는 것이 {@code libs/messaging} 에서 한 번 있었던 일이다.
  *
  * @param partitions {@code shipment_events} 일 파티션 관리
+ * @param atRisk     지연 위험 판정·통지 (§5.4)
  */
 @ConfigurationProperties(prefix = "dawnline.tracking", ignoreUnknownFields = false)
-public record TrackingProperties(@DefaultValue Partitions partitions) {
+public record TrackingProperties(@DefaultValue Partitions partitions, @DefaultValue AtRisk atRisk) {
+
+    /**
+     * 지연 위험 (§5.4).
+     *
+     * <p>두 값이 <strong>서로 다른 것을 지킨다.</strong> {@code margin} 은 판정 기준이라
+     * 바꾸면 <em>무엇이 위험인지</em>가 달라지고, {@code cooldown} 은 알림 주기라 바꾸면
+     * <em>얼마나 자주 말하는지</em>만 달라진다. 뒤의 것은 정확성이 아니다 — 재계획이 두 번
+     * 도는 것을 막는 쿨다운은 dispatch 의 DB 에 있다(§6.8, ADR-046).
+     *
+     * @param marginMinutes   약속 끝에서 앞당겨 보는 여유(분). §5.4 기본 15
+     * @param cooldownMinutes 라우트당 알림 쿨다운(분). §5.4 · §7.2 기본 5
+     */
+    public record AtRisk(
+            @DefaultValue("15") int marginMinutes,
+            @DefaultValue("5") int cooldownMinutes) {
+
+        public AtRisk {
+            if (marginMinutes < 0) {
+                throw new IllegalArgumentException(
+                        "dawnline.tracking.at-risk.margin-minutes 는 0 이상이어야 합니다");
+            }
+            if (cooldownMinutes < 1) {
+                throw new IllegalArgumentException(
+                        "dawnline.tracking.at-risk.cooldown-minutes 는 1 이상이어야 합니다");
+            }
+        }
+
+        /** 판정 여유. */
+        public java.time.Duration margin() {
+            return java.time.Duration.ofMinutes(marginMinutes);
+        }
+
+        /** 알림 쿨다운 창. */
+        public java.time.Duration cooldown() {
+            return java.time.Duration.ofMinutes(cooldownMinutes);
+        }
+    }
 
     /**
      * 일 파티션 관리 (§5.4, §7.1 보존 30일).

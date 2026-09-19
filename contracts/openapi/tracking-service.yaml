@@ -44,7 +44,8 @@ paths:
         "200":
           description: "받았다. `orders[]` 의 `outcome` 이 주문마다의 결과다 — `APPLIED`(상태가 옮겨\
             졌다) · `STALE`(이미 지나온 지점, 중복 스캔) · `AFTER_CANCEL`(취소된 주문이라 무시했다). **재시도\
-            해도 안전하다**"
+            해도 안전하다**. `DEPARTED_CAMP` 는 `{stopSeq}` 를 무시하고 **라우트 전체**에 적용되므로 `orders[]`\
+            \ 에 그 라우트의 모든 주문이 들어온다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다"
           content:
             '*/*':
               schema:
@@ -57,8 +58,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "404":
-          description: 그 라우트의 그 순번에 배송이 없다. 아직 `route.assigned` 를 받지 못한 창일 수 있으므로
-            **잠시 후 같은 요청을 다시 보내도 된다**
+          description: 그 라우트의 그 순번에 배송이 없다(`DEPARTED_CAMP` 는 그 라우트에 배송이 하나도 없다). 아직
+            `route.assigned` 를 받지 못한 창일 수 있으므로 **잠시 후 같은 요청을 다시 보내도 된다**
           content:
             '*/*':
               schema:

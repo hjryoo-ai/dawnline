@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dawnline.internal/contracts/events/delivery.at-risk.v1.schema.json",
+  "title": "delivery.at-risk v1 페이로드",
+  "description": "지연 위험 감지 (DESIGN.md §5.4 — 어떤 stop 의 eta > promised_end − 15분). 토픽 dawnline.delivery.at-risk.v1, 키 routeId, 발행 tracking-service(Phase 5-1b), 소비 dispatch-service(Phase 5-3 부분 재계획)·ops. **이것은 사건이지 상태가 아니다.** 편차가 계속 커지면 같은 라우트에서 다시 발행되고(라우트당 5분 쿨다운이 그 주기다), 위험이 **사라지는** 경우는 이벤트로 알리지 않는다 — 이미 시작된 재계획을 취소할 방법이 없고, 해소는 ops 의 읽기 모델이 ETA 로 보여 줄 일이다. 그 비대칭이 이 계약의 모양을 정한다: 소비자는 「위험 해제」를 기다리지 않는다. **쿨다운이 지키는 것은 알림 수이지 정확성이 아니다** — Redis 가 죽으면 중복 발행되고 그것은 §7.2 가 허용으로 정한 폴백이다. 재계획이 두 번 도는 것을 막는 것은 dispatch 쪽의 DB 쿨다운이다(§6.8, routes.last_replanned_at) — 멱등 소비자는 eventId 가 다르면 막지 못한다.",
+  "type": "object",
+  "required": [
+    "routeId",
+    "campId",
+    "detectedAt",
+    "deviationSeconds",
+    "remainingStops"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "routeId": {
+      "$ref": "#/$defs/uuid",
+      "description": "라우트. 이 이벤트의 partitionKey 와 같아야 한다 (§4.1 키 = routeId)."
+    },
+    "campId": {
+      "$ref": "#/$defs/uuid",
+      "description": "출발 캠프. dispatch 는 자기 routes 에서 알 수 있지만 ops 는 이 이벤트만 보게 되므로 싣는다 — 소비자가 다른 곳을 조회해야 하는 필드는 스냅샷이 아니다(불변규칙 4)."
+    },
+    "detectedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "위험을 판정한 시각. 주입된 시계에서 온 값이다(불변규칙 12). 스캔의 occurredAt 과 다를 수 있다 — 오프라인 단말이 밀린 스캔을 뒤늦게 보내면 그 둘이 벌어진다."
+    },
+    "deviationSeconds": {
+      "type": "integer",
+      "description": "이 판정을 부른 스캔이 만든 편차(초). 계획보다 이르면 음수다. 위험은 누적된 ETA 로 판정하지만 이 값은 **마지막 한 걸음**이라, dispatch 가 「지금 벌어지고 있는가 / 이미 벌어져 있었는가」를 구별하는 데 쓴다."
+    },
+    "remainingStops": {
+      "type": "array",
+      "minItems": 1,
+      "description": "아직 끝나지 않은 stop 들 (방문 순서). dispatch 의 §6.8 부분 재계획이 다시 푸는 대상이고, 그래서 **위험한 것만이 아니라 남은 전부**가 들어간다 — 재계획의 입력은 위험한 stop 하나가 아니라 남은 구간이다. 완료·실패·취소된 stop 은 빠진다.",
+      "items": {
+        "type": "object",
+        "required": ["seq", "orderIds", "etaAt", "promisedEnd", "atRisk"],
+        "additionalProperties": true,
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "라우트 안의 stop 순번 (route.assigned.v1 의 stops[].seq 와 같은 값)."
+          },
+          "orderIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/uuid" },
+            "description": "이 stop 에 묶인, 아직 끝나지 않은 주문들 (§6.5 1단계 StopMerger)."
+          },
+          "etaAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "현재 ETA. 앞선 stop 의 편차가 전파된 값이다 (§5.4 ETA 재계산)."
+          },
+          "promisedEnd": {
+            "type": "string",
+            "format": "date-time",
+            "description": "약속창의 끝. tracking 이 아는 것은 route.assigned 가 준 값 하나이고, 그것이 원 약속인지 개정된 약속인지는 모른다 — 두 기준 정시율은 ops-api 가 낸다(§5.5)."
+          },
+          "atRisk": {
+            "type": "boolean",
+            "description": "이 stop 이 위험한가 (eta > promisedEnd − 15분). 판정을 소비자가 다시 하지 않도록 함께 싣는다 — 여유(15분)는 tracking 의 정책이고, 두 곳에서 계산하면 둘이 갈라진다."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "소문자 UUID. order.placed.v1 의 정의와 같다."
+    }
+  }
+}

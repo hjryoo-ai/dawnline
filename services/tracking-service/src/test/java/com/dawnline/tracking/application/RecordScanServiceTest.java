@@ -56,10 +56,17 @@ class RecordScanServiceTest {
     private static final UUID SIBLING = UUID.randomUUID();
     private static final int SEQ = 3;
 
+    private static final UUID CAMP = UUID.randomUUID();
+    /** §5.4 의 at-risk 여유. */
+    private static final Duration MARGIN = Duration.ofMinutes(15);
+    private static final Instant DEPARTURE = NOW.plus(Duration.ofMinutes(5));
     private static final Instant ARRIVAL = NOW.plus(Duration.ofMinutes(20));
     private static final Instant PROMISED_END = NOW.plus(Duration.ofHours(2));
 
     private InMemoryShipments shipments;
+    private FixedRevisions revisions;
+    private RecordingDelivery delivery;
+    private OpenCooldown cooldown;
     private RecordingEvents events;
     private MeterRegistry meters;
     private RecordScanService service;
@@ -69,8 +76,14 @@ class RecordScanServiceTest {
         shipments = new InMemoryShipments();
         events = new RecordingEvents();
         meters = new SimpleMeterRegistry();
-        service = new RecordScanService(shipments, events, new TrackingMetrics(meters),
-                new Ids(CLOCK, RandomGenerator.getDefault()));
+        revisions = new FixedRevisions();
+        delivery = new RecordingDelivery();
+        TrackingMetrics metrics = new TrackingMetrics(meters);
+        cooldown = new OpenCooldown();
+        service = new RecordScanService(shipments, events, delivery,
+                new EtaPropagator(shipments, revisions),
+                new AtRiskDetector(revisions, cooldown, delivery, metrics, CLOCK, MARGIN),
+                metrics, new Ids(CLOCK, RandomGenerator.getDefault()));
     }
 
     // --- 적용 ---------------------------------------------------------------
@@ -283,6 +296,105 @@ class RecordScanServiceTest {
         }
     }
 
+    // --- delivery.status 발행 (Phase 5-1b) --------------------------------------
+
+    @Test
+    void 옮겨진_주문만_한_건으로_발행한다() {
+        // stop 단위 한 건이다. 주문마다 내보내면 한 번의 방문이 여러 사건으로 쪼개지고,
+        // 소비자가 그것을 다시 합쳐야 한다 (§4.1, §6.5 1단계).
+        shipments.put(scheduled(ORDER));
+        shipments.put(scheduled(SIBLING));
+
+        service.record(scan(ScanType.COMPLETED));
+
+        assertThat(delivery.sent).singleElement().satisfies(sent -> {
+            assertThat(sent.routeId()).isEqualTo(ROUTE);
+            assertThat(sent.stopSeq()).isEqualTo(SEQ);
+            assertThat(sent.orderIds()).containsExactlyInAnyOrder(ORDER, SIBLING);
+            assertThat(sent.type()).isEqualTo(ScanType.COMPLETED);
+            assertThat(sent.occurredAt()).isEqualTo(NOW);
+        });
+    }
+
+    @Test
+    void 캠프_출발은_브로커로_나가지_않는다() {
+        // 한 사실을 stop 수만큼 반복해 말하는 꼴이고, order-service 의 상태 머신은
+        // DISPATCHED 로 그 구간을 이미 덮는다 (ScanType.isPublished()).
+        shipments.put(scheduled(ORDER));
+
+        service.record(new ScanCommand(ROUTE, SEQ, ScanType.DEPARTED_CAMP, NOW, null, null, null));
+
+        assertThat(delivery.sent).isEmpty();
+    }
+
+    @Test
+    void 아무것도_옮기지_못한_스캔은_발행하지_않는다() {
+        // 전부 STALE 이거나 AFTER_CANCEL 이다 — 소비자에게 말할 새 사실이 없다.
+        shipments.put(scheduled(ORDER));
+        service.record(scan(ScanType.COMPLETED));
+        delivery.sent.clear();
+
+        service.record(scan(ScanType.COMPLETED));
+
+        assertThat(delivery.sent).isEmpty();
+    }
+
+    // --- 캠프 출발과 편차 전파 (Phase 5-1b) -------------------------------------
+
+    @Test
+    void 캠프_출발은_라우트_전체에_적용된다() {
+        // 기사는 캠프를 한 번 떠나고, 그 순간 그 라우트의 모든 배송이 길 위에 있다. stop
+        // 하나만 옮기면 나머지는 SCHEDULED 로 남아 「아직 출발하지 않은 배송」처럼 보인다.
+        shipments.put(scheduled(ORDER));
+        shipments.put(Shipment.scheduled(SIBLING, ROUTE, SEQ + 2, ARRIVAL.plus(Duration.ofMinutes(20)),
+                PROMISED_END));
+
+        ScanResult result = service.record(new ScanCommand(ROUTE, SEQ, ScanType.DEPARTED_CAMP,
+                NOW, null, null, null));
+
+        assertThat(result.orders()).extracting(OrderScan::orderId)
+                .as("응답에도 라우트의 모든 주문이 들어온다 — 단말이 무엇이 옮겨졌는지 알아야 한다")
+                .containsExactlyInAnyOrder(ORDER, SIBLING);
+        assertThat(shipments.stored.values()).extracting(Shipment::status)
+                .containsOnly(ShipmentStatus.OUT_FOR_DELIVERY);
+    }
+
+    @Test
+    void 배송이_없는_라우트의_캠프_출발은_404_다() {
+        assertThatThrownBy(() -> service.record(new ScanCommand(ROUTE, SEQ,
+                ScanType.DEPARTED_CAMP, NOW, null, null, null)))
+                .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void 늦은_출발은_뒤따르는_stop_의_ETA_를_민다() {
+        // 늦은 출발은 가장 흔한 지연 원인이고 첫 도착 스캔 전에 이미 알 수 있다 (§5.4).
+        shipments.put(scheduled(ORDER));
+        Duration late = Duration.ofMinutes(12);
+
+        service.record(new ScanCommand(ROUTE, SEQ, ScanType.DEPARTED_CAMP,
+                DEPARTURE.plus(late), null, null, null));
+
+        assertThat(shipments.stored.get(ORDER).etaAt()).isEqualTo(ARRIVAL.plus(late));
+    }
+
+    @Test
+    void 도착_스캔의_편차는_그_stop_의_계획_도착에서_잰다() {
+        shipments.put(scheduled(ORDER));
+        shipments.put(Shipment.scheduled(SIBLING, ROUTE, SEQ + 1,
+                ARRIVAL.plus(Duration.ofMinutes(10)), PROMISED_END));
+        Duration late = Duration.ofMinutes(9);
+
+        service.record(new ScanCommand(ROUTE, SEQ, ScanType.ARRIVED,
+                ARRIVAL.plus(late), null, null, null));
+
+        assertThat(shipments.stored.get(SIBLING).etaAt())
+                .isEqualTo(ARRIVAL.plus(Duration.ofMinutes(10)).plus(late));
+        assertThat(shipments.stored.get(ORDER).etaAt())
+                .as("스캔이 난 stop 자신은 옮기지 않는다")
+                .isEqualTo(ARRIVAL);
+    }
+
     private static ScanCommand scan(ScanType type) {
         return new ScanCommand(ROUTE, SEQ, type, NOW, null, null, null);
     }
@@ -295,6 +407,61 @@ class RecordScanServiceTest {
         Shipment shipment = scheduled(orderId);
         shipment.cancel();
         return shipment;
+    }
+
+    /** 발행된 {@code delivery.status} 한 건. */
+    private record Published(UUID routeId, int stopSeq, List<UUID> orderIds, ScanType type,
+            Instant occurredAt, String failureReason) {
+    }
+
+    private static final class RecordingDelivery
+            implements com.dawnline.tracking.application.port.out.DeliveryEvents {
+
+        private final List<Published> sent = new ArrayList<>();
+        private final List<UUID> atRisk = new ArrayList<>();
+
+        @Override
+        public void deliveryStatus(UUID routeId, int stopSeq, List<UUID> orderIds, ScanType type,
+                Instant occurredAt, String failureReason) {
+            sent.add(new Published(routeId, stopSeq, List.copyOf(orderIds), type, occurredAt,
+                    failureReason));
+        }
+
+        @Override
+        public void deliveryAtRisk(UUID routeId, UUID campId, Instant detectedAt,
+                Duration deviation, List<Shipment> remaining, Duration margin) {
+            atRisk.add(routeId);
+        }
+    }
+
+    /** 언제나 창을 여는 쿨다운. 쿨다운 자체는 AtRiskDetectorTest 가 본다. */
+    private static final class OpenCooldown
+            implements com.dawnline.tracking.application.port.out.AtRiskCooldown {
+
+        private boolean open = true;
+
+        @Override
+        public boolean tryStart(UUID routeId) {
+            return open;
+        }
+    }
+
+    /** 라우트당 계획값. 이 테스트에서 바뀌지 않는다 — 보는 것은 편차 계산이지 저장이 아니다. */
+    private static final class FixedRevisions
+            implements com.dawnline.tracking.application.port.out.RouteRevisions {
+
+        private Instant plannedDeparture = DEPARTURE;
+
+        @Override
+        public boolean claim(UUID routeId, int revision, UUID campId, Instant departure,
+                Instant appliedAt) {
+            throw new UnsupportedOperationException("스캔 경로는 선점하지 않습니다");
+        }
+
+        @Override
+        public java.util.Optional<RoutePlanned> find(UUID routeId) {
+            return java.util.Optional.of(new RoutePlanned(CAMP, plannedDeparture));
+        }
     }
 
     private static final class RecordingEvents implements ShipmentEvents {
@@ -329,6 +496,16 @@ class RecordScanServiceTest {
         public List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq) {
             return stored.values().stream()
                     .filter(shipment -> shipment.routeId().equals(routeId) && shipment.stopSeq() == stopSeq)
+                    .toList();
+        }
+
+        @Override
+        public List<Shipment> findByRouteFrom(UUID routeId, int fromSeq) {
+            return stored.values().stream()
+                    .filter(shipment -> shipment.routeId().equals(routeId)
+                            && shipment.stopSeq() >= fromSeq)
+                    .sorted(java.util.Comparator.comparingInt(Shipment::stopSeq)
+                            .thenComparing(Shipment::orderId))
                     .toList();
         }
 

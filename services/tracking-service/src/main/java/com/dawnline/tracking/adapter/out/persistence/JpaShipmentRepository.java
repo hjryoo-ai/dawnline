@@ -32,6 +32,15 @@ public class JpaShipmentRepository implements ShipmentRepository {
             "SELECT s FROM ShipmentEntity s WHERE s.routeId = :routeId AND s.stopSeq = :stopSeq "
                     + "ORDER BY s.orderId";
 
+    /**
+     * 편차 전파·at-risk 판정의 대상 (§5.4). 같은 {@code ix_ship_route} 를 타고 범위만 넓다.
+     * 순번으로 정렬하는 이유는 at-risk 페이로드의 「남은 stop 목록」이 방문 순서여야 하기
+     * 때문이다 — dispatch 는 그 순서로 무엇을 다시 풀지 정한다(§6.8).
+     */
+    private static final String FIND_FROM_SEQ_JPQL =
+            "SELECT s FROM ShipmentEntity s WHERE s.routeId = :routeId AND s.stopSeq >= :fromSeq "
+                    + "ORDER BY s.stopSeq, s.orderId";
+
     private final EntityManager entityManager;
 
     /**
@@ -61,6 +70,17 @@ public class JpaShipmentRepository implements ShipmentRepository {
         return entityManager.createQuery(FIND_AT_STOP_JPQL, ShipmentEntity.class)
                 .setParameter("routeId", routeId)
                 .setParameter("stopSeq", (short) stopSeq)
+                .getResultList().stream()
+                .map(ShipmentEntity::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<Shipment> findByRouteFrom(UUID routeId, int fromSeq) {
+        Objects.requireNonNull(routeId, "routeId");
+        return entityManager.createQuery(FIND_FROM_SEQ_JPQL, ShipmentEntity.class)
+                .setParameter("routeId", routeId)
+                .setParameter("fromSeq", (short) fromSeq)
                 .getResultList().stream()
                 .map(ShipmentEntity::toDomain)
                 .toList();

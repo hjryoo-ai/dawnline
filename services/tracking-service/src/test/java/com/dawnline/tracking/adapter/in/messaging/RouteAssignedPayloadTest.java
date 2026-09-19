@@ -33,6 +33,9 @@ import org.junit.jupiter.api.Test;
 @DisplayName("route.assigned 페이로드")
 class RouteAssignedPayloadTest {
 
+    /** 이 테스트에서 값 자체는 중요하지 않다 — 「있다/없다」가 검사 대상이다. */
+    private static final Instant DEPARTURE = Instant.parse("2026-08-29T15:21:00Z");
+
     private static final EventContracts CONTRACTS = EventContracts.load();
     private static final EventJson JSON = CONTRACTS.json();
 
@@ -104,13 +107,40 @@ class RouteAssignedPayloadTest {
         // Phase 5-1a 이전에 발행된 이벤트다. 창을 지어내면 at-risk 판정이 거짓 위에서 돌고,
         // 그 거짓은 이벤트를 받은 쪽에서 구별할 수 없다 (§5.4, contracts/events/README.md §5).
         RouteAssignedPayload payload = new RouteAssignedPayload(UUID.randomUUID(), 1,
-                UUID.randomUUID(), List.of(new RouteAssignedPayload.StopPayload(1, List.of(UUID.randomUUID()), null,
+                UUID.randomUUID(), new RouteAssignedPayload.Summary(DEPARTURE),
+                List.of(new RouteAssignedPayload.StopPayload(1, List.of(UUID.randomUUID()), null,
                         Instant.parse("2026-08-29T15:41:00Z"), null, "PLANNED")));
 
         assertThatThrownBy(payload::toAssignment)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("promisedWindow")
                 .hasMessageContaining("latest");
+    }
+
+    @Test
+    void 계획_출발_시각이_없는_라우트도_지어내지_않고_멈춘다() {
+        // 같은 부류다 (Phase 5-1b 계약). 출발 시각을 지어내면 「늦게 출발했다」가 거짓 위에서
+        // 판정되고, at-risk 를 받은 dispatch 는 그 거짓을 구별할 수 없다.
+        RouteAssignedPayload payload = new RouteAssignedPayload(UUID.randomUUID(), 1,
+                UUID.randomUUID(), null,
+                List.of(new RouteAssignedPayload.StopPayload(1, List.of(UUID.randomUUID()), null,
+                        Instant.parse("2026-08-29T15:41:00Z"),
+                        new RouteAssignedPayload.Window(null, Instant.parse("2026-08-29T18:00:00Z")),
+                        "PLANNED")));
+
+        assertThatThrownBy(payload::toAssignment)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("plannedDeparture")
+                .hasMessageContaining("latest");
+    }
+
+    @Test
+    void 예시의_계획_출발_시각을_읽는다() {
+        RouteAssignment assignment = assignmentFrom("route.assigned.v1.example.json");
+
+        assertThat(assignment.plannedDeparture())
+                .as("summary.plannedDeparture — DEPARTED_CAMP 편차의 기준이다")
+                .isEqualTo(Instant.parse("2026-08-29T15:21:00Z"));
     }
 
     private static RouteAssignment assignmentFrom(String exampleFile) {

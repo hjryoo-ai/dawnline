@@ -1,0 +1,34 @@
+{
+  "eventId": "01a04e10-31b2-7d44-8c07-5f2a9b61de03",
+  "eventType": "delivery.at-risk",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T16:12:40.118Z",
+  "producer": "tracking-service",
+  "partitionKey": "01a04e09-854a-770c-b7b7-03325dccc708",
+  "traceId": "c7e2a15b90d4386fbe1a7d08c4a35f19",
+  "payload": {
+    "routeId": "01a04e09-854a-770c-b7b7-03325dccc708",
+    "campId": "01a04d71-2f3c-7a10-9e55-8c2b41d9f004",
+    "detectedAt": "2026-08-29T16:12:40.118Z",
+    "deviationSeconds": 1380,
+    "remainingStops": [
+      {
+        "seq": 2,
+        "orderIds": ["01a04dad-9f21-7b03-bc4e-2d7a55019f3c"],
+        "etaAt": "2026-08-29T17:51:00Z",
+        "promisedEnd": "2026-08-29T18:00:00Z",
+        "atRisk": true
+      },
+      {
+        "seq": 3,
+        "orderIds": [
+          "01a04dad-c4b8-7e19-9a62-71f0e8c35d27",
+          "01a04dad-e0aa-7f52-8d31-4b96c7120ae8"
+        ],
+        "etaAt": "2026-08-29T18:23:00Z",
+        "promisedEnd": "2026-08-29T20:00:00Z",
+        "atRisk": false
+      }
+    ]
+  }
+}

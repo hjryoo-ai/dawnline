@@ -103,7 +103,9 @@ public final class RouteAccumulator {
         int distanceM = state.distanceWithReturn();
         int durationS = state.durationWithReturn();
         Money vehicleCost = cost.routeCost(vehicle, distanceM, durationS, state.stopCount());
-        return new PlannedRoute(vehicle.id(), state.stops(), distanceM, durationS,
-                vehicleCost.plus(softPenalty));
+        // 출발 앵커를 여기서 넘긴다. 그동안 이 값은 RouteState 에만 있다가 버려졌고,
+        // 그래서 route.assigned 를 받은 쪽은 "언제 출발할 계획이었나" 를 알 수 없었다.
+        return new PlannedRoute(vehicle.id(), state.stops(), state.startedAt(), distanceM,
+                durationS, vehicleCost.plus(softPenalty));
     }
 }

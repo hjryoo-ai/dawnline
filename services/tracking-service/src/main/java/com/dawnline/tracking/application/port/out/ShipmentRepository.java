@@ -40,6 +40,22 @@ public interface ShipmentRepository {
     List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq);
 
     /**
+     * 한 라우트의 배송을 <strong>순번 이상</strong>으로 찾는다 — 편차 전파와 at-risk 판정의
+     * 대상이다 (§5.4, Phase 5-1b).
+     *
+     * <p>{@code findByRouteAndStop} 과 같은 인덱스({@code ix_ship_route})를 타고 범위만 넓다.
+     * {@code fromSeq} 를 받는 이유는 스캔이 만든 편차가 <strong>뒤따르는</strong> stop 의
+     * 것이기 때문이다 — 이미 지나온 stop 의 ETA 를 옮기는 일은 아무 물음에도 답하지 않는다.
+     * {@code DEPARTED_CAMP} 는 1 을 준다: 캠프 출발은 라우트 전체의 사건이다.
+     *
+     * @param routeId 라우트 id
+     * @param fromSeq 이 순번부터(포함)
+     * @return 순번 오름차순의 배송들. 취소·완료된 것도 포함한다 — 무엇을 옮기지 <em>않을지</em>는
+     *         애그리거트가 정한다({@code Shipment.projectEta})
+     */
+    List<Shipment> findByRouteFrom(UUID routeId, int fromSeq);
+
+    /**
      * 새 배송을 넣는다.
      *
      * @param shipment 새 배송

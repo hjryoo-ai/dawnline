@@ -47,8 +47,9 @@ public class JdbcPlannedRouteRepository implements PlannedRouteRepository {
 
     private static final String INSERT_ROUTE = """
             INSERT INTO routes (id, plan_id, vehicle_id, seq_no, status, revision,
-                                stop_count, distance_m, duration_s, cost_krw, version)
-            VALUES (?, ?, ?, ?, 'PLANNED', 1, ?, ?, ?, ?, 0)
+                                stop_count, distance_m, duration_s, cost_krw,
+                                planned_departure, version)
+            VALUES (?, ?, ?, ?, 'PLANNED', 1, ?, ?, ?, ?, ?, 0)
             """;
 
     private static final String INSERT_STOP = """
@@ -97,6 +98,9 @@ public class JdbcPlannedRouteRepository implements PlannedRouteRepository {
                 statement.setInt(6, route.distanceM());
                 statement.setInt(7, route.durationS());
                 statement.setLong(8, route.cost().krw());
+                // §6.10 의 개정 발행은 계획 결과가 아니라 이 행을 읽는다. 여기서 쓰지 않으면
+                // 그쪽이 route.assigned 의 required 필드를 잃는다 (V6 의 약속창과 같은 이유).
+                statement.setObject(9, route.departAt().atOffset(ZoneOffset.UTC));
             }
 
             @Override
