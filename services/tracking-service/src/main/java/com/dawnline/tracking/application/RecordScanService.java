@@ -32,7 +32,8 @@ import org.springframework.transaction.annotation.Transactional;
  * 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나를 Phase 6 에서 소비자 주도로 정한다.
  *
  * <h2>순서가 규칙이다</h2>
- * 상태를 옮기고 → 편차를 전파하고 → 사건을 적재하고 → <strong>마지막에</strong> 센다. 카운터는 트랜잭션을 모르므로
+ * 상태를 옮기고 → 편차를 전파하고 → 위험을 판정하고 → 사건을 적재하고 →
+ * <strong>마지막에</strong> 센다. 카운터는 트랜잭션을 모르므로
  * 먼저 올리면 뒤의 INSERT 가 실패해 롤백됐을 때 숫자만 남는다 — 「취소 뒤 스캔이 늘었다」는
  * 알림이 실제로는 파티션이 없어서 났다는 뜻이 되고, 그 오해는 대시보드에서 풀리지 않는다.
  *
@@ -58,6 +59,7 @@ public class RecordScanService implements RecordScanUseCase {
     private final ShipmentEvents events;
     private final DeliveryEvents delivery;
     private final EtaPropagator eta;
+    private final AtRiskDetector atRisk;
     private final TrackingMetrics metrics;
     private final Ids ids;
 
@@ -66,15 +68,18 @@ public class RecordScanService implements RecordScanUseCase {
      * @param events    사건 적재
      * @param delivery  {@code delivery.status} 발행 (outbox, 불변규칙 1)
      * @param eta       편차 전파 (§5.4)
+     * @param atRisk    지연 위험 판정·통지 (§5.4)
      * @param metrics   §9.1 카운터
      * @param ids       UUIDv7 생성기 (불변규칙 10·12)
      */
     public RecordScanService(ShipmentRepository shipments, ShipmentEvents events,
-            DeliveryEvents delivery, EtaPropagator eta, TrackingMetrics metrics, Ids ids) {
+            DeliveryEvents delivery, EtaPropagator eta, AtRiskDetector atRisk,
+            TrackingMetrics metrics, Ids ids) {
         this.shipments = Objects.requireNonNull(shipments, "shipments");
         this.events = Objects.requireNonNull(events, "events");
         this.delivery = Objects.requireNonNull(delivery, "delivery");
         this.eta = Objects.requireNonNull(eta, "eta");
+        this.atRisk = Objects.requireNonNull(atRisk, "atRisk");
         this.metrics = Objects.requireNonNull(metrics, "metrics");
         this.ids = Objects.requireNonNull(ids, "ids");
     }
@@ -123,6 +128,7 @@ public class RecordScanService implements RecordScanUseCase {
         // 자기 편차로 다시 미는 일이 생긴다.
         Propagation propagation = eta.propagate(command.routeId(), command.type(),
                 command.stopSeq(), command.occurredAt());
+        atRisk.evaluate(command.routeId(), propagation);
 
         events.appendAll(appended);
         publish(command, moved);

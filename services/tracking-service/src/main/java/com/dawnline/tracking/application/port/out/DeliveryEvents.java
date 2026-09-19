@@ -1,6 +1,8 @@
 package com.dawnline.tracking.application.port.out;
 
 import com.dawnline.tracking.domain.ScanType;
+import com.dawnline.tracking.domain.Shipment;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -36,4 +38,23 @@ public interface DeliveryEvents {
      */
     void deliveryStatus(UUID routeId, int stopSeq, List<UUID> orderIds, ScanType type,
             Instant occurredAt, @Nullable String failureReason);
+
+    /**
+     * {@code delivery.at-risk} 하나 — <strong>라우트 단위</strong>다 (§5.4, 키 {@code routeId}).
+     *
+     * <p><strong>사건이지 상태가 아니다.</strong> 편차가 계속 커지면 같은 라우트에서 다시
+     * 나가고(쿨다운이 그 주기다), 위험이 <em>사라지는</em> 경우는 알리지 않는다 — 이미 시작된
+     * 재계획을 취소할 방법이 없기 때문이다. 해소는 ops 의 읽기 모델이 ETA 로 보여 준다
+     * ([ADR-046](docs/adr/ADR-046-at-risk-is-an-event.md)).
+     *
+     * @param routeId    라우트 id. 파티션 키다
+     * @param campId     캠프 id. ops 는 이 이벤트만 보게 된다
+     * @param detectedAt 판정 시각 (주입된 시계, 불변규칙 12)
+     * @param deviation  이 판정을 부른 스캔의 편차
+     * @param remaining  아직 끝나지 않은 배송들 (순번 오름차순). 위험한 것만이 아니라
+     *                   <strong>남은 전부</strong>다 — 재계획의 입력은 남은 구간이다
+     * @param margin     at-risk 여유 (§5.4 기본 15분). stop 마다의 판정을 함께 싣는 데 쓴다
+     */
+    void deliveryAtRisk(UUID routeId, UUID campId, Instant detectedAt, Duration deviation,
+            List<Shipment> remaining, Duration margin);
 }

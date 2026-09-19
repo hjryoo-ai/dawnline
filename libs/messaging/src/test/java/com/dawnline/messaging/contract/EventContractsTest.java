@@ -291,9 +291,11 @@ class EventContractsTest {
 
     @Test
     void 계약검증_스키마가_없으면_명확히_알려준다() {
-        // delivery.at-risk 는 아직 스키마가 없다(발행자인 tracking-service 가 Phase 5).
-        // order-service 가 소비하지 않으므로 소비자 주도로 먼저 정의할 이유도 없다 — 그 상태를 그대로 쓴다.
-        assertThatThrownBy(() -> CONTRACTS.validatePayload("delivery.at-risk", 1,
+        // 표본은 **설계서에 없는** 이름이어야 한다. 2026-09-19 까지 여기에 delivery.at-risk 를
+        // 썼는데(그때는 스키마가 없었다), Phase 5-1b 에서 그 스키마가 생기자 이 검사가 깨졌다 —
+        // 「아직 없는 것」을 표본으로 삼으면 그것이 생기는 날 표본이 아니게 된다. 없을 예정인
+        // 것과 없을 것은 다르다.
+        assertThatThrownBy(() -> CONTRACTS.validatePayload("nowhere.declared", 1,
                 CONTRACTS.json().readTree("{}")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("불변규칙 8");

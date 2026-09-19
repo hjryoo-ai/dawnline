@@ -11,12 +11,15 @@ import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
 import com.dawnline.tracking.application.ApplyRouteAssignmentService;
 import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.tracking.adapter.out.messaging.OutboxDeliveryEvents;
+import com.dawnline.tracking.adapter.out.redis.RedisAtRiskCooldown;
+import com.dawnline.tracking.application.AtRiskDetector;
 import com.dawnline.tracking.application.EtaPropagator;
 import com.dawnline.tracking.application.RecordScanService;
 import com.dawnline.tracking.application.ShipmentEventPartitions;
 import com.dawnline.tracking.application.TrackingMetrics;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase;
+import com.dawnline.tracking.application.port.out.AtRiskCooldown;
 import com.dawnline.tracking.application.port.out.DeliveryEvents;
 import com.dawnline.tracking.application.port.out.EventPartitions;
 import com.dawnline.tracking.application.port.out.RouteRevisions;
@@ -30,6 +33,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -141,19 +145,52 @@ public class TrackingApplicationConfig {
     }
 
     /**
+     * at-risk 쿨다운 (§7.2 {@code route:{id}:atrisk:cooldown}).
+     *
+     * @param redis      문자열 전용 템플릿
+     * @param metrics    폴백을 세는 메트릭
+     * @param properties {@code dawnline.tracking.at-risk.*}
+     */
+    @Bean
+    public AtRiskCooldown atRiskCooldown(StringRedisTemplate redis, TrackingMetrics metrics,
+            TrackingProperties properties) {
+        return new RedisAtRiskCooldown(redis, metrics, properties.atRisk().cooldown());
+    }
+
+    /**
+     * 지연 위험 판정·통지 (§5.4).
+     *
+     * @param revisions  라우트당 계획값 (campId 의 출처)
+     * @param cooldown   알림 쿨다운
+     * @param delivery   발행 포트
+     * @param metrics    §9.1 카운터
+     * @param clock      판정 시각 (불변규칙 12)
+     * @param properties {@code dawnline.tracking.at-risk.*}
+     */
+    @Bean
+    public AtRiskDetector atRiskDetector(RouteRevisions revisions, AtRiskCooldown cooldown,
+            DeliveryEvents delivery, TrackingMetrics metrics, Clock clock,
+            TrackingProperties properties) {
+        return new AtRiskDetector(revisions, cooldown, delivery, metrics, clock,
+                properties.atRisk().margin());
+    }
+
+    /**
      * 스캔 적용 유스케이스 (§5.4).
      *
      * @param shipments 배송 저장소
      * @param events    사건 적재
      * @param delivery  {@code delivery.status} 발행
      * @param eta       편차 전파
+     * @param atRisk    지연 위험 판정·통지
      * @param metrics   §9.1 카운터
      * @param ids       UUIDv7 생성기 (불변규칙 10)
      */
     @Bean
     public RecordScanUseCase recordScanUseCase(ShipmentRepository shipments, ShipmentEvents events,
-            DeliveryEvents delivery, EtaPropagator eta, TrackingMetrics metrics, Ids ids) {
-        return new RecordScanService(shipments, events, delivery, eta, metrics, ids);
+            DeliveryEvents delivery, EtaPropagator eta, AtRiskDetector atRisk,
+            TrackingMetrics metrics, Ids ids) {
+        return new RecordScanService(shipments, events, delivery, eta, atRisk, metrics, ids);
     }
 
     // --- shipment_events 일 파티션 (§5.4) -------------------------------------

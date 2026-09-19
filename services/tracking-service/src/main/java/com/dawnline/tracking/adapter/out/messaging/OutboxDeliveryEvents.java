@@ -4,6 +4,8 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.messaging.outbox.OutboxMessage;
 import com.dawnline.tracking.application.port.out.DeliveryEvents;
 import com.dawnline.tracking.domain.ScanType;
+import com.dawnline.tracking.domain.Shipment;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
@@ -46,5 +48,26 @@ public class OutboxDeliveryEvents implements DeliveryEvents {
                 routeId.toString(),
                 DeliveryStatusPayload.of(routeId, stopSeq, orderIds, type, occurredAt,
                         failureReason)));
+    }
+
+    @Override
+    public void deliveryAtRisk(UUID routeId, UUID campId, Instant detectedAt, Duration deviation,
+            List<Shipment> remaining, Duration margin) {
+
+        Objects.requireNonNull(routeId, "routeId");
+        Objects.requireNonNull(campId, "campId");
+        Objects.requireNonNull(remaining, "remaining");
+        if (remaining.isEmpty()) {
+            // 계약이 minItems 1 이다. 남은 stop 이 없으면 재계획이 풀 것도 없다.
+            throw new IllegalArgumentException("남은 stop 없는 at-risk 는 발행하지 않습니다");
+        }
+        outbox.append(OutboxMessage.of(
+                DeliveryAtRiskPayload.AGGREGATE_TYPE,
+                routeId,
+                DeliveryAtRiskPayload.EVENT_TYPE,
+                DeliveryAtRiskPayload.SCHEMA_VERSION,
+                routeId.toString(),
+                DeliveryAtRiskPayload.of(routeId, campId, detectedAt, deviation, remaining,
+                        margin)));
     }
 }

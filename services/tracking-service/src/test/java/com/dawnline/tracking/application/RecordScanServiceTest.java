@@ -57,6 +57,8 @@ class RecordScanServiceTest {
     private static final int SEQ = 3;
 
     private static final UUID CAMP = UUID.randomUUID();
+    /** §5.4 의 at-risk 여유. */
+    private static final Duration MARGIN = Duration.ofMinutes(15);
     private static final Instant DEPARTURE = NOW.plus(Duration.ofMinutes(5));
     private static final Instant ARRIVAL = NOW.plus(Duration.ofMinutes(20));
     private static final Instant PROMISED_END = NOW.plus(Duration.ofHours(2));
@@ -64,6 +66,7 @@ class RecordScanServiceTest {
     private InMemoryShipments shipments;
     private FixedRevisions revisions;
     private RecordingDelivery delivery;
+    private OpenCooldown cooldown;
     private RecordingEvents events;
     private MeterRegistry meters;
     private RecordScanService service;
@@ -75,9 +78,12 @@ class RecordScanServiceTest {
         meters = new SimpleMeterRegistry();
         revisions = new FixedRevisions();
         delivery = new RecordingDelivery();
+        TrackingMetrics metrics = new TrackingMetrics(meters);
+        cooldown = new OpenCooldown();
         service = new RecordScanService(shipments, events, delivery,
-                new EtaPropagator(shipments, revisions), new TrackingMetrics(meters),
-                new Ids(CLOCK, RandomGenerator.getDefault()));
+                new EtaPropagator(shipments, revisions),
+                new AtRiskDetector(revisions, cooldown, delivery, metrics, CLOCK, MARGIN),
+                metrics, new Ids(CLOCK, RandomGenerator.getDefault()));
     }
 
     // --- 적용 ---------------------------------------------------------------
@@ -412,12 +418,31 @@ class RecordScanServiceTest {
             implements com.dawnline.tracking.application.port.out.DeliveryEvents {
 
         private final List<Published> sent = new ArrayList<>();
+        private final List<UUID> atRisk = new ArrayList<>();
 
         @Override
         public void deliveryStatus(UUID routeId, int stopSeq, List<UUID> orderIds, ScanType type,
                 Instant occurredAt, String failureReason) {
             sent.add(new Published(routeId, stopSeq, List.copyOf(orderIds), type, occurredAt,
                     failureReason));
+        }
+
+        @Override
+        public void deliveryAtRisk(UUID routeId, UUID campId, Instant detectedAt,
+                Duration deviation, List<Shipment> remaining, Duration margin) {
+            atRisk.add(routeId);
+        }
+    }
+
+    /** 언제나 창을 여는 쿨다운. 쿨다운 자체는 AtRiskDetectorTest 가 본다. */
+    private static final class OpenCooldown
+            implements com.dawnline.tracking.application.port.out.AtRiskCooldown {
+
+        private boolean open = true;
+
+        @Override
+        public boolean tryStart(UUID routeId) {
+            return open;
         }
     }
 

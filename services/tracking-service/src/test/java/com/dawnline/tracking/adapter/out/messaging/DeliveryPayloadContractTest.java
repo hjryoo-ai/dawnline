@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.contract.EventContracts;
 import com.dawnline.tracking.domain.ScanType;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -30,6 +31,16 @@ class DeliveryPayloadContractTest {
     private static final EventContracts CONTRACTS = EventContracts.load();
 
     private static final Instant NOW = Instant.parse("2026-09-19T11:00:00Z");
+    private static final Duration MARGIN = Duration.ofMinutes(15);
+    private static final Instant PROMISED_END = NOW.plus(Duration.ofHours(2));
+    private static final Instant RISKY_ETA = PROMISED_END.minus(Duration.ofMinutes(10));
+    private static final Instant SAFE_ETA = PROMISED_END.minus(Duration.ofMinutes(40));
+
+    private static com.dawnline.tracking.domain.Shipment remaining(int seq, Instant eta) {
+        return com.dawnline.tracking.domain.Shipment.restore(Ids.newId(), Ids.newId(), seq,
+                com.dawnline.tracking.domain.ShipmentStatus.OUT_FOR_DELIVERY, eta, eta,
+                PROMISED_END, null, 0L);
+    }
 
     @ParameterizedTest
     @EnumSource(mode = EnumSource.Mode.EXCLUDE, names = "DEPARTED_CAMP")
@@ -65,6 +76,48 @@ class DeliveryPayloadContractTest {
 
         CONTRACTS.validatePayload(DeliveryStatusPayload.EVENT_TYPE,
                 DeliveryStatusPayload.SCHEMA_VERSION, CONTRACTS.json().toTree(payload));
+    }
+
+    // --- delivery.at-risk (Phase 5-1b) -----------------------------------------
+
+    @Test
+    void at_risk_가_계약을_지킨다() {
+        DeliveryAtRiskPayload payload = DeliveryAtRiskPayload.of(Ids.newId(), Ids.newId(), NOW,
+                Duration.ofMinutes(23), List.of(remaining(2, RISKY_ETA), remaining(3, SAFE_ETA)),
+                MARGIN);
+
+        CONTRACTS.validatePayload(DeliveryAtRiskPayload.EVENT_TYPE,
+                DeliveryAtRiskPayload.SCHEMA_VERSION, CONTRACTS.json().toTree(payload));
+    }
+
+    @Test
+    void 남은_stop_은_주문_단위가_아니라_stop_단위로_되접힌다() {
+        // shipments 는 주문 하나씩이지만 §6.5 1단계가 같은 지점의 주문을 한 stop 으로 묶었고,
+        // 재계획도 stop 단위로 푼다. 되접지 않으면 소비자가 그것을 다시 해야 한다.
+        UUID routeId = Ids.newId();
+        DeliveryAtRiskPayload payload = DeliveryAtRiskPayload.of(routeId, Ids.newId(), NOW,
+                Duration.ofMinutes(23),
+                List.of(remaining(2, RISKY_ETA), remaining(2, RISKY_ETA), remaining(3, SAFE_ETA)),
+                MARGIN);
+
+        assertThat(payload.remainingStops()).hasSize(2);
+        assertThat(payload.remainingStops().getFirst().orderIds()).hasSize(2);
+        assertThat(payload.remainingStops().getFirst().atRisk()).isTrue();
+        assertThat(payload.remainingStops().getLast().atRisk())
+                .as("판정을 소비자가 다시 하지 않도록 stop 마다 함께 싣는다")
+                .isFalse();
+    }
+
+    @Test
+    void 편차는_음수도_싣는다() {
+        // 위험은 누적된 ETA 로 판정하지만 이 값은 마지막 한 걸음이다 — 앞서 가는 중에도
+        // 이미 벌어져 있던 지연 때문에 위험할 수 있다.
+        DeliveryAtRiskPayload payload = DeliveryAtRiskPayload.of(Ids.newId(), Ids.newId(), NOW,
+                Duration.ofMinutes(-4), List.of(remaining(1, RISKY_ETA)), MARGIN);
+
+        assertThat(payload.deviationSeconds()).isNegative();
+        CONTRACTS.validatePayload(DeliveryAtRiskPayload.EVENT_TYPE,
+                DeliveryAtRiskPayload.SCHEMA_VERSION, CONTRACTS.json().toTree(payload));
     }
 
     @Test
