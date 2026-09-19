@@ -153,6 +153,23 @@ class OpenApiContractIT extends OrderIntegrationTestBase {
     }
 
     @Test
+    void 성공_응답의_본문은_이름_있는_타입이다() throws Exception {
+        // 오류 쪽 검사의 짝이다. 이것이 없으면 위 둘은 「오류를 파싱할 수 있는가」만 답하고,
+        // 같은 부류의 결함이 2xx 에 있을 때 아무 말도 하지 않는다 — order-service 의 POST /api/v1/orders 가
+        // ResponseEntity<Object> 라서 201·200 을 `type: object` 로 적고 있었다(2026-09-19).
+        OpenApiResponses responses = OpenApiResponses.parse(generatedJson());
+
+        assertThat(responses.successBodies())
+                .as("전제 — 문서에 2xx 응답이 있다. 없으면 아래 어설션은 아무것도 보지 않는다")
+                .isNotEmpty();
+        assertThat(responses.successBodiesWithoutNamedType())
+                .as("성공 본문은 이름 있는 타입이어야 한다. 인라인 `type: object` 는 「본문이 있다」와 "
+                        + "「그 타입은 말하지 않는다」를 동시에 말하고, 문서를 보고 만든 클라이언트는 "
+                        + "응답을 역직렬화할 타입을 만들 수 없다")
+                .isEmpty();
+    }
+
+    @Test
     void 커밋된_문서가_코드와_같다() throws Exception {
         String generated = generatedYaml();
 

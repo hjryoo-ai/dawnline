@@ -4,6 +4,7 @@ import com.dawnline.order.application.port.in.CancelOrderUseCase;
 import com.dawnline.order.application.port.in.GetOrderUseCase;
 import com.dawnline.order.application.port.in.ListOrdersQuery;
 import com.dawnline.order.application.port.in.ListOrdersUseCase;
+import com.dawnline.order.application.port.in.OrderAccepted;
 import com.dawnline.order.application.port.in.OrderCursor;
 import com.dawnline.order.application.port.in.OrderView;
 import com.dawnline.order.application.port.in.PlaceOrderResult;
@@ -86,6 +87,12 @@ public class OrderController {
      * <p>201 에는 {@code Location} 을 붙인다. 200(재생)에는 붙이지 않는다 — 새로 만들어진 것이
      * 없기 때문이고, 그 차이가 두 응답을 구분하는 또 하나의 신호가 된다.
      *
+     * <p><strong>반환 타입은 {@code ResponseEntity<OrderAccepted>} 다.</strong> 두 갈래가 같은
+     * 본문을 돌려주므로 {@code Object} 로 열어 둘 이유가 없었는데, 열어 둔 대가는 문서가
+     * 치렀다 — springdoc 은 반환 타입을 적으므로 201·200 이 {@code type: object} 로 나갔고,
+     * 그것은 「본문이 있다」와 「그 타입은 말하지 않는다」를 동시에 말한다(2026-09-19 까지).
+     * 오류 쪽 결함과 같은 부류이고, {@code OpenApiContractIT} 의 2xx 검사가 그 자리를 본다.
+     *
      * @param idempotencyKey {@code Idempotency-Key} 헤더 (필수)
      * @param request        요청 본문
      */
@@ -111,7 +118,7 @@ public class OrderController {
                     description = "고객별 레이트 리밋 초과. `Retry-After` 초 뒤에 다시 시도한다",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     @PostMapping
-    public ResponseEntity<Object> place(
+    public ResponseEntity<OrderAccepted> place(
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody PlaceOrderRequest request) {
 

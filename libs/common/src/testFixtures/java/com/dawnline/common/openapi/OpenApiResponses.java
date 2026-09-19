@@ -30,6 +30,14 @@ import tools.jackson.databind.json.JsonMapper;
  * {@code 403} 은 조용히 검사 밖에 남는다(CLAUDE.md 「집합을 도는 검사는 열거하지 않고 전체에서
  * 뺀다」). 그래서 {@link #errorBodiesNotUsing(String)} 은 <strong>2xx 가 아닌 전부</strong>를
  * 대상으로 하고, 제외한 2xx 가 왜 제외인지는 {@link #successBodiesUsing(String)} 이 말한다.
+ *
+ * <h2>2xx 도 계약이다</h2>
+ * 오류 쪽만 보면 이 클래스는 「오류를 파싱할 수 있는가」만 답하는 검사가 된다. 같은 결함이
+ * 성공 응답에도 있었다 — {@code POST /api/v1/orders} 는 {@code ResponseEntity<Object>} 를
+ * 반환해서 201·200 의 본문이 {@code type: object} 로 적혀 있었고, 그것은 <em>본문이 있다고
+ * 말하면서 무엇인지는 말하지 않는</em> 상태다. 그래서 {@link #successBodiesWithoutNamedType()}
+ * 이 짝으로 있다: <strong>4xx 는 {@code ProblemDetail} 이고 2xx 는 이름 있는 타입이다.</strong>
+ * 둘을 합쳐야 검사가 「계약이 본문을 말하는가」를 본다.
  */
 public final class OpenApiResponses {
 
@@ -44,6 +52,16 @@ public final class OpenApiResponses {
 
     /** 응답에 {@code content} 자체가 없을 때. 본문이 없다고 <em>선언한</em> 것과 같다. */
     public static final String NO_BODY = "(본문 없음)";
+
+    /**
+     * 인라인 스키마의 표시 접두사 — {@code $ref} 가 아니라 자리에서 펼쳐진 타입이다.
+     * springdoc 은 {@code ResponseEntity<Object>} 를 {@code type: object} 로 적고, 그것은
+     * 「본문이 있다」와 「그 타입은 말하지 않는다」를 동시에 말한다.
+     */
+    public static final String UNNAMED_PREFIX = "(이름 없는 ";
+
+    /** 배열 표시. 중첩을 풀 때 {@link #namesAType(String)} 이 같은 문자열을 쓴다. */
+    private static final String ARRAY_PREFIX = "배열<";
 
     private final List<Response> responses;
 
@@ -126,11 +144,33 @@ public final class OpenApiResponses {
             return ref.substring(ref.lastIndexOf('/') + 1);
         }
         if (schema.has("items")) {
-            return "배열<" + schemaNameOf(schema.get("items")) + ">";
+            return ARRAY_PREFIX + schemaNameOf(schema.get("items")) + ">";
         }
-        // 인라인 스키마. 이름이 없으므로 타입을 그대로 보여 준다 — ResponseEntity<Object> 의
-        // "type: object" 가 여기로 온다.
-        return schema.path("type").isMissingNode() ? NO_SCHEMA : schema.get("type").asString();
+        // 인라인 스키마. 이름이 없다는 것 자체가 결함일 수 있으므로(ResponseEntity<Object> 의
+        // "type: object") 타입을 보여 주되 이름이 아니라는 표시를 함께 단다.
+        return schema.path("type").isMissingNode()
+                ? NO_SCHEMA
+                : UNNAMED_PREFIX + schema.get("type").asString() + ")";
+    }
+
+    /**
+     * 스키마 이름이 <strong>이름 있는 타입</strong>인가 — {@code $ref} 에서 온 이름이거나 그
+     * 배열인가. 배열은 원소까지 내려가 본다: {@code 배열<(이름 없는 object)>} 는 이름이 아니다.
+     *
+     * <p>판정을 파싱 시점의 구조에서 끌어오는 것이 요점이다. {@code object}·{@code string} 같은
+     * 기본 타입 이름을 <em>목록으로</em> 두고 비교하면 그 목록이 곧 열거가 되고, 스펙이 타입을
+     * 더하면 조용히 검사 밖에 남는다.
+     *
+     * @param schema {@link Response#schema()}
+     * @return 이름 있는 타입이면 {@code true}
+     */
+    public static boolean namesAType(String schema) {
+        Objects.requireNonNull(schema, "schema");
+        String inner = schema;
+        while (inner.startsWith(ARRAY_PREFIX) && inner.endsWith(">")) {
+            inner = inner.substring(ARRAY_PREFIX.length(), inner.length() - 1);
+        }
+        return !inner.startsWith(UNNAMED_PREFIX) && !NO_SCHEMA.equals(inner) && !NO_BODY.equals(inner);
     }
 
     /** 문서의 모든 응답. */
@@ -158,6 +198,36 @@ public final class OpenApiResponses {
         Objects.requireNonNull(schemaName, "schemaName");
         return errorBodies().stream()
                 .filter(response -> !schemaName.equals(response.schema()))
+                .toList();
+    }
+
+    /**
+     * 2xx 인 응답 전부. {@link #errorBodies()} 와 같은 이유로 둔다 — 아래 2xx 검사의
+     * <strong>전제</strong>다.
+     *
+     * @return 성공 응답들
+     */
+    public List<Response> successBodies() {
+        return responses.stream().filter(Response::isSuccess).toList();
+    }
+
+    /**
+     * 2xx 인데 <strong>이름 있는 타입</strong>을 말하지 않는 응답들 —
+     * {@link #errorBodiesNotUsing(String)} 의 짝이다.
+     *
+     * <p>세 가지가 걸린다: 인라인 타입({@code type: object}), 스키마가 빈 자리, 그리고 본문
+     * 선언이 아예 없는 응답. 셋 다 「읽는 쪽이 각자 다르게 가정하게 되는」 같은 상태다.
+     *
+     * <p><strong>본문이 정말 없는 2xx</strong>(예: {@code 204})가 생기면 이 검사는 실패한다.
+     * 그것이 의도다 — 그때 제외를 <em>쓰게</em> 되고, 쓰인 제외는 읽힌다(DESIGN.md §13 규칙 2).
+     * 지금 이 저장소에는 본문 없는 2xx 가 하나도 없으므로, 없는 구성원을 위해 미리 제외를
+     * 적어 두지 않는다.
+     *
+     * @return 타입을 말하지 않는 성공 응답들. 비어 있어야 한다
+     */
+    public List<Response> successBodiesWithoutNamedType() {
+        return successBodies().stream()
+                .filter(response -> !namesAType(response.schema()))
                 .toList();
     }
 

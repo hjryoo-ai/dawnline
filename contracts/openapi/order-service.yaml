@@ -99,13 +99,13 @@ paths:
           content:
             '*/*':
               schema:
-                type: object
+                $ref: "#/components/schemas/OrderAccepted"
         "200":
           description: 같은 멱등 키의 재요청 — 저장된 응답을 그대로 재생한다. `Location` 은 없다
           content:
             '*/*':
               schema:
-                type: object
+                $ref: "#/components/schemas/OrderAccepted"
         "400":
           description: "요청 값이 유효하지 않거나 `Idempotency-Key` 가 없다. 본문은 Problem Details\
             \ 이고 `errors[]` 에 어긋난 필드가 모두 들어온다"
@@ -292,6 +292,36 @@ components:
         properties:
           type: object
           additionalProperties: {}
+    OrderAccepted:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - PLACED
+          - PLANNED
+          - DISPATCHED
+          - DELIVERED
+          - FAILED
+          - CANCELLED
+        serviceTier:
+          type: string
+          enum:
+          - DAWN
+          - SAME_DAY
+          - NEXT_DAY
+        promisedStart:
+          type: string
+          format: date-time
+        promisedEnd:
+          type: string
+          format: date-time
+        placedAt:
+          type: string
+          format: date-time
     CancelOrderRequest:
       type: object
       properties:

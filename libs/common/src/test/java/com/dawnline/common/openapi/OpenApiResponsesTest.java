@@ -28,6 +28,15 @@ class OpenApiResponsesTest {
               }}}}}
             """;
 
+    /** 배열과 인라인이 섞인 문서. 이름 판정이 껍데기가 아니라 원소까지 내려가는지 본다. */
+    private static final String MIXED = """
+            {"paths": {"/api/v1/x": {"get": {"responses": {
+              "200": {"content": {"application/json": {"schema":
+                  {"type": "array", "items": {"$ref": "#/components/schemas/OrderView"}}}}},
+              "400": {"content": {"application/json": {"schema": {"type": "object"}}}}
+            }}}}}
+            """;
+
     @Test
     void 오류_응답이_반환_타입을_쓰고_있으면_그것을_집어낸다() {
         OpenApiResponses responses = OpenApiResponses.parse(ORDER_SHAPED);
@@ -90,17 +99,55 @@ class OpenApiResponsesTest {
 
     @Test
     void 배열과_인라인_스키마도_이름으로_읽는다() {
-        String mixed = """
-                {"paths": {"/api/v1/x": {"get": {"responses": {
-                  "200": {"content": {"application/json": {"schema":
-                      {"type": "array", "items": {"$ref": "#/components/schemas/OrderView"}}}}},
-                  "400": {"content": {"application/json": {"schema": {"type": "object"}}}}
-                }}}}}
-                """;
-        OpenApiResponses responses = OpenApiResponses.parse(mixed);
+        OpenApiResponses responses = OpenApiResponses.parse(MIXED);
 
         assertThat(responses.all()).extracting(OpenApiResponses.Response::schema)
-                .containsExactly("배열<OrderView>", "object");
+                .containsExactly("배열<OrderView>", "(이름 없는 object)");
         assertThat(responses.statusCodes()).containsExactly("200", "400");
+    }
+
+    @Test
+    void 이름_없는_성공_본문을_집어낸다() {
+        // order-service 의 POST /api/v1/orders 가 2026-09-19 까지 그랬다 —
+        // ResponseEntity<Object> 라서 201·200 이 "type: object" 로 적혀 있었다. 오류 쪽 검사는
+        // 2xx 를 제외하므로 이것을 보지 못한다. 그 구멍을 이 검사가 닫는다.
+        String unnamed = ORDER_SHAPED.replace(
+                "\"200\": {\"content\": {\"*/*\": {\"schema\": {\"$ref\": \"#/components/schemas/OrderView\"}}}}",
+                "\"200\": {\"content\": {\"*/*\": {\"schema\": {\"type\": \"object\"}}}}");
+        // 전제 — 표본이 실제로 바뀌었다.
+        assertThat(unnamed).contains("\"type\": \"object\"");
+
+        assertThat(OpenApiResponses.parse(unnamed).successBodiesWithoutNamedType())
+                .singleElement()
+                .hasToString("GET /api/v1/orders/{orderId} → 200 [*/*] (이름 없는 object)");
+    }
+
+    @Test
+    void 이름_있는_성공_본문은_배열이어도_통과한다() {
+        // 배열은 원소까지 내려가 본다 — 껍데기만 보면 "array" 가 이름처럼 보인다.
+        assertThat(OpenApiResponses.parse(MIXED).successBodiesWithoutNamedType()).isEmpty();
+        assertThat(OpenApiResponses.parse(ORDER_SHAPED).successBodiesWithoutNamedType()).isEmpty();
+    }
+
+    @Test
+    void 본문을_선언하지_않은_성공_응답도_집어낸다() {
+        // 204 처럼 본문이 정말 없는 2xx 가 생기면 이 검사가 실패한다 — 그때 제외를 쓰게 되고,
+        // 쓰인 제외는 읽힌다 (DESIGN.md §13 규칙 2). 지금은 그런 응답이 하나도 없다.
+        String noBody = """
+                {"paths": {"/api/v1/x": {"post": {"responses": {"204": {"description": "없다"}}}}}}
+                """;
+
+        assertThat(OpenApiResponses.parse(noBody).successBodiesWithoutNamedType())
+                .singleElement()
+                .hasToString("POST /api/v1/x → 204 [(본문 없음)] (본문 없음)");
+    }
+
+    @Test
+    void 성공_전제가_비면_비었다고_말한다() {
+        // successBodies() 는 2xx 검사의 전제다 — errorBodies() 와 같은 이유로 둔다.
+        assertThat(OpenApiResponses.parse("{}").successBodies()).isEmpty();
+        assertThat(OpenApiResponses.parse(ORDER_SHAPED).successBodies())
+                .extracting(OpenApiResponses.Response::status)
+                .containsExactly("200");
     }
 }
