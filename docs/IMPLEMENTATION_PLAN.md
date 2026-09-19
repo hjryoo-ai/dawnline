@@ -1629,6 +1629,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    shipment 는 새 revision 이 와도 그대로 두고, 나머지만 `plannedArrival`·`eta` 를 갱신한다.
    5번 전에는 dispatch 가 진행 상황을 모르므로 **이 규칙이 tracking 쪽의 유일한 방어선**이다.
 
+   **조건은 「완료했는가」가 아니라 「종결인가」다** (2026-09-19 정정 — 코드가 옳고 이 문장이
+   좁았다). `CANCELLED` 도 같은 줄에 걸린다. 앞의 둘과 이유는 다르다: 되돌릴 것이 있어서가
+   아니라 **갱신할 것이 없어서**다 — 취소된 배송의 계획 도착 시각을 옮기는 일은 아무 물음에도
+   답하지 않는다. 그래서 구현은 `ShipmentStatus.isTerminal()` 한 번이고, 상태가 늘어도
+   그 줄은 그대로다(§5.4).
+
    **계약 변경 하나 — `route.assigned.v1` 의 stop 에 `promisedWindow`(required)**. tracking 이
    정시 여부와 at-risk(`eta > promised_end − 15분`, §5.4)를 판정하려면 stop 마다 약속창이
    필요한데 `plannedStop` 에 없다. dispatch 는 갖고 있다 — `StopMerger` 의 병합 키가
