@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: Dawnline tracking-service
+  description: |-
+    기사 스캔 API (DESIGN.md §5.4). 배송 진행·ETA·지연 위험은 이 스캔에서 시작한다.
+
+    **인증이 없다.** 고객 API 와 같은 결정이고(§10) 같은 대가를 치른다 — 라우트 id 를 아는 사람은 누구나 그 라우트의 배송 상태를 바꿀 수 있다. 라우트 id 가 UUIDv7(무작위 74비트)이라는 것이 사실상 유일한 방어다.
+
+    **재시도해도 안전하다.** 멱등 키 헤더가 없다 — 멱등은 상태 머신이 만든다(§8.5). 같은 스캔이 다시 오면 이미 지나온 지점이라 `STALE` 로 흡수되고, 상태는 그대로다. 오프라인에서 다시 켜진 단말이 밀린 스캔을 순서 없이 보내도 같은 규칙이 흡수한다.
+
+    **취소 뒤의 스캔도 200 이다.** 기사가 취소를 받지 못하고 배송한 경우이고 기사가 고칠 수 있는 문제가 아니다. 해당 주문 줄이 `AFTER_CANCEL` 로 온다.
+
+    오류 응답은 RFC 9457 Problem Details 이고 `type` 과 `code` 가 항상 채워진다.
+  version: 1.0.0
+servers:
+- url: http://localhost:8084
+  description: 로컬 개발
+paths:
+  /api/v1/routes/{routeId}/stops/{stopSeq}/events:
+    post:
+      tags:
+      - scan-controller
+      operationId: report
+      parameters:
+      - name: routeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: stopSeq
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanRequest"
+        required: true
+      responses:
+        "200":
+          description: "받았다. `orders[]` 의 `outcome` 이 주문마다의 결과다 — `APPLIED`(상태가 옮겨\
+            졌다) · `STALE`(이미 지나온 지점, 중복 스캔) · `AFTER_CANCEL`(취소된 주문이라 무시했다). **재시도\
+            해도 안전하다**"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ScanResult"
+        "400":
+          description: "요청 값이 유효하지 않다. 본문은 Problem Details 이고 `errors[]` 에 어긋난 필드가\
+            \ 모두 들어온다. 지원하지 않는 API 버전도 여기로 온다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 그 라우트의 그 순번에 배송이 없다. 아직 `route.assigned` 를 받지 못한 창일 수 있으므로
+            **잠시 후 같은 요청을 다시 보내도 된다**
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: "상태 머신이 허용하지 않는 전이다. 역행 스캔은 409 가 아니라 200 + `STALE` 이므로, 여기\
+            까지 오는 것은 상류의 결함이다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+components:
+  schemas:
+    ScanRequest:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - DEPARTED_CAMP
+          - ARRIVED
+          - COMPLETED
+          - FAILED
+        occurredAt:
+          type: string
+          format: date-time
+        lat:
+          type: number
+          format: double
+          maximum: 90.0
+          minimum: -90.0
+        lng:
+          type: number
+          format: double
+          maximum: 180.0
+          minimum: -180.0
+        failureReason:
+          type: string
+          maxLength: 200
+          minLength: 0
+      required:
+      - occurredAt
+      - type
+    ProblemDetail:
+      type: object
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+        properties:
+          type: object
+          additionalProperties: {}
+    OrderScan:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+          enum:
+          - APPLIED
+          - STALE
+          - AFTER_CANCEL
+        status:
+          type: string
+          enum:
+          - SCHEDULED
+          - OUT_FOR_DELIVERY
+          - ARRIVED
+          - COMPLETED
+          - FAILED
+          - CANCELLED
+    ScanResult:
+      type: object
+      properties:
+        routeId:
+          type: string
+          format: uuid
+        stopSeq:
+          type: integer
+          format: int32
+        type:
+          type: string
+          enum:
+          - DEPARTED_CAMP
+          - ARRIVED
+          - COMPLETED
+          - FAILED
+        occurredAt:
+          type: string
+          format: date-time
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderScan"

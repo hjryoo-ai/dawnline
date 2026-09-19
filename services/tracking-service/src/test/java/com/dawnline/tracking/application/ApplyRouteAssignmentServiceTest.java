@@ -271,6 +271,12 @@ class ApplyRouteAssignmentServiceTest {
         }
 
         @Override
+        public List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq) {
+            // 이 유스케이스는 stop 으로 찾지 않는다 — 개정은 주문 id 로 온다.
+            throw new UnsupportedOperationException("개정 반영은 stop 으로 찾지 않습니다");
+        }
+
+        @Override
         public void insert(Shipment shipment) {
             inserted.add(shipment.orderId());
             stored.put(shipment.orderId(), shipment);

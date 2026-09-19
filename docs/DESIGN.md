@@ -917,6 +917,25 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
 시각을 옮기는 일은 아무 물음에도 답하지 않는다. 그래서 조건은 「완료했는가」가 아니라
 **「종결인가」**(`ShipmentStatus.isTerminal()`)이고, 셋이 한 줄로 걸린다.
 
+**스캔 API 는 멱등 키를 요구하지 않는다 — 멱등을 상태 머신이 만들기 때문이다.** §8.5 의 키는
+「`(routeId, seq, type)` + 상태 머신」이고, 같은 스캔이 다시 오면 이미 지나온 지점이라 `STALE` 로
+흡수된다. 별도의 키를 요구하면 단말이 그것을 재시도 사이에 보존해야 하는데, 오프라인에서 다시
+켜지는 기기에 그것은 쉬운 요구가 아니다. 같은 이유로 **취소 뒤의 스캔도 200** 이다 — 기사가
+취소를 받지 못하고 배송한 경우이고 기사가 고칠 수 있는 문제가 아니다. 오류로 답하면 단말이
+재시도를 반복하고 그동안 다음 stop 이 밀린다. 응답의 해당 주문 줄이 `AFTER_CANCEL` 이고, 세는
+것은 `dawnline_scan_after_cancel_total` 이다. 한 스캔이 <em>주문마다</em> 다른 답을 낼 수 있다 —
+통합된 stop 에서 하나만 취소된 경우가 그것이다(ADR-026 후속 정정).
+
+**`shipment_events` 에는 상태를 옮긴 스캔만 남는다.** `STALE` 과 `AFTER_CANCEL` 은 행이 되지
+않는다. 남기면 이 로그를 읽는 사람이 「어느 행이 실제로 무언가를 바꿨나」를 알기 위해 상태 머신을
+다시 구현해야 한다. 취소 뒤 스캔의 기록은 위 카운터이고(§5.4 「무시하되 센다」), 중복 스캔은
+기록할 값이 없다. `occurredAt` 은 **required** 이고 기본값이 없다 — 빠뜨린 요청이 조용히 「지금」이
+되면 정시율(§8.1)이 어긋난 이유를 아무도 찾을 수 없다. `failureReason` 은 `payload` JSONB 에
+`{"failureReason": …}` 로 들어가고, 사유가 없으면 `payload` 는 `NULL` 이다 —
+`{"failureReason": null}` 은 「칸이 있는데 비어 있다」로 읽힌다. 그 JSON 은 **PostgreSQL 이**
+`jsonb_build_object` 로 만든다: 기사가 쓴 자유 텍스트의 이스케이프를 자바에서 손으로 하면 틀린
+날 깨지는 것이 행 하나가 아니라 배치 전체다.
+
 **파티션은 함수 하나가 만들고 스케줄러가 부른다.** `shipment_events` 에 **DEFAULT 파티션을 두지
 않는다.** 두면 범위 밖 행이 조용히 거기 쌓이고, 나중에 그 날짜의 파티션을 만들 때
 PostgreSQL 이 DEFAULT 를 스캔해 겹치는 행을 발견하고 **그때** 실패한다 — 생성이 멈췄다는 사실이
@@ -2086,7 +2105,7 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | RDB | PostgreSQL | **18.x** | 서비스별 DB. 파티셔닝·JSONB |
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
-| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/order-service.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사 |
+| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. 지금 둘이다 — `order-service`(Phase 1)·`tracking-service`(Phase 5-1a). tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다 |
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |

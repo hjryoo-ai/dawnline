@@ -15,6 +15,10 @@ dependencies {
     // 이 스타터가 없으면 spring.flyway.* 가 죽은 설정이 되어 마이그레이션이 실행되지 않는다.
     implementation(libs.spring.boot.starter.flyway)
     runtimeOnly(libs.flyway.postgresql)
+    // 유스케이스가 dawnline_scan_after_cancel_total 을 직접 올린다(§9.1). 지금은
+    // libs/observability 가 노출하는 OTel 스타터를 타고 전이로 들어오지만, 직접 쓰는 의존은
+    // 직접 선언한다 — 그 스타터를 바꾸는 날 컴파일이 깨지는 이유가 보이지 않게 된다.
+    implementation(libs.micrometer.core)
     implementation(libs.springdoc.openapi.webmvc)
     runtimeOnly(libs.postgresql)
 
@@ -24,6 +28,8 @@ dependencies {
     // 계약 예시로 소비자 페이로드를 검증한다 (불변규칙 8) — 발행자 쪽 테스트와 같은 픽스처다.
     testImplementation(testFixtures(project(":libs:messaging")))
 
+    // Boot 4 모듈화: @AutoConfigureMockMvc 는 spring-boot-starter-test 가 아니라 이 모듈에 있다.
+    integrationTestImplementation(libs.spring.boot.webmvc.test)
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.testcontainers.redis)
@@ -38,4 +44,21 @@ tasks.named<Test>("test") {
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
             .withPropertyName("eventContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// -----------------------------------------------------------------------------
+// OpenAPI 문서 재생성 (DESIGN.md §5.4, §14).
+//
+// contracts/openapi/tracking-service.yaml 은 생성물이고, OpenApiContractIT 가 코드와 어긋나지
+// 않는지 검사한다. 스캔 API 를 고치면 이 태스크로 문서를 다시 만든다 — Phase 5-2 의 sim-runner
+// 가 다른 모듈에서 이 엔드포인트를 부르므로, 두 모듈이 공유하는 것은 이 문서뿐이다.
+tasks.register<Test>("updateOpenApi") {
+    description = "contracts/openapi/tracking-service.yaml 을 코드에서 다시 만든다"
+    group = "documentation"
+    testClassesDirs = sourceSets["integrationTest"].output.classesDirs
+    classpath = sourceSets["integrationTest"].runtimeClasspath
+    useJUnitPlatform()
+    filter { includeTestsMatching("*OpenApiContractIT*") }
+    systemProperty("dawnline.openapi.update", "true")
+    outputs.upToDateWhen { false }
 }

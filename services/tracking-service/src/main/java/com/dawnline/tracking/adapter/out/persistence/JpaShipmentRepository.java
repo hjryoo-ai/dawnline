@@ -23,6 +23,15 @@ public class JpaShipmentRepository implements ShipmentRepository {
     private static final String FIND_ALL_JPQL =
             "SELECT s FROM ShipmentEntity s WHERE s.orderId IN :orderIds";
 
+    /**
+     * {@code ix_ship_route (route_id, stop_seq)} 를 타는 유일한 질의다 (§5.4 DDL, 불변규칙 11).
+     * {@code orderId} 로 정렬하는 이유는 결과 순서가 응답에 그대로 나가기 때문이다 — 정하지
+     * 않으면 같은 요청이 실행마다 다른 순서를 돌려주고, 그것을 비교하는 테스트는 가끔 깨진다.
+     */
+    private static final String FIND_AT_STOP_JPQL =
+            "SELECT s FROM ShipmentEntity s WHERE s.routeId = :routeId AND s.stopSeq = :stopSeq "
+                    + "ORDER BY s.orderId";
+
     private final EntityManager entityManager;
 
     /**
@@ -41,6 +50,17 @@ public class JpaShipmentRepository implements ShipmentRepository {
         }
         return entityManager.createQuery(FIND_ALL_JPQL, ShipmentEntity.class)
                 .setParameter("orderIds", orderIds)
+                .getResultList().stream()
+                .map(ShipmentEntity::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq) {
+        Objects.requireNonNull(routeId, "routeId");
+        return entityManager.createQuery(FIND_AT_STOP_JPQL, ShipmentEntity.class)
+                .setParameter("routeId", routeId)
+                .setParameter("stopSeq", (short) stopSeq)
                 .getResultList().stream()
                 .map(ShipmentEntity::toDomain)
                 .toList();

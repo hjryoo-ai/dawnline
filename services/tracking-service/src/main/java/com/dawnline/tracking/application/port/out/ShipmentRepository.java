@@ -27,6 +27,19 @@ public interface ShipmentRepository {
     List<Shipment> findAll(Collection<UUID> orderIds);
 
     /**
+     * 한 stop 에 묶인 배송들을 찾는다 — 기사 스캔의 대상이다 (§5.4).
+     *
+     * <p>{@code ix_ship_route (route_id, stop_seq)} 를 타는 유일한 질의다(§5.4 DDL 에 명시된
+     * 인덱스, 불변규칙 11). 스캔은 stop 단위로 오고 배송은 주문 단위라 여기서 하나가 여럿이 된다.
+     *
+     * @param routeId 라우트 id
+     * @param stopSeq stop 순번
+     * @return 그 stop 의 배송들. 취소된 것도 포함한다 — 「취소된 주문에 스캔이 왔다」를 세려면
+     *         그 행이 보여야 한다 (§9.1 {@code dawnline_scan_after_cancel_total})
+     */
+    List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq);
+
+    /**
      * 새 배송을 넣는다.
      *
      * @param shipment 새 배송

@@ -1,16 +1,22 @@
 package com.dawnline.tracking.config;
 
+import com.dawnline.common.Ids;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.tracking.adapter.in.messaging.RouteAssignedListener;
 import com.dawnline.tracking.adapter.out.persistence.JdbcEventPartitions;
 import com.dawnline.tracking.adapter.out.persistence.JdbcRouteRevisions;
+import com.dawnline.tracking.adapter.out.persistence.JdbcShipmentEvents;
 import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
 import com.dawnline.tracking.application.ApplyRouteAssignmentService;
+import com.dawnline.tracking.application.RecordScanService;
 import com.dawnline.tracking.application.ShipmentEventPartitions;
+import com.dawnline.tracking.application.TrackingMetrics;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
+import com.dawnline.tracking.application.port.in.RecordScanUseCase;
 import com.dawnline.tracking.application.port.out.EventPartitions;
 import com.dawnline.tracking.application.port.out.RouteRevisions;
+import com.dawnline.tracking.application.port.out.ShipmentEvents;
 import com.dawnline.tracking.application.port.out.ShipmentRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -84,6 +90,43 @@ public class TrackingApplicationConfig {
     public RouteAssignedListener routeAssignedListener(IdempotentConsumer consumer,
             ApplyRouteAssignmentUseCase applyRouteAssignment, EventJson json, MeterRegistry meters) {
         return new RouteAssignedListener(consumer, applyRouteAssignment, json, meters);
+    }
+
+    // --- 기사 스캔 (§5.4) ------------------------------------------------------
+
+    /**
+     * §9.1 의 tracking 고유 카운터. 기동 때 등록한다 — 늦게 등록하면 「0 이다」와 「그런 지표가
+     * 없다」가 구분되지 않는다.
+     *
+     * @param registry 미터 레지스트리
+     */
+    @Bean
+    public TrackingMetrics trackingMetrics(MeterRegistry registry) {
+        return new TrackingMetrics(registry);
+    }
+
+    /**
+     * {@code shipment_events} 적재 포트.
+     *
+     * @param jdbc 같은 트랜잭션에 참여하는 JDBC 템플릿
+     */
+    @Bean
+    public ShipmentEvents shipmentEvents(JdbcTemplate jdbc) {
+        return new JdbcShipmentEvents(jdbc);
+    }
+
+    /**
+     * 스캔 적용 유스케이스 (§5.4).
+     *
+     * @param shipments 배송 저장소
+     * @param events    사건 적재
+     * @param metrics   §9.1 카운터
+     * @param ids       UUIDv7 생성기 (불변규칙 10)
+     */
+    @Bean
+    public RecordScanUseCase recordScanUseCase(ShipmentRepository shipments, ShipmentEvents events,
+            TrackingMetrics metrics, Ids ids) {
+        return new RecordScanService(shipments, events, metrics, ids);
     }
 
     // --- shipment_events 일 파티션 (§5.4) -------------------------------------
