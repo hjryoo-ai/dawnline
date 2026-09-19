@@ -2173,7 +2173,9 @@ dawnline/
 | 성능 | 주문 API 부하, 계획 시간 | k6, benchmark 도구 | §8.1 목표 대비 리포트 |
 | 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료 | Compose `stop/start` 스크립트 | 데이터 유실·중복 0 (검증 쿼리) |
 
-**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12).
+**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12) (8) `adapter.in.web` 의 매핑 경로에 리터럴 API 버전(`/api/v1/...`) 금지 — 버전은 `{version}` 자리표시자와 `ApiVersionConfigurer` 로 해석한다([ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2).
+
+규칙 8 은 불변규칙이 아니라 **ADR 을 강제한다**. 그것이 이 규칙이 생긴 이유이기도 하다 — ADR-009 는 order-service 의 첫 컨트롤러와 함께 쓰였고 그 서비스는 지켰지만, dispatch 의 컨트롤러 셋은 리터럴 `/api/v1` 로 들어왔다(2026-09-19). 결정이 **한 서비스에만 적용되고 있다**는 사실을 아무 검사도 보고 있지 않았고, 「운영자 API 라서 다르다」는 ADR 에 없는 예외였다. ADR 은 결정을 적지만 그 결정이 다음 서비스에서도 지켜지는지는 말해 주지 않는다.
 
 규칙 7이 이름이 아니라 **인자 타입**으로 판정하는 이유: `LocalTime.now(Clock)` 은 주입받은 시계를 읽는 <em>올바른</em> 형태이고 `LocalTime.now(ZoneId)` 는 시스템 시계를 읽는 위반이다. 이름만 보면 둘이 같아 보인다 — 규칙을 처음 켰을 때 `TierEligibility.nowInServiceZone()` 이 그렇게 잘못 걸렸다. 분석 대상에서 테스트 클래스는 뺀다(`DoNotIncludeTests`): 규칙은 프로덕션 구조를 서술하는 것이고, "생성자가 잘못된 인자를 거부하는가" 를 보는 테스트는 버릴 객체를 만들려고 시스템 시계를 부를 수 있다.
 

@@ -18,6 +18,9 @@ dependencies {
     // 진짜로 참조해야 한다. 컴파일되지 않는 표본으로는 음성 테스트를 쓸 수 없다.
     // test 스코프 전용이므로 main 은 프레임워크 비의존 그대로다 (불변규칙 5).
     testImplementation(libs.spring.boot.starter.kafka)
+    // 규칙 8(ADR-009, 매핑에 리터럴 버전 금지)의 위반 표본이 @RequestMapping 을 실제로 붙여야
+    // 한다. 같은 이유다 — 컴파일되지 않는 표본으로는 음성 테스트를 쓸 수 없다.
+    testImplementation(libs.spring.boot.starter.web)
 }
 
 // -----------------------------------------------------------------------------

@@ -126,6 +126,32 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙8_은_매핑에_박힌_버전을_잡는다() {
+        assertThatThrownBy(() -> hardcodedVersionRuleFor(SAMPLES + ".bad..").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("VersionedPathController")
+                .hasMessageContaining("/api/v1/routes")
+                .hasMessageContaining("\"v1\"");
+    }
+
+    @Test
+    void 규칙8_은_자리표시자_매핑을_통과시킨다() {
+        // 반대 방향이 없으면 "모든 매핑을 막는" 규칙이 되어도 테스트가 통과한다. 표본의
+        // {v2Seq} 경로 변수는 세그먼트 전체가 v숫자 가 아니므로 위반이 아니다.
+        hardcodedVersionRuleFor(SAMPLES + ".good..").check(GOOD);
+    }
+
+    @Test
+    void 규칙8_이_ADR_009_를_이유로_밝힌다() {
+        String description = HexagonalArchitectureRules
+                .apiVersionIsNotHardcodedInMappings("dispatch").getDescription();
+
+        assertThat(description)
+                .contains("com.dawnline.dispatch.adapter.in.web..")
+                .contains("ADR-009");
+    }
+
+    @Test
     void 규칙6_은_올바른_표본을_통과시킨다() {
         HexagonalArchitectureRules.PUBLISHING_GOES_THROUGH_OUTBOX_ONLY.check(GOOD);
     }
@@ -152,7 +178,7 @@ class HexagonalArchitectureRulesTest {
     void 서비스별_규칙_전부를_만들_수_있고_대상이_없으면_통과한다(String service) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
-        assertThat(rules).hasSize(7);
+        assertThat(rules).hasSize(8);
         // GOOD 표본에는 위반이 없으므로 전부 통과해야 한다. 규칙 3·4 는 이 표본에 대상이 0개이고,
         // allowEmptyShould(true) 덕분에 "대상 없음" 이 실패가 되지 않는다.
         // 그 둘의 탐지 능력은 위의 전용 테스트가 확인한다.
@@ -172,6 +198,19 @@ class HexagonalArchitectureRulesTest {
                 .should()
                 .callMethodWhere(com.tngtech.archunit.lang.conditions.ArchPredicates.are(
                         HexagonalArchitectureRules.SYSTEM_CLOCK_CALL))
+                .allowEmptyShould(true);
+    }
+
+    /**
+     * 규칙 8 과 <strong>같은 조건</strong>을 표본 패키지에 적용한다. 이유는
+     * {@link #systemClockRuleFor(String)} 과 같다 — 규칙의 {@code that} 절이
+     * {@code com.dawnline.<service>.adapter.in.web..} 로 좁혀져 있어 표본에 닿지 않는다.
+     */
+    private static ArchRule hardcodedVersionRuleFor(String samplePackage) {
+        return com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses()
+                .that()
+                .resideInAPackage(samplePackage)
+                .should(HexagonalArchitectureRules.HARDCODE_API_VERSION_IN_MAPPING)
                 .allowEmptyShould(true);
     }
 

@@ -250,4 +250,24 @@ class DispatchApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].shiftStart").value("06:00:00"));
     }
+
+    @Test
+    void 지원하지_않는_버전은_404_가_아니라_400_이다() throws Exception {
+        // ADR-009 결정 2. 매핑이 리터럴 /api/v1 이면 이 요청은 경로 매칭에서 먼저 떨어져 404 가
+        // 되고, 운영자는 「그 라우트가 없다」와 「그 버전을 안 쓴다」를 구분할 수 없다.
+        // 2026-09-19 까지 이 서비스가 그 상태였다 — ArchUnit 규칙 8 이 잡았다.
+        mvc.perform(get("/api/v2/routes/" + Ids.newId()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void 버전_자리표시자는_경로_변수로_새지_않는다() throws Exception {
+        // 전제 — 같은 주소가 그대로 통한다. 위 테스트만 있으면 "전부 400 이 되었다" 도 통과한다.
+        UUID campId = Ids.newId();
+        when(resources.listDrivers(campId)).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/drivers").param("campId", campId.toString()))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON));
+    }
 }

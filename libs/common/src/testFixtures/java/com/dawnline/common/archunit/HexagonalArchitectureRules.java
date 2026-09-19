@@ -1,14 +1,20 @@
 package com.dawnline.common.archunit;
 
 import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaAnnotation;
 import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
+import com.tngtech.archunit.lang.ConditionEvents;
+import com.tngtech.archunit.lang.SimpleConditionEvent;
 import com.tngtech.archunit.lang.conditions.ArchPredicates;
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 모든 서비스가 공유하는 헥사고날 아키텍처 ArchUnit 규칙 (DESIGN.md §13, CLAUDE.md 불변규칙 3·5·6).
@@ -189,6 +195,99 @@ public final class HexagonalArchitectureRules {
                 .allowEmptyShould(true);
     }
 
+    private static final String SPRING_WEB_ANNOTATIONS = "org.springframework.web.bind.annotation.";
+
+    /** {@code /api/v1/orders} 의 {@code v1} 처럼 <em>버전이 박힌</em> 경로 세그먼트. */
+    private static final Pattern LITERAL_VERSION_SEGMENT = Pattern.compile("v\\d+", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 규칙 8 의 조건. 공개하는 이유는 규칙 7 과 같다 — 규칙의 {@code that} 절이
+     * {@code com.dawnline.<service>.adapter.in.web..} 로 좁혀져 있어 표본 패키지에 닿지 않고,
+     * 테스트가 조건을 따로 적으면 둘이 표류한다.
+     */
+    public static final ArchCondition<JavaClass> HARDCODE_API_VERSION_IN_MAPPING =
+            new ArchCondition<>("매핑 경로에 리터럴 버전 세그먼트(v1)를 박은") {
+                @Override
+                public void check(JavaClass item, ConditionEvents events) {
+                    for (String path : mappingPathsOf(item)) {
+                        for (String segment : path.split("/")) {
+                            if (LITERAL_VERSION_SEGMENT.matcher(segment).matches()) {
+                                events.add(SimpleConditionEvent.satisfied(item,
+                                        "%s 의 매핑 경로 \"%s\" 에 리터럴 버전 세그먼트 \"%s\" 가 있다"
+                                                .formatted(item.getName(), path, segment)));
+                            }
+                        }
+                    }
+                }
+            };
+
+    /**
+     * 규칙 8 — REST 매핑 경로에 버전을 <strong>박지 않는다</strong>
+     * ([ADR-009](docs/adr/ADR-009-url-path-api-versioning.md) 결정 2).
+     *
+     * <p>주소는 {@code /api/v1/orders} 그대로다. 달라지는 것은 <em>매핑</em>이다 —
+     * {@code @RequestMapping(path = "/api/{version}/orders", version = "1")} 으로 두면
+     * {@code /api/v2/orders} 가 경로 매칭을 통과해 <strong>버전 조건</strong>까지 도달하고,
+     * 지원하지 않는 버전이라는 400 으로 답한다. 리터럴 {@code v1} 이면 경로에서 먼저 떨어져
+     * <strong>404</strong> 가 되고, 그러면 클라이언트는 오타와 버전 불일치를 구분할 수 없다.
+     *
+     * <p>이 규칙이 생긴 이유는 실제 표류다 (2026-09-19). ADR-009 는 order-service 의 첫 컨트롤러를
+     * 만들며 쓰였고 그 서비스는 지켰지만, dispatch-service 의 컨트롤러 셋은 리터럴
+     * {@code /api/v1} 로 들어왔다 — 「운영자 API 라서 다르다」는 ADR 에 없는 예외이고, ADR 을
+     * 읽지 않은 사람이 하나 더 만들 때마다 같은 일이 반복된다. 결정이 한 서비스에만 적용되고
+     * 있었다는 사실은 <em>아무 테스트도 보지 않고 있었다.</em>
+     *
+     * <p>검사 대상은 {@code adapter.in.web} 의 클래스와 메서드에 붙은 Spring 의 모든
+     * {@code *Mapping} 어노테이션이다 — 이름을 열거하지 않고 패키지와 접미사로 고른다
+     * (CLAUDE.md 「집합을 도는 검사는 열거하지 않고 전체에서 뺀다」). {@code @GetMapping} 이
+     * 새로 생겨도 대상이다.
+     *
+     * @param service {@link #SERVICES} 중 하나
+     */
+    public static ArchRule apiVersionIsNotHardcodedInMappings(String service) {
+        String owner = requireKnownService(service);
+        return ArchRuleDefinition.noClasses()
+                .that()
+                .resideInAPackage(packageOf(owner) + ".adapter.in.web..")
+                .should(HARDCODE_API_VERSION_IN_MAPPING)
+                .because("API 버전은 {version} 자리표시자 + ApiVersionConfigurer 로 해석한다 (ADR-009 결정 2). "
+                        + "리터럴 v1 은 지원하지 않는 버전을 400 이 아니라 404 로 만들어, 클라이언트가 "
+                        + "오타와 버전 불일치를 구분할 수 없게 한다")
+                .allowEmptyShould(true);
+    }
+
+    /** 클래스와 그 메서드들에 붙은 Spring {@code *Mapping} 어노테이션의 경로 전부. */
+    private static List<String> mappingPathsOf(JavaClass javaClass) {
+        List<String> paths = new ArrayList<>();
+        collectMappingPaths(javaClass.getAnnotations(), paths);
+        javaClass.getMethods().forEach(method -> collectMappingPaths(method.getAnnotations(), paths));
+        return paths;
+    }
+
+    private static void collectMappingPaths(Set<? extends JavaAnnotation<?>> annotations, List<String> into) {
+        for (JavaAnnotation<?> annotation : annotations) {
+            String type = annotation.getRawType().getName();
+            if (!type.startsWith(SPRING_WEB_ANNOTATIONS) || !type.endsWith("Mapping")) {
+                continue;
+            }
+            // value 와 path 는 서로의 별칭이다. 둘 다 읽는다 — 어느 쪽으로 적었든 같은 경로다.
+            addStrings(annotation, "value", into);
+            addStrings(annotation, "path", into);
+        }
+    }
+
+    private static void addStrings(JavaAnnotation<?> annotation, String attribute, List<String> into) {
+        annotation.get(attribute).ifPresent(value -> {
+            if (value instanceof Object[] array) {
+                for (Object element : array) {
+                    into.add(String.valueOf(element));
+                }
+            } else {
+                into.add(String.valueOf(value));
+            }
+        });
+    }
+
     private HexagonalArchitectureRules() {
         throw new AssertionError("유틸리티 클래스는 생성하지 않는다");
     }
@@ -261,7 +360,7 @@ public final class HexagonalArchitectureRules {
                 .allowEmptyShould(true);
     }
 
-    /** 한 서비스에 적용할 7개 규칙 전부. */
+    /** 한 서비스에 적용할 8개 규칙 전부. */
     public static List<ArchRule> allRulesFor(String service) {
         String owner = requireKnownService(service);
         List<ArchRule> rules = new ArrayList<>();
@@ -272,6 +371,7 @@ public final class HexagonalArchitectureRules {
         rules.add(kafkaListenersOnlyInInboundMessagingAdapter(owner));
         rules.add(transactionalOnlyInApplicationLayer(owner));
         rules.add(clocksAreInjected(owner));
+        rules.add(apiVersionIsNotHardcodedInMappings(owner));
         return List.copyOf(rules);
     }
 
