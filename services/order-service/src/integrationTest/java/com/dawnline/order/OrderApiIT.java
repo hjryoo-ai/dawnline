@@ -500,9 +500,14 @@ class OrderApiIT extends OrderIntegrationTestBase {
     }
 
     @Test
-    void 액추에이터는_버전_해석의_영향을_받지_않는다() throws Exception {
-        // /actuator/health 의 두 번째 세그먼트는 health 다. 그것을 버전으로 파싱하면 헬스 체크가 깨지고,
-        // 레디니스 프로브가 실패하면 배포가 멈춘다.
+    void 레디니스_프로브가_200_이다() throws Exception {
+        // 배포 게이트다 — 이 프로브가 실패하면 롤아웃이 멈춘다(§8.6).
+        //
+        // 이 검사는 **ADR-009 결정 3(버전 해석 범위를 /api/ 로 한정)의 음성 표본이 아니다.**
+        // 원래 그렇게 적혀 있었지만, 2026-09-19 에 술어를 빼고(usePathSegment(1) 만) 돌려 보니
+        // 이 프로브도 /v3/api-docs 도 그대로 200 이었다(Boot 4.1.x) — 버전 해석기는 버전 조건이
+        // 걸린 매핑에만 관여한다. 술어는 방어적으로 유지하되(ADR-009 후속 정정), 그것을 지킨다고
+        // 말하던 이 줄의 범위는 좁힌다. 통과하는데 아무것도 검사하지 않는 줄을 그대로 둘 수 없다.
         mockMvc.perform(get("/actuator/health/readiness"))
                 .andExpect(status().isOk());
     }
