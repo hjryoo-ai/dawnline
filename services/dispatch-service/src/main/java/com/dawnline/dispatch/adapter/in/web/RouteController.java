@@ -17,9 +17,18 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** 라우트 API (DESIGN.md §5.3). 운영자용이다. */
+/**
+ * 라우트 API (DESIGN.md §5.3). 운영자용이다.
+ *
+ * <h2>버전</h2>
+ * 매핑 경로에 {@code v1} 을 <strong>박아 넣지 않고</strong> {@code {version}} 으로 둔다
+ * (ADR-009 결정 2). 리터럴로 두면 {@code /api/v2/...} 가 경로 매칭에서 먼저 떨어져 <em>404</em>
+ * 가 되어, 「그런 리소스가 없다」와 「그 버전은 지원하지 않는다」가 구분되지 않는다.
+ * 쓰이지 않는 자리표시자처럼 보여 지우고 싶어지는 코드이고, 지우면 그 구분이 조용히 사라진다 —
+ * ArchUnit 규칙 8 이 그것을 막는다.
+ */
 @RestController
-@RequestMapping("/api/v1/routes")
+@RequestMapping(path = "/api/{version}/routes", version = "1")
 public class RouteController {
 
     private final PlanQueries queries;

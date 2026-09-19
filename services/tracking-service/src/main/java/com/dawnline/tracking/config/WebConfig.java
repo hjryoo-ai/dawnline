@@ -17,9 +17,14 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * 집단이라, 이 구별이 특히 값을 한다 — 404 를 보면 라우트가 사라진 줄 알게 된다.
  *
  * <h2>술어가 필요한 이유</h2>
- * {@code usePathSegment(1)} 만 두면 <em>모든</em> 요청의 두 번째 세그먼트를 버전으로 읽으려 든다.
- * {@code /actuator/health} 의 두 번째 세그먼트는 {@code health} 이고, 그것을 버전으로 파싱하면
- * 헬스 체크가 깨진다 — 레디니스 프로브가 실패하면 배포가 멈춘다(§8.6).
+ * {@code usePathSegment(1)} 만 두면 버전 해석의 범위가 <em>모든</em> 요청이 된다.
+ * {@code /actuator/health} 의 두 번째 세그먼트는 {@code health} 이고, 그것을 버전으로 읽으려 드는
+ * 상태를 만들 이유가 없다 — 레디니스 프로브가 실패하면 배포가 멈춘다(§8.6).
+ *
+ * <p><strong>다만 그 결함은 지금 재현되지 않는다</strong>(2026-09-19, Boot 4.1.x): 술어를 빼도
+ * 프로브와 {@code /v3/api-docs} 는 그대로 200 이다. 버전 해석기가 버전 조건이 걸린 매핑에만
+ * 관여하기 때문이다. 술어는 <em>방어적으로</em> 유지한다 — 그 관대함은 계약이 아니라 현재 구현의
+ * 성질이다([ADR-009](docs/adr/ADR-009-url-path-api-versioning.md) 후속 정정).
  */
 @Configuration(proxyBeanMethods = false)
 public class WebConfig implements WebMvcConfigurer {

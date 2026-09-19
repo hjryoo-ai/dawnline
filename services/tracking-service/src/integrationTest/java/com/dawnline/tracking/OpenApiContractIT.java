@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.dawnline.common.openapi.OpenApiResponses;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,6 +42,9 @@ class OpenApiContractIT extends TrackingIntegrationTestBase {
 
     /** 이 값을 주면 문서를 다시 쓴다. */
     private static final String UPDATE_FLAG = "dawnline.openapi.update";
+
+    /** 오류 본문의 스키마 이름 (RFC 9457, {@code org.springframework.http.ProblemDetail}). */
+    private static final String PROBLEM_DETAIL = "ProblemDetail";
 
     @Autowired
     private MockMvc mockMvc;
@@ -83,13 +87,54 @@ class OpenApiContractIT extends TrackingIntegrationTestBase {
     void 오류_응답이_문서에_있다() throws Exception {
         // springdoc 은 반환 타입만 본다. 예외로 나가는 상태 코드는 적어 주지 않으면 문서에 없고,
         // 그러면 단말을 만드는 사람은 404·409 가 존재한다는 것조차 모른다.
-        String yaml = generatedYaml();
+        assertThat(generatedYaml()).contains("\"400\"").contains("\"404\"").contains("\"409\"");
+    }
 
-        assertThat(yaml).contains("\"400\"").contains("\"404\"").contains("\"409\"");
-        assertThat(yaml)
-                .as("오류 본문은 Problem Details 다. 적지 않으면 springdoc 이 메서드 반환 타입을 "
-                        + "모든 응답에 붙여, 문서가 「404 의 본문은 ScanResult 다」라고 말한다")
-                .contains("ProblemDetail");
+    @Test
+    void 오류_응답의_본문은_모두_Problem_Details_다() throws Exception {
+        // 코드를 열거하지 않는다 — **2xx 가 아닌 전부**다. 열거하면 새로 생긴 코드가 조용히 검사
+        // 밖에 남는다(CLAUDE.md 「집합을 도는 검사는 열거하지 않고 전체에서 뺀다」). 문자열
+        // contains("ProblemDetail") 로는 부족하다 — 한 자리만 맞아도 통과하기 때문이다.
+        OpenApiResponses responses = OpenApiResponses.parse(generatedJson());
+
+        assertThat(responses.errorBodies())
+                .as("전제 — 문서에 2xx 아닌 응답이 있다. 없으면 아래 어설션은 아무것도 보지 않는다")
+                .isNotEmpty();
+        assertThat(responses.errorBodiesNotUsing(PROBLEM_DETAIL))
+                .as("오류 본문은 RFC 9457 Problem Details 다. springdoc 은 @ApiResponse 에 content 를 "
+                        + "주지 않으면 **메서드 반환 타입**을 모든 응답에 붙이므로, 문서가 「404 의 "
+                        + "본문은 ScanResult」라고 말하게 된다 — 그 문서를 보고 만든 단말(Phase 5-2 의 "
+                        + "sim-runner 포함)은 오류를 파싱하지 못한다")
+                .isEmpty();
+    }
+
+    @Test
+    void 성공_응답에는_오류_본문이_실리지_않는다() throws Exception {
+        // 위 검사가 2xx 를 **왜** 제외하는지를 말하는 검사다 — 성공 본문은 유스케이스의 반환
+        // 타입이어야 한다. 이것이 없으면 다음 사람은 제외가 「검토했는데 제외」인지 「잊었는지」를
+        // 구별할 수 없다 (DESIGN.md §13 규칙 2). 이 API 에서는 특히 중요하다: 취소 뒤 스캔도
+        // 200 + AFTER_CANCEL 이지 오류가 아니다 (§5.4).
+        assertThat(OpenApiResponses.parse(generatedJson()).successBodiesUsing(PROBLEM_DETAIL))
+                .as("성공 응답이 Problem Details 를 싣고 있다 — 오류를 200 으로 내보내고 있다는 뜻이다")
+                .isEmpty();
+    }
+
+    @Test
+    void 성공_응답의_본문은_이름_있는_타입이다() throws Exception {
+        // 오류 쪽 검사의 짝이다. 이것이 없으면 위 둘은 「오류를 파싱할 수 있는가」만 답하고,
+        // 같은 부류의 결함이 2xx 에 있을 때 아무 말도 하지 않는다 — order-service 의 POST /api/v1/orders 가 ResponseEntity<Object>
+        // 라서 201·200 을 `type: object` 로 적고 있었다(2026-09-19). 이 서비스는 그 자국이 없지만,
+        // 검사는 자국이 생기기 전에 둔다.
+        OpenApiResponses responses = OpenApiResponses.parse(generatedJson());
+
+        assertThat(responses.successBodies())
+                .as("전제 — 문서에 2xx 응답이 있다. 없으면 아래 어설션은 아무것도 보지 않는다")
+                .isNotEmpty();
+        assertThat(responses.successBodiesWithoutNamedType())
+                .as("성공 본문은 이름 있는 타입이어야 한다. 인라인 `type: object` 는 「본문이 있다」와 "
+                        + "「그 타입은 말하지 않는다」를 동시에 말하고, 문서를 보고 만든 클라이언트는 "
+                        + "응답을 역직렬화할 타입을 만들 수 없다")
+                .isEmpty();
     }
 
     @Test
@@ -125,6 +170,13 @@ class OpenApiContractIT extends TrackingIntegrationTestBase {
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** 같은 문서의 JSON 표현. 구조로 읽을 때는 파서를 더 들이지 않으려고 이쪽을 쓴다. */
+    private String generatedJson() throws Exception {
+        return mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
     }
 
     private String generatedYaml() throws Exception {

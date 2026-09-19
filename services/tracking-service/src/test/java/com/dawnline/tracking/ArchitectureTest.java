@@ -15,9 +15,10 @@ import java.util.List;
  *
  * <p>규칙 본문은 {@code libs/common} 의 테스트 픽스처
  * {@link HexagonalArchitectureRules} 가 모든 서비스에 공통으로 제공한다.
- * 규칙 7개: domain 프레임워크 비의존 · application→adapter 역참조 금지 ·
+ * 규칙 8개: domain 프레임워크 비의존 · application→adapter 역참조 금지 ·
  * 서비스 간 참조 금지 · {@code @KafkaListener} 위치 · {@code @Transactional} 위치 ·
- * domain·application 의 Spring Kafka 의존 금지(발행은 Outbox 를 거친다, 불변규칙 1).
+ * domain·application 의 Spring Kafka 의존 금지(발행은 Outbox 를 거친다, 불변규칙 1) ·
+ * 시계 주입(불변규칙 12) · REST 매핑에 리터럴 API 버전 금지(ADR-009 결정 2).
  *
  * <h2>골격 단계에서도 의미 있게 통과시키기</h2>
  * <p>규칙들은 {@code allowEmptyShould(true)} 라서 검사 대상이 아직 0개여도 실패하지 않는다
@@ -55,7 +56,7 @@ class ArchitectureTest {
     @ArchTest
     static void 헥사고날_규칙을_모두_지킨다(JavaClasses classes) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(SERVICE);
-        assertThat(rules).as("DESIGN.md §13 의 ArchUnit 규칙 7개").hasSize(7);
+        assertThat(rules).as("DESIGN.md §13 의 ArchUnit 규칙 8개").hasSize(8);
         rules.forEach(rule -> rule.check(classes));
     }
 

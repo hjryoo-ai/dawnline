@@ -1697,6 +1697,16 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 > Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
 
 **작업**
+0. **(선결, 6-0) dispatch OpenAPI 생성물 + 오류·성공 본문 검사.** `contracts/openapi/dispatch-service.yaml`
+   과 `OpenApiContractIT` 를 만들고, 오류 본문은 `ProblemDetail`·성공 본문은 이름 있는 타입인지
+   본다(§11, `libs/common` 의 `OpenApiResponses`). **ops-api 가 그 문서로 코어 위임 클라이언트를
+   만든다** — 작업 1·2 의 입력이다.
+   *왜 지금인가*: dispatch 에는 springdoc 이 붙어 있는데 생성물이 없다(2026-09-19 확인). 이것은
+   order-service 가 2026-09-19 까지 「404 의 본문은 `OrderView`」라고 **거짓을 말하던** 상태와
+   성격이 다르다 — 거짓은 아는 순간 고치지만 **부재는 첫 소비자가 나타나는 시점에 채우는 것이
+   소비자 주도 원칙과 맞고**, 그 소비자가 ops-api 다. 반대로 작업 1 을 먼저 하면 위임 클라이언트가
+   컨트롤러 소스를 읽고 만들어지고, 그 순간 §11 의 「문서가 계약이다」가 dispatch 에만 성립하지
+   않게 된다.
 1. ops-api: 전 토픽 프로젝션(§5.5 rm_* 테이블), KPI 시간 버킷 집계, JWT·역할, 커맨드 엔드포인트(웨이브 조기 마감·재계획·stop 재배정·주문 취소·DLQ replay) → 코어 서비스 REST 위임 + `audit_logs`.
 2. 코어 서비스에 필요한 운영 엔드포인트 추가(fulfillment: 웨이브 조기 마감; dispatch: 재계획·재배정은 Phase 3/5에서 존재).
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.
@@ -1706,6 +1716,8 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 **DoD**
 - 운영자가 UI에서 웨이브를 조기 마감하고 계획 결과·라우트 지도를 보며, 특정 stop을 다른 라우트로 옮기는 흐름이 동작.
+- **REST 표면이 있는 서비스마다 OpenAPI 생성물과 계약 IT 가 있다**(§11) — 이 Phase 가 끝나면
+  dispatch 와 ops-api 둘 다 대상이다.
 
 ---
 

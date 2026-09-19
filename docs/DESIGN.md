@@ -2105,7 +2105,7 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | RDB | PostgreSQL | **18.x** | 서비스별 DB. 파티셔닝·JSONB |
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
-| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. 지금 둘이다 — `order-service`(Phase 1)·`tracking-service`(Phase 5-1a). tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다 |
+| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. **REST 표면이 있는 서비스마다 생성물과 계약 IT 를 둔다** — 목록이 아니라 조건이다(2026-09-19 정정). 열거였을 때 그 목록은 `order-service`(Phase 1)·`tracking-service`(Phase 5-1a) 둘이었고, springdoc 이 붙어 있는데 생성물이 없는 `dispatch-service` 는 그 문장 **밖**에 있었다 — 조건으로 적으면 새 REST 표면이 스스로 대상이 된다. tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다. 계약 IT 는 **오류 본문(`ProblemDetail`)과 성공 본문(이름 있는 타입)을 둘 다** 본다 — 한쪽만 보면 「오류를 파싱할 수 있는가」까지만 답한다. dispatch 의 생성물은 **Phase 6-0** 에서 만든다: 지금은 *문서가 거짓을 말하는* 상태가 아니라 문서가 **없는** 상태이고, 부재는 첫 소비자가 나타나는 시점에 채우는 것이 소비자 주도 원칙과 맞는다 — 그 소비자가 ops-api 다 |
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
@@ -2173,7 +2173,9 @@ dawnline/
 | 성능 | 주문 API 부하, 계획 시간 | k6, benchmark 도구 | §8.1 목표 대비 리포트 |
 | 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료 | Compose `stop/start` 스크립트 | 데이터 유실·중복 0 (검증 쿼리) |
 
-**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12).
+**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12) (8) `adapter.in.web` 의 매핑 경로에 리터럴 API 버전(`/api/v1/...`) 금지 — 버전은 `{version}` 자리표시자와 `ApiVersionConfigurer` 로 해석한다([ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2).
+
+규칙 8 은 불변규칙이 아니라 **ADR 을 강제한다**. 그것이 이 규칙이 생긴 이유이기도 하다 — ADR-009 는 order-service 의 첫 컨트롤러와 함께 쓰였고 그 서비스는 지켰지만, dispatch 의 컨트롤러 셋은 리터럴 `/api/v1` 로 들어왔다(2026-09-19). 결정이 **한 서비스에만 적용되고 있다**는 사실을 아무 검사도 보고 있지 않았고, 「운영자 API 라서 다르다」는 ADR 에 없는 예외였다. ADR 은 결정을 적지만 그 결정이 다음 서비스에서도 지켜지는지는 말해 주지 않는다.
 
 규칙 7이 이름이 아니라 **인자 타입**으로 판정하는 이유: `LocalTime.now(Clock)` 은 주입받은 시계를 읽는 <em>올바른</em> 형태이고 `LocalTime.now(ZoneId)` 는 시스템 시계를 읽는 위반이다. 이름만 보면 둘이 같아 보인다 — 규칙을 처음 켰을 때 `TierEligibility.nowInServiceZone()` 이 그렇게 잘못 걸렸다. 분석 대상에서 테스트 클래스는 뺀다(`DoNotIncludeTests`): 규칙은 프로덕션 구조를 서술하는 것이고, "생성자가 잘못된 인자를 거부하는가" 를 보는 테스트는 버릴 객체를 만들려고 시스템 시계를 부를 수 있다.
 
@@ -2200,6 +2202,19 @@ dawnline/
 | 11 | 인덱스 추가 금지(설계서 명시분 외) | — | PR 체크리스트(EXPLAIN 첨부), 마이그레이션 리뷰 | — |
 | 12 | 시간·난수는 주입 | 규칙 7 — 시계 쪽은 온전히 강제된다. 난수(`RandomGenerator`)는 아직 아니다 | 생성자 시그니처, seed 재현성 테스트, `libs/messaging` 이 저장 정밀도로 자른 `Clock` 빈을 제공 | 규칙 7 ✅(양방향) |
 | 13 | 머지된 마이그레이션 불변 | — | CI 「마이그레이션 불변 검사」 job — PR 에서 기존 `V*.sql` 이 수정·삭제·이동되면 실패 | ✅(CI) |
+
+**ArchUnit 규칙이 전부 불변규칙에서 오는 것은 아니다.** 위 표는 왼쪽이 불변규칙이라 규칙 2·8 이
+들어갈 칸이 없다 — 그 둘이 강제하는 것은 설계 문서와 ADR 이다. 출처를 적어 두는 이유는 **규칙을
+지울 때 무엇이 풀리는지 보이게** 하기 위해서다. 불변규칙을 강제하는 규칙을 지우면 `CLAUDE.md` 의
+한 줄이 풀리고, ADR 을 강제하는 규칙을 지우면 **그 결정이 다음 서비스에서도 지켜지는지 아무도 묻지
+않게 된다** — 규칙 8 이 생긴 이유가 정확히 그것이다.
+
+| ArchUnit 규칙 | 출처 | 지우면 무엇이 풀리나 |
+|---|---|---|
+| 1 · 3 · 6 · 7 | 불변규칙 5 · 3·4 · 1 · 12 (위 표) | 그 불변규칙의 유일한 자동 강제 수단 |
+| 4 · 5 | DESIGN §3.4 의 레이어 책임 (+ 규칙 5 는 불변규칙 1 을 함께 받친다) | 어노테이션의 *위치* 규약 |
+| 2 | DESIGN §3.4 의 의존 방향, [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) | 헥사고날의 방향 자체 — 불변규칙 목록에는 없다 |
+| 8 | [ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2 | 결정이 **한 서비스에만** 적용되고 있는지를 보는 유일한 자리 |
 
 **손으로 옮기는 매핑은 단위 테스트가 잡는다.** 애그리거트와 엔티티를 분리하면(ADR-007) 필드를
 양방향으로 옮기는 코드가 생기고, 거기서 **하나를 빠뜨리면 그 값은 예외 없이 조용히 사라진다.**
@@ -2250,6 +2265,23 @@ dawnline/
    번호를 열거하지 않고 파일에서 전부 읽은 뒤, **표에만 있고 파일이 없는** 번호는 「문서 열이
    `—` 인가」로 스스로를 설명하게 한다(005·008·010·011·012 — 결정 방향만 정해 둔 항목들).
 
+   **대조가 있어도 보는 자리가 좁으면 같은 일이 난다** (2026-09-19, 같은 날 둘째 건). OpenAPI 쪽
+   대조는 넷 중 하나로 이미 있었는데, 검사가 문자열 포함이라 「404 가 문서에 있는가」까지만 답했다.
+   *그 404 의 본문이 무엇인가*는 묻지 않았고, `contracts/openapi/order-service.yaml` 은 오류 응답
+   아홉 자리를 `OrderView`·`object` 로 말하고 있었다 — springdoc 은 `@ApiResponse` 에 `content` 가
+   없으면 **메서드 반환 타입**을 모든 응답에 붙인다. 문서를 보고 만든 클라이언트는 오류를 파싱하지
+   못한다. 고친 검사는 문서를 구조로 읽고(`OpenApiResponses`), 상태 코드를 **열거하지 않는다** —
+   2xx 가 아닌 전부가 대상이고, 2xx 를 제외한 이유는 「성공 응답에 Problem Details 가 실리지
+   않는다」가 따로 말한다(규칙 2). `contains("ProblemDetail")` 은 **한 자리만 맞아도 통과한다**는
+   것이 이 건의 교훈이다.
+
+   **그리고 오류만 보는 검사는 그 자체로 좁다.** 같은 부류가 성공 쪽에 있었다 —
+   `POST /api/v1/orders` 가 `ResponseEntity<Object>` 라서 201·200 의 본문이 `type: object` 로
+   적혀 있었고, 그것은 「본문이 있다」와 「그 타입은 말하지 않는다」를 동시에 말한다. 오류 검사는
+   2xx 를 제외하므로 이것을 **구조상 볼 수 없다.** 그래서 짝을 둔다: **4xx·5xx 는
+   `ProblemDetail` 이고 2xx 는 이름 있는 타입이다**(`successBodiesWithoutNamedType`). 둘을 합쳐야
+   검사가 「오류를 파싱할 수 있는가」가 아니라 **「계약이 본문을 말하는가」**를 본다.
+
 **픽스처가 정하지 않은 축** — 「통과했지만 아무것도 검사하지 않는 테스트」의 목록이다. 공통점은
 하나다: **지금 깨지지 않는 이유가 테스트에 적혀 있지 않다.** Phase 3 마감에서 셋이었던 것이
 Phase 4-0 하나의 PR 에서 여섯이 됐고, 여섯 다 *다른 것이 우연히 그 자리를 메우고 있었다.*
@@ -2265,7 +2297,7 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 | 6 | **배정 동률** | 한계비용이 같을 때 `ORDER BY code` 순서로 차를 골랐다. cold-chain 공허성 검사의 통과·실패가 **시각과 시드 배분**에 달려 있었고, **CI 의 이전 통과는 시각 운이었다** | 근무조를 나누자 한 대가 웨이브를 흡수하게 되어([ADR-030](adr/ADR-030-night-shift-seed.md)) 드러남 |
 | 8 | **실행 순서** | 클래스·컨텍스트의 **시작 순서가 보장된다**고 암묵적으로 기대했다 — 축 3 의 fulfillment 쪽이 그 위에 서 있었다 | **순서 자체가 실행마다 달랐다** (2026-09-18, Phase 5-0): 같은 두 클래스를 두 번 돌렸더니 `GeoFallbackIT`→`WaveLifecycleIT` 와 그 반대가 각각 나왔다. 즉 초록의 근거는 「순서」보다도 얇은 **타이밍**이었다. 음성 표본은 그 타이밍을 고정해 만든다 — 앞 컨텍스트가 `lead()` 로 락을 확실히 쥐게 하자 뒤 클래스 일곱 개가 전부 `LEADER` 대 `FOLLOWER` 로 실패했다 |
 | 7 | **검사 대상 집합** | 실현 가능성 기준이 `{SMALL, MEDIUM, LARGE}` 를 **열거**했다 — `peak` 은 목록에 없었고, 목록에 없다는 사실은 어디에도 나타나지 않았다 | 병렬화 게이트를 재려고 `peak` 을 돌렸더니 총비용의 88%가 미배정 페널티(stop 8,411 > 슬롯 7,200) |
-| 9 | **환경이 결함을 가린다** | 검사가 보려는 성질을 **환경이 기본값으로 만족**시키고 있었다. 둘은 같은 얼굴이다 — ① Phase 1: 개발 기계의 `Clock.systemUTC()` 가 나노초를 내지 않아 저장 정밀도(마이크로초) 불일치가 숨어 있었다 ② Phase 5-1a: 컨테이너 세션이 UTC 라 파티션 경계 검사가 **함수가 세션 존을 써도 그대로 통과**했다 | **환경을 일부러 어긋나게 만들어 드러낸다** (2026-09-19): 같은 커넥션에서 `SET TIME ZONE 'Asia/Seoul'` 로 만들었더니 경계가 `FROM ('2035-05-09 15:00:00+00')` 로 나와 검사가 실패했다. Phase 1 쪽의 대응은 저장 정밀도로 자른 `Clock` 빈을 `libs/messaging` 한 곳에 둔 것이다 — 양쪽 다 **기본값이 맞춰 주던 것을 검사가 직접 말하게** 하는 형태다 |
+| 9 | **환경이 결함을 가린다** | 검사가 보려는 성질을 **환경이 기본값으로 만족**시키고 있었다. 둘은 같은 얼굴이다 — ① Phase 1: 개발 기계의 `Clock.systemUTC()` 가 나노초를 내지 않아 저장 정밀도(마이크로초) 불일치가 숨어 있었다 ② Phase 5-1a: 컨테이너 세션이 UTC 라 파티션 경계 검사가 **함수가 세션 존을 써도 그대로 통과**했다 | **환경을 일부러 어긋나게 만들어 드러낸다** (2026-09-19): 같은 커넥션에서 `SET TIME ZONE 'Asia/Seoul'` 로 만들었더니 경계가 `FROM ('2035-05-09 15:00:00+00')` 로 나와 검사가 실패했다. Phase 1 쪽의 대응은 저장 정밀도로 자른 `Clock` 빈을 `libs/messaging` 한 곳에 둔 것이다 — 양쪽 다 **기본값이 맞춰 주던 것을 검사가 직접 말하게** 하는 형태다. **반대 방향도 있다**: 환경이 바뀌어 결함이 *사라진* 경우다 — [ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 3 의 음성 표본(`/actuator/health` 의 세그먼트를 버전으로 파싱해 프로브가 깨진다)은 Boot 4.1.x 에서 재현되지 않는다(2026-09-19). 그때 남는 것은 **초록인 채로 아무 말도 하지 않는 검사**이고, 이쪽의 대응은 결정을 방어적으로 유지하되 그것을 지킨다고 *말하던* 줄의 범위를 좁히는 것이다 |
 
 6번이 이 목록의 요점을 가장 잘 보여 준다. 검사는 옳았고 코드도 "틀리지" 않았다 — 다만 답을
 정하는 자리가 비어 있었고, 그 빈자리를 **어댑터의 정렬 순서**가 메우고 있었다. 채운 것이
