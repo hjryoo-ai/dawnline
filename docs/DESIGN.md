@@ -2105,7 +2105,7 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | RDB | PostgreSQL | **18.x** | 서비스별 DB. 파티셔닝·JSONB |
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
-| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. 지금 둘이다 — `order-service`(Phase 1)·`tracking-service`(Phase 5-1a). tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다 |
+| 문서 | springdoc-openapi | **3.1.0** (Boot 4 라인) — Phase 1 에서 동작 확인 | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. **REST 표면이 있는 서비스마다 생성물과 계약 IT 를 둔다** — 목록이 아니라 조건이다(2026-09-19 정정). 열거였을 때 그 목록은 `order-service`(Phase 1)·`tracking-service`(Phase 5-1a) 둘이었고, springdoc 이 붙어 있는데 생성물이 없는 `dispatch-service` 는 그 문장 **밖**에 있었다 — 조건으로 적으면 새 REST 표면이 스스로 대상이 된다. tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다. 계약 IT 는 **오류 본문(`ProblemDetail`)과 성공 본문(이름 있는 타입)을 둘 다** 본다 — 한쪽만 보면 「오류를 파싱할 수 있는가」까지만 답한다. dispatch 의 생성물은 **Phase 6-0** 에서 만든다: 지금은 *문서가 거짓을 말하는* 상태가 아니라 문서가 **없는** 상태이고, 부재는 첫 소비자가 나타나는 시점에 채우는 것이 소비자 주도 원칙과 맞는다 — 그 소비자가 ops-api 다 |
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
@@ -2203,6 +2203,19 @@ dawnline/
 | 12 | 시간·난수는 주입 | 규칙 7 — 시계 쪽은 온전히 강제된다. 난수(`RandomGenerator`)는 아직 아니다 | 생성자 시그니처, seed 재현성 테스트, `libs/messaging` 이 저장 정밀도로 자른 `Clock` 빈을 제공 | 규칙 7 ✅(양방향) |
 | 13 | 머지된 마이그레이션 불변 | — | CI 「마이그레이션 불변 검사」 job — PR 에서 기존 `V*.sql` 이 수정·삭제·이동되면 실패 | ✅(CI) |
 
+**ArchUnit 규칙이 전부 불변규칙에서 오는 것은 아니다.** 위 표는 왼쪽이 불변규칙이라 규칙 2·8 이
+들어갈 칸이 없다 — 그 둘이 강제하는 것은 설계 문서와 ADR 이다. 출처를 적어 두는 이유는 **규칙을
+지울 때 무엇이 풀리는지 보이게** 하기 위해서다. 불변규칙을 강제하는 규칙을 지우면 `CLAUDE.md` 의
+한 줄이 풀리고, ADR 을 강제하는 규칙을 지우면 **그 결정이 다음 서비스에서도 지켜지는지 아무도 묻지
+않게 된다** — 규칙 8 이 생긴 이유가 정확히 그것이다.
+
+| ArchUnit 규칙 | 출처 | 지우면 무엇이 풀리나 |
+|---|---|---|
+| 1 · 3 · 6 · 7 | 불변규칙 5 · 3·4 · 1 · 12 (위 표) | 그 불변규칙의 유일한 자동 강제 수단 |
+| 4 · 5 | DESIGN §3.4 의 레이어 책임 (+ 규칙 5 는 불변규칙 1 을 함께 받친다) | 어노테이션의 *위치* 규약 |
+| 2 | DESIGN §3.4 의 의존 방향, [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) | 헥사고날의 방향 자체 — 불변규칙 목록에는 없다 |
+| 8 | [ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2 | 결정이 **한 서비스에만** 적용되고 있는지를 보는 유일한 자리 |
+
 **손으로 옮기는 매핑은 단위 테스트가 잡는다.** 애그리거트와 엔티티를 분리하면(ADR-007) 필드를
 양방향으로 옮기는 코드가 생기고, 거기서 **하나를 빠뜨리면 그 값은 예외 없이 조용히 사라진다.**
 그것을 잡는 데는 DB 가 필요 없다 — 도메인→행→도메인 왕복이 손실 없는지만 보면 되고, 그래서
@@ -2261,6 +2274,13 @@ dawnline/
    2xx 가 아닌 전부가 대상이고, 2xx 를 제외한 이유는 「성공 응답에 Problem Details 가 실리지
    않는다」가 따로 말한다(규칙 2). `contains("ProblemDetail")` 은 **한 자리만 맞아도 통과한다**는
    것이 이 건의 교훈이다.
+
+   **그리고 오류만 보는 검사는 그 자체로 좁다.** 같은 부류가 성공 쪽에 있었다 —
+   `POST /api/v1/orders` 가 `ResponseEntity<Object>` 라서 201·200 의 본문이 `type: object` 로
+   적혀 있었고, 그것은 「본문이 있다」와 「그 타입은 말하지 않는다」를 동시에 말한다. 오류 검사는
+   2xx 를 제외하므로 이것을 **구조상 볼 수 없다.** 그래서 짝을 둔다: **4xx·5xx 는
+   `ProblemDetail` 이고 2xx 는 이름 있는 타입이다**(`successBodiesWithoutNamedType`). 둘을 합쳐야
+   검사가 「오류를 파싱할 수 있는가」가 아니라 **「계약이 본문을 말하는가」**를 본다.
 
 **픽스처가 정하지 않은 축** — 「통과했지만 아무것도 검사하지 않는 테스트」의 목록이다. 공통점은
 하나다: **지금 깨지지 않는 이유가 테스트에 적혀 있지 않다.** Phase 3 마감에서 셋이었던 것이
