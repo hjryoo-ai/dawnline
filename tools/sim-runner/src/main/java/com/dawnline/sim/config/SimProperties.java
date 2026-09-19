@@ -2,7 +2,9 @@ package com.dawnline.sim.config;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
@@ -45,6 +47,17 @@ public record SimProperties(
     }
 
     /**
+     * 고른 시나리오. 없으면 {@code null} 이다.
+     *
+     * <p>{@link #selected()} 와 달리 <strong>없는 이름에도 던지지 않는다</strong>. 배선이 이
+     * 값을 읽는데, 오타 하나가 컨텍스트 기동 실패로 나타나면 "있는 것: [...]" 안내가 스택
+     * 트레이스 아래로 묻힌다. 이름이 틀렸다는 것은 실행 시점에 {@link #selected()} 가 말한다.
+     */
+    public @Nullable Scenario selectedOrNull() {
+        return scenarios.get(scenario);
+    }
+
+    /**
      * 시나리오 하나.
      *
      * @param orders        보낼 주문 수
@@ -57,6 +70,8 @@ public record SimProperties(
      *                      버킷 용량(60)보다 한참 작아야 한다
      * @param coldRatio     냉장 비율 (0.0 ~ 1.0)
      * @param tierWeights   티어별 가중치. 키는 API 에 보내는 문자열 그대로다
+     * @param driver        기사 시뮬레이터 설정 (Phase 5-2). 없으면 주문만 넣고 끝난다 —
+     *                      그래야 {@code smoke} 가 브로커 없이 돈다
      */
     public record Scenario(
             @DefaultValue("200") int orders,
@@ -64,7 +79,8 @@ public record SimProperties(
             @DefaultValue("1") long seed,
             @DefaultValue("1000") int customers,
             @DefaultValue("0.25") double coldRatio,
-            @DefaultValue Map<String, Integer> tierWeights) {
+            @DefaultValue Map<String, Integer> tierWeights,
+            @Nullable Driver driver) {
 
         public Scenario {
             if (orders < 1) {
@@ -90,6 +106,67 @@ public record SimProperties(
                 throw new IllegalArgumentException("tier-weights 의 합이 0 입니다");
             }
             tierWeights = Map.copyOf(tierWeights);
+        }
+
+        /**
+         * 기사 시뮬레이터 설정 (IMPLEMENTATION_PLAN Phase 5-2).
+         *
+         * <p>난수 seed 는 여기 없다 — 시나리오의 {@code seed} 를 그대로 쓴다. 주문 생성과 지연
+         * 주입이 같은 seed 에서 나와야 "이 시나리오" 하나가 재현된다 (불변규칙 12).
+         *
+         * @param routes                 기다릴 라우트 수. 이만큼 끝나야 성공이다 — 적게 온 것도
+         *                               실패다({@code DriverReport.isSuccess})
+         * @param speed                  배속. 시뮬레이션 초 ÷ 벽시계 초. 0 이하면 대기 없이 돈다.
+         *                               <strong>at-risk 쿨다운 TTL 은 벽시계 5분</strong>이므로
+         *                               배속이 크면 라우트당 at-risk 가 한 번만 보인다 —
+         *                               "몇 번 났다" 를 보려면 1 로 둔다 (ADR-046, package-info)
+         * @param timeoutSeconds         라우트를 기다리는 상한(초)
+         * @param scanRetrySeconds       스캔 404 재시도 상한(초). 넘기면 그 라우트를 포기한다 —
+         *                               조용히 무한 재시도하면 시나리오 결과가 오염된다
+         * @param scanBaseUrl            tracking-service 주소
+         * @param delayProbability       구간에 지연이 걸릴 확률 (0.0 ~ 1.0)
+         * @param delayMagnitude         지연의 최대 비율. 0.5 면 계획 이동 시간의 최대 1.5배
+         * @param failureProbability     전달이 실패할 확률 (0.0 ~ 1.0)
+         * @param departureDelaySeconds  캠프 출발 지연의 최대 초. §5.4 가 말하는 가장 흔한
+         *                               지연 원인이고, 첫 도착 스캔 전에 이미 알 수 있는 위험이다
+         */
+        public record Driver(
+                @DefaultValue("1") int routes,
+                @DefaultValue("600") double speed,
+                @DefaultValue("300") long timeoutSeconds,
+                @DefaultValue("30") long scanRetrySeconds,
+                @DefaultValue("http://localhost:8084") String scanBaseUrl,
+                @DefaultValue("0.0") double delayProbability,
+                @DefaultValue("0.0") double delayMagnitude,
+                @DefaultValue("0.0") double failureProbability,
+                @DefaultValue("0") long departureDelaySeconds) {
+
+            public Driver {
+                if (routes < 1) {
+                    throw new IllegalArgumentException("driver.routes 는 1 이상이어야 합니다");
+                }
+                if (timeoutSeconds < 1) {
+                    throw new IllegalArgumentException("driver.timeout-seconds 는 1 이상이어야 합니다");
+                }
+                if (scanRetrySeconds < 0) {
+                    throw new IllegalArgumentException("driver.scan-retry-seconds 는 0 이상이어야 합니다");
+                }
+                requireRatio(delayProbability, "driver.delay-probability");
+                requireRatio(failureProbability, "driver.failure-probability");
+                if (delayMagnitude < 0.0) {
+                    throw new IllegalArgumentException("driver.delay-magnitude 는 0 이상이어야 합니다");
+                }
+                if (departureDelaySeconds < 0) {
+                    throw new IllegalArgumentException("driver.departure-delay-seconds 는 0 이상이어야 합니다");
+                }
+                scanBaseUrl = Objects.requireNonNull(scanBaseUrl, "driver.scan-base-url");
+            }
+
+            private static void requireRatio(double value, String name) {
+                if (!(value >= 0.0 && value <= 1.0)) {
+                    throw new IllegalArgumentException("%s 는 0.0 ~ 1.0 이어야 합니다: %s".formatted(name, value));
+                }
+            }
         }
     }
 }

@@ -69,7 +69,7 @@ class SmokeScenarioTest {
     }
 
     private static Scenario scenario(int orders, int ratePerSecond) {
-        return new Scenario(orders, ratePerSecond, 1L, 50, 0.25, Map.of("DAWN", 1));
+        return new Scenario(orders, ratePerSecond, 1L, 50, 0.25, Map.of("DAWN", 1), null);
     }
 
     private static OrderGenerator generator(Scenario scenario) {
