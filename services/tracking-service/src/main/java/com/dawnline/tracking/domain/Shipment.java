@@ -1,6 +1,7 @@
 package com.dawnline.tracking.domain;
 
 import com.dawnline.common.error.IllegalStateTransitionException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -157,6 +158,47 @@ public final class Shipment {
         this.etaAt = plannedArrival;
         this.promisedEnd = promisedEnd;
         return true;
+    }
+
+    /**
+     * ETA 를 옮긴다 — 앞선 stop 의 편차 전파 (§5.4 ETA 재계산, Phase 5-1b).
+     *
+     * <p><strong>얼마나 옮기는지는 이 애그리거트가 정하지 않는다.</strong> 편차는 라우트의
+     * 성질이고(어느 stop 에서 얼마가 벌어졌나), 그것이 <em>누구에게</em> 전파되는지는
+     * 방문 순서를 아는 쪽만 안다. 여기서 절반만 계산하면 「어디서 움직이는가」의 답이 둘이
+     * 된다 — 그래서 받는 것은 결과값 하나다.
+     *
+     * <p>종결 상태는 옮기지 않는다. 배송이 끝난 stop 의 도착 예정 시각을 미루는 일은 아무
+     * 물음에도 답하지 않는다 — {@link #applyRevision} 이 종결을 그대로 두는 것과 같은 이유다.
+     *
+     * @param eta 새 ETA
+     * @return 옮겼으면 {@code true}, 종결 상태라 그대로 두었으면 {@code false}
+     */
+    public boolean projectEta(Instant eta) {
+        Objects.requireNonNull(eta, "eta");
+        if (status.isTerminal()) {
+            return false;
+        }
+        if (eta.equals(etaAt)) {
+            // 편차가 0 이거나 이미 같은 값이다. 쓰지 않으면 낙관적 락 충돌도 UPDATE 도 없다.
+            return false;
+        }
+        this.etaAt = eta;
+        return true;
+    }
+
+    /**
+     * 약속을 지키지 못할 위험인가 — {@code eta > promised_end − margin} (§5.4).
+     *
+     * <p>판정이 애그리거트에 있는 이유: 비교하는 두 값이 <strong>둘 다 이 배송의 것</strong>
+     * 이다. 여유(margin)만 밖에서 온다 — 그것은 정책이고 §5.4 가 15분으로 정했다.
+     *
+     * @param margin 약속 끝에서 앞당겨 보는 여유
+     * @return 위험하면 {@code true}. 종결 상태는 언제나 {@code false} 다 — 이미 끝났다
+     */
+    public boolean isAtRisk(Duration margin) {
+        Objects.requireNonNull(margin, "margin");
+        return !status.isTerminal() && etaAt.isAfter(promisedEnd.minus(margin));
     }
 
     /**

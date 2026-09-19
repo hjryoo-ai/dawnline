@@ -32,13 +32,17 @@ public interface ApplyRouteAssignmentUseCase {
      * @param campId   이 라우트의 캠프. {@code route_revisions} 에 남아 at-risk 메트릭의
      *                 {@code camp} 라벨이 된다 (§9.1) — 라우트의 성질이라 stop 이 아니라
      *                 라우트에 붙는다
+     * @param plannedDeparture 캠프 출발 계획 시각. {@code DEPARTED_CAMP} 편차의 기준이다
+     *                 (§5.4) — 늦은 출발은 첫 도착 스캔 전에 이미 알 수 있는 위험이다
      * @param stops    방문 순서대로의 stop 들. 취소된 stop 도 들어 있다 (ADR-026)
      */
-    record RouteAssignment(UUID routeId, int revision, UUID campId, List<AssignedStop> stops) {
+    record RouteAssignment(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
+            List<AssignedStop> stops) {
 
         public RouteAssignment {
             Objects.requireNonNull(routeId, "routeId");
             Objects.requireNonNull(campId, "campId");
+            Objects.requireNonNull(plannedDeparture, "plannedDeparture");
             if (revision < 1) {
                 throw new IllegalArgumentException("revision 은 1 이상이어야 합니다: " + revision);
             }

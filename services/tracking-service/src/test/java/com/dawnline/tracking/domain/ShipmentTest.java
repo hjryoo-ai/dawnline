@@ -223,6 +223,69 @@ class ShipmentTest {
                 .isEqualTo(ShipmentStatus.COMPLETED);
     }
 
+    // --- ETA 와 위험 (Phase 5-1b) ----------------------------------------------
+
+    @Test
+    void ETA_는_받은_값으로_옮겨진다() {
+        // 얼마나 옮기는지는 애그리거트가 정하지 않는다 — 편차는 라우트의 성질이고, 여기 오는
+        // 것은 결과값 하나다 (EtaPropagator).
+        Shipment shipment = scheduled();
+        Instant moved = PLANNED.plus(Duration.ofMinutes(25));
+
+        assertThat(shipment.projectEta(moved)).isTrue();
+        assertThat(shipment.etaAt()).isEqualTo(moved);
+        assertThat(shipment.plannedArrival())
+                .as("계획은 계획대로 남는다 — 다음 편차도 여기서 잰다")
+                .isEqualTo(PLANNED);
+    }
+
+    @Test
+    void 같은_ETA_로는_옮기지_않는다() {
+        Shipment shipment = scheduled();
+
+        assertThat(shipment.projectEta(PLANNED))
+                .as("편차 0 에 UPDATE 와 낙관적 락 충돌을 만들지 않는다")
+                .isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"COMPLETED", "FAILED", "CANCELLED"})
+    void 종결된_배송의_ETA_는_움직이지_않는다(ShipmentStatus terminal) {
+        Shipment shipment = Shipment.restore(Ids.newId(), Ids.newId(), 1, terminal,
+                PLANNED, PLANNED, PROMISED_END, null, 0L);
+
+        assertThat(shipment.projectEta(PLANNED.plus(Duration.ofHours(1)))).isFalse();
+        assertThat(shipment.etaAt()).isEqualTo(PLANNED);
+    }
+
+    @Test
+    void 약속_끝에서_여유_안에_들면_위험이다() {
+        // §5.4 — eta > promised_end − 15분.
+        Shipment shipment = scheduled();
+        shipment.projectEta(PROMISED_END.minus(Duration.ofMinutes(14)));
+
+        assertThat(shipment.isAtRisk(Duration.ofMinutes(15))).isTrue();
+    }
+
+    @Test
+    void 여유_경계_위는_위험이_아니다() {
+        // 경계는 <em>초과</em>다. 같은 값이 위험이면 정확히 15분 남은 라우트가 매번 알림을 낸다.
+        Shipment shipment = scheduled();
+        shipment.projectEta(PROMISED_END.minus(Duration.ofMinutes(15)));
+
+        assertThat(shipment.isAtRisk(Duration.ofMinutes(15))).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"COMPLETED", "FAILED", "CANCELLED"})
+    void 종결된_배송은_위험하지_않다(ShipmentStatus terminal) {
+        // 늦게 끝난 것은 사실이지만 「위험」이 아니다 — 재계획으로 되돌릴 것이 없다.
+        Shipment shipment = Shipment.restore(Ids.newId(), Ids.newId(), 1, terminal,
+                PLANNED, PROMISED_END.plus(Duration.ofHours(1)), PROMISED_END, null, 0L);
+
+        assertThat(shipment.isAtRisk(Duration.ofMinutes(15))).isFalse();
+    }
+
     @Test
     void 도착한_뒤의_취소는_소리를_낸다() {
         // dispatch 가 이미 거부했어야 하는 건이다(§6.10 넷째 분기). 여기까지 왔다면 상류의

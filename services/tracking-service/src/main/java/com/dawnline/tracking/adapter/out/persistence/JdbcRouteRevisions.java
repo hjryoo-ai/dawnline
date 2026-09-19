@@ -4,6 +4,7 @@ import com.dawnline.tracking.application.port.out.RouteRevisions;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -21,14 +22,18 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class JdbcRouteRevisions implements RouteRevisions {
 
     private static final String CLAIM_SQL = """
-            INSERT INTO route_revisions (route_id, revision, camp_id, applied_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO route_revisions (route_id, revision, camp_id, planned_departure, applied_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT (route_id) DO UPDATE
                SET revision = EXCLUDED.revision,
                    camp_id = EXCLUDED.camp_id,
+                   planned_departure = EXCLUDED.planned_departure,
                    applied_at = EXCLUDED.applied_at
              WHERE route_revisions.revision < EXCLUDED.revision
             """;
+
+    private static final String FIND_SQL =
+            "SELECT camp_id, planned_departure FROM route_revisions WHERE route_id = ?";
 
     private final JdbcTemplate jdbc;
 
@@ -40,15 +45,26 @@ public class JdbcRouteRevisions implements RouteRevisions {
     }
 
     @Override
-    public boolean claim(UUID routeId, int revision, UUID campId, Instant appliedAt) {
+    public boolean claim(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
+            Instant appliedAt) {
         Objects.requireNonNull(routeId, "routeId");
         Objects.requireNonNull(campId, "campId");
+        Objects.requireNonNull(plannedDeparture, "plannedDeparture");
         Objects.requireNonNull(appliedAt, "appliedAt");
         if (revision < 1) {
             throw new IllegalArgumentException("revision 은 1 이상이어야 합니다: " + revision);
         }
         // TIMESTAMPTZ 에는 OffsetDateTime 으로 넘긴다 — 드라이버가 Instant 를 직접 받지 않는다.
         return jdbc.update(CLAIM_SQL, routeId, revision, campId,
-                appliedAt.atOffset(ZoneOffset.UTC)) > 0;
+                plannedDeparture.atOffset(ZoneOffset.UTC), appliedAt.atOffset(ZoneOffset.UTC)) > 0;
+    }
+
+    @Override
+    public Optional<RoutePlanned> find(UUID routeId) {
+        Objects.requireNonNull(routeId, "routeId");
+        return jdbc.query(FIND_SQL, rs -> rs.next()
+                ? Optional.of(new RoutePlanned(rs.getObject(1, UUID.class),
+                        rs.getObject(2, java.time.OffsetDateTime.class).toInstant()))
+                : Optional.empty(), routeId);
     }
 }
