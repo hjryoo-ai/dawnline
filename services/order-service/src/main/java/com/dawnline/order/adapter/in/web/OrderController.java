@@ -12,6 +12,8 @@ import com.dawnline.order.application.port.out.RateLimiter;
 import com.dawnline.order.domain.OrderErrorCode;
 import com.dawnline.order.domain.OrderStatus;
 import com.dawnline.common.error.DomainException;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import jakarta.validation.Valid;
@@ -23,6 +25,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -90,16 +93,23 @@ public class OrderController {
             @ApiResponse(responseCode = "201", description = "접수됨. `Location` 에 주문 주소가 온다"),
             @ApiResponse(responseCode = "200",
                     description = "같은 멱등 키의 재요청 — 저장된 응답을 그대로 재생한다. `Location` 은 없다"),
+            // 오류 본문의 스키마를 명시한다. 적지 않으면 springdoc 이 <메서드 반환 타입>을 모든
+            // 응답에 붙여, 문서가 「404 의 본문은 OrderView 다」라고 말한다 — 그 문서를 보고 만든
+            // 클라이언트는 오류를 파싱하지 못한다(2026-09-19 까지 실제로 그랬다).
             @ApiResponse(responseCode = "400",
                     description = "요청 값이 유효하지 않거나 `Idempotency-Key` 가 없다. "
-                            + "본문은 Problem Details 이고 `errors[]` 에 어긋난 필드가 모두 들어온다"),
+                            + "본문은 Problem Details 이고 `errors[]` 에 어긋난 필드가 모두 들어온다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "409",
                     description = "같은 멱등 키의 요청이 처리 중이다. **잠시 후 같은 요청을 그대로 재시도한다** — "
-                            + "`Retry-After` 가 대기 시간을 알려 준다"),
+                            + "`Retry-After` 가 대기 시간을 알려 준다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "422",
-                    description = "같은 멱등 키에 다른 본문이거나, 이 지역에 제공되지 않는 배송 티어다"),
+                    description = "같은 멱등 키에 다른 본문이거나, 이 지역에 제공되지 않는 배송 티어다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "429",
-                    description = "고객별 레이트 리밋 초과. `Retry-After` 초 뒤에 다시 시도한다")})
+                    description = "고객별 레이트 리밋 초과. `Retry-After` 초 뒤에 다시 시도한다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     @PostMapping
     public ResponseEntity<Object> place(
             @RequestHeader("Idempotency-Key") String idempotencyKey,
@@ -147,8 +157,10 @@ public class OrderController {
      */
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "주문 상세"),
-            @ApiResponse(responseCode = "400", description = "주문 id 가 UUID 형식이 아니다"),
-            @ApiResponse(responseCode = "404", description = "그런 주문이 없다")})
+            @ApiResponse(responseCode = "400", description = "주문 id 가 UUID 형식이 아니다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "그런 주문이 없다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     @GetMapping("/{orderId}")
     public OrderView get(@PathVariable UUID orderId) {
         return getOrder.get(orderId);
@@ -162,10 +174,12 @@ public class OrderController {
      */
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "취소됨"),
-            @ApiResponse(responseCode = "404", description = "그런 주문이 없다"),
+            @ApiResponse(responseCode = "404", description = "그런 주문이 없다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "409",
                     description = "취소할 수 없는 상태다. 배송이 시작된 뒤에는 취소되지 않는다 — "
-                            + "재시도해도 결과가 같아 `Retry-After` 는 없다")})
+                            + "재시도해도 결과가 같아 `Retry-After` 는 없다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     @PostMapping("/{orderId}/cancel")
     public OrderView cancel(@PathVariable UUID orderId,
             @Valid @RequestBody(required = false) @Nullable CancelOrderRequest request) {
@@ -187,7 +201,8 @@ public class OrderController {
                     description = "한 페이지. `nextCursor` 가 없으면 마지막 페이지다"),
             @ApiResponse(responseCode = "400",
                     description = "`limit` 이 범위를 벗어났거나 `cursor` 형식이 올바르지 않다. "
-                            + "`limit` 은 조용히 줄이지 않는다 — 줄이면 목록의 끝을 오판한다")})
+                            + "`limit` 은 조용히 줄이지 않는다 — 줄이면 목록의 끝을 오판한다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     @GetMapping
     public OrderPageResponse list(
             @RequestParam UUID customerId,
