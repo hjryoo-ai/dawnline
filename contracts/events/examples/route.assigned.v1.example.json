@@ -19,7 +19,8 @@
       "stopCount": 3,
       "distanceM": 8420,
       "durationS": 2340,
-      "costKrw": 21500
+      "costKrw": 21500,
+      "plannedDeparture": "2026-08-29T15:21:00Z"
     },
     "stops": [
       {

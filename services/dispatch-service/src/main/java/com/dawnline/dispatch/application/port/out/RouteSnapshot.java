@@ -21,10 +21,13 @@ import java.util.UUID;
  * @param distanceM 총 이동 거리(m). 취소된 stop 은 방문하지 않으므로 빠져 있다
  * @param durationS 총 소요 시간(초)
  * @param costKrw   총 비용(원)
+ * @param plannedDeparture 캠프 출발 계획 시각. <strong>V7 이전에 저장된 행은 {@code null}</strong>
+ *                  이다 — {@code promised} 와 같은 규칙이다. 지어낸 값으로 required 필드를
+ *                  채우는 대신 발행이 소리 내어 실패한다
  * @param stops     순번대로의 stop 들. <strong>취소된 것을 포함</strong>한다
  */
 public record RouteSnapshot(UUID routeId, UUID vehicleId, int distanceM, int durationS,
-        long costKrw, List<StopSnapshot> stops) {
+        long costKrw, @Nullable Instant plannedDeparture, List<StopSnapshot> stops) {
 
     public RouteSnapshot {
         Objects.requireNonNull(routeId, "routeId");

@@ -56,8 +56,8 @@ public final class PlanPruner {
                 }
             }
             if (!kept.isEmpty()) {
-                routes.add(new PlannedRoute(route.vehicle(), List.copyOf(kept), route.distanceM(),
-                        route.durationS(), route.cost()));
+                routes.add(new PlannedRoute(route.vehicle(), List.copyOf(kept), route.departAt(),
+                        route.distanceM(), route.durationS(), route.cost()));
             }
         }
 

@@ -297,7 +297,8 @@ public class JdbcRouteMutations implements RouteMutations {
     @SuppressWarnings("unchecked")
     public Optional<RouteSnapshot> snapshot(UUID routeId) {
         List<Object[]> header = entityManager.createNativeQuery("""
-                SELECT vehicle_id, distance_m, duration_s, cost_krw FROM routes WHERE id = ?
+                SELECT vehicle_id, distance_m, duration_s, cost_krw, planned_departure
+                  FROM routes WHERE id = ?
                 """).setParameter(1, routeId).getResultList();
         if (header.isEmpty()) {
             return Optional.empty();
@@ -331,6 +332,8 @@ public class JdbcRouteMutations implements RouteMutations {
         return Optional.of(new RouteSnapshot(routeId, (UUID) first[0],
                 ((Number) first[1]).intValue(), ((Number) first[2]).intValue(),
                 ((Number) first[3]).longValue(),
+                // V7 이전 행은 NULL 이다. 지어내지 않는다 (V6 의 약속창과 같은 규칙).
+                (Instant) first[4],
                 byStop.values().stream().map(SnapshotBuilder::build).toList()));
     }
 

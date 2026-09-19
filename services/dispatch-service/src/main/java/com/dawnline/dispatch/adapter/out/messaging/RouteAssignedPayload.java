@@ -5,6 +5,7 @@ import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
 import com.dawnline.dispatch.domain.optimizer.PlannedStop;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -41,12 +42,16 @@ public record RouteAssignedPayload(UUID routeId, UUID planId, UUID waveId, UUID 
     /**
      * 요약.
      *
-     * @param stopCount  stop 수. {@code stops} 길이와 같아야 한다 (계약 테스트가 검사한다)
-     * @param distanceM  총 이동 거리(m)
-     * @param durationS  총 소요 시간(초)
-     * @param costKrw    총 비용(원)
+     * @param stopCount        stop 수. {@code stops} 길이와 같아야 한다 (계약 테스트가 검사한다)
+     * @param distanceM        총 이동 거리(m)
+     * @param durationS        총 소요 시간(초)
+     * @param costKrw          총 비용(원)
+     * @param plannedDeparture 캠프 출발 계획 시각. <strong>required</strong> 다 — tracking 이
+     *                         {@code DEPARTED_CAMP} 편차의 기준으로 쓴다(§5.4). stop 이 아니라
+     *                         요약에 있는 이유는 라우트당 하나이기 때문이다
      */
-    public record Summary(int stopCount, int distanceM, int durationS, long costKrw) {
+    public record Summary(int stopCount, int distanceM, int durationS, long costKrw,
+            String plannedDeparture) {
     }
 
     /**
@@ -95,7 +100,8 @@ public record RouteAssignedPayload(UUID routeId, UUID planId, UUID waveId, UUID 
                 route.vehicle().value(), driverId,
                 plan.strategy().orElseThrow(() -> new IllegalStateException("전략 없이 발행할 수 없습니다")),
                 revision,
-                new Summary(stops.size(), route.distanceM(), route.durationS(), route.cost().krw()),
+                new Summary(stops.size(), route.distanceM(), route.durationS(), route.cost().krw(),
+                        route.departAt().toString()),
                 stops);
     }
 
@@ -120,8 +126,25 @@ public record RouteAssignedPayload(UUID routeId, UUID planId, UUID waveId, UUID 
                 plan.strategy().orElseThrow(() -> new IllegalStateException("전략 없이 발행할 수 없습니다")),
                 revision,
                 new Summary(stops.size(), snapshot.distanceM(), snapshot.durationS(),
-                        snapshot.costKrw()),
+                        snapshot.costKrw(), departureOf(snapshot)),
                 stops);
+    }
+
+    /**
+     * 스냅샷의 계획 출발 시각. 없으면 <strong>멈춘다</strong> — V6 의 약속창과 같은 규칙이다.
+     *
+     * <p>지어낸 출발 시각으로 required 필드를 채우면 tracking 의 편차가 거짓 위에서 계산되고,
+     * 그 거짓은 이벤트를 받은 쪽에서 구별할 수 없다. 여기서 멈추면 outbox 에 행이 남지 않고
+     * 원인이 이 한 줄로 드러난다.
+     */
+    private static String departureOf(RouteSnapshot snapshot) {
+        Instant departAt = snapshot.plannedDeparture();
+        if (departAt == null) {
+            throw new IllegalStateException(
+                    "계획 출발 시각 없이 개정을 발행할 수 없습니다 (V7 이전 행): routeId=%s"
+                            .formatted(snapshot.routeId()));
+        }
+        return departAt.toString();
     }
 
     private static StopPayload stopOf(PlannedStop planned) {

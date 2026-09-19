@@ -56,7 +56,7 @@ class DispatchPayloadContractTest {
                 new TimeWindow(NOW, NOW.plus(Duration.ofHours(4))), 120, 0);
         return new PlannedRoute(VehicleId.of(Ids.newId()),
                 List.of(new PlannedStop(1, stop, NOW.plusSeconds(600), NOW.plusSeconds(720))),
-                8_420, 2_340, Money.krw(21_500));
+                NOW, 8_420, 2_340, Money.krw(21_500));
     }
 
     @Test
@@ -83,7 +83,7 @@ class DispatchPayloadContractTest {
         UUID dead = Ids.newId();
         UUID kept = Ids.newId();
         UUID alsoDead = Ids.newId();
-        return new RouteSnapshot(Ids.newId(), Ids.newId(), 5_900, 1_600, 17_400, List.of(
+        return new RouteSnapshot(Ids.newId(), Ids.newId(), 5_900, 1_600, 17_400, NOW, List.of(
                 new RouteSnapshot.StopSnapshot(1, List.of(dead), List.of(dead),
                         37.4979, 127.0276, NOW.plusSeconds(600), 90, true, PROMISED),
                 new RouteSnapshot.StopSnapshot(2, List.of(kept, alsoDead), List.of(alsoDead),
@@ -117,7 +117,7 @@ class DispatchPayloadContractTest {
         // required 필드를 채우면 tracking 의 at-risk 가 거짓 위에서 돌고, 받는 쪽은 그 거짓을
         // 구별할 수 없다 — 그래서 발행을 멈춘다. outbox 에 행이 남지 않는다.
         RouteSnapshot legacy = new RouteSnapshot(Ids.newId(), Ids.newId(), 5_900, 1_600, 17_400,
-                List.of(new RouteSnapshot.StopSnapshot(1, List.of(Ids.newId()), List.of(),
+                NOW, List.of(new RouteSnapshot.StopSnapshot(1, List.of(Ids.newId()), List.of(),
                         37.4979, 127.0276, NOW.plusSeconds(600), 90, false, null)));
 
         assertThatThrownBy(() ->

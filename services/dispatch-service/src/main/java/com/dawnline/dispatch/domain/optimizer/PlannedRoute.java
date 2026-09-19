@@ -2,6 +2,7 @@ package com.dawnline.dispatch.domain.optimizer;
 
 import com.dawnline.common.Money;
 import com.dawnline.common.error.ValidationException;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
@@ -10,15 +11,20 @@ import java.util.Objects;
  *
  * @param vehicle   차량
  * @param stops     방문 순서대로 정렬된 stop 들. {@code seq} 는 1부터 연속이어야 한다
+ * @param departAt  캠프 출발 계획 시각. 근무창 시작과 계획 시작 중 <em>늦은</em> 쪽이다
+ *                  (§6.3 · [ADR-030](docs/adr/ADR-030-night-shift-seed.md)) — 첫 stop 의
+ *                  도착에서 이동 시간을 빼서 되돌릴 수 있는 값이 아니다. tracking 이
+ *                  {@code DEPARTED_CAMP} 편차의 기준으로 쓴다 (§5.4, Phase 5-1b)
  * @param distanceM 총 이동 거리(m). <strong>캠프 출발·복귀 포함</strong>
  * @param durationS 총 소요 시간(초). 이동 + 서비스
  * @param cost      이 라우트의 비용
  */
-public record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, int durationS,
-        Money cost) {
+public record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, Instant departAt,
+        int distanceM, int durationS, Money cost) {
 
     public PlannedRoute {
         Objects.requireNonNull(vehicle, "vehicle");
+        Objects.requireNonNull(departAt, "departAt");
         Objects.requireNonNull(cost, "cost");
         stops = List.copyOf(Objects.requireNonNull(stops, "stops"));
         if (stops.isEmpty()) {
