@@ -18,7 +18,7 @@ spring-boot = "4.1.1"
 # --- BOM 이 관리하지 않는 것만 고정 ---
 archunit = "1.5.0"
 json-schema-validator = "3.0.7"   # 계약 테스트 (contracts/events/*.schema.json)
-springdoc = "3.1.0"               # Spring Boot 4 라인 (parent: spring-boot-starter-parent 4.1.0)
+springdoc = "3.1.1"               # Spring Boot 4 라인 (parent: spring-boot-starter-parent 4.1.0)
 resilience4j = "2.4.0"            # Boot 4 전용 모듈: resilience4j-spring-boot4
 jacoco = "0.8.15"
 
