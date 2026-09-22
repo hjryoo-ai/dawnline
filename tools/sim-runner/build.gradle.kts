@@ -20,16 +20,8 @@ dependencies {
 
     // 기사 시뮬레이터는 route.assigned 를 구독한다 (Phase 5-2). 봉투(EventEnvelope)·이벤트 JSON·
     // 토픽 이름은 libs/messaging 이 정한 것을 그대로 쓴다 — 여기에 다시 적으면 같은 계약이 두 곳에
-    // 생기고, 갈라졌을 때 조용한 쪽은 도구다.
-    //
-    // JPA 는 빼고 가져온다. libs/messaging 이 그것을 쓰는 것은 IdempotentConsumer·OutboxRelay 뿐이고
-    // 이 도구에는 DB 가 없다. 두고 오면 DataSourceAutoConfiguration 이 "url 이 없다" 로 기동을 막는다.
-    // 자동설정 이름을 spring.autoconfigure.exclude 에 문자열로 적는 방법도 있지만, Boot 4 에서
-    // 자동설정 패키지가 재배치됐고 이름이 틀리면 기동이 "그런 클래스가 없다" 로 끝난다 —
-    // 클래스패스에서 빼면 libs/messaging 의 @ConditionalOnClass 가 알아서 꺼진다.
-    implementation(project(":libs:messaging")) {
-        exclude(group = "org.springframework.boot", module = "spring-boot-starter-data-jpa")
-    }
+    // 생기고, 갈라졌을 때 조용한 쪽은 도구다. JPA 는 아래에서 모듈째 빼낸다.
+    implementation(project(":libs:messaging"))
 
     testImplementation(libs.spring.boot.starter.test)
 
@@ -55,6 +47,27 @@ tasks.named<Test>("test") {
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/openapi"))
             .withPropertyName("openApiContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// -----------------------------------------------------------------------------
+// 이 모듈에는 JPA 가 들어오지 않는다.
+//
+// libs/messaging 이 spring-boot-starter-data-jpa 를 쓰는 것은 IdempotentConsumer·OutboxRelay
+// 뿐이고 이 도구에는 DB 가 없다. 들어오면 DataSourceAutoConfiguration 이
+// "Failed to determine a suitable driver class" 로 기동을 막는다.
+//
+// **의존 하나에 exclude 를 거는 것으로는 부족하다.** 처음에는 implementation(project(...)) 에만
+// 걸었는데, 나중에 추가한 integrationTestImplementation(testFixtures(project(...))) 가 같은
+// 프로젝트를 다시 선언하면서 JPA 를 되가져왔다 — 제외는 *선언마다* 걸리기 때문이다. 그 상태는
+// 단위 테스트에서 초록이었고(테스트 클래스패스는 깨끗했다) SimDriverIT 이 컨텍스트를 띄우고 나서야
+// 드러났다. 선언이 늘어날 때마다 같은 한 줄을 기억해야 하는 규칙은 조용히 새므로, 모듈 전체에
+// 한 번 선언한다.
+//
+// 자동설정 이름을 spring.autoconfigure.exclude 에 문자열로 적는 방법도 있지만, Boot 4 에서
+// 자동설정 패키지가 재배치됐고 이름이 틀리면 기동이 "그런 클래스가 없다" 로 끝난다 —
+// 클래스패스에서 빼면 libs/messaging 의 @ConditionalOnClass 가 알아서 꺼진다.
+configurations.configureEach {
+    exclude(group = "org.springframework.boot", module = "spring-boot-starter-data-jpa")
 }
 
 tasks.named<Jar>("jar") {
