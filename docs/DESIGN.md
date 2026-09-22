@@ -215,6 +215,14 @@ com.dawnline.<service>
 추가 필드가 필요 없으므로 additive 변경도 없다. 구현은 tracking 이 이 이벤트를 실제로 내는
 Phase 5 이고(§5.4), 그때 dispatch 리스너 + `route_stops.status` 전이 + ADR 을 함께 쓴다.
 
+**들어왔다** (2026-09-22, Phase 5-5, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md)).
+계약은 예고대로 그대로다 — 그런데 그 사실이 판단 하나를 정했다: `revision` 이 없으므로 dispatch 는
+개정 번호로 거를 수 없고, **걸러서도 안 된다.** `route.assigned` 는 계획이라 옛 것을 버려야 하지만
+이 이벤트는 사실이고, 버리면 §6.8 이 읽을 값이 사라진다. 그래서 stop 은 `stopSeq` 가 아니라
+`orderIds` 로 찾는다 — 개정을 가로질러 같은 것을 가리키는 값이 그것뿐이다.
+소비 처리량은 [측정](benchmarks/phase5-delivery-status-throughput.md)에 있다(조건은 코드보다
+**먼저** 적었다).
+
 ### 4.2 이벤트 봉투 (Envelope)
 
 ```json
