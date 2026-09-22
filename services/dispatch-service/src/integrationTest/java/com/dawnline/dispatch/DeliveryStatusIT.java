@@ -13,6 +13,8 @@ import com.dawnline.dispatch.application.port.in.RunPlanCommand;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
+import com.dawnline.dispatch.application.port.out.RouteProgress;
+import com.dawnline.dispatch.application.port.out.RouteProgressCache;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.messaging.contract.EventContracts;
 import com.redis.testcontainers.RedisContainer;
@@ -95,6 +97,9 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
     @Autowired
     private StringRedisTemplate redis;
 
+    @Autowired
+    private RouteProgressCache cache;
+
     /**
      * 살아 있는 Redis 를 가리킨다.
      *
@@ -167,7 +172,8 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
         assertThat(progress).as("§7.2 의 세 칸이 채워져야 한다")
                 .containsEntry(RedisRouteProgressCache.FIELD_COMPLETED, "1")
                 .containsEntry(RedisRouteProgressCache.FIELD_FAILED, "0")
-                .containsEntry(RedisRouteProgressCache.FIELD_NEXT_SEQ, Integer.toString(planned.stops().get(1).seq()));
+                .containsEntry(RedisRouteProgressCache.FIELD_NEXT_SEQ,
+                        Integer.toString(planned.stops().get(1).seq()));
         assertThat(redis.getExpire(RedisRouteProgressCache.key(planned.routeId())))
                 .as("TTL 이 붙어야 한다 — 없으면 키가 영영 남는다 (§7.2 2일)")
                 .isPositive();
@@ -222,6 +228,25 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(statusOf(planned.routeId(), first.seq())).isEqualTo("ARRIVED"));
+    }
+
+    @Test
+    void 진행_해시는_남은_stop_이_없는_상태까지_왕복한다() {
+        // 「남은 stop 이 없다」를 빈 문자열로 적고 필드를 지우지 않는다 — 지우면 «아직 안 쓴 것»
+        // 과 «끝난 것» 이 같은 모양이 된다. 그 규약은 put 과 get 두 곳에 걸쳐 있어서 한쪽만
+        // 고치면 조용히 어긋난다.
+        UUID routeId = Ids.newId();
+
+        cache.put(routeId, new RouteProgress(null, 7, 2));
+
+        RouteProgress read = cache.get(routeId).orElseThrow();
+        assertThat(read.nextSeq()).isNull();
+        assertThat(read.done()).isTrue();
+        assertThat(read.completed()).isEqualTo(7);
+        assertThat(read.failed()).isEqualTo(2);
+        assertThat(redis.<String, String>opsForHash()
+                .get(RedisRouteProgressCache.key(routeId), RedisRouteProgressCache.FIELD_NEXT_SEQ))
+                .as("필드를 지우지 않는다 — 부재는 값이 아니다").isEmpty();
     }
 
     // --- 발행 ----------------------------------------------------------------
