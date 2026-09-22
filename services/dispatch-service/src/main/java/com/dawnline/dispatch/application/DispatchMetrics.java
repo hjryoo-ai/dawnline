@@ -3,6 +3,8 @@ package com.dawnline.dispatch.application;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
+import com.dawnline.messaging.MessagingMetrics;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
@@ -68,6 +70,25 @@ public class DispatchMetrics {
 
     /** 배송이 끝난 뒤 도착해 거부한 취소 (§6.10, §9.4 알림). */
     public static final String CANCEL_TOO_LATE = "dawnline.cancel.too_late";
+
+    /**
+     * {@code CANCELLED} 인 stop 에 도착해 <strong>무시한</strong> {@code delivery.status}
+     * (§9.1, [ADR-047](../../../../../../../../docs/adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md)).
+     *
+     * <p>tracking 의 같은 이름과 <strong>한 쌍</strong>이고 자리({@code job})로 갈린다. 저쪽은
+     * 「취소된 배송이 스캔됐다」이고 이쪽은 <strong>「계획에서 뺀 지점에 배송이 일어났다」</strong>다 —
+     * 개정이 tracking 에 닿기 전에는 이쪽만 오른다. <em>둘이 갈리는 것이 정보다.</em>
+     */
+    public static final String SCAN_AFTER_CANCEL = "dawnline.scan.after.cancel";
+
+    /** {@code dawnline_event_stale_total} 의 {@code consumer} 태그. */
+    public static final String DELIVERY_STATUS_CONSUMER = "dispatch";
+
+    /** {@code dawnline_event_stale_total} 의 {@code eventType} 태그. */
+    public static final String DELIVERY_STATUS_EVENT_TYPE = "delivery.status";
+
+    /** {@code dawnline_event_rejected_total} 의 {@code reason} 태그 — 모르는 상태값. */
+    public static final String DELIVERY_STATUS_UNKNOWN_REASON = "unknown-delivery-status";
 
     private final MeterRegistry registry;
     private final Map<UUID, AtomicLong> costByCamp = new ConcurrentHashMap<>();
@@ -145,6 +166,56 @@ public class DispatchMetrics {
     public void cancelTooLate(UUID campId) {
         Objects.requireNonNull(campId, "campId");
         registry.counter(CANCEL_TOO_LATE, "camp", campId.toString()).increment();
+    }
+
+    /**
+     * 이 라우트에 그 주문의 stop 이 없거나, 이미 지나온 단계로 되돌아가는
+     * {@code delivery.status} 를 무시했다 (§9.1, ADR-047 결정 1·4).
+     *
+     * <p><strong>커밋(또는 적재) 뒤에 부른다.</strong> 롤백된 작업의 숫자가 남으면 그 차이는
+     * 장애 때 가장 커진다 — 지표가 가장 많이 읽히는 순간에 가장 많이 틀린다.
+     *
+     * @param count 이번 이벤트에서 무시한 수
+     */
+    public void deliveryStatusStale(int count) {
+        if (count <= 0) {
+            return;
+        }
+        Counter.builder(MessagingMetrics.EVENT_STALE)
+                .tag(MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER)
+                .tag(MessagingMetrics.TAG_EVENT_TYPE, DELIVERY_STATUS_EVENT_TYPE)
+                .register(registry)
+                .increment(count);
+    }
+
+    /**
+     * 취소된 stop 에 도착한 상태 보고를 무시했다 (§9.1, ADR-047 결정 3).
+     *
+     * <p>{@link #deliveryStatusStale(int)} 와 같은 시점 규칙이다.
+     *
+     * @param count 이번 이벤트에서 무시한 수
+     */
+    public void scanAfterCancel(int count) {
+        if (count <= 0) {
+            return;
+        }
+        registry.counter(SCAN_AFTER_CANCEL).increment(count);
+    }
+
+    /**
+     * 계약이 새 {@code status} 값을 냈고 이쪽이 아직 모른다 (§4.7, §4.6 3행).
+     *
+     * <p>{@code dawnline_event_stale_total} 이 아니라 {@code rejected} 로 세는 이유: stale 은
+     * <strong>늘 조금씩 있는 값</strong>이라 거기 섞으면 이 사실이 묻힌다. 이것은 사람이 봐야
+     * 하는 상황이다 — 새 값을 내는 발행자가 배포됐다는 뜻이다.
+     */
+    public void deliveryStatusUnknown() {
+        Counter.builder(MessagingMetrics.EVENT_REJECTED)
+                .tag(MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER)
+                .tag(MessagingMetrics.TAG_EVENT_TYPE, DELIVERY_STATUS_EVENT_TYPE)
+                .tag(MessagingMetrics.TAG_REASON, DELIVERY_STATUS_UNKNOWN_REASON)
+                .register(registry)
+                .increment();
     }
 
     private void gauge(Map<UUID, AtomicLong> holder, String name, UUID campId, long value) {

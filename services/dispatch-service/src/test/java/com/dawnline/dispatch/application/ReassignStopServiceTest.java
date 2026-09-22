@@ -9,10 +9,12 @@ import com.dawnline.common.TimeWindow;
 import com.dawnline.common.error.ConflictException;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
+import com.dawnline.dispatch.application.port.out.RouteProgress;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
 import com.dawnline.dispatch.domain.optimizer.Parcel;
@@ -117,6 +119,18 @@ class ReassignStopServiceTest {
         @Override
         public boolean cancelStopIfAllOrdersCancelled(UUID stopId) {
             throw new UnsupportedOperationException("이 페이크는 취소를 모른다 — CancelOrderServiceTest 를 보라");
+        }
+
+        @Override
+        public void markStopStatus(UUID stopId, RouteStopStatus status) {
+            throw new UnsupportedOperationException(
+                    "이 페이크는 배송 상태를 모른다 — RecordDeliveryStatusServiceTest 를 보라");
+        }
+
+        @Override
+        public Optional<RouteProgress> progressOf(UUID routeId) {
+            throw new UnsupportedOperationException(
+                    "이 페이크는 배송 상태를 모른다 — RecordDeliveryStatusServiceTest 를 보라");
         }
 
         @Override

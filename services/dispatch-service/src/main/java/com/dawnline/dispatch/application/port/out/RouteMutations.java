@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.application.port.out;
 
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import java.util.List;
@@ -123,17 +124,42 @@ public interface RouteMutations {
     Optional<RouteSnapshot> snapshot(UUID routeId);
 
     /**
+     * 이 stop 의 상태를 옮긴다 (ADR-047).
+     *
+     * <p>판정은 {@link com.dawnline.dispatch.domain.RouteStopTransition} 이 이미 내렸다 —
+     * 여기서는 한 행을 쓸 뿐이다. 조건부 갱신(«현재 상태가 X 일 때만»)을 걸지 않는 이유는
+     * 그 조건이 <em>규칙</em>이고 규칙은 한 곳에만 있어야 하기 때문이다. 같은 트랜잭션 안에서
+     * 읽고 쓰므로 그 사이에 끼어들 수 있는 것은 다른 트랜잭션이고, 그건 행 잠금이 막는다.
+     *
+     * @param stopId stop id
+     * @param status 새 상태
+     */
+    void markStopStatus(UUID stopId, RouteStopStatus status);
+
+    /**
+     * 라우트의 진행 상황을 {@code route_stops} 에서 다시 만든다 — §7.2 의 폴백 경로다.
+     *
+     * <p>Redis 가 살아 있든 없든 <strong>이 값이 진실</strong>이다(불변규칙 7).
+     *
+     * @param routeId 라우트 id
+     * @return 라우트에 stop 이 하나도 없으면 빈 값
+     */
+    Optional<RouteProgress> progressOf(UUID routeId);
+
+    /**
      * 주문이 실린 stop 과 그 stop 의 상태.
      *
      * @param routeId 라우트 id
      * @param stopId  stop id
-     * @param status  {@code route_stops.status} — {@code PLANNED|CANCELLED|ARRIVED|COMPLETED}
+     * @param seq     방문 순번. <strong>조회 키가 아니다</strong> — {@code delivery.status} 가
+     *                싣고 온 순번과 다른지 보는 데만 쓴다(ADR-047 결정 1, 기각 (1))
+     * @param status  {@code route_stops.status}
      */
-    record AssignedStop(UUID routeId, UUID stopId, String status) {
+    record AssignedStop(UUID routeId, UUID stopId, int seq, RouteStopStatus status) {
 
         /** 기사가 이미 그 지점에 닿았는가. 닿았으면 취소는 거부된다 (ADR-026 결정 2 네 번째 행). */
         public boolean visited() {
-            return "ARRIVED".equals(status) || "COMPLETED".equals(status);
+            return status.visited();
         }
     }
 
