@@ -1,0 +1,11 @@
+-- delivery.status 소비가 stop 을 «주문» 으로 찾는다 (ADR-047 결정 2).
+-- PK 는 (stop_id, order_id) 라 order_id 단독 조회는 선두 컬럼이 아니어서 쓰지 못한다.
+--
+-- 질의 자체는 Phase 3-6 의 취소 경로가 이미 쓰고 있었다. 바뀐 것은 «빈도» 다 —
+-- 취소된 주문마다에서 stop 방문마다로. 피크 673 건/초에서 30일치 테이블(44만 행)을
+-- 순차 스캔하면 한 건에 5.9 ms 이고, 그 곱은 한 세션으로 따라갈 수 없는 값이다.
+--
+-- 측정: docs/benchmarks/phase5-route-stop-orders-order-lookup.md
+--   1일 15천 행 0.630 → 0.250 ms · 10일 15만 행 3.430 → 0.258 ms · 30일 45만 행 5.891 → 0.257 ms
+-- dispatch 에는 라우트 보존 정책이 없으므로(§7.1) 왼쪽 값에는 상한이 없다.
+CREATE INDEX ix_rso_order ON route_stop_orders (order_id);
