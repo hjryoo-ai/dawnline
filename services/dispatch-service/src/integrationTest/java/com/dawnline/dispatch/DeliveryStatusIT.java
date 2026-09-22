@@ -198,7 +198,7 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
     @Test
     void 취소된_stop_은_완료가_와도_그대로다() {
-        // ADR-047 결정 3. CANCELLED 는 「계획에서 뺐다」는 뜻이라 여기에 COMPLETED 를 적으면
+        // ADR-047 결정 4. CANCELLED 는 「계획에서 뺐다」는 뜻이라 여기에 COMPLETED 를 적으면
         // 이미 나간 개정과 저장된 계획이 어긋난다.
         Planned planned = plannedRoute();
         RouteView.StopView last = planned.stops().getLast();
@@ -218,8 +218,8 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
     }
 
     @Test
-    void 이_라우트에_없는_주문의_상태는_아무_행도_바꾸지_않는다() {
-        // relocate 가 옮겼거나 개정이 지운 자리의 뒤늦은 스캔이다 (ADR-047 결정 1).
+    void 어느_라우트에도_없는_주문의_상태는_아무_행도_바꾸지_않는다() {
+        // 개정이 지운 자리의 뒤늦은 스캔이거나 라우트가 정리된 뒤의 replay 다 (ADR-047 결정 2).
         Planned planned = plannedRoute();
         RouteView.StopView first = planned.stops().getFirst();
 
@@ -228,6 +228,31 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(statusOf(planned.routeId(), first.seq())).isEqualTo("ARRIVED"));
+    }
+
+    @Test
+    void 옮겨간_주문의_완료는_옮겨간_라우트에_적용된다() {
+        // ADR-047 결정 2. 이벤트는 A 를 말하지만 그 주문은 이미 B 에 있다 — 「A 에 없으니
+        // 버린다」면 B 의 기사가 이미 배송된 곳으로 간다. 사실은 주문에 귀속된다.
+        Planned a = plannedRoute();
+        Planned b = plannedRoute();
+        RouteView.StopView 떠난_stop = a.stops().getFirst();
+        RouteView.StopView 받은_stop = b.stops().getFirst();
+        UUID orderId = 떠난_stop.orderIds().getFirst();
+        moveOrder(orderId, stopIdOf(b.routeId(), 받은_stop.seq()));
+
+        publish(a.routeId(), 떠난_stop.seq(), List.of(orderId), "COMPLETED");
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(statusOf(b.routeId(), 받은_stop.seq())).isEqualTo("COMPLETED"));
+        assertThat(statusOf(a.routeId(), 떠난_stop.seq()))
+                .as("이벤트가 말한 라우트는 손대지 않는다").isEqualTo("PLANNED");
+        assertThat(redis.opsForHash().entries(RedisRouteProgressCache.key(a.routeId())))
+                .as("진행도 지금 있는 라우트의 것이다").isEmpty();
+        assertThat(redis.<String, String>opsForHash()
+                .get(RedisRouteProgressCache.key(b.routeId()),
+                        RedisRouteProgressCache.FIELD_COMPLETED))
+                .isEqualTo("1");
     }
 
     @Test
@@ -284,6 +309,19 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
     private String statusOf(UUID routeId, int seq) {
         return tx().execute(status -> (String) entityManager.createNativeQuery(
                         "SELECT status FROM route_stops WHERE route_id = ? AND seq = ?")
+                .setParameter(1, routeId).setParameter(2, seq).getSingleResult());
+    }
+
+    /** 주문 하나를 다른 stop 으로 옮긴다 — {@code moveOrder} 가 하는 일의 핵심 한 줄이다. */
+    private void moveOrder(UUID orderId, UUID targetStopId) {
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery(
+                        "UPDATE route_stop_orders SET stop_id = ? WHERE order_id = ?")
+                .setParameter(1, targetStopId).setParameter(2, orderId).executeUpdate());
+    }
+
+    private UUID stopIdOf(UUID routeId, int seq) {
+        return tx().execute(status -> (UUID) entityManager.createNativeQuery(
+                        "SELECT id FROM route_stops WHERE route_id = ? AND seq = ?")
                 .setParameter(1, routeId).setParameter(2, seq).getSingleResult());
     }
 

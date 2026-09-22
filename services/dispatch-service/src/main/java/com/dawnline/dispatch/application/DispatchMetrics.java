@@ -81,6 +81,17 @@ public class DispatchMetrics {
      */
     public static final String SCAN_AFTER_CANCEL = "dawnline.scan.after.cancel";
 
+    /**
+     * 이벤트가 말한 라우트가 아니라 <strong>다른 라우트</strong>의 stop 에 적용한
+     * {@code delivery.status} (§9.1, ADR-047 결정 2).
+     *
+     * <p>재계획이 주문을 옮기는 동안 기사가 옛 라우트에서 배송을 끝낸 경우다. 이것을 stale 과
+     * 같이 세면 안 되는 이유가 둘이다 — <strong>버리지 않고 적용했다</strong>는 점에서 다르고,
+     * 이 값이 §6.8 <strong>경합 창의 크기</strong>라는 점에서 다르다. 오르면 볼 곳은 dispatch 가
+     * 아니라 {@code delivery.status} 컨슈머 랙과 재계획 빈도다.
+     */
+    public static final String STATUS_AFTER_RELOCATE = "dawnline.status.after.relocate";
+
     /** {@code dawnline_event_stale_total} 의 {@code consumer} 태그. */
     public static final String DELIVERY_STATUS_CONSUMER = "dispatch";
 
@@ -169,8 +180,12 @@ public class DispatchMetrics {
     }
 
     /**
-     * 이 라우트에 그 주문의 stop 이 없거나, 이미 지나온 단계로 되돌아가는
-     * {@code delivery.status} 를 무시했다 (§9.1, ADR-047 결정 1·4).
+     * <strong>어느 라우트에도</strong> 그 주문의 stop 이 없거나, 이미 지나온 단계로 되돌아가는
+     * {@code delivery.status} 를 무시했다 (§9.1, ADR-047 결정 2·5).
+     *
+     * <p>「이 라우트에 없다」가 아니라 「어디에도 없다」인 것이 결정 2 다. 전자로 세면 재계획이
+     * 주문을 옮긴 뒤 도착한 <em>사실</em>이 전부 여기로 들어오고, 그것들은 버려서는 안 되는
+     * 것들이다 — {@link #statusAfterRelocate(int)} 가 그 자리다.
      *
      * <p><strong>커밋(또는 적재) 뒤에 부른다.</strong> 롤백된 작업의 숫자가 남으면 그 차이는
      * 장애 때 가장 커진다 — 지표가 가장 많이 읽히는 순간에 가장 많이 틀린다.
@@ -189,7 +204,7 @@ public class DispatchMetrics {
     }
 
     /**
-     * 취소된 stop 에 도착한 상태 보고를 무시했다 (§9.1, ADR-047 결정 3).
+     * 취소된 stop 에 도착한 상태 보고를 무시했다 (§9.1, ADR-047 결정 4).
      *
      * <p>{@link #deliveryStatusStale(int)} 와 같은 시점 규칙이다.
      *
@@ -200,6 +215,21 @@ public class DispatchMetrics {
             return;
         }
         registry.counter(SCAN_AFTER_CANCEL).increment(count);
+    }
+
+    /**
+     * 이벤트의 라우트가 아닌 곳에서 stop 을 찾아 적용했다 (§9.1, ADR-047 결정 2).
+     *
+     * <p>{@link #deliveryStatusStale(int)} 와 같은 시점 규칙이다 — 적용한 <strong>뒤</strong>에
+     * 센다.
+     *
+     * @param count 이번 이벤트에서 옮겨 적용한 수
+     */
+    public void statusAfterRelocate(int count) {
+        if (count <= 0) {
+            return;
+        }
+        registry.counter(STATUS_AFTER_RELOCATE).increment(count);
     }
 
     /**

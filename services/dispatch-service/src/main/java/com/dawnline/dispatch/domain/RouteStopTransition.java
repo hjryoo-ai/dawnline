@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * {@code delivery.status} 하나가 {@code route_stops.status} 에 무엇을 하는가 — <strong>순수
- * 함수</strong>다 (ADR-047 결정 4).
+ * 함수</strong>다 (ADR-047 결정 5).
  *
  * <h2>왜 애그리거트 메서드가 아닌가</h2>
  * 불변규칙 6 은 상태 전이를 애그리거트 메서드로만 하라고 적는다. {@code route_stops} 에는

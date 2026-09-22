@@ -16,7 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * 축 규칙의 <strong>네 번째 자리</strong> (ADR-047 결정 4).
+ * 축 규칙의 <strong>네 번째 자리</strong> (ADR-047 결정 5).
  *
  * <p>불변규칙 6 을 ArchUnit 이 지키지 못하는 자리라(애그리거트가 없다) 이 테스트가 그 몫을
  * 대신한다 — §13 매핑표에 그렇게 적혀 있다.

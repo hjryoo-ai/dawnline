@@ -34,7 +34,7 @@ import org.junit.jupiter.api.Test;
  * 바깥</em>이다 — 어떤 stop 을 찾는가, 무엇을 세는가, 진행 캐시를 언제 쓰는가.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
-@DisplayName("RecordDeliveryStatusService — 주문으로 찾고, 개정으로 거르지 않는다")
+@DisplayName("RecordDeliveryStatusService — 사실은 주문에 귀속된다")
 class RecordDeliveryStatusServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-09-06T01:00:00Z");
@@ -166,12 +166,12 @@ class RecordDeliveryStatusServiceTest {
         assertThat(routes.row(route.routeId(), 1).status).isEqualTo(RouteStopStatus.COMPLETED);
     }
 
-    // ------------------------------------------------------------ 결정 1 — 주문으로 찾는다
+    // ------------------------------------------------------------ 결정 1·2 — 사실은 주문의 것
 
     @Test
     void 페이로드의_순번이_아니라_주문으로_찾는다() {
         // 개정이 순서를 바꿔 seq 가 다른 지점을 가리키는 상황. 페이로드는 1 이라고 말하지만
-        // 이 주문의 stop 은 3 번이다 — 옮겨야 하는 것은 3 번이다 (ADR-047 결정 1).
+        // 이 주문의 stop 은 3 번이다 — 옮겨야 하는 것은 3 번이다 (ADR-047 결정 1·2).
         Route route = route();
 
         service.record(command(route.routeId(), 1, route.mergedOrderIds(),
@@ -182,29 +182,65 @@ class RecordDeliveryStatusServiceTest {
     }
 
     @Test
-    void 이_라우트에_없는_주문의_상태는_철_지난_것으로_세고_버린다() {
+    void 어느_라우트에도_없는_주문의_상태만_철_지난_것으로_센다() {
         Route route = route();
 
-        service.record(command(Ids.newId(), 1, List.of(route.firstOrderId()),
+        service.record(command(route.routeId(), 1, List.of(Ids.newId()),
                 RouteStopStatus.COMPLETED));
 
         assertThat(routes.row(route.routeId(), 1).status).isEqualTo(RouteStopStatus.PLANNED);
         assertThat(staleCount()).isEqualTo(1.0d);
+        assertThat(relocateCount()).isZero();
     }
 
     @Test
-    void 한_stop_의_주문이_갈라져도_남아_있는_쪽으로_찾는다() {
-        // 운영자 재배정은 stop 이 아니라 주문 하나를 옮긴다. 첫 주문만 보고 판정하면 「옮겨 간
-        // 쪽」을 집었을 때 남아 있는 방문을 놓친다.
+    void 이벤트가_말한_라우트에_없으면_지금_있는_라우트에_적용한다() {
+        // 경합의 형태: A 의 기사가 배송했고, dispatch 는 그것을 모른 채 재계획으로 그 주문을
+        // B 로 옮겼고, 그 뒤에 완료가 routeId=A 로 도착한다. 「A 에 없으니 버린다」면 dispatch 는
+        // 그 주문이 B 에서 미완료라고 믿고 B 의 기사를 이미 배송된 곳으로 보낸다.
+        Route moved = route();
+        UUID 떠나온_라우트 = Ids.newId();
+
+        service.record(command(떠나온_라우트, 1, List.of(moved.firstOrderId()),
+                RouteStopStatus.COMPLETED));
+
+        assertThat(routes.row(moved.routeId(), 1).status).isEqualTo(RouteStopStatus.COMPLETED);
+        assertThat(relocateCount()).as("경합 창의 크기다 — stale 과 섞으면 잴 수 없다")
+                .isEqualTo(1.0d);
+        assertThat(staleCount()).isZero();
+    }
+
+    @Test
+    void 재배치된_건의_진행은_지금_있는_라우트에_쓴다() {
+        // 이벤트가 말한 라우트의 진행을 쓰면, 그 라우트에는 없는 stop 의 완료가 남의 진행을
+        // 덮는다. 값이 틀리는 쪽은 언제나 이벤트 쪽이다.
+        Route moved = route();
+        UUID 떠나온_라우트 = Ids.newId();
+
+        service.record(command(떠나온_라우트, 1, List.of(moved.firstOrderId()),
+                RouteStopStatus.COMPLETED));
+
+        assertThat(cache.get(떠나온_라우트)).isEmpty();
+        assertThat(cache.get(moved.routeId()).orElseThrow().completed()).isEqualTo(1);
+    }
+
+    @Test
+    void 한_stop_의_주문이_갈라지면_이벤트의_라우트에_있는_쪽을_택한다() {
+        // 운영자 재배정은 stop 이 아니라 주문 하나를 옮긴다. 갈라졌으면 기사가 실제로 서 있던
+        // 자리를 택한다 — 덜 표시하면 기사가 한 번 더 가고, 더 표시하면 배송되지 않은 주문이
+        // 계획에서 사라진다.
         Route route = route();
+        Route 옮겨간_곳 = route();
         List<UUID> split = new ArrayList<>();
-        split.add(Ids.newId());                 // 이 라우트에 없는 주문이 먼저 온다
+        split.add(옮겨간_곳.firstOrderId());        // 다른 라우트로 간 주문이 먼저 온다
         split.add(route.middleOrderId());
 
         service.record(command(route.routeId(), 2, split, RouteStopStatus.COMPLETED));
 
         assertThat(routes.row(route.routeId(), 2).status).isEqualTo(RouteStopStatus.COMPLETED);
+        assertThat(routes.row(옮겨간_곳.routeId(), 1).status).isEqualTo(RouteStopStatus.PLANNED);
         assertThat(staleCount()).isZero();
+        assertThat(relocateCount()).isZero();
     }
 
     // ------------------------------------------------------------ 결정 2 — 개정으로 거르지 않는다
@@ -310,10 +346,30 @@ class RecordDeliveryStatusServiceTest {
 
         assertThat(staleCount()).isZero();
         assertThat(registry.counter(DispatchMetrics.SCAN_AFTER_CANCEL).count()).isZero();
+        assertThat(relocateCount()).isZero();
         assertThat(cache.get(route.routeId())).isEmpty();
     }
 
+    @Test
+    void 재배치를_적용하다_실패해도_카운터를_올리지_않는다() {
+        // 같은 규칙이 새 카운터에도 걸린다 — 「경합 창이 넓어졌다」는 알림이 사실은 적재
+        // 실패였다는 것을 대시보드는 말해 주지 않는다.
+        Route moved = route();
+        RecordDeliveryStatusService failing =
+                new RecordDeliveryStatusService(new FailingWrite(), cache, metrics);
+
+        assertThatThrownBy(() -> failing.record(command(Ids.newId(), 1,
+                List.of(moved.firstOrderId()), RouteStopStatus.COMPLETED)))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(relocateCount()).isZero();
+    }
+
     // ------------------------------------------------------------ 픽스처
+
+    private double relocateCount() {
+        return registry.counter(DispatchMetrics.STATUS_AFTER_RELOCATE).count();
+    }
 
     private double staleCount() {
         return registry.counter(MessagingMetrics.EVENT_STALE,
