@@ -2,7 +2,7 @@
 # 시나리오 정의 (DESIGN.md §5.6 — "시나리오 YAML")
 #
 # 새 시나리오는 여기에 이름을 하나 더 만들면 된다. 코드를 고치지 않는다.
-# 기사 시뮬레이터가 붙는 Phase 5 에서 이 파일에 driver 절이 생긴다.
+# driver 절이 있으면 route.assigned 를 구독해 기사까지 돈다(Phase 5-2). 없으면 주문만 넣는다.
 # =============================================================================
 
 dawnline:
@@ -36,3 +36,35 @@ dawnline:
           DAWN: 1
           SAME_DAY: 1
           NEXT_DAY: 1
+
+      # Phase 5-2 의 DoD 시나리오 — 늦게 출발한 기사 (IMPLEMENTATION_PLAN Phase 5-2).
+      #
+      # 출발을 최대 30분 늦추고 구간마다 최대 60%를 더 쓴다. 그 지연이 곧 tracking 이
+      # 계산하는 편차이므로(occurredAt 이 계획에서 파생되기 때문) at-risk 가 난다 —
+      # 이 시나리오가 확인하는 것은 "at-risk 가 났다" 까지다. **몇 번 났는지는 보지 않는다**:
+      # 쿨다운 TTL 은 벽시계 5분인데 여기서는 시뮬레이션 시각이 600배로 흐르므로 라우트당
+      # 한 번만 보인다. 그것은 시뮬레이터의 제약이지 tracking 의 규칙이 아니다(ADR-046).
+      # 횟수를 보려면 speed 를 1 로 두고 실제 시간만큼 기다린다.
+      late-injection:
+        orders: 60
+        rate-per-second: 20
+        seed: 20260919
+        customers: 60
+        cold-ratio: 0.25
+        tier-weights:
+          DAWN: 5
+          SAME_DAY: 3
+          NEXT_DAY: 2
+        driver:
+          # 기다릴 라우트 수. 계획이 이보다 많이 만들면 나머지 기사는 실행이 끝날 때 끊긴다.
+          routes: 1
+          # 시뮬레이션 초 ÷ 벽시계 초. 4시간짜리 라우트가 24초에 끝난다.
+          speed: 600
+          timeout-seconds: 300
+          scan-retry-seconds: 30
+          scan-base-url: ${DAWNLINE_SIM_SCAN_BASE_URL:http://localhost:8084}
+          # 늦게 출발하는 것이 가장 흔한 지연 원인이고, 첫 도착 스캔 전에 이미 알 수 있다(§5.4).
+          departure-delay-seconds: 1800
+          delay-probability: 1.0
+          delay-magnitude: 0.6
+          failure-probability: 0.05

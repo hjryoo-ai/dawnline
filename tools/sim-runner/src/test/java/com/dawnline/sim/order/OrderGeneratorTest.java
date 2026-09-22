@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 class OrderGeneratorTest {
 
     private static final Scenario SCENARIO = new Scenario(
-            200, 20, 20260904L, 200, 0.25, Map.of("DAWN", 5, "SAME_DAY", 3, "NEXT_DAY", 2));
+            200, 20, 20260904L, 200, 0.25, Map.of("DAWN", 5, "SAME_DAY", 3, "NEXT_DAY", 2), null);
 
     private static RandomGenerator random(long seed) {
         return RandomGeneratorFactory.of("L64X128MixRandom").create(seed);
@@ -81,7 +81,7 @@ class OrderGeneratorTest {
 
     @Test
     void 고객_풀은_설정한_크기를_넘지_않는다() {
-        Scenario small = new Scenario(200, 20, 5L, 10, 0.25, Map.of("DAWN", 1));
+        Scenario small = new Scenario(200, 20, 5L, 10, 0.25, Map.of("DAWN", 1), null);
         Set<Object> customers = new HashSet<>();
         generate(small, 5L, 200).forEach(order -> customers.add(order.customerId()));
         assertThat(customers).hasSizeLessThanOrEqualTo(10);
@@ -109,9 +109,9 @@ class OrderGeneratorTest {
         // 같은 가중치를 다른 순서로 넣어도 같은 수열이 나와야 한다. HashMap 의 순회 순서에
         // 결정론이 기대면, 키가 하나 늘어나는 날 재현이 조용히 깨진다.
         Scenario a = new Scenario(10, 5, 9L, 10, 0.0,
-                Map.of("DAWN", 2, "SAME_DAY", 1, "NEXT_DAY", 1));
+                Map.of("DAWN", 2, "SAME_DAY", 1, "NEXT_DAY", 1), null);
         Scenario b = new Scenario(10, 5, 9L, 10, 0.0,
-                Map.of("NEXT_DAY", 1, "DAWN", 2, "SAME_DAY", 1));
+                Map.of("NEXT_DAY", 1, "DAWN", 2, "SAME_DAY", 1), null);
         assertThat(generate(a, 9L, 50)).isEqualTo(generate(b, 9L, 50));
     }
 }

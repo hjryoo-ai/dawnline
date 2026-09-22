@@ -49,6 +49,74 @@ class SimPropertiesTest {
     }
 
     @Test
+    void scenarios_yml_의_late_injection_은_기사까지_돈다() throws IOException {
+        SimProperties.Scenario late = bindScenariosYml().scenarios().get("late-injection");
+
+        assertThat(late).isNotNull();
+        SimProperties.Scenario.Driver driver = late.driver();
+        assertThat(driver).isNotNull();
+        assertThat(driver.routes()).isEqualTo(1);
+        assertThat(driver.speed()).isEqualTo(600.0);
+        // 늦게 출발하는 것이 가장 흔한 지연 원인이다 (§5.4). 이 시나리오의 이름이 그것이다.
+        assertThat(driver.departureDelaySeconds()).isEqualTo(1800);
+        assertThat(driver.delayProbability()).isEqualTo(1.0);
+        assertThat(driver.delayMagnitude()).isPositive();
+    }
+
+    @Test
+    void 기사_절이_없는_시나리오는_브로커_없이_돈다() throws IOException {
+        // driver 가 null 이면 리스너를 켜지 않는다(ScenarioRunner). smoke 가 Kafka 를 요구하게
+        // 되는 순간 Phase 1 의 시나리오가 Phase 5 의 스택을 필요로 한다.
+        assertThat(bindScenariosYml().scenarios().get("smoke").driver()).isNull();
+    }
+
+    @Test
+    void 기사_절이_있는_시나리오는_전부_돌_수_있는_값이다() throws IOException {
+        // 이름을 열거하지 않는다 — 새 시나리오가 조용히 검사 밖에 남지 않게(CLAUDE.md 코딩 컨벤션).
+        Map<String, SimProperties.Scenario> scenarios = bindScenariosYml().scenarios();
+
+        assertThat(scenarios).isNotEmpty();
+        assertThat(scenarios.values()).filteredOn(scenario -> scenario.driver() != null)
+                .isNotEmpty()
+                .allSatisfy(scenario -> {
+                    SimProperties.Scenario.Driver driver = scenario.driver();
+                    assertThat(driver).isNotNull();
+                    assertThat(driver.scanBaseUrl()).isNotBlank();
+                    assertThat(driver.timeoutSeconds()).isPositive();
+                    // 라우트가 생기려면 주문이 흘러야 한다. 주문 없는 기사 시나리오는 기다리기만 한다.
+                    assertThat(scenario.orders()).isPositive();
+                });
+    }
+
+    @Test
+    void 고른_시나리오가_없으면_배선은_null_을_받는다() throws IOException {
+        // selected() 와 달리 던지지 않는다 — 배선에서 던지면 "있는 것: [...]" 안내가
+        // 컨텍스트 기동 실패의 스택 아래로 묻힌다.
+        SimProperties properties = new SimProperties("없는것", "http://localhost:8081", 5000,
+                bindScenariosYml().scenarios());
+
+        assertThat(properties.selectedOrNull()).isNull();
+    }
+
+    @Test
+    void 기사_설정의_값은_범위_안이어야_한다() {
+        assertThatThrownBy(() -> driver(0, 1.0, 0.0, 0.5))
+                .hasMessageContaining("driver.routes");
+        assertThatThrownBy(() -> driver(1, 1.5, 0.0, 0.5))
+                .hasMessageContaining("driver.delay-probability");
+        assertThatThrownBy(() -> driver(1, 0.5, 0.0, 1.5))
+                .hasMessageContaining("driver.failure-probability");
+        assertThatThrownBy(() -> driver(1, 0.5, -0.1, 0.5))
+                .hasMessageContaining("driver.delay-magnitude");
+    }
+
+    private static SimProperties.Scenario.Driver driver(int routes, double delayProbability,
+            double delayMagnitude, double failureProbability) {
+        return new SimProperties.Scenario.Driver(routes, 600.0, 300, 30, "http://localhost:8084",
+                delayProbability, delayMagnitude, failureProbability, 0);
+    }
+
+    @Test
     void 이름이_틀리면_있는_것을_함께_알려_준다() throws IOException {
         SimProperties properties = new SimProperties("없는것", "http://localhost:8081", 5000,
                 bindScenariosYml().scenarios());
@@ -61,17 +129,17 @@ class SimPropertiesTest {
 
     @Test
     void 잘못된_시나리오_값은_만들어지는_순간_거부된다() {
-        assertThatThrownBy(() -> new SimProperties.Scenario(0, 20, 1L, 10, 0.25, Map.of("DAWN", 1)))
+        assertThatThrownBy(() -> new SimProperties.Scenario(0, 20, 1L, 10, 0.25, Map.of("DAWN", 1), null))
                 .hasMessageContaining("orders");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 0, 1L, 10, 0.25, Map.of("DAWN", 1)))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 0, 1L, 10, 0.25, Map.of("DAWN", 1), null))
                 .hasMessageContaining("rate-per-second");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 0, 0.25, Map.of("DAWN", 1)))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 0, 0.25, Map.of("DAWN", 1), null))
                 .hasMessageContaining("customers");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 1.5, Map.of("DAWN", 1)))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 1.5, Map.of("DAWN", 1), null))
                 .hasMessageContaining("cold-ratio");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of()))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of(), null))
                 .hasMessageContaining("tier-weights");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of("DAWN", 0)))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of("DAWN", 0), null))
                 .hasMessageContaining("합이 0");
     }
 

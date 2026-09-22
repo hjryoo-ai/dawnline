@@ -1681,6 +1681,21 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    **seed 결정론**: 지연·실패 주입도 전부 seed 에서 뽑는다(불변규칙 12). 그리고 여기서 처음 흐르는
    `delivery.status` 에는 Phase 1 8단계 규칙대로 **브로커 도착 IT** 가 붙는다(`OrderPublishIT`·
    `FulfillmentPublishIT` 와 같은 형태).
+
+   **정정(2026-09-19, 5-2 착수 시점).** 그 「브로커 도착 IT」는 <em>5-1b</em> 가 이미 채웠다 —
+   `TrackingPublishIT` 이 스캔 → outbox → 브로커까지를 보고 팬아웃 수(`2 × stop 수`,
+   `DEPARTED_CAMP` 는 0)까지 못박는다. 이 항목이 놓여 있을 때는 tracking 이 없었고 `delivery.status`
+   가 5-2 에서 처음 흐를 것으로 보았지만, 실제 순서는 `0 → 1a → 1b → 2` 라 1b 에서 먼저 흘렀다.
+   **대조표에서 이 줄은 5-1b 에 귀속한다.** 5-2 가 대신 보는 것은 시뮬레이터 자신의 계약이다:
+   seed 동일 → 스캔 열 동일, 주입한 지연 = 편차, 개정 재진입, 404 재시도 상한, 그리고
+   `SimDriverIT`(브로커 → 스캔 API 전 구간).
+
+   **시뮬레이션 시각과 벽시계를 가른다.** 스캔의 `occurredAt` 은 `plannedDeparture`·`plannedArrival`
+   에서 파생하고 벽시계를 읽지 않는다. 그래야 <em>주입한 지연이 곧 tracking 이 계산하는 편차</em>가
+   되어 `late-injection` 이 값을 어설션할 수 있다. 배속(`speed`)은 대기에만 닿는다.
+   그 결과로 기록해 둘 것 하나: at-risk 쿨다운 TTL 은 **벽시계 5분**이라 압축된 시간에서는
+   라우트당 at-risk 가 한 번만 보인다. **시뮬레이터의 제약이지 tracking 의 규칙이 아니다** —
+   `late-injection` 의 어설션은 「at-risk 가 났다」까지이고, 「몇 번 났다」는 배속 1에서만 의미가 있다.
 3. dispatch 재계획(§6.8): `delivery.at-risk` 리스너, 미완료 stop 부분 재계획, `revision` 증가 발행, 쿨다운.
 
    **쿨다운은 첫 커밋에 함께 넣는다** — `routes.last_replanned_at` 을 재계획 트랜잭션 안에서

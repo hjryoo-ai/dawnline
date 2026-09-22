@@ -1027,6 +1027,22 @@ Phase 2-7 에서 order-service 쪽을 구현하며 드러났고, Phase 5-1a 에�
 ### 5.6 sim-runner / benchmark 도구
 
 - `sim-runner` (Spring Boot CLI, `tools/sim-runner`): 시나리오 YAML로 (a) 주문 생성기 — 캠프별 좌표 분포, 티어 비율, 냉장 비율, 초당 rps 곡선(평시·피크) (b) 기사 시뮬레이터 — `route.assigned` 구독 후 stop을 순서대로 이동하며 스캔 이벤트 호출, 지연·실패 확률 주입.
+
+  **시뮬레이션 시각은 벽시계가 아니다** (Phase 5-2). 스캔의 `occurredAt` 은 계약의
+  `plannedDeparture`·`plannedArrival` 에 seed 에서 뽑은 지연을 더한 값이고, `Instant.now()` 가
+  아니다(불변규칙 12). 그래야 *주입한 지연이 곧 tracking 이 계산하는 편차*가 되어 「늦었다」를
+  값으로 확인할 수 있다. 배속(`speed`)은 호출 사이의 대기에만 닿고 페이로드에 닿지 않으므로,
+  같은 seed 는 배속과 무관하게 같은 스캔 열을 낸다.
+  그 결과로 적어 둘 것 하나: `route:{id}:atrisk:cooldown` 의 TTL 은 **벽시계** 5분이라
+  압축된 시간에서는 라우트당 at-risk 가 한 번만 보인다 — **시뮬레이터의 제약이지 tracking 의
+  규칙이 아니다**([ADR-046](adr/ADR-046-at-risk-is-an-event.md): 쿨다운이 지키는 것은 알림 수다).
+  시나리오의 어설션은 「at-risk 가 났다」까지이고, 「몇 번 났다」는 배속 1에서만 의미가 있다.
+
+  시뮬레이터는 개정을 받으면 **현재 위치에서 다시 계획한다**. 그래서 「라우트 → 스캔 열」이 아니라
+  「라우트 + 현재 위치 → 남은 스캔 열」이 순수 함수의 모양이고, 이미 끝낸 stop 은 새 개정이 뭐라
+  하든 다시 스캔하지 않는다 — tracking 의 「개정은 종결을 되돌리지 않는다」와 대칭이며 축도 같다
+  (`seq` 가 아니라 주문 id). 이것이 있어야 Phase 5-3 의 「at-risk → 재계획 → revision 반영」에서
+  *기사가 새 순서를 따르는지*를 tracking DB 밖에서 확인할 수 있다.
 - `benchmark` (`tools/benchmark`): 고정 데이터셋(JSON)으로 `DispatchStrategy` 구현을 메모리 내에서 실행·비교 (JMH 대신 단순 반복 측정, 결과 CSV/Markdown 생성).
 
 ---
@@ -1855,7 +1871,7 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
 | `route:{id}:progress` | HASH | dispatch/tracking | 2d | DB 조회 |
-| `driver:{id}:pos` | GEO | tracking | 1h | 없음(시각화용) |
+| `driver:{id}:pos` | GEO | tracking | 1h | 없음(시각화용). **아직 아무도 쓰지 않는다**(2026-09-19, Phase 5-2) — 쓰는 코드도 읽는 코드도 없고 tracking 은 `route.assigned` 의 `driverId` 를 읽지도 않는다(`RouteAssignedPayload`). 채우는 시점은 **첫 소비자가 나타날 때**, 즉 Phase 6 의 ops-web 지도다 — dispatch OpenAPI 산출물·`delivery.route-departed` 와 같은 원칙이다(「부재는 첫 소비자가 나타나는 시점에 채운다」). 그때까지 기사 시뮬레이터는 스캔마다 `lat`·`lng` 를 실어 보내 데이터가 비어 있지 않게만 한다 |
 | `route:{id}:atrisk:cooldown` | STRING NX | tracking | 5m | 중복 at-risk 허용. **흡수하는 쪽은 멱등 소비자가 아니다**(2026-09-19 정정) — 두 at-risk 는 서로 다른 `eventId` 라 `processed_events` 에는 둘 다 처음 보는 이벤트다. 중복이 *재계획 두 번*이 되지 않게 하는 것은 dispatch 의 DB 쿨다운이고(§6.8 `routes.last_replanned_at`, 재계획 트랜잭션 안에서 비교·갱신), 이 키가 지키는 것은 **알림 수**다 ([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 폴백은 세어 둔다 — `dawnline_at_risk_cooldown_bypassed_total` |
 
 원칙: Redis는 **성능·조정(coordination)** 용도이며 **유일한 진실 저장소가 아니다**. 어떤 키가 사라져도 정확성은 DB로 회복된다.
@@ -2196,7 +2212,7 @@ dawnline/
 | # | 불변 규칙 | ArchUnit | 그 밖의 강제 수단 | 음성 검증 |
 |---|---|---|---|---|
 | 1 | Outbox 필수 | 규칙 6(직접 발행 차단), 규칙 5(트랜잭션 경계 위치) | `OutboxAppender` 가 유일한 발행 API — `libs/messaging` 은 다른 발행 경로를 제공하지 않는다. 어노테이션이 <em>사라지는</em> 것은 ArchUnit이 못 잡으므로 `PlaceOrderTransactionTest` 가 그 존재를 직접 확인한다 | 규칙 6 ✅ / 규칙 5 ✅ |
-| 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트, 리스너 IT 가 같은 이벤트를 두 번 보내 상태가 한 번만 바뀌는지 확인 | 규칙 4 ✅ / 멱등 체크 자체는 ✗ |
+| 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트, 리스너 IT 가 같은 이벤트를 두 번 보내 상태가 한 번만 바뀌는지 확인. **예외 하나**: `tools/sim-runner` 의 기사 시뮬레이터는 `route.assigned` 를 구독하지만 DB 도 `processed_events` 도 없고, 대신 `DriverFleet` 이 라우트별 개정 최댓값으로 거른다(tracking 의 `route_revisions` 와 같은 모양, `DriverFleetTest`). **예외가 성립하는 이유는 「도구라서」가 아니라 「하류가 멱등이라서」다** — 중복 소비가 만드는 것은 tracking 으로 가는 중복 스캔이고 그것은 §8.5 의 「`(routeId, seq, type)` + 상태 머신」이 `STALE` 로 흡수한다. **하류가 멱등이 아닌 소비자는 이 예외를 쓸 수 없다**. 그 리스너는 ArchUnit 규칙 4 의 대상도 아니다 — `tools/sim-runner` 는 `dawnline.spring-service` 규약을 쓰지 않아 ArchUnit 이 돌지 않고, 도구에는 `adapter.in.messaging` 이라는 자리 자체가 없다 (2026-09-19, Phase 5-2) | 규칙 4 ✅ / 멱등 체크 자체는 ✗ |
 | 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✅(양방향) / DB 권한 ✅(컨테이너에서 거부 확인) |
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
@@ -2287,6 +2303,21 @@ dawnline/
    2xx 를 제외하므로 이것을 **구조상 볼 수 없다.** 그래서 짝을 둔다: **4xx·5xx 는
    `ProblemDetail` 이고 2xx 는 이름 있는 타입이다**(`successBodiesWithoutNamedType`). 둘을 합쳐야
    검사가 「오류를 파싱할 수 있는가」가 아니라 **「계약이 본문을 말하는가」**를 본다.
+
+   **좁은 자리는 클래스패스에도 있다** (2026-09-22, Phase 5-2). `sim-runner` 는 DB 가 없어
+   `libs/messaging` 에서 JPA 를 빼 오는데, 그 제외를 `implementation(project(…))` <em>선언 하나</em>에
+   걸어 두었다. 뒤에 추가한 `integrationTestImplementation(testFixtures(project(…)))` 가 같은
+   프로젝트를 다시 선언하면서 JPA 가 돌아왔다 — Gradle 의 `exclude` 는 **선언마다** 걸린다.
+   그 누수를 지켜야 할 `MessagingDependencyTest` 는 **`test` 클래스패스만** 보고 있었고, 새는 자리는
+   `integrationTest` 였다. 그래서 단위 테스트는 초록이었고, 드러난 것은 `SimDriverIT` 이 컨텍스트를
+   띄우다 `Failed to determine a suitable driver class` 로 죽었을 때다. 위의 OpenAPI 건과 같은
+   모양이다 — **대조는 있었는데 보는 자리가 대상보다 좁았다.** 고친 검사는 같은 어설션을 두
+   클래스패스에서 돌린다(`MessagingDependencyTest` · `MessagingDependencyIT`, 어설션은 한 벌).
+
+   그리고 제외 자체는 **모듈 전체에 한 번** 선언한다(`configurations.configureEach`).
+   「선언이 늘 때마다 같은 한 줄을 기억한다」는 규칙은 조용히 샌다 — 기억에 기대는 규칙을
+   기계가 지키는 규칙으로 바꾸는 것은 규칙 2 의 「빼는 방식」, CI 의 「마이그레이션 불변 검사」와
+   같은 계열이다. 셋 다 사람이 잊어도 같은 답이 나오게 만든다.
 
 **픽스처가 정하지 않은 축** — 「통과했지만 아무것도 검사하지 않는 테스트」의 목록이다. 공통점은
 하나다: **지금 깨지지 않는 이유가 테스트에 적혀 있지 않다.** Phase 3 마감에서 셋이었던 것이

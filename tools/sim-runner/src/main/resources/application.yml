@@ -20,6 +20,25 @@ spring:
     import:
       - classpath:scenarios.yml
 
+  # --- Kafka: 기사 시뮬레이터가 route.assigned 를 구독한다 (Phase 5-2) ---------
+  # 컨테이너끼리는 kafka:9092, 호스트 도구는 localhost:29092 를 쓴다(.env.example).
+  # 리스너 컨테이너는 꺼진 채로 등록되고(@KafkaListener autoStartup=false), 기사 설정이 있는
+  # 시나리오에서만 DriverScenario 가 켠다 — 그래야 smoke 가 브로커 없이 돈다.
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    consumer:
+      # tracking-service 와 다른 그룹이다. 둘은 같은 토픽을 독립적으로 읽으므로 이 도구가
+      # 먼저 읽는 일이 있고, 그때 스캔은 404 를 받는다 (DriverTrip 의 재시도 상한 참고).
+      group-id: ${DAWNLINE_SIM_GROUP_ID:sim-runner}
+      # earliest 가 아니다. 이 도구는 "지금부터 확정되는" 라우트를 돌아야 하고, 개발 볼륨에
+      # 남아 있는 옛 이벤트(Phase 5-1a 이전의 promisedWindow 없는 것들)를 다시 돌 이유가 없다.
+      auto-offset-reset: latest
+      enable-auto-commit: false
+    listener:
+      # 토픽은 compose 의 kafka-init 이 만든다. 없더라도 기동을 막지 않는다 —
+      # 대신 KafkaRouteFeed 가 파티션 배정을 기다리다 시간이 다 되면 말한다.
+      missing-topics-fatal: false
+
 dawnline:
   sim:
     # --dawnline.sim.scenario=... 로 바꾼다.

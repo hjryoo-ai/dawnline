@@ -1,7 +1,10 @@
 # tools/sim-runner — 시나리오 CLI
 
-시나리오 YAML 로 주문을 만들어 order-service 에 넣는다 (DESIGN.md §5.6).
-**Phase 1 에서는 주문 생성기만** 있다. 기사 시뮬레이터는 라우트가 생기는 Phase 5 의 일이다.
+시나리오 YAML 로 (a) 주문을 만들어 order-service 에 넣고 (b) `route.assigned` 를 구독해
+기사가 라우트를 도는 것까지 한다 (DESIGN.md §5.6).
+
+**기사는 시나리오에 `driver` 절이 있을 때만 돈다.** 없으면 주문만 넣는다 — 그래야 `smoke` 가
+브로커 없이 돈다. 리스너 컨테이너는 꺼진 채로 등록되고, 켜는 것은 `DriverScenario` 다.
 
 ## 실행
 
@@ -13,6 +16,9 @@ make smoke SIM_BASE_URL=http://localhost:9081
 
 # gradle 로 직접
 ./gradlew :tools:sim-runner:bootRun --args='--dawnline.sim.scenario=smoke'
+
+# 기사까지 — 늦게 출발한 기사를 주입한다 (Phase 5-2)
+./gradlew :tools:sim-runner:bootRun --args='--dawnline.sim.scenario=late-injection'
 ```
 
 시나리오는 `src/main/resources/scenarios.yml` 에 있다. 새 시나리오는 거기에 이름을 하나
@@ -33,6 +39,32 @@ make smoke SIM_BASE_URL=http://localhost:9081
 **실패를 삼키지 않는다** — 한 건이 실패해도 계속 보내되, 끝에 Problem Details 의 `code` 별로
 몇 건인지 말한다. 그리고 하나라도 접수되지 않으면 0 이 아닌 종료 코드로 끝난다.
 `make demo` 가 "성공" 이라고 말한 뒤 DB 가 비어 있는 상황을 만들지 않기 위해서다.
+
+## 기사 시뮬레이터 (Phase 5-2)
+
+**시뮬레이션 시각은 벽시계가 아니다.** 스캔의 `occurredAt` 은 계약의 `plannedDeparture`·
+`plannedArrival` 에 seed 에서 뽑은 지연을 더한 값이고 `Instant.now()` 가 아니다. 그래야
+*주입한 지연이 곧 tracking 이 계산하는 편차*가 되어 「늦었다」를 값으로 확인할 수 있다.
+배속(`speed`)은 호출 사이의 대기에만 닿으므로 같은 seed 는 배속과 무관하게 같은 스캔 열을 낸다.
+
+그래서 적어 둘 것 하나: at-risk 쿨다운 TTL 은 **벽시계 5분**인데 `late-injection` 은 600배속이라
+라우트당 at-risk 가 한 번만 보인다. **시뮬레이터의 제약이지 tracking 의 규칙이 아니다**
+(ADR-046: 쿨다운이 지키는 것은 알림 수다). 횟수를 보려면 `speed: 1` 로 두고 실제 시간만큼
+기다린다.
+
+**개정이 오면 현재 위치에서 다시 계획한다.** `DriverSimulator` 는 「라우트 → 스캔 열」이 아니라
+「라우트 + 현재 위치 → 남은 스캔 열」이다. 이미 끝낸 stop 은 새 개정이 뭐라 하든 다시 스캔하지
+않고, 그 판단은 `seq` 가 아니라 **주문 id** 로 한다 — 개정이 순서를 바꾸면 같은 `seq` 가 다른
+지점을 가리키기 때문이고, tracking 이 배송 단위로 판단하는 것과 같은 축이다.
+
+**404 는 재시도하되 상한이 있다.** tracking 과 이 도구는 같은 토픽을 다른 컨슈머 그룹으로 읽어
+이 도구가 먼저 읽는 일이 있다. 다만 조용히 무한 재시도하면 시나리오 결과가 오염되므로
+(`scan-retry-seconds`) 를 넘기면 그 라우트를 포기하고 로그·카운터로 말한다.
+
+**`processed_events` 가 없다** — 불변규칙 2 의 예외다. 성립하는 이유는 「도구라서」가 아니라
+**하류가 멱등이라서**다: 중복이 만드는 것은 tracking 으로 가는 중복 스캔이고 §8.5 의
+「`(routeId, seq, type)` + 상태 머신」이 `STALE` 로 흡수한다. 하류가 멱등이 아닌 도구는 같은
+예외를 쓸 수 없다 (DESIGN.md §13 매핑표).
 
 ## 알아 둘 결합
 
