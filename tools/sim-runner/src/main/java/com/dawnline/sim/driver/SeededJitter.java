@@ -10,9 +10,18 @@ import java.util.random.RandomGenerator;
  * seed 하나에서 모든 지연·실패를 뽑는 {@link Jitter}.
  *
  * <p>좌표 {@code (seed, routeId, revision, seq)} 를 SplitMix64 로 섞어 그 자리만의 난수원을
- * 만들고, <strong>항상 같은 순서로 같은 개수</strong>를 뽑는다. 조건부로 뽑으면 다음 값의 자리가
- * 밀려서 「확률을 0.3에서 0.4로 바꿨더니 실패하는 stop 이 전부 달라졌다」가 된다 — 그러면
- * 시나리오 둘을 비교할 수 없다.
+ * 만들고, <strong>항상 같은 순서로 같은 개수</strong>를 뽑는다 — 쓰지 않을 값도 뽑는다.
+ *
+ * <h2>안 쓰는 값을 왜 뽑는가 — 공통 난수(common random numbers)</h2>
+ * 시뮬레이션에서 두 설정을 비교할 때 쓰는 표준 기법이다. 각 자리의 난수를 <em>그 자리에
+ * 고정</em>해 두면 설정을 바꿨을 때 달라지는 것이 <strong>바꾼 그것뿐</strong>이 되고, 차이를
+ * 주입한 값 덕으로 돌릴 수 있다.
+ *
+ * <p>조건부로 뽑으면 그 성질이 깨진다. 지연 확률에 걸린 stop 만 크기를 한 번 더 뽑게 되므로
+ * 다음 값의 자리가 밀리고, 「지연 확률을 0.3에서 0.4로 바꿨더니 <em>실패하는</em> stop 이 전부
+ * 달라졌다」가 된다 — 파라미터 하나가 다른 축의 운명까지 바꾸면 시나리오 둘은 비교 대상이
+ * 아니다. 그래서 {@link Draws} 는 넷을 <strong>언제나</strong> 뽑는다. 쓰이지 않는 추출을 지우면
+ * 이 성질이 사라지고, 사라진 것은 시나리오를 비교하기 전까지 보이지 않는다.
  *
  * <p>난수 알고리즘을 이름으로 고정하는 이유는 {@code SimRunnerConfig} 와 같다: JDK 가 올라가도
  * 같은 seed 가 같은 수열을 낸다.
@@ -89,7 +98,10 @@ public final class SeededJitter implements Jitter {
         return REASONS.get(Math.clamp(index, 0, REASONS.size() - 1));
     }
 
-    /** 한 자리에서 뽑는 값 전부. 순서와 개수가 고정이어야 한다 — 클래스 Javadoc 참고. */
+    /**
+     * 한 자리에서 뽑는 값 전부. <strong>순서와 개수가 고정</strong>이어야 한다 — 공통 난수의
+     * 요점이고, 줄이면 파라미터 하나가 다른 축의 값을 바꾼다 (클래스 Javadoc).
+     */
     private record Draws(double delayRoll, double delaySize, double failureRoll, double reasonRoll) {
     }
 

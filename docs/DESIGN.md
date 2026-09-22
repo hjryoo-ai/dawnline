@@ -2304,6 +2304,21 @@ dawnline/
    `ProblemDetail` 이고 2xx 는 이름 있는 타입이다**(`successBodiesWithoutNamedType`). 둘을 합쳐야
    검사가 「오류를 파싱할 수 있는가」가 아니라 **「계약이 본문을 말하는가」**를 본다.
 
+   **좁은 자리는 클래스패스에도 있다** (2026-09-22, Phase 5-2). `sim-runner` 는 DB 가 없어
+   `libs/messaging` 에서 JPA 를 빼 오는데, 그 제외를 `implementation(project(…))` <em>선언 하나</em>에
+   걸어 두었다. 뒤에 추가한 `integrationTestImplementation(testFixtures(project(…)))` 가 같은
+   프로젝트를 다시 선언하면서 JPA 가 돌아왔다 — Gradle 의 `exclude` 는 **선언마다** 걸린다.
+   그 누수를 지켜야 할 `MessagingDependencyTest` 는 **`test` 클래스패스만** 보고 있었고, 새는 자리는
+   `integrationTest` 였다. 그래서 단위 테스트는 초록이었고, 드러난 것은 `SimDriverIT` 이 컨텍스트를
+   띄우다 `Failed to determine a suitable driver class` 로 죽었을 때다. 위의 OpenAPI 건과 같은
+   모양이다 — **대조는 있었는데 보는 자리가 대상보다 좁았다.** 고친 검사는 같은 어설션을 두
+   클래스패스에서 돌린다(`MessagingDependencyTest` · `MessagingDependencyIT`, 어설션은 한 벌).
+
+   그리고 제외 자체는 **모듈 전체에 한 번** 선언한다(`configurations.configureEach`).
+   「선언이 늘 때마다 같은 한 줄을 기억한다」는 규칙은 조용히 샌다 — 기억에 기대는 규칙을
+   기계가 지키는 규칙으로 바꾸는 것은 규칙 2 의 「빼는 방식」, CI 의 「마이그레이션 불변 검사」와
+   같은 계열이다. 셋 다 사람이 잊어도 같은 답이 나오게 만든다.
+
 **픽스처가 정하지 않은 축** — 「통과했지만 아무것도 검사하지 않는 테스트」의 목록이다. 공통점은
 하나다: **지금 깨지지 않는 이유가 테스트에 적혀 있지 않다.** Phase 3 마감에서 셋이었던 것이
 Phase 4-0 하나의 PR 에서 여섯이 됐고, 여섯 다 *다른 것이 우연히 그 자리를 메우고 있었다.*

@@ -66,6 +66,11 @@ tasks.named<Test>("test") {
 // 자동설정 이름을 spring.autoconfigure.exclude 에 문자열로 적는 방법도 있지만, Boot 4 에서
 // 자동설정 패키지가 재배치됐고 이름이 틀리면 기동이 "그런 클래스가 없다" 로 끝난다 —
 // 클래스패스에서 빼면 libs/messaging 의 @ConditionalOnClass 가 알아서 꺼진다.
+//
+// **이 줄을 지우면 무엇이 잡는가**: MessagingDependencyTest(test 클래스패스)와
+// MessagingDependencyIT(integrationTest 클래스패스)가 같은 어설션으로 잡고, 그 뒤 SimDriverIT 이
+// 컨텍스트 기동에서 잡는다. 주석이 아니라 그 셋이 이 결정을 지킨다 —
+// 실제로 떼어 보고 IT 가 빨갛게 되는 것을 확인했다(2026-09-22).
 configurations.configureEach {
     exclude(group = "org.springframework.boot", module = "spring-boot-starter-data-jpa")
 }

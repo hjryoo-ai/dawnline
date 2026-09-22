@@ -75,7 +75,7 @@ class DriverSimulatorTest {
     }
 
     @Test
-    void 취소된_stop_은_가지_않고_그만큼_시간도_쓰지_않는다() {
+    void 취소된_stop_은_가지_않은_곳이라_앵커를_옮기지_않는다() {
         AssignedRoute route = new AssignedRoute(ROUTE, 1, DRIVER, new AssignedRoute.Summary(DEPARTURE),
                 List.of(stop(1, 20, 5, null), stop(2, 40, 5, "CANCELLED"), stop(3, 60, 5, null)));
 
@@ -131,7 +131,7 @@ class DriverSimulatorTest {
     }
 
     @Test
-    void 개정은_이미_끝낸_stop_을_되돌리지_않는다() {
+    void 끝낸_stop_은_갔던_곳이라_앵커를_옮기고_다시_스캔하지_않는다() {
         // tracking 의 "개정은 종결을 되돌리지 않는다" 와 대칭이다. 축도 같다 — seq 가 아니라 주문이다.
         DriverSimulator simulator = new DriverSimulator(ON_TIME);
         TripProgress progress = new TripProgress(DEPARTURE.plus(Duration.ofMinutes(25)),
@@ -140,6 +140,10 @@ class DriverSimulatorTest {
         List<ScanCall> remaining = simulator.remainingCalls(route(2), progress);
 
         assertThat(remaining).extracting(ScanCall::stopSeq).containsExactly(3, 3);
+        // 앵커가 stop 2 의 계획 완료(45분)로 옮겨졌으므로 남은 구간은 15분이다: 25 + 15 = 40.
+        // 옮기지 않았다면 캠프부터 다시 재어 60분 구간이 되고 도착은 85분이 된다 — 갔던 곳에서
+        // 쓴 시간을 두 번 세는 것이다.
+        assertThat(minutesAfterDeparture(remaining.getFirst().occurredAt())).isEqualTo(40);
     }
 
     @Test
