@@ -1802,7 +1802,8 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    컴파일 의존 · JaCoCo `classDirectories`)이 피처 변형을 모르기 때문이다 — 모듈은 둘 다 공짜로
    받는다. ArchUnit 규칙 9·10 이 그 경계를 지킨다.
 
-0-b. **(선결, 판정 완료) `delivery.route-departed` 를 정한다** (Phase 5-1b 이월 — 2026-09-23).
+0-b. **(선결, 판정 완료) `delivery.route-departed` 를 정한다**
+   ([ADR-050](adr/ADR-050-route-departure-is-an-event.md), Phase 5-1b 이월 — 2026-09-23).
    tracking 은 `DEPARTED_CAMP` 를 브로커로 내보내지 않는다 — 라우트의 사건을 stop 수만큼 반복하는
    꼴이고, order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다(§5.4). **정의하는 쪽으로 정했고,
    근거는 ops 화면이 아니라 사실의 가시성이다**: 5-1b 가 출발을 **첫 편차의 출처**로 만들었는데
@@ -1813,7 +1814,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    고전 KPI(출발 정시율)라 peak-day 스토리에서 「출발 지연 → at-risk → 재계획」의 첫 칸이 된다.
    **「정의하지 않는다」가 더 단순하다는 것을 알고 취하지 않았다** — 그 단순함의 대가가 운영자
    에게서 마지막 개입 창을 숨기는 것이기 때문이고, 그 문장이 이 결정의 근거다.
-   계약은 §4.1 에 적었다(`delivery.route-departed.v1`, 키 `routeId`). **스키마·예시·토픽 생성·발행은
+   계약은 §4.1 과 ADR-050 에 적었다(`delivery.route-departed.v1`, 키 `routeId`). **스키마·예시·토픽 생성·발행은
    아래 작업 1 에서 한다** — 소비자(ops 의 `rm_routes` 프로젝션)가 먼저 정의하고 tracking 이
    outbox 로 낸다. 소비자 주도를 지키는 것이 이 순서다.
 
