@@ -13,8 +13,9 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>계약에 있는데 여기 없는 필드는 읽지 않는 것이다. {@code EventJson} 이 모르는 필드를 무시하므로
  * (§4.7) 발행자가 필드를 더해도 깨지지 않는다 — 소비자가 자기가 읽는 것만 선언하는 것이 소비자
- * 주도 계약의 요점이다. 특히 {@link RouteDeparted} 는 ADR-050 이 정한 여섯 칸 중 셋만 읽는다
- * (재검토 지점 3 — 읽는지는 코드가 보인다).
+ * 주도 계약의 요점이다. 특히 {@link RouteDeparted} 는 계약의 다섯 칸 중 셋만 읽는다 — {@code revision}·
+ * {@code plannedDeparture} 는 출발 정시율(KPI 단계)의 자리다. 여섯째였던 {@code stopCount} 는
+ * 이 소비자가 읽지 않아 계약에서 뺐다(ADR-050 재검토 지점 3).
  */
 final class Payloads {
 

@@ -15,8 +15,8 @@ import org.jspecify.annotations.Nullable;
  * 컴파일되지 않는다. 그 사슬의 다른 끝(리스너가 모든 토픽을 구독하는가)은 {@code ProjectionTopicsTest}
  * 가 본다.
  *
- * <p>여기 없는 계약 필드는 읽지 않는 것이다. 특히 {@link RouteDeparted} 는 계약의 여섯 칸 중
- * 셋만 읽는다(ADR-050 재검토 지점 3 — 소비자가 읽는지는 코드가 보인다).
+ * <p>여기 없는 계약 필드는 읽지 않는 것이다. 특히 {@link RouteDeparted} 는 계약의 다섯 칸 중
+ * 셋만 읽는다(ADR-050 재검토 지점 3 에서 여섯째 {@code stopCount} 를 뺐다).
  */
 public sealed interface Fact {
 
