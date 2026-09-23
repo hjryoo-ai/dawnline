@@ -1,0 +1,17 @@
+{
+  "eventId": "01a04e05-6b1c-7a2e-9d40-1c83f5a7b2e6",
+  "eventType": "delivery.route-departed",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-29T15:07:12.402Z",
+  "producer": "tracking-service",
+  "partitionKey": "01a04e09-854a-770c-b7b7-03325dccc708",
+  "traceId": "5d0c2e81a7b94f36b1e2c9a04d7f3e58",
+  "payload": {
+    "routeId": "01a04e09-854a-770c-b7b7-03325dccc708",
+    "campId": "01a04d71-2f3c-7a10-9e55-8c2b41d9f004",
+    "revision": 1,
+    "plannedDeparture": "2026-08-29T15:00:00Z",
+    "departedAt": "2026-08-29T15:07:12.402Z",
+    "stopCount": 3
+  }
+}

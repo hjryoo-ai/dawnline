@@ -54,4 +54,8 @@ tasks.named<Test>("test") {
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
             .withPropertyName("eventContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // ComposeTopicsTest 가 kafka-init 의 토픽 목록을 계약과 대조한다 — 같은 이유로 입력이다.
+    inputs.file(rootProject.layout.projectDirectory.file("deploy/compose/docker-compose.yml"))
+            .withPropertyName("composeTopics")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }

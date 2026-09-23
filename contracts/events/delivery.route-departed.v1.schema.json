@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dawnline.internal/contracts/events/delivery.route-departed.v1.schema.json",
+  "title": "delivery.route-departed v1 페이로드",
+  "description": "라우트가 캠프를 떠났다 (DESIGN.md §4.1 · §5.4 DEPARTED_CAMP, ADR-050). 토픽 dawnline.delivery.route-departed.v1, 키 routeId, 발행 tracking-service(Phase 6 묶음 B), 소비 ops-api(rm_routes). **소비자가 먼저 정의한다** — 이 계약은 ops 의 읽기 모델 커밋에서 들어왔고 tracking 은 그 뒤에 outbox 로 낸다(contracts/events/README.md §1 예외). **라우트 하나에 하나다** — DEPARTED_CAMP 스캔을 stop 마다 내보내지 않는 이유(§5.4 ScanType.isPublished())가 이 이벤트를 라우트 단위로 만들었다. 근거는 화면이 아니라 사실의 가시성이다: 출발은 첫 편차의 출처이고, 이 이벤트가 없으면 ops 는 첫 ARRIVED 까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못한다 — 그 구간이 운영자가 개입할 수 있는 마지막 창이다.",
+  "type": "object",
+  "required": [
+    "routeId",
+    "campId",
+    "revision",
+    "plannedDeparture",
+    "departedAt",
+    "stopCount"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "routeId": {
+      "$ref": "#/$defs/uuid",
+      "description": "라우트. 이 이벤트의 partitionKey 와 같아야 한다 (§4.1 키 = routeId)."
+    },
+    "campId": {
+      "$ref": "#/$defs/uuid",
+      "description": "출발 캠프. ops 는 이 이벤트만 보고도 행을 캠프 대시보드에 올릴 수 있어야 한다 — 이 이벤트가 그 라우트의 route.assigned 보다 먼저 올 수 있기 때문이다(ADR-051). tracking 은 route_revisions.camp_id 에서 낸다."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "출발 시점에 tracking 이 적용해 둔 개정 번호 (route.assigned.v1 의 revision). 「어느 개정본의 계획에 대해 늦었나」를 말한다 — 출발 전 재계획이 계획 출발 시각을 바꿀 수 있다(ADR-050)."
+    },
+    "plannedDeparture": {
+      "type": "string",
+      "format": "date-time",
+      "description": "위 revision 의 계획 출발 시각 (route.assigned.v1 의 summary.plannedDeparture, tracking 의 route_revisions.planned_departure). departedAt 과 한 쌍으로 출발 편차의 기준선이다."
+    },
+    "departedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "기사가 DEPARTED_CAMP 를 찍은 시각 (스캔의 occurredAt). 처리 시각이 아니라 사건 시각이다 — 오프라인 단말이 밀린 스캔을 뒤늦게 보내도 이 값은 움직이지 않는다."
+    },
+    "stopCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "출발 시점에 tracking 이 이 라우트에 들고 있는 stop 수 (shipments 의 COUNT(DISTINCT stop_seq)). ADR-050 재검토 지점 3 — 소비자가 이 칸을 읽는지는 코드가 보인다."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "소문자 UUID. order.placed.v1 의 정의와 같다."
+    }
+  }
+}

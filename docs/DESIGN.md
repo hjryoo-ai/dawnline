@@ -198,7 +198,7 @@ com.dawnline.<service>
 | dawnline.plan.failed.v1 | waveId | dispatch | **fulfillment**, ops | 계획 실행 실패 (§5.3 Plan `FAILED` — 예외·시간초과) |
 | dawnline.delivery.status.v1 | routeId | tracking | order, **dispatch**, ops | ARRIVED/COMPLETED/FAILED |
 | dawnline.delivery.at-risk.v1 | routeId | tracking | dispatch, ops | 지연 위험 감지 |
-| dawnline.delivery.route-departed.v1 | routeId | tracking | ops | 라우트가 캠프를 떠났다 (§5.4 `DEPARTED_CAMP`). **계약은 아직 없다** — 아래 문단 |
+| dawnline.delivery.route-departed.v1 | routeId | tracking | ops | 라우트가 캠프를 떠났다 (§5.4 `DEPARTED_CAMP`). 계약은 소비자가 먼저 정의했다(2026-09-24, 묶음 B) — 발행은 같은 묶음의 tracking |
 | `<topic>.dlq` | 원본 키 | 각 소비자 | 운영자 | 재처리 실패 메시지 |
 
 **dispatch 가 `delivery.status` 를 소비한다** (2026-09-05 결정). 처음에는 소비자가 order 와 ops 뿐이었고, 그
@@ -258,6 +258,9 @@ Phase 5 이고(§5.4), 그때 dispatch 리스너 + `route_stops.status` 전이 +
 스스로 드러난다: `EventContractsTest` 의 `PARTITION_KEY_FIELD` 는 예시 파일에서 역으로 돌기
 때문에 `delivery.route-departed` 예시가 들어오면 그 표에 칸이 없다는 이유로 실패한다. 같은
 이유로 `deploy/compose` 의 토픽 목록도 그 커밋에서 함께 는다.
+**채워졌다** (2026-09-24). 예고대로 `PARTITION_KEY_FIELD` 에 칸이 하나 늘었고, 토픽 목록 쪽에는
+그 문장을 확인하는 장치가 **없었다** — 그래서 `ComposeTopicsTest` 를 더했다(compose 의 토픽 집합
+= 계약 스키마의 집합, 양쪽 다 파일에서 읽는다).
 
 **브로커로 내보내지 않던 이유는 그대로 유효하다** — `DEPARTED_CAMP` 를 stop 마다 내보내면 한
 사실을 stop 수만큼 반복하는 꼴이고 order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다
