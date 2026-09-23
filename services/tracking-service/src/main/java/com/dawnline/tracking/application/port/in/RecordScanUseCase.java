@@ -15,7 +15,7 @@ import org.jspecify.annotations.Nullable;
  * {@code POST /api/v1/routes/{id}/stops/{seq}/events}).
  *
  * <h2>멱등은 상태 머신이 만든다</h2>
- * §8.5 의 멱등 키는 「{@code (routeId, seq, type)} + 상태 머신」이다. 별도의 중복 표를 두지
+ * §8.5 의 멱등 키는 「{@code (orderIds, type)} + 상태 머신」이다. 별도의 중복 표를 두지
  * 않는 이유는 그 표가 답할 수 있는 것을 상태가 이미 알고 있기 때문이다 — 같은 스캔이 다시 오면
  * 이미 지나온 지점이라 {@link ScanOutcome#STALE} 이 되고, 그것은 「중복이었다」와 「순서가
  * 뒤바뀌어 늦게 왔다」를 <em>같은 방식으로</em> 흡수한다

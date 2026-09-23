@@ -63,7 +63,7 @@ make smoke SIM_BASE_URL=http://localhost:9081
 
 **`processed_events` 가 없다** — 불변규칙 2 의 예외다. 성립하는 이유는 「도구라서」가 아니라
 **하류가 멱등이라서**다: 중복이 만드는 것은 tracking 으로 가는 중복 스캔이고 §8.5 의
-「`(routeId, seq, type)` + 상태 머신」이 `STALE` 로 흡수한다. 하류가 멱등이 아닌 도구는 같은
+「`(orderIds, type)` + 상태 머신」이 `STALE` 로 흡수한다. 하류가 멱등이 아닌 도구는 같은
 예외를 쓸 수 없다 (DESIGN.md §13 매핑표).
 
 ## 알아 둘 결합

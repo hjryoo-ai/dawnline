@@ -28,7 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 기사 스캔 API (DESIGN.md §5.4). {@code sim-runner} 의 기사 시뮬레이터가 부른다(§5.6).
  *
  * <h2>재시도해도 안전하다</h2>
- * 멱등 키 헤더가 없다. §8.5 의 멱등 키는 「{@code (routeId, seq, type)} + 상태 머신」이고, 같은
+ * 멱등 키 헤더가 없다. §8.5 의 멱등 키는 「{@code (orderIds, type)} + 상태 머신」이고, 같은
  * 스캔이 다시 오면 이미 지나온 지점이라 {@code STALE} 로 흡수된다 — 별도의 키를 요구하면 단말이
  * 그 키를 재시도 사이에 보존해야 하고, 그것은 오프라인에서 다시 켜지는 기기에 어려운 요구다.
  *

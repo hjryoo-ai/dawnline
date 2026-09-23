@@ -88,7 +88,7 @@ public enum ShipmentStatus {
      * {@code target} 이 <strong>이미 지나온 지점</strong>인가.
      *
      * <p>참이면 그 스캔은 늦게 도착했거나 중복이므로 무시한다. 같은 지점도 참이다 — 같은 스캔이
-     * 두 번 와도 상태가 다시 움직이지 않는다(§8.5 의 「(routeId, seq, type) + 상태 머신」).
+     * 두 번 와도 상태가 다시 움직이지 않는다(§8.5 의 「(orderIds, type) + 상태 머신」).
      *
      * <p>둘 중 하나라도 축 밖({@code CANCELLED})이면 거짓이다 — 비교할 축이 없다. 취소 뒤의 스캔은
      * 이 물음이 아니라 {@link Shipment#recordScan} 의 앞선 분기가 답한다.

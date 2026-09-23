@@ -20,7 +20,7 @@ import tools.jackson.databind.ObjectMapper;
  * 이유는 {@code HttpOrderClient} 와 같다.
  *
  * <p>멱등 키 헤더를 보내지 않는다. 스캔 API 는 그것을 요구하지 않는다 — §8.5 의 멱등 키는
- * 「{@code (routeId, seq, type)} + 상태 머신」이고, 같은 스캔이 다시 가면 {@code STALE} 로
+ * 「{@code (orderIds, type)} + 상태 머신」이고, 같은 스캔이 다시 가면 {@code STALE} 로
  * 흡수된다 ({@code ScanController} javadoc).
  */
 public final class HttpScanClient implements ScanClient {
