@@ -7,13 +7,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.Ids;
+import com.dawnline.messaging.config.MessagingAutoConfiguration;
 import com.redis.testcontainers.RedisContainer;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -28,8 +36,23 @@ import org.springframework.test.web.servlet.MockMvc;
  * <p>용량을 3으로 낮춰 쓴다. 기본값 60으로 검증하려면 61번의 주문 접수가 필요한데, 그것은 이
  * 테스트가 보려는 것과 무관한 시간이다. 60이라는 값 자체는 {@code OrderScheduledDefaultsTest} 류의
  * 설정 테스트와 k6 {@code rate-limit.js} 가 확인한다.
+ *
+ * <h2>시계를 멈춰 둔다 — 리필이 <em>구조적으로</em> 0 이어야 한다</h2>
+ * 버킷은 {@code (지금 − 마지막 갱신) × 초당 리필} 로 토큰을 되돌린다. 실제 시계로 돌면 그 값이
+ * <strong>러너 속도</strong>에 달리고, 요청 사이에 1초가 지나면 비운 버킷에 토큰 하나가 돌아와
+ * <strong>429 가 201 로 바뀐다</strong> — 2026-09-23 CI 에서 {@code 고객마다_따로_센다} 가 그렇게
+ * 깨졌다(주문 INSERT 세 건이 그 창 안에 있다). {@code refill-per-second} 는 이미 설정이 허용하는
+ * 최솟값 1 이라 값으로는 더 줄일 수 없다.
+ *
+ * <p>이음매는 처음부터 있었다: 버킷 Lua 는 시각을 <em>인자로</em> 받고 그 이유를 스스로
+ * 「리필을 테스트로 재현할 수 없기 때문」이라고 적어 두었다(불변규칙 12,
+ * {@code rate-limit-token-bucket.lua}). 이 클래스만 그 이음매를 쓰지 않고 있었다. 고정 시계를
+ * 빈으로 넣으면 요청 사이에 시간이 흐르지 않고, 리필은 러너가 아무리 느려도 0 이다.
+ * {@code MessagingAutoConfiguration.dawnlineClock} 이 {@code @ConditionalOnMissingBean} 이라
+ * 이쪽이 이긴다 — 그 javadoc 이 「테스트의 고정 시계」를 그 용도로 적어 두었다.
  */
 @SpringBootTest(classes = OrderApplication.class)
+@Import(RateLimitApiIT.FrozenClock.class)
 @AutoConfigureMockMvc
 @DisplayName("RateLimitApiIT — 429 와 Retry-After")
 class RateLimitApiIT extends OrderIntegrationTestBase {
@@ -46,6 +69,24 @@ class RateLimitApiIT extends OrderIntegrationTestBase {
 
     @Autowired
     private io.micrometer.core.instrument.MeterRegistry meters;
+
+    @Autowired
+    private Clock clock;
+
+    /**
+     * 멈춘 시계. 저장 정밀도(마이크로초)로 자른 «지금» 에서 멈춘다 — 리터럴을 쓰지 않는 이유는
+     * 이 값이 컷오프·약속창 계산에도 들어가기 때문이고(CLAUDE.md), 자르는 이유는
+     * {@code MessagingAutoConfiguration.dawnlineClock} 의 javadoc 과 같다.
+     */
+    @TestConfiguration
+    static class FrozenClock {
+
+        @Bean
+        Clock clock() {
+            return Clock.fixed(MessagingAutoConfiguration.storagePrecisionClock().instant(),
+                    ZoneOffset.UTC);
+        }
+    }
 
     /**
      * <strong>전제: 레이트 리밋이 켜져 있다.</strong>
@@ -74,7 +115,9 @@ class RateLimitApiIT extends OrderIntegrationTestBase {
         registry.add("spring.data.redis.host", REDIS::getRedisHost);
         registry.add("spring.data.redis.port", REDIS::getRedisPort);
         registry.add("dawnline.order.rate-limit.capacity", () -> CAPACITY);
-        // 리필이 테스트 도중 끼어들지 않게 느리게 둔다. 리필 자체는 RateLimitIT 가 본다.
+        // 설정이 허용하는 가장 느린 리필이다. 다만 **이 값이 리필을 막는 것은 아니다** —
+        // 막는 것은 멈춘 시계이고(위 javadoc), 이 줄은 그 위에 얹힌 여유일 뿐이다.
+        // 리필 자체의 산수는 RateLimitIT 가 본다.
         registry.add("dawnline.order.rate-limit.refill-per-second", () -> 1);
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         // Redis 명령 타임아웃을 넉넉하게 준다. 50 ms 는 **운영 핫패스의 SLO 예산**이고(§7.2),
@@ -106,6 +149,37 @@ class RateLimitApiIT extends OrderIntegrationTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(customerId)))
                 .andReturn().getResponse().getStatus();
+    }
+
+    @Test
+    void 전제_시계가_멈춰_있다() throws Exception {
+        // 이 클래스의 모든 어설션이 「리필이 끼어들지 않는다」에 기댄다. 전제가 조용히 무너지면
+        // (고정 시계 빈이 사라지면) 남은 테스트들은 러너가 빠른 동안만 통과하고, 느려지는 날
+        // 「레이트 리밋이 고장났다」처럼 실패한다 — 실제로는 검사 대상이 사라진 것이다.
+        Instant before = clock.instant();
+        place(Ids.newId(), "frozen-" + Ids.newId());
+
+        assertThat(clock.instant())
+                .as("버킷이 받는 시각이 요청 사이에 움직이면 리필이 러너 속도에 달린다")
+                .isEqualTo(before);
+    }
+
+    @Test
+    void 리필은_실제_시간이_흘러도_일어나지_않는다() throws Exception {
+        // 위 어설션은 「시계가 멈췄다」까지이고, 이 검사가 그것이 **무엇을 막는지**를 본다.
+        // 잠을 자는 것이 여기서는 검사 대상이다 — 막으려는 결함이 「벽시계가 흐르면 토큰이
+        // 돌아온다」이므로, 벽시계를 실제로 흘려 보내지 않으면 고쳤다는 근거가 없다.
+        // 1초에 1개가 리필이므로 1.2초면 충분하고, 그만큼이 이 클래스가 쓰는 유일한 대기다.
+        UUID customer = Ids.newId();
+        for (int i = 0; i < CAPACITY; i++) {
+            assertThat(place(customer, "drift-" + customer + "-" + i)).isEqualTo(201);
+        }
+
+        Thread.sleep(Duration.ofMillis(1_200));
+
+        assertThat(place(customer, "drift-" + customer + "-after"))
+                .as("실제 시계로 돌면 여기서 토큰 하나가 돌아와 201 이 된다 — 2026-09-23 CI 의 실패다")
+                .isEqualTo(429);
     }
 
     @Test
