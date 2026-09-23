@@ -8,8 +8,6 @@ import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.in.RecordDeliveryStatusUseCase.DeliveryStatusCommand;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
-import com.dawnline.dispatch.application.port.out.RouteProgress;
-import com.dawnline.dispatch.application.port.out.RouteProgressCache;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.messaging.MessagingMetrics;
@@ -17,9 +15,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -31,7 +27,10 @@ import org.junit.jupiter.api.Test;
  * {@code delivery.status} → {@code route_stops.status} (ADR-047).
  *
  * <p>전이 규칙 자체는 {@code RouteStopTransitionTest} 가 본다. 여기서 보는 것은 <em>그 판정
- * 바깥</em>이다 — 어떤 stop 을 찾는가, 무엇을 세는가, 진행 캐시를 언제 쓰는가.
+ * 바깥</em>이다 — 어떤 stop 을 찾는가, 무엇을 세는가.
+ *
+ * <p>「진행 캐시를 언제 쓰는가」도 여기 있었다 (2026-09-23 제거, Phase 6-0c). {@code §7.2 진행}
+ * 절의 세 검사가 그 자리였고, 캐시와 함께 지웠다.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("RecordDeliveryStatusService — 사실은 주문에 귀속된다")
@@ -49,28 +48,11 @@ class RecordDeliveryStatusServiceTest {
             new InMemoryDispatchPorts.Candidates();
     private final InMemoryDispatchPorts.CancellableRoutes routes =
             new InMemoryDispatchPorts.CancellableRoutes(candidates);
-    private final RecordingCache cache = new RecordingCache();
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final DispatchMetrics metrics = new DispatchMetrics(registry);
 
     private final RecordDeliveryStatusService service =
-            new RecordDeliveryStatusService(routes, cache, metrics);
-
-    /** 캐시에 무엇이 언제 쓰였는지 본다. */
-    private static final class RecordingCache implements RouteProgressCache {
-
-        private final Map<UUID, RouteProgress> written = new LinkedHashMap<>();
-
-        @Override
-        public void put(UUID routeId, RouteProgress progress) {
-            written.put(routeId, progress);
-        }
-
-        @Override
-        public Optional<RouteProgress> get(UUID routeId) {
-            return Optional.ofNullable(written.get(routeId));
-        }
-    }
+            new RecordDeliveryStatusService(routes, metrics);
 
     /** 상태 쓰기에서 실패하는 라우트 — 카운터가 쓰기 <em>뒤</em>인지 보기 위한 것이다. */
     private final class FailingWrite implements RouteMutations {
@@ -100,11 +82,6 @@ class RecordDeliveryStatusServiceTest {
         public boolean tryStartReplan(UUID routeId, java.time.Instant now,
                 java.time.Duration cooldown) {
             throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Optional<RouteProgress> progressOf(UUID routeId) {
-            return routes.progressOf(routeId);
         }
 
         @Override
@@ -280,20 +257,6 @@ class RecordDeliveryStatusServiceTest {
     }
 
     @Test
-    void 재배치된_건의_진행은_지금_있는_라우트에_쓴다() {
-        // 이벤트가 말한 라우트의 진행을 쓰면, 그 라우트에는 없는 stop 의 완료가 남의 진행을
-        // 덮는다. 값이 틀리는 쪽은 언제나 이벤트 쪽이다.
-        Route moved = route();
-        UUID 떠나온_라우트 = Ids.newId();
-
-        service.record(command(떠나온_라우트, 1, List.of(moved.firstOrderId()),
-                RouteStopStatus.COMPLETED));
-
-        assertThat(cache.get(떠나온_라우트)).isEmpty();
-        assertThat(cache.get(moved.routeId()).orElseThrow().completed()).isEqualTo(1);
-    }
-
-    @Test
     void 한_stop_의_주문이_갈라지면_이벤트의_라우트에_있는_쪽을_택한다() {
         // 운영자 재배정은 stop 이 아니라 주문 하나를 옮긴다. 갈라졌으면 기사가 실제로 서 있던
         // 자리를 택한다 — 덜 표시하면 기사가 한 번 더 가고, 더 표시하면 배송되지 않은 주문이
@@ -357,48 +320,6 @@ class RecordDeliveryStatusServiceTest {
         assertThat(staleCount()).isEqualTo(1.0d);
     }
 
-    // ------------------------------------------------------------ §7.2 진행
-
-    @Test
-    void 적용한_뒤에_진행을_다시_쓴다() {
-        Route route = route();
-
-        service.record(command(route.routeId(), 1, List.of(route.firstOrderId()),
-                RouteStopStatus.COMPLETED));
-
-        RouteProgress progress = cache.get(route.routeId()).orElseThrow();
-        assertThat(progress.nextSeq()).as("종결되지 않은 가장 작은 seq").isEqualTo(2);
-        assertThat(progress.completed()).isEqualTo(1);
-        assertThat(progress.failed()).isZero();
-    }
-
-    @Test
-    void 마지막_stop_이_끝나면_다음_순번이_없다() {
-        Route route = route();
-        for (int seq = 1; seq <= 3; seq++) {
-            routes.row(route.routeId(), seq).status = RouteStopStatus.COMPLETED;
-        }
-        routes.row(route.routeId(), 3).status = RouteStopStatus.ARRIVED;
-
-        service.record(command(route.routeId(), 3, route.mergedOrderIds(),
-                RouteStopStatus.FAILED));
-
-        RouteProgress progress = cache.get(route.routeId()).orElseThrow();
-        assertThat(progress.done()).isTrue();
-        assertThat(progress.failed()).isEqualTo(1);
-    }
-
-    @Test
-    void 적용하지_않은_이벤트는_진행을_건드리지_않는다() {
-        Route route = route();
-        routes.row(route.routeId(), 1).status = RouteStopStatus.COMPLETED;
-
-        service.record(command(route.routeId(), 1, List.of(route.firstOrderId()),
-                RouteStopStatus.ARRIVED));
-
-        assertThat(cache.get(route.routeId())).isEmpty();
-    }
-
     // ------------------------------------------------------------ 세는 순서
 
     @Test
@@ -407,7 +328,7 @@ class RecordDeliveryStatusServiceTest {
         // 장애 때 가장 커진다 — 지표가 가장 많이 읽히는 순간에 가장 많이 틀린다.
         Route route = route();
         RecordDeliveryStatusService failing =
-                new RecordDeliveryStatusService(new FailingWrite(), cache, metrics);
+                new RecordDeliveryStatusService(new FailingWrite(), metrics);
 
         assertThatThrownBy(() -> failing.record(command(route.routeId(), 1,
                 List.of(route.firstOrderId()), RouteStopStatus.COMPLETED)))
@@ -416,7 +337,6 @@ class RecordDeliveryStatusServiceTest {
         assertThat(staleCount()).isZero();
         assertThat(registry.counter(DispatchMetrics.SCAN_AFTER_CANCEL).count()).isZero();
         assertThat(relocateCount()).isZero();
-        assertThat(cache.get(route.routeId())).isEmpty();
     }
 
     @Test
@@ -425,7 +345,7 @@ class RecordDeliveryStatusServiceTest {
         // 실패였다는 것을 대시보드는 말해 주지 않는다.
         Route moved = route();
         RecordDeliveryStatusService failing =
-                new RecordDeliveryStatusService(new FailingWrite(), cache, metrics);
+                new RecordDeliveryStatusService(new FailingWrite(), metrics);
 
         assertThatThrownBy(() -> failing.record(command(Ids.newId(), 1,
                 List.of(moved.firstOrderId()), RouteStopStatus.COMPLETED)))

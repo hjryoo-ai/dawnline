@@ -80,6 +80,15 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
      *
      * <p>{@code pg_class.reltuples} 가 남으면 이 컨테이너의 dispatch DB 를 함께 쓰는 다음
      * 클래스의 계획을 <em>이 테스트가</em> 정하게 된다. 여기서 만들어 낸 통계는 여기서 치운다.
+     *
+     * <p><strong>{@code plan_explanations} 가 빠져 있었다</strong> (2026-09-23). 이 클래스는 그
+     * 표를 만들지 않지만 {@code route_plans} 를 지우고, 그 표가 계획을 FK 로 참조한다 — 그래서
+     * <em>앞서 돈 클래스가 남긴</em> 설명 행이 있으면 이 삭제가 FK 위반으로 터진다. 여기 있는
+     * 다른 IT 여섯은 전부 자기 정리에 이 표를 넣고 있었고, 이 하나만 빠진 채로 통과하고 있었다
+     * — <strong>순서에 기대고 있었다는 뜻</strong>이다. 같은 날 {@code RouteProgressFallbackIT}
+     * 이 사라지면서 포크에 담기는 클래스 순서가 바뀌었고 그 자리에서 드러났다. 자기가 만들지
+     * 않은 행까지 지우는 것이 맞다 — 이 클래스가 지우는 것은 <em>자기 픽스처</em>가 아니라
+     * <em>공유 DB 의 통계</em>이고, 그 범위는 처음부터 테이블 전체다.
      */
     @AfterEach
     void wipe() {
@@ -87,6 +96,7 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
             entityManager.createNativeQuery("DELETE FROM route_stop_orders").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM route_stops").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM routes").executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM plan_explanations").executeUpdate();
             entityManager.createNativeQuery("DELETE FROM route_plans").executeUpdate();
         });
         analyze();

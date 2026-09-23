@@ -9,7 +9,6 @@ import com.dawnline.common.TimeWindow;
 import com.dawnline.common.error.ConflictException;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
-import com.dawnline.dispatch.application.port.out.RouteProgress;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
@@ -146,12 +145,6 @@ class ReassignStopServiceTest {
                 java.time.Duration cooldown) {
             throw new UnsupportedOperationException(
                     "이 페이크는 재계획을 모른다 — ReplanRouteServiceTest 를 보라");
-        }
-
-        @Override
-        public Optional<RouteProgress> progressOf(UUID routeId) {
-            throw new UnsupportedOperationException(
-                    "이 페이크는 배송 상태를 모른다 — RecordDeliveryStatusServiceTest 를 보라");
         }
 
         @Override

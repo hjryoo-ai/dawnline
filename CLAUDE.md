@@ -24,7 +24,7 @@
 ## 저장소 구조
 
 ```
-libs/{common,messaging,observability}
+libs/{common,messaging,observability,web}   # common 만 프레임워크 비의존 (ADR-049)
 services/{order-service,fulfillment-service,dispatch-service,tracking-service,ops-api}
 apps/ops-web
 tools/{sim-runner,benchmark}

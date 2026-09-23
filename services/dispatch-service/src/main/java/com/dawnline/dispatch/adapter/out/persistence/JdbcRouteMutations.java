@@ -4,7 +4,6 @@ import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
-import com.dawnline.dispatch.application.port.out.RouteProgress;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
@@ -336,30 +335,6 @@ public class JdbcRouteMutations implements RouteMutations {
         Object[] row = rows.getFirst();
         return Optional.of(new SettledStop(((Number) row[0]).intValue(), (Instant) row[1],
                 (Instant) row[2]));
-    }
-
-    @Override
-    @SuppressWarnings("unchecked")
-    public Optional<RouteProgress> progressOf(UUID routeId) {
-        // §7.2 의 폴백 경로다 — Redis 가 살아 있든 없든 이 값이 진실이다(불변규칙 7).
-        // 한 번의 조회로 세 칸을 다 만든다: 아직 종결되지 않은 가장 작은 seq, 완료 수, 실패 수.
-        // CANCELLED 는 방문하지 않으므로 nextSeq 에서 빠진다. 상태 문자열은 리터럴로 적는다
-        // (CLAUDE.md 코딩 컨벤션) — 스키마의 값이고 파라미터로 받을 이유가 없다.
-        List<Object[]> rows = entityManager.createNativeQuery("""
-                SELECT MIN(s.seq) FILTER (WHERE s.status IN ('PLANNED', 'ARRIVED')),
-                       COUNT(*) FILTER (WHERE s.status = 'COMPLETED'),
-                       COUNT(*) FILTER (WHERE s.status = 'FAILED'),
-                       COUNT(*)
-                  FROM route_stops s
-                 WHERE s.route_id = ?
-                """).setParameter(1, routeId).getResultList();
-        Object[] row = rows.getFirst();
-        if (((Number) row[3]).intValue() == 0) {
-            return Optional.empty();            // stop 이 없는 라우트는 진행이라 할 것이 없다
-        }
-        Integer nextSeq = row[0] == null ? null : ((Number) row[0]).intValue();
-        return Optional.of(new RouteProgress(nextSeq, ((Number) row[1]).intValue(),
-                ((Number) row[2]).intValue()));
     }
 
     @Override

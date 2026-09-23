@@ -33,7 +33,11 @@ public record RouteView(UUID routeId, UUID planId, UUID vehicleId, @Nullable UUI
      * @param plannedArrival   계획 도착 시각
      * @param plannedDeparture 계획 출발 시각
      * @param serviceSeconds   하차·전달 시간(초)
-     * @param status           {@code PLANNED} 또는 {@code CANCELLED} (§6.10)
+     * @param status           {@code PLANNED} · {@code CANCELLED}(§6.10) · 그리고 배송이 지나간 뒤의
+     *                         {@code ARRIVED} · {@code COMPLETED} · {@code FAILED}(§6.10, Phase 5-5 —
+     *                         {@code delivery.status} 가 옮긴다, [ADR-047]). <strong>둘만 적고 있었다</strong>
+     *                         (2026-09-23 정정): 5-5 가 집합을 늘렸는데 이 주석이 따라오지 않았고,
+     *                         그래서 「이 응답이 진행 상황을 이미 말한다」는 사실이 읽는 쪽에서 가려졌다
      * @param orderIds         이 지점에서 배송할 주문들
      */
     public record StopView(UUID stopId, int seq, double lat, double lng, Instant plannedArrival,

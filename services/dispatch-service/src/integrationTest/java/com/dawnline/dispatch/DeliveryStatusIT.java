@@ -6,18 +6,14 @@ import static org.awaitility.Awaitility.await;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
-import com.dawnline.dispatch.adapter.out.redis.RedisRouteProgressCache;
 import com.dawnline.dispatch.application.port.in.PlanView;
 import com.dawnline.dispatch.application.port.in.RouteView;
 import com.dawnline.dispatch.application.port.in.RunPlanCommand;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
-import com.dawnline.dispatch.application.port.out.RouteProgress;
-import com.dawnline.dispatch.application.port.out.RouteProgressCache;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.messaging.contract.EventContracts;
-import com.redis.testcontainers.RedisContainer;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -40,32 +36,27 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * 브로커의 {@code delivery.status} → {@code route_stops.status} → {@code route:{id}:progress}
- * (Phase 5-5, ADR-047).
+ * 브로커의 {@code delivery.status} → {@code route_stops.status} (Phase 5-5, ADR-047).
  *
  * <p>단위 테스트가 보는 것은 <em>판단</em>이다. 여기서 보는 것은 그 판단이 실물 브로커와 실물
- * PostgreSQL·Redis 를 지났을 때의 결과다 — 봉투 역직렬화, 멱등 게이트, 그리고 캐시에 실제로
- * 무엇이 적히는가.
+ * PostgreSQL 을 지났을 때의 결과다 — 봉투 역직렬화, 멱등 게이트, 그리고 실제로 어느 행이
+ * 바뀌는가.
  *
- * <p>Redis 가 <strong>죽었을 때</strong>의 같은 경로는 {@code RouteProgressFallbackIT} 가 본다.
+ * <p>여기에 {@code route:{id}:progress} 까지 있었다 (2026-09-23, Phase 6-0c 제거). 이 클래스가
+ * Redis 컨테이너를 띄우던 유일한 이유가 그 캐시였고, 죽은 Redis 로 같은 경로를 보던
+ * {@code RouteProgressFallbackIT} 도 키와 함께 지웠다 — 읽는 쪽이 끝내 나타나지 않았다.
  */
 @SpringBootTest(classes = DispatchApplication.class)
 @Import(PlanningClock.class)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("DeliveryStatusIT — 브로커에서 route_stops 까지")
 class DeliveryStatusIT extends DispatchIntegrationTestBase {
-
-    /** deploy/compose/.env.example 의 {@code REDIS_IMAGE} 와 같은 태그. */
-    private static final String REDIS_IMAGE = "redis:8.8.2";
-
-    private static final RedisContainer REDIS = new RedisContainer(REDIS_IMAGE);
 
     /** 시드의 첫 캠프 (서울 북부). */
     private static final UUID CAMP_ID = UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
@@ -75,7 +66,6 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
     private static KafkaProducer<String, String> producer;
 
     static {
-        REDIS.start();
         createTopics(TOPIC);
     }
 
@@ -93,27 +83,6 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
-
-    @Autowired
-    private StringRedisTemplate redis;
-
-    @Autowired
-    private RouteProgressCache cache;
-
-    /**
-     * 살아 있는 Redis 를 가리킨다.
-     *
-     * <p>{@code host}/{@code port} 가 아니라 {@code url} 로 적는다 — 다른
-     * {@code @DynamicPropertySource} 와의 적용 순서가 보장되지 않기 때문이다
-     * ({@code GeoFallbackIT} 가 그것으로 한 번 데였다).
-     *
-     * @param registry 동적 속성 레지스트리
-     */
-    @DynamicPropertySource
-    static void liveRedis(DynamicPropertyRegistry registry) {
-        registry.add("spring.data.redis.url",
-                () -> "redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379));
-    }
 
     /**
      * <strong>릴레이를 끈다 — 이 클래스는 발행을 보지 않는다.</strong>
@@ -158,7 +127,7 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
     }
 
     @Test
-    void 완료_스캔이_route_stops_를_옮기고_진행을_채운다() {
+    void 완료_스캔이_route_stops_를_옮긴다() {
         Planned planned = plannedRoute();
         RouteView.StopView first = planned.stops().getFirst();
 
@@ -166,17 +135,6 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(statusOf(planned.routeId(), first.seq())).isEqualTo("COMPLETED"));
-
-        Map<Object, Object> progress = redis.opsForHash()
-                .entries(RedisRouteProgressCache.key(planned.routeId()));
-        assertThat(progress).as("§7.2 의 세 칸이 채워져야 한다")
-                .containsEntry(RedisRouteProgressCache.FIELD_COMPLETED, "1")
-                .containsEntry(RedisRouteProgressCache.FIELD_FAILED, "0")
-                .containsEntry(RedisRouteProgressCache.FIELD_NEXT_SEQ,
-                        Integer.toString(planned.stops().get(1).seq()));
-        assertThat(redis.getExpire(RedisRouteProgressCache.key(planned.routeId())))
-                .as("TTL 이 붙어야 한다 — 없으면 키가 영영 남는다 (§7.2 2일)")
-                .isPositive();
     }
 
     @Test
@@ -282,31 +240,6 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
                 assertThat(statusOf(b.routeId(), 받은_stop.seq())).isEqualTo("COMPLETED"));
         assertThat(statusOf(a.routeId(), 떠난_stop.seq()))
                 .as("이벤트가 말한 라우트는 손대지 않는다").isEqualTo("PLANNED");
-        assertThat(redis.opsForHash().entries(RedisRouteProgressCache.key(a.routeId())))
-                .as("진행도 지금 있는 라우트의 것이다").isEmpty();
-        assertThat(redis.<String, String>opsForHash()
-                .get(RedisRouteProgressCache.key(b.routeId()),
-                        RedisRouteProgressCache.FIELD_COMPLETED))
-                .isEqualTo("1");
-    }
-
-    @Test
-    void 진행_해시는_남은_stop_이_없는_상태까지_왕복한다() {
-        // 「남은 stop 이 없다」를 빈 문자열로 적고 필드를 지우지 않는다 — 지우면 «아직 안 쓴 것»
-        // 과 «끝난 것» 이 같은 모양이 된다. 그 규약은 put 과 get 두 곳에 걸쳐 있어서 한쪽만
-        // 고치면 조용히 어긋난다.
-        UUID routeId = Ids.newId();
-
-        cache.put(routeId, new RouteProgress(null, 7, 2));
-
-        RouteProgress read = cache.get(routeId).orElseThrow();
-        assertThat(read.nextSeq()).isNull();
-        assertThat(read.done()).isTrue();
-        assertThat(read.completed()).isEqualTo(7);
-        assertThat(read.failed()).isEqualTo(2);
-        assertThat(redis.<String, String>opsForHash()
-                .get(RedisRouteProgressCache.key(routeId), RedisRouteProgressCache.FIELD_NEXT_SEQ))
-                .as("필드를 지우지 않는다 — 부재는 값이 아니다").isEmpty();
     }
 
     // --- 발행 ----------------------------------------------------------------

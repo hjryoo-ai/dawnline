@@ -24,6 +24,9 @@ include(
     "libs:common",
     "libs:messaging",
     "libs:observability",
+    // Spring 을 아는 공유 web 조각 (ADR-049). common 은 프레임워크 비의존으로 남는다 —
+    // 그 둘의 경계를 ArchUnit 규칙 10 이 지킨다.
+    "libs:web",
 )
 
 // --- 코어 서비스 -------------------------------------------------------------

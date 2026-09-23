@@ -198,6 +198,7 @@ com.dawnline.<service>
 | dawnline.plan.failed.v1 | waveId | dispatch | **fulfillment**, ops | 계획 실행 실패 (§5.3 Plan `FAILED` — 예외·시간초과) |
 | dawnline.delivery.status.v1 | routeId | tracking | order, **dispatch**, ops | ARRIVED/COMPLETED/FAILED |
 | dawnline.delivery.at-risk.v1 | routeId | tracking | dispatch, ops | 지연 위험 감지 |
+| dawnline.delivery.route-departed.v1 | routeId | tracking | ops | 라우트가 캠프를 떠났다 (§5.4 `DEPARTED_CAMP`). **계약은 아직 없다** — 아래 문단 |
 | `<topic>.dlq` | 원본 키 | 각 소비자 | 운영자 | 재처리 실패 메시지 |
 
 **dispatch 가 `delivery.status` 를 소비한다** (2026-09-05 결정). 처음에는 소비자가 order 와 ops 뿐이었고, 그
@@ -205,7 +206,9 @@ com.dawnline.<service>
 
 - §6.8 부분 재계획은 "미완료 stop 만" 다시 푼다. 어디까지 완료됐는지를 모르면 그 문장이 성립하지 않는다.
 - §7.2 의 `route:{id}:progress`(HASH: nextSeq, completed, failed)는 소유자가 dispatch/tracking 인데,
-  dispatch 쪽 값을 채울 입력이 없었다.
+  dispatch 쪽 값을 채울 입력이 없었다. **이 줄은 2026-09-23 에 근거를 잃었다** — 그 키는
+  지웠다(§7.2 표 아래). 지우지 않고 남기는 이유는 *그때 소비자 목록을 바꾼 판단*이 이 셋을
+  근거로 했기 때문이고, 셋 중 하나가 나중에 사라졌다는 것이 나머지 둘을 무르지 않는다.
 - §6.10 넷째 분기(배송이 끝난 뒤 도착한 취소를 거부)와 `dawnline_cancel_too_late_total` 이
   **구조적으로 발화하지 않는다** — `route_stops.status` 를 옮기는 코드가 없기 때문이다.
 
@@ -227,6 +230,39 @@ Phase 5 이고(§5.4), 그때 dispatch 리스너 + `route_stops.status` 전이 +
 같은 열쇠를 §5.4 의 기사 스캔 API 도 쓴다(기사는 송장을 찍지 stop 번호를 찍지 않는다).
 소비 처리량은 [측정](benchmarks/phase5-delivery-status-throughput.md)에 있다(조건은 코드보다
 **먼저** 적었다).
+
+**`delivery.route-departed` 를 정한다** ([ADR-050](adr/ADR-050-route-departure-is-an-event.md),
+2026-09-23, Phase 6-0b — 5-1b 이월 판정이고
+[ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 재검토 지점 1 의 절반을 닫는다).
+
+근거는 ops 화면이 아니라 **사실의 가시성**이다. 5-1b 가 출발을 *첫 편차의 출처*로 만들었다
+(§5.4 `DEPARTED_CAMP` — 늦은 출발은 가장 흔한 지연 원인이고 그 편차는 첫 `ARRIVED` 전에 이미
+알 수 있다). 그런데 지금 그 사실을 아는 것은 tracking 뿐이라, ops 는 첫 `ARRIVED` 가 올 때까지
+**「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못한다.** 그 구간이 정확히 운영자가
+개입할 수 있는 마지막 창이다 — 아직 안 나간 차는 다시 짤 수 있다. 그리고
+`plannedDeparture − departedAt` 은 라스트마일의 고전 KPI(출발 정시율)라, peak-day 스토리에서
+「출발 지연 → at-risk → 재계획」의 첫 칸이 된다.
+
+**「정의하지 않는다」가 더 단순하다는 것을 알고 취하지 않았다** — 그 단순함의 대가가 운영자
+에게서 마지막 개입 창을 숨기는 것이기 때문이다. 그 문장이 이 결정의 근거다.
+
+형태는 최소로 둔다. 키 `routeId`, 페이로드
+`{routeId, campId, revision, plannedDeparture, departedAt, stopCount}`. tracking 은 이 여섯을
+**새 컬럼 없이** 낼 수 있다 — `route_revisions` 가 `camp_id`·`planned_departure` 를 들고
+(§5.4, `V2`), `revision` 은 같은 행에, `departedAt` 은 스캔의 `occurredAt` 이며, `stopCount` 는
+`shipments` 의 `COUNT(DISTINCT stop_seq)` 다(`ix_ship_route` 가 선두 컬럼으로 받는다).
+
+**스키마·예시·토픽 생성·발행은 묶음 B 에서 한다.** 소비자(ops 의 `rm_routes` 프로젝션)가 먼저
+정의하고 tracking 이 outbox 로 낸다 — `DEPARTED_CAMP` 처리에 이미 그 자리가 있다. 지금 이 행과
+`contracts/events/` 가 갈라져 있는 것은 **의도한 짧은 간격**이고, 채워지는 순간 그 어긋남은
+스스로 드러난다: `EventContractsTest` 의 `PARTITION_KEY_FIELD` 는 예시 파일에서 역으로 돌기
+때문에 `delivery.route-departed` 예시가 들어오면 그 표에 칸이 없다는 이유로 실패한다. 같은
+이유로 `deploy/compose` 의 토픽 목록도 그 커밋에서 함께 는다.
+
+**브로커로 내보내지 않던 이유는 그대로 유효하다** — `DEPARTED_CAMP` 를 stop 마다 내보내면 한
+사실을 stop 수만큼 반복하는 꼴이고 order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다
+(§5.4 `ScanType.isPublished()`). 그래서 새 이벤트는 **라우트 하나에 하나**다. 그 이유가 이
+이벤트를 *라우트 단위*로 만든 것이지, 이벤트를 만들지 않을 이유였던 적은 없다.
 
 ### 4.2 이벤트 봉투 (Envelope)
 
@@ -873,7 +909,9 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
 > 파생이 아니다: `StopMerger` 의 병합 키가 「같은 약속창」이므로(§6.5 1단계) 그 값은 stop 이
 > 만들어지는 순간 확정된다.
 
-**Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시), `route:{id}:progress` (HASH: nextSeq, completed, failed).
+**Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시).
+
+`route:{id}:progress` 는 **설계에서 뺐다**(2026-09-23, Phase 6-0c — §7.2 표 아래에 근거가 있다). 5-5 가 채우던 키인데 읽는 쪽이 끝내 나타나지 않았고, `GET /routes/{routeId}` 가 stop 마다 살아 있는 상태를 이미 돌려주므로 그 캐시를 읽는 것은 같은 사실의 둘째 출처를 만드는 일이었다.
 
 `lock:plan:{waveId}` 는 **설계에서 뺐다**(2026-09-05). "이중 안전장치" 라고 적혀 있었지만 `route_plans.wave_id` 의 UNIQUE 제약이 이미 그 안전장치이고, 계획 유스케이스는 그 제약 위에서 `openPlan` 이 경합을 흡수하도록 짜여 있다(§5.3 `RunPlanService`). 두 번째 장치는 없는 문제를 막으면서 Redis 장애 시 무엇이 맞는지를 새로 정하게 만든다 — **폴백을 정해야 하는 키를 하나 늘리는 것이 안전장치를 하나 늘리는 것보다 비싸다.**
 
@@ -887,7 +925,7 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
   찍은 자리와 tracking 이 아는 자리가 다르면 **그대로 적용하고** `dawnline_scan_after_relocate_total` 로 센다(§9.1) — 그 값이 개정과 기사가 어긋난 창의 크기이고, dispatch 의 `dawnline_status_after_relocate_total` 과 한 쌍이다. 편차 전파와 `delivery.status` 발행도 **배송이 지금 있는 (라우트, 순번)** 에서 한다: 요청이 말한 좌표로 전파하면 개정이 옮긴 stop 의 ETA 를 엉뚱하게 밀고, 옛 좌표를 그대로 실어 보내면 dispatch 의 확인용 컨텍스트가 틀린 값을 받아 저쪽 카운터가 우리 탓으로 오른다. 그래서 **한 스캔이 `delivery.status` 두 건이 될 수 있다** — 그 주문들이 지금 서로 다른 stop 에 있으면 그것은 두 지점의 사실이다.
   `DEPARTED_CAMP` 만 예외다: **라우트의 사건**이라 `orderIds` 를 싣지 않고(실으면 400) 그 라우트 전체에 적용한다. 사유를 `FAILED` 에만 붙이는 것과 같은 모양이다 — 종류가 필드의 뜻을 정하고, 어긋나면 조용히 버리지 않고 거절한다.
 - ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17). 부호를 지우지 않는다 — 일찍 도착하면 음수로 당겨진다. 「늦은 것만 민다」로 적으면 앞서 가는 라우트의 ETA 가 낡은 채로 남고 ops 화면이 그 값을 읽는다.
-- **`DEPARTED_CAMP` 는 라우트의 사건이다** (Phase 5-1b). 경로의 `{seq}` 를 무시하고 그 라우트의 배송 <em>전부</em>를 `OUT_FOR_DELIVERY` 로 옮긴다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다. stop 하나만 옮기면 나머지는 `SCHEDULED` 로 남아 「아직 출발하지 않은 배송」처럼 보인다. 그리고 이 갈래가 **첫 편차의 출처**다: 기준값은 `route_revisions.planned_departure`(= `route.assigned.v1` 의 `summary.plannedDeparture`, required)이고, 늦은 출발은 가장 흔한 지연 원인이면서 **첫 `ARRIVED` 스캔 전에 이미 알 수 있다.** 브로커로는 나가지 않는다 — 한 사실을 stop 수만큼 반복해 말하는 것이고 order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다(`ScanType.isPublished()`). 운영자가 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 **첫 소비자가 나타나는 Phase 6 에서 소비자 주도로** 정한다.
+- **`DEPARTED_CAMP` 는 라우트의 사건이다** (Phase 5-1b). 경로의 `{seq}` 를 무시하고 그 라우트의 배송 <em>전부</em>를 `OUT_FOR_DELIVERY` 로 옮긴다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다. stop 하나만 옮기면 나머지는 `SCHEDULED` 로 남아 「아직 출발하지 않은 배송」처럼 보인다. 그리고 이 갈래가 **첫 편차의 출처**다: 기준값은 `route_revisions.planned_departure`(= `route.assigned.v1` 의 `summary.plannedDeparture`, required)이고, 늦은 출발은 가장 흔한 지연 원인이면서 **첫 `ARRIVED` 스캔 전에 이미 알 수 있다.** 브로커로는 나가지 않는다 — 한 사실을 stop 수만큼 반복해 말하는 것이고 order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다(`ScanType.isPublished()`). 운영자가 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 **첫 소비자가 나타나는 Phase 6 에서 소비자 주도로** 정한다. **정했다** ([ADR-050](adr/ADR-050-route-departure-is-an-event.md), 2026-09-23, Phase 6-0b — §4.1 표와 그 아래 문단). 근거는 화면이 아니라 이 갈래가 *첫 편차의 출처*라는 것이다: 그 편차를 아는 것이 tracking 뿐이면 ops 는 첫 `ARRIVED` 까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, 그 구간이 운영자가 개입할 수 있는 마지막 창이다. 발행은 묶음 B 에서 이 자리에 붙는다.
 - **편차 전파는 애그리거트 밖이다** (`EtaPropagator`). 편차는 <em>라우트</em>의 성질이다 — 어느 stop 에서 얼마가 벌어졌고 그것이 누구에게 옮겨 가는지는 방문 순서를 아는 쪽만 안다. `Shipment` 는 주문 하나만 알고, 받는 것은 결과값 하나(`projectEta`)다. 종결 상태를 옮기지 않는 판단만 애그리거트의 것이다 — 「어디서 움직이는가」의 답이 하나여야 한다.
 - **at-risk 규칙**: 어떤 stop의 `eta > promised_end − 15분`이면 `delivery.at-risk` 1회 발행(라우트당 5분 쿨다운, Redis `SET NX`). 페이로드에 남은 stop 목록·편차 포함.
   **이것은 사건이지 상태가 아니다**([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 위험이 계속되면 다시 알리고(쿨다운이 그 주기다) **사라지는 경우는 알리지 않는다** — dispatch 가 이미 시작한 재계획을 취소할 방법이 없고, 해소된 ETA 는 ops 의 읽기 모델(§5.5)이 그대로 보여 준다. 소비자는 「위험 해제」를 기다리지 않는다.
@@ -1717,7 +1755,10 @@ public interface DispatchStrategy {
 거기서 나오기 때문이고(위 문단), 그 값은 캐시에 없다. 같은 행을 어차피 읽으므로 캐시를 먼저
 보는 것은 조회를 아끼지 않고 <em>같은 사실의 두 번째 출처</em>만 만든다. 캐시가 진실이 될 수
 없다는 것은 불변규칙 7 이 이미 정했고, 아끼지도 못하면 남는 것은 갈라질 자리뿐이다.
-**그러면 이 캐시는 쓰는 쪽만 남는다.** ops 의 읽기 모델(§5.5)은 이벤트로 프로젝션하지 dispatch 의 Redis 를 읽지 않으므로, Phase 6 에서도 소비자가 안 생길 수 있다 — 그때는 **이 키와 5-5 의 쓰기 경로를 함께 지운다**(Phase 6-0c 에서 판정). §7.2 에 행이 있다는 것은 유지할 이유가 아니다.
+**그러면 이 캐시는 쓰는 쪽만 남았고, 그래서 지웠다** (Phase 6-0c 판정, 같은 날). ops 의 읽기
+모델(§5.5)은 이벤트로 프로젝션하지 dispatch 의 Redis 를 읽지 않고, `GET /routes/{routeId}` 가
+stop 마다 살아 있는 상태를 이미 돌려주므로 위임 조회도 그 캐시를 필요로 하지 않는다.
+근거와 지운 목록은 §7.2 표 아래에 있다.
 
 **편차는 «평가 시계» 를 민다 — 저장되는 `planned_arrival` 은 계획 시계 그대로다.**
 
@@ -1948,7 +1989,8 @@ medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기
 **네 번째 행은 Phase 5 까지 발화하지 않는다.** `route_stops.status` 를 `ARRIVED`/`COMPLETED` 로
 옮기는 코드가 아직 없기 때문이다. 원인은 소비자 목록이었고 **그것은 2026-09-05 에 고쳤다** —
 §4.1 에서 dispatch 가 `delivery.status` 의 소비자가 됐다(그 표 아래 문단에 근거가 있다: §6.8 의
-"미완료 stop 만" 과 §7.2 의 `route:{id}:progress` 도 같은 결손을 겪고 있었다). 남은 것은 발행자다.
+"미완료 stop 만" 과 §7.2 의 `route:{id}:progress` 도 같은 결손을 겪고 있었다 — 그 키는
+2026-09-23 에 지웠고, 그래도 §6.8 과 이 분기는 그대로 남는다). 남은 것은 발행자다.
 tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 들어가고, 그때까지
 `dawnline_cancel_too_late_total` 은 구조적으로 0 이며 아래 "재검토 지점" 의 판정은 아무것도
 검사하지 않는다. **0 을 "경합 창이 좁다" 로 읽으면 안 되는 기간이 여기다.**
@@ -1994,11 +2036,23 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `lock:wave:{id}` | STRING NX | fulfillment | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
-| `route:{id}:progress` | HASH | dispatch/tracking | 2d | DB 조회 — `route_stops` 에서 `nextSeq`(종결되지 않은 가장 작은 `seq`, 취소된 stop 제외)·`completed`·`failed` 를 한 번의 조회로 다시 만든다. **채우는 쪽은 Phase 5-5** 의 `delivery.status` 전이이고(ADR-047), **첫 소비자는 Phase 5-3** 의 부분 재계획(§6.8 「미완료 stop 만」)이다 — 그때까지 이 키를 읽는 운영 코드는 없고 폴백을 지키는 것은 IT 다. `driver:{id}:pos` 와 달리 *쓰는* 쪽을 먼저 두는 이유는 값이 **사건이 지나갈 때만** 만들어지기 때문이다: 5-3 에 가서 켜면 그전에 지나간 스캔은 Redis 에 없고, 그 차이는 폴백이 있어야만 드러나지 않는다. **그런데 그 첫 소비자는 오지 않았다** (2026-09-23, Phase 5-3 정정): §6.8 은 같은 행을 어차피 읽으므로 캐시를 먼저 보면 조회를 아끼는 것이 아니라 **같은 사실의 둘째 출처만 생기고**, 불변규칙 7 이 그 출처를 진실로 못 쓴다고 이미 정했으니 남는 것은 갈라질 자리뿐이다([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 1). 지금 이 키는 **쓰는 쪽만 있고 읽는 쪽이 없다** — Phase 6-0c 에서 소비자를 정하거나, 정하지 않기로 하면 **이 행과 5-5 의 쓰기 경로를 함께 지운다.** 행이 있다는 것은 유지할 이유가 아니다 |
 | `driver:{id}:pos` | GEO | tracking | 1h | 없음(시각화용). **아직 아무도 쓰지 않는다**(2026-09-19, Phase 5-2) — 쓰는 코드도 읽는 코드도 없고 tracking 은 `route.assigned` 의 `driverId` 를 읽지도 않는다(`RouteAssignedPayload`). 채우는 시점은 **첫 소비자가 나타날 때**, 즉 Phase 6 의 ops-web 지도다 — dispatch OpenAPI 산출물·`delivery.route-departed` 와 같은 원칙이다(「부재는 첫 소비자가 나타나는 시점에 채운다」). 그때까지 기사 시뮬레이터는 스캔마다 `lat`·`lng` 를 실어 보내 데이터가 비어 있지 않게만 한다 |
 | `route:{id}:atrisk:cooldown` | STRING NX | tracking | 5m | 중복 at-risk 허용. **흡수하는 쪽은 멱등 소비자가 아니다**(2026-09-19 정정) — 두 at-risk 는 서로 다른 `eventId` 라 `processed_events` 에는 둘 다 처음 보는 이벤트다. 중복이 *재계획 두 번*이 되지 않게 하는 것은 dispatch 의 DB 쿨다운이고(§6.8 `routes.last_replanned_at`, 재계획 트랜잭션 안에서 비교·갱신), 이 키가 지키는 것은 **알림 수**다 ([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 폴백은 세어 둔다 — `dawnline_at_risk_cooldown_bypassed_total` |
 
 원칙: Redis는 **성능·조정(coordination)** 용도이며 **유일한 진실 저장소가 아니다**. 어떤 키가 사라져도 정확성은 DB로 회복된다.
+
+**이 표에서 행 하나가 빠졌다 — `route:{id}:progress`(HASH: nextSeq, completed, failed)** (2026-09-23,
+Phase 6-0c). 5-5 가 `delivery.status` 전이의 끝에서 그 키를 채웠고 5-3 이 첫 소비자가 될
+예정이었는데, 재계획이 필요한 값은 그 세 칸이 아니라 `actual_at`·`planned_arrival` 이어서
+읽는 쪽이 오지 않았다([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 1). Phase 6 에서도
+오지 않는다 — ops 는 이벤트로 프로젝션하고, **`GET /routes/{routeId}` 가 stop 마다 살아 있는
+상태를 이미 돌려주므로**(§5.3 `RouteView.StopView.status`) `nextSeq`·`completed`·`failed` 는
+그 응답이 싣고 있는 행들에서 나온다. 캐시를 읽으면 조회를 아끼는 것이 아니라 **같은 사실의
+둘째 출처**만 생기고, 불변규칙 7 이 그 출처를 진실로 못 쓴다고 이미 정했다. 「부재는 첫
+소비자가 채운다」(§11)의 거울상이다 — **소비자 없는 쓰기는 이 표에 행이 있다는 이유로 유지되면
+안 된다.** 지운 것: 어댑터·포트·`RouteMutations.progressOf`·그 폴백을 보던 IT·이 행. 폴링이
+필요해지면 답은 `GET /routes/{routeId}` 이고, 그것이 느리면 **그 응답을 캐시하는 것이지 다른
+키를 두는 것이 아니다.**
 
 **이 표에는 2026-09-05 하루 동안 예외가 하나 있었다.** `lock:relay:{service}` 행의 폴백 칸에는
 "없다 — 발행을 멈춘다" 가 적혀 있었다(ADR-027). 폴백이 없는 이유는 맞았다 — 락 없이 진행하면
@@ -2256,7 +2310,7 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | RDB | PostgreSQL | **18.x** | 서비스별 DB. 파티셔닝·JSONB |
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
-| 문서 | springdoc-openapi | **3.1.1** (Boot 4 라인) — Phase 1 에 3.1.0 으로 동작 확인, 2026-09-23 에 3.1.1 (보안 권고 8건) | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. **REST 표면이 있는 서비스마다 생성물과 계약 IT 를 둔다** — 목록이 아니라 조건이다(2026-09-19 정정). 열거였을 때 그 목록은 `order-service`(Phase 1)·`tracking-service`(Phase 5-1a) 둘이었고, springdoc 이 붙어 있는데 생성물이 없는 `dispatch-service` 는 그 문장 **밖**에 있었다 — 조건으로 적으면 새 REST 표면이 스스로 대상이 된다. tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다. 계약 IT 는 **오류 본문(`ProblemDetail`)과 성공 본문(이름 있는 타입)을 둘 다** 본다 — 한쪽만 보면 「오류를 파싱할 수 있는가」까지만 답한다. dispatch 의 생성물은 **Phase 6-0** 에서 만든다: 지금은 *문서가 거짓을 말하는* 상태가 아니라 문서가 **없는** 상태이고, 부재는 첫 소비자가 나타나는 시점에 채우는 것이 소비자 주도 원칙과 맞는다 — 그 소비자가 ops-api 다 |
+| 문서 | springdoc-openapi | **3.1.1** (Boot 4 라인) — Phase 1 에 3.1.0 으로 동작 확인, 2026-09-23 에 3.1.1 (보안 권고 8건) | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. **REST 표면이 있는 서비스마다 생성물과 계약 IT 를 둔다** — 목록이 아니라 조건이다(2026-09-19 정정). 열거였을 때 그 목록은 `order-service`(Phase 1)·`tracking-service`(Phase 5-1a) 둘이었고, springdoc 이 붙어 있는데 생성물이 없는 `dispatch-service` 는 그 문장 **밖**에 있었다 — 조건으로 적으면 새 REST 표면이 스스로 대상이 된다. tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다. 계약 IT 는 **오류 본문(`ProblemDetail`)과 성공 본문(이름 있는 타입)을 둘 다** 본다 — 한쪽만 보면 「오류를 파싱할 수 있는가」까지만 답한다. dispatch 의 생성물은 **Phase 6-0 에서 만들었다**(2026-09-23). 부재를 그때까지 둔 것은 *문서가 거짓을 말하는* 상태가 아니라 문서가 **없는** 상태였기 때문이고, 부재는 첫 소비자가 나타나는 시점에 채우는 것이 소비자 주도 원칙과 맞는다 — 그 소비자가 ops-api 다. **채우면서 결함 하나가 나왔다**: `PUT /rules/{ruleId}` 는 `Map<String, Integer>` 를, `POST /vehicles`·`POST /drivers` 는 `Map<String, UUID>` 를 돌려주어 문서가 성공 본문을 `type: object` 로 적고 있었다 — order-service 의 `ResponseEntity<Object>` 와 **같은 부류**이고, 그것을 잡은 것이 열거가 아닌 조건으로 적힌 `successBodiesWithoutNamedType()` 이다(되돌려 확인: `PUT /api/v1/rules/{ruleId} → 200 (이름 없는 object)`). 이름 있는 record 로 바꿨고 직렬화 결과는 같다 |
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
@@ -2291,7 +2345,8 @@ dawnline/
 ├── libs/
 │   ├── common/          # 값 객체(GeoPoint, Money, TimeWindow), UUIDv7, geohash, 에러 모델
 │   ├── messaging/       # Envelope, Outbox(엔티티·릴레이·Flyway 스크립트), IdempotentConsumer, Kafka 설정
-│   └── observability/   # 메트릭 명명, MDC 필터, 로그 설정
+│   ├── observability/   # 메트릭 명명, MDC 필터, 로그 설정
+│   └── web/             # RFC 9457 오류 응답의 모양(ProblemDetailsAdviceSupport) — ADR-049
 ├── services/
 │   ├── order-service/
 │   ├── fulfillment-service/
@@ -2307,6 +2362,8 @@ dawnline/
 │   └── k8s/ (선택)
 └── .github/workflows/ci.yml, release.yml
 ```
+
+`libs/*` 안에서도 경계가 하나 더 있다: **`common` 은 프레임워크를 모르고, 나머지 셋은 Spring 을 안다**([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md)). `common` 의 `main` 에 Spring 이 들어가면 `tools/benchmark`(Spring 없이 도는 CLI)가 그것을 끌고 오게 되고, 불변규칙 5 의 근거가 도메인 패키지 밖에서 무너진다. 그 경계는 문장이 아니라 **ArchUnit 규칙 10** 이 지킨다 — build 파일의 주석은 의존을 한 줄 더해도 그대로 있다. Spring 을 아는 공유 코드의 자리는 `libs/web` 이다.
 
 각 서비스 모듈은 `libs/*`만 의존한다. 서비스 간 소스 의존은 금지 — 현재 강제 수단은 ArchUnit 규칙 3(다른 서비스 *패키지를 참조*하면 실패)뿐이다. Gradle 수준의 가드(다른 `services:*` 를 의존에 추가하면 설정 시점에 실패)는 아직 없다.
 
@@ -2324,15 +2381,17 @@ dawnline/
 | 성능 | 주문 API 부하, 계획 시간 | k6, benchmark 도구 | §8.1 목표 대비 리포트 |
 | 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료 | Compose `stop/start` 스크립트 | 데이터 유실·중복 0 (검증 쿼리) |
 
-**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12) (8) `adapter.in.web` 의 매핑 경로에 리터럴 API 버전(`/api/v1/...`) 금지 — 버전은 `{version}` 자리표시자와 `ApiVersionConfigurer` 로 해석한다([ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2).
+**ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12) (8) `adapter.in.web` 의 매핑 경로에 리터럴 API 버전(`/api/v1/...`) 금지 — 버전은 `{version}` 자리표시자와 `ApiVersionConfigurer` 로 해석한다([ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2) (9) `@ControllerAdvice` 계열 클래스는 `libs/web` 의 `ProblemDetailsAdviceSupport` 를 상속한다 — 오류 응답의 모양은 한 곳에서 정해진다([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) 결정 4) (10) `libs/common` 의 **main** 은 `org.springframework`·`jakarta.persistence` 의존 금지 — Spring 을 아는 공유 코드는 `libs/web` 에 산다(ADR-049 결정 2).
 
 규칙 8 은 불변규칙이 아니라 **ADR 을 강제한다**. 그것이 이 규칙이 생긴 이유이기도 하다 — ADR-009 는 order-service 의 첫 컨트롤러와 함께 쓰였고 그 서비스는 지켰지만, dispatch 의 컨트롤러 셋은 리터럴 `/api/v1` 로 들어왔다(2026-09-19). 결정이 **한 서비스에만 적용되고 있다**는 사실을 아무 검사도 보고 있지 않았고, 「운영자 API 라서 다르다」는 ADR 에 없는 예외였다. ADR 은 결정을 적지만 그 결정이 다음 서비스에서도 지켜지는지는 말해 주지 않는다.
+
+규칙 9 와 10 은 **[ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) 를 강제한다** — 규칙 8 과 같은 부류다. 둘 다 표본이 사는 자리가 다른 규칙들과 다르다. 규칙 9 의 양성 표본은 `ProblemDetailsAdviceSupport` 를 상속해야 하는데 그 타입은 `libs/web` 에 살고 `libs/common` → `libs/web` 의존은 **방향이 반대**다. 그래서 이 규칙의 표본만 `libs/web` 의 테스트 소스셋에 둔다(`ProblemDetailsAdviceRuleTest`). 같은 이유로 규칙이 기반 클래스를 **문자열 FQN** 으로 가리키는데, 문자열 링크는 **끊어져도 조용하다** — 이름이 바뀌면 규칙은 아무것도 매치하지 않으면서 통과한다. 그 자리를 아래 규칙 3(대조 검사)이 막는다: 같은 테스트가 `HexagonalArchitectureRules.ERROR_ADVICE_BASE` 와 `ProblemDetailsAdviceSupport.class.getName()` 을 맞춰 본다. 규칙 10 은 대상이 서비스가 아니라 `libs/common` 이라 `allRulesFor(service)` 에 들어가지 않고 그 모듈의 테스트가 직접 건다(`LibsCommonIsFrameworkFreeTest`); **분석 대상을 main 출력 경로로 좁히는 것이 전제**이고(이 모듈의 테스트 클래스패스에는 Spring 을 일부러 참조하는 위반 표본이 있다) 그 전제를 첫 어설션이 스스로 말한다 — 0 개를 읽으면 규칙은 검사 없이 통과한다.
 
 규칙 7이 이름이 아니라 **인자 타입**으로 판정하는 이유: `LocalTime.now(Clock)` 은 주입받은 시계를 읽는 <em>올바른</em> 형태이고 `LocalTime.now(ZoneId)` 는 시스템 시계를 읽는 위반이다. 이름만 보면 둘이 같아 보인다 — 규칙을 처음 켰을 때 `TierEligibility.nowInServiceZone()` 이 그렇게 잘못 걸렸다. 분석 대상에서 테스트 클래스는 뺀다(`DoNotIncludeTests`): 규칙은 프로덕션 구조를 서술하는 것이고, "생성자가 잘못된 인자를 거부하는가" 를 보는 테스트는 버릴 객체를 만들려고 시스템 시계를 부를 수 있다.
 
 규칙 6이 따로 필요한 이유: `libs/messaging` 이 Kafka 의존을 `api` 로 노출하므로 `KafkaTemplate` 이 5개 서비스 전부의 컴파일 클래스패스에 있다. 유스케이스가 그것을 직접 부르면 도메인 변경과 이벤트 발행이 서로 다른 트랜잭션이 되는데, 규칙 5는 어노테이션의 *위치*만 보므로 이를 잡지 못한다.
 
-**규칙의 검증 상태**: 일곱 규칙 <strong>전부</strong> 위반 표본(`libs/common` 의 `archunit/samples/bad`)으로 "잡아야 할 것을 잡는지"까지 확인된다. Phase 0 마감 시점에는 규칙 3·4·5가 대상 0개라 미검증이었고, Phase 1에서 첫 `@Transactional`(규칙 5)·첫 `@KafkaListener`(규칙 4)·서비스 간 참조 표본(규칙 3)이 생기며 채워졌다.
+**규칙의 검증 상태**: 열 규칙 <strong>전부</strong> 위반 표본으로 "잡아야 할 것을 잡는지"까지 확인된다 — 여덟은 `libs/common` 의 `archunit/samples/bad` 에, 규칙 9 의 표본만 `libs/web` 의 테스트 소스셋에 있다(위 문단의 방향 문제). 규칙 10 의 음성 방향은 표본이 아니라 **좁히기를 뺀 결과**로 본다 — 그 모듈의 테스트 소스셋 자체가 Spring 을 참조하는 표본 집합이기 때문이다. Phase 0 마감 시점에는 규칙 3·4·5가 대상 0개라 미검증이었고, Phase 1에서 첫 `@Transactional`(규칙 5)·첫 `@KafkaListener`(규칙 4)·서비스 간 참조 표본(규칙 3)이 생기며 채워졌다.
 
 규칙별 주의점 세 가지. (1) 규칙 1의 표본은 금지 대상 중 Spring 쪽만 건드린다 — `libs/common` 의 test 클래스패스에 `jakarta.persistence` 가 없기 때문이며, JPA 는 같은 `resideInAnyPackage` 술어에 들어가는 다른 패키지 문자열일 뿐 검사 경로가 다르지 않다. (2) 규칙 3의 표본은 `that` 절이 서비스 패키지로 좁혀져 있어 `com.dawnline.order`·`com.dawnline.fulfillment` 패키지에 두어야 한다. 그 클래스들은 `libs/common` 의 테스트 소스에만 있고 서비스의 테스트 클래스패스에는 없으므로 실제 분석에 섞이지 않는다. (3) 규칙 3·7은 <strong>반대 방향</strong>(통과해야 할 표본이 통과하는지)도 함께 본다 — 그 방향이 없으면 "모든 참조를 막는" 규칙이나 "시각을 아예 못 읽게 만드는" 규칙이 되어도 테스트가 통과한다.
 
@@ -2344,7 +2403,7 @@ dawnline/
 | 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트, 리스너 IT 가 같은 이벤트를 두 번 보내 상태가 한 번만 바뀌는지 확인. **예외 하나**: `tools/sim-runner` 의 기사 시뮬레이터는 `route.assigned` 를 구독하지만 DB 도 `processed_events` 도 없고, 대신 `DriverFleet` 이 라우트별 개정 최댓값으로 거른다(tracking 의 `route_revisions` 와 같은 모양, `DriverFleetTest`). **예외가 성립하는 이유는 「도구라서」가 아니라 「하류가 멱등이라서」다** — 중복 소비가 만드는 것은 tracking 으로 가는 중복 스캔이고 그것은 §8.5 의 「`(orderIds, type)` + 상태 머신」이 `STALE` 로 흡수한다. **하류가 멱등이 아닌 소비자는 이 예외를 쓸 수 없다**. 그 리스너는 ArchUnit 규칙 4 의 대상도 아니다 — `tools/sim-runner` 는 `dawnline.spring-service` 규약을 쓰지 않아 ArchUnit 이 돌지 않고, 도구에는 `adapter.in.messaging` 이라는 자리 자체가 없다 (2026-09-19, Phase 5-2) | 규칙 4 ✅ / 멱등 체크 자체는 ✗ |
 | 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✅(양방향) / DB 권한 ✅(컨테이너에서 거부 확인) |
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
-| 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다 | — | ✅ |
+| 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다. **규칙 10** 이 같은 근거를 `libs/common` 의 main 으로 넓힌다([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) 결정 2) — 그 모듈의 build 파일이 「순수 Java 다」라고 적고 있었지만 그것은 문장이지 강제가 아니었다 | — | ✅ (규칙 1 · 규칙 10 둘 다) |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트**. **애그리거트가 없는 자리 하나**: dispatch 의 `route_stops.status`(2026-09-22, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 기각 (5)). 라우트는 120 stop 까지 가고 `RouteMutations` 는 「애그리거트를 되살리지 않는다」를 명시한 포트라, 전이 규칙은 도메인의 **순수 함수**(`RouteStopTransition`)에 두고 어댑터가 판정만 받아 한 행을 쓴다. 규칙이 한 곳에 있다는 목적은 지켜지지만 **세터를 막는 장치가 없다** — 지키는 것은 `RouteStopTransitionTest` 와 리뷰다 | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다. `RouteStopTransitionTest` 가 위 예외의 표 전체(도착 상태 × 현재 상태)를 **빼는 방식**으로 돈다 |
 | 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표(**예외 없음** — 2026-09-05 에 하루 있었고 [ADR-027 후속 정정](adr/ADR-027-outbox-relay-leader-lock.md)이 그 행을 없앴다), 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |
 | 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
@@ -2474,7 +2533,7 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 | 4 | **플래너 통계** | 통계 없는 테이블에서 플래너가 *짐작으로* 인덱스를 골랐다 — 50행에서 순차 스캔이 옳다 | CI 에서 autoanalyze 가 먼저 돌아 |
 | 5 | **컷오프 상한** | `GeoFallbackIT` 의 시각 리터럴이 `isStale` 24시간을 넘겼다 — 작성한 날로부터 25시간짜리 | 이틀 뒤 열 캠프 전부 배차 불가 |
 | 6 | **배정 동률** | 한계비용이 같을 때 `ORDER BY code` 순서로 차를 골랐다. cold-chain 공허성 검사의 통과·실패가 **시각과 시드 배분**에 달려 있었고, **CI 의 이전 통과는 시각 운이었다** | 근무조를 나누자 한 대가 웨이브를 흡수하게 되어([ADR-030](adr/ADR-030-night-shift-seed.md)) 드러남 |
-| 8 | **실행 순서** | 클래스·컨텍스트의 **시작 순서가 보장된다**고 암묵적으로 기대했다 — 축 3 의 fulfillment 쪽이 그 위에 서 있었다 | **순서 자체가 실행마다 달랐다** (2026-09-18, Phase 5-0): 같은 두 클래스를 두 번 돌렸더니 `GeoFallbackIT`→`WaveLifecycleIT` 와 그 반대가 각각 나왔다. 즉 초록의 근거는 「순서」보다도 얇은 **타이밍**이었다. 음성 표본은 그 타이밍을 고정해 만든다 — 앞 컨텍스트가 `lead()` 로 락을 확실히 쥐게 하자 뒤 클래스 일곱 개가 전부 `LEADER` 대 `FOLLOWER` 로 실패했다. **같은 축이 Phase 5-1b 에서 한 번 더 나왔다** (2026-09-19): `ShipmentEventPartitionIT` 의 회전 검사가 2035년 기준 시계로 `rotate()` 를 부르며 보존 경계보다 앞선 파티션을 **전부** 드롭한다 — 오늘 것까지. `ScanApiIT` 가 그동안 통과한 근거는 **클래스 이름 순서**(`S-c` < `S-h`)뿐이었고, 뒤에 붙은 `TrackingPublishIT` 는 그 운이 없어 `no partition of relation "shipment_events" found for row` 셋으로 드러났다. 고친 방식은 축 1·2 와 같다 — **쓰는 쪽이 자기 자리에서 만든다**(`ensure` 는 멱등이다). 되돌리거나 지우는 쪽을 고치지 않는 이유는 그 드롭이 그 테스트의 <em>검사 대상</em>이기 때문이다 |
+| 8 | **실행 순서** | 클래스·컨텍스트의 **시작 순서가 보장된다**고 암묵적으로 기대했다 — 축 3 의 fulfillment 쪽이 그 위에 서 있었다 | **순서 자체가 실행마다 달랐다** (2026-09-18, Phase 5-0): 같은 두 클래스를 두 번 돌렸더니 `GeoFallbackIT`→`WaveLifecycleIT` 와 그 반대가 각각 나왔다. 즉 초록의 근거는 「순서」보다도 얇은 **타이밍**이었다. 음성 표본은 그 타이밍을 고정해 만든다 — 앞 컨텍스트가 `lead()` 로 락을 확실히 쥐게 하자 뒤 클래스 일곱 개가 전부 `LEADER` 대 `FOLLOWER` 로 실패했다. **같은 축이 Phase 5-1b 에서 한 번 더 나왔다** (2026-09-19): `ShipmentEventPartitionIT` 의 회전 검사가 2035년 기준 시계로 `rotate()` 를 부르며 보존 경계보다 앞선 파티션을 **전부** 드롭한다 — 오늘 것까지. `ScanApiIT` 가 그동안 통과한 근거는 **클래스 이름 순서**(`S-c` < `S-h`)뿐이었고, 뒤에 붙은 `TrackingPublishIT` 는 그 운이 없어 `no partition of relation "shipment_events" found for row` 셋으로 드러났다. 고친 방식은 축 1·2 와 같다 — **쓰는 쪽이 자기 자리에서 만든다**(`ensure` 는 멱등이다). 되돌리거나 지우는 쪽을 고치지 않는 이유는 그 드롭이 그 테스트의 <em>검사 대상</em>이기 때문이다. **세 번째가 Phase 6-0c 에서 나왔다** (2026-09-23): `RouteStopOrdersIndexIT` 의 `@AfterEach` 가 `route_plans` 를 지우면서 `plan_explanations` 를 지우지 않았다 — 자기가 만드는 행은 아니지만 FK 로 그 계획을 참조하므로, *앞서 돈 클래스가 남긴* 설명 행이 있으면 FK 위반으로 터진다. 같은 소스셋의 다른 IT **여섯은 전부** 자기 정리에 그 표를 넣고 있었고 이 하나만 빠진 채 통과하고 있었다. 드러난 계기가 이 축의 정확한 발현 형태다 — **클래스 하나(`RouteProgressFallbackIT`)가 사라지며 포크에 담기는 배치가 바뀌었다.** 코드는 한 줄도 그 IT 를 건드리지 않았고, 통과의 근거였던 것은 *다른 클래스가 앞에서 치워 주는 순서*였다. 고친 쪽은 삭제가 아니라 그 정리다 |
 | 7 | **검사 대상 집합** | 실현 가능성 기준이 `{SMALL, MEDIUM, LARGE}` 를 **열거**했다 — `peak` 은 목록에 없었고, 목록에 없다는 사실은 어디에도 나타나지 않았다 | 병렬화 게이트를 재려고 `peak` 을 돌렸더니 총비용의 88%가 미배정 페널티(stop 8,411 > 슬롯 7,200) |
 | 9 | **환경이 결함을 가린다** | 검사가 보려는 성질을 **환경이 기본값으로 만족**시키고 있었다. 둘은 같은 얼굴이다 — ① Phase 1: 개발 기계의 `Clock.systemUTC()` 가 나노초를 내지 않아 저장 정밀도(마이크로초) 불일치가 숨어 있었다 ② Phase 5-1a: 컨테이너 세션이 UTC 라 파티션 경계 검사가 **함수가 세션 존을 써도 그대로 통과**했다 | **환경을 일부러 어긋나게 만들어 드러낸다** (2026-09-19): 같은 커넥션에서 `SET TIME ZONE 'Asia/Seoul'` 로 만들었더니 경계가 `FROM ('2035-05-09 15:00:00+00')` 로 나와 검사가 실패했다. Phase 1 쪽의 대응은 저장 정밀도로 자른 `Clock` 빈을 `libs/messaging` 한 곳에 둔 것이다 — 양쪽 다 **기본값이 맞춰 주던 것을 검사가 직접 말하게** 하는 형태다. **반대 방향도 있다**: 환경이 바뀌어 결함이 *사라진* 경우다 — [ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 3 의 음성 표본(`/actuator/health` 의 세그먼트를 버전으로 파싱해 프로브가 깨진다)은 Boot 4.1.x 에서 재현되지 않는다(2026-09-19). 그때 남는 것은 **초록인 채로 아무 말도 하지 않는 검사**이고, 이쪽의 대응은 결정을 방어적으로 유지하되 그것을 지킨다고 *말하던* 줄의 범위를 좁히는 것이다 |
 
@@ -2587,6 +2646,8 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 041 | **「차 한 대 몫」에는 stop 슬롯이 들어간다** — 목표 클러스터 수 = `min(차량 수, max(중량, 부피, ceil(stop 수 / routeStopCap)))` · 룰의 파라미터를 읽는 것이 아니라 **룰이 답하는 질문**을 하나 더 묻는다([ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md)) · **클러스터 수 상한(차량 수)은 남긴다** — 셋을 한꺼번에 바꾼 판이 진 이유가 그 상한 제거였다(`peak` 클러스터 121개 > 차량 88대, +1,507,476원) · 그리고 **「빈 차를 먼저 본다」를 설계서에 올린다**(그 휴리스틱만 뺀 변형이 `peak` +2,203,845원 · 미배정 2 → 70) · 재기준 −26.15% → **−26.60%** · −16.12% → **−17.37%** · −14.56% → **−14.93%** · −23.37% → **−24.18%** | 축·차량급·상한을 한꺼번에 바꾸기(`large` −12.87% · `peak` −18.66% — 범인은 상한 제거였다), 이분법에 계속 맡기기(클러스터러의 오류를 메우는 것이지 설계가 아니다 — 이분법을 빼면 `small` 미배정 3), 클러스터 수 상한 제거(남는 클러스터가 이미 실은 차에 얹혀 지그재그), 가장 작은 차량급 기준(묶어서 재지 않으려고 남겼다 — 따로 잰다), FAST 가 나빠지므로 넣지 않기(FULL 이 기본이고 네 데이터셋을 다 이긴다 — 열화가 더 나빠지는 것은 열화의 성질이다) | [ADR-041](adr/ADR-041-cluster-target-counts-stop-slots.md) |
 | 042 | **savings 의 병합은 제약 조합을 안다** — `savings-cw+ls` 구성 단계. 쌍은 **개선 단계와 같은 K-최근접 표**([ADR-032](adr/ADR-032-local-search-budget-and-approximations.md), K=20 — 완전 목록은 `peak` 에서 3,500만 쌍) · 병합 가능성은 **합집합 조합을 덮는 차량 중 가장 큰 것**으로 · [ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) 의 **집계 좌석 불변식을 구성 단계로** 옮긴다(예약은 배정의 장치인데 CW 에서 배정은 라우트가 다 만들어진 뒤에 온다) · 뒤 단계(재삽입·개선)는 **같은 클래스** · 라우트를 뒤집지 않는다 | 「가장 큰 차량」 기준 단순 병합([ADR-038]·[ADR-039] 의 결함을 CW 안에서 되살린다 — 지는 이유가 「구성 방식」이 아니라 「희소 좌석」이 된다), 완전한 savings 목록(3,500만 쌍), K 를 이름에 넣기(표가 읽히지 않는다), 라우트 뒤집기(순서는 5단계의 일), 다중 패스(재 봤다 — 두 번째 패스가 한 건도 더 잇지 못한다), 부착에서 재시퀀싱(구성이 정한 순서를 배정이 덮는다), 전용 재삽입·개선(§6.6 이 이미 기각한 「두 구현의 차이」) | [ADR-042](adr/ADR-042-savings-merges-are-class-aware.md) |
 | 044 | **끝점은 전부 본다 — 근사는 stop 이 많을 때의 것이지 라우트가 적을 때의 것이 아니다** — savings 구성에 2단계를 붙인다: 1단계(K-최근접) 뒤 남은 라우트들의 (꼬리, 머리) 쌍을 **전부** 만들어 같은 게이트로 잇고 고정점까지 돈다 · 쌍 예산 `R(R−1) ≤ n·K`(성능 가드이지 동작 게이트가 아니다 — 부등식이 참인 구간의 쌍은 K 표가 이미 본 것이다) · 상한에 찬 라우트는 후보에서 뺀다 · **`peak` 라우트 216 → 90**(stop 하나짜리 67개가 0 이 된다), 밀린 라우트 128 → 2, FULL 이 13,018 ms 에 수렴 · `large` 차량 40 → 35 | 전체 K 키우기(개선 단계 K 도 움직여야 해 비교가 표 크기를 잰다 · 157 까지밖에 안 내려간다 · **206 ms 로 더 비싸다**), 끝점만 K_end=50·100(같은 이유로 비싸고 상한 미달), 라우트 뒤집기(순서는 5단계의 일), 2단계에서 게이트 느슨하게(집계가 2단계에서도 638건을 거절한다), 부착이 한 차에 둘(증상을 고친다 — 90개가 88대에 맞으므로 지금은 불필요), 쌍 예산 없이(못 이은 입력에서 `O(n²)` 가 마감을 먹는다) | [ADR-044](adr/ADR-044-endpoints-are-few-enough-to-see-all.md) |
+| 050 | **라우트 출발은 이벤트다 — 출발이 첫 편차의 출처이기 때문이다** — `dawnline.delivery.route-departed.v1`(키 `routeId`, 소비자 **ops 뿐**) · 근거는 화면이 아니라 **사실의 가시성**이다: 지금 출발을 아는 것은 tracking 뿐이라(`ScanType.isPublished()` 가 `DEPARTED_CAMP` 를 뺀다) ops 는 첫 `ARRIVED` 가 올 때까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, **그 구간이 운영자가 개입할 수 있는 마지막 창이다**(아직 안 나간 차는 다시 짤 수 있다) · **라우트 하나에 이벤트 하나** — 반복하지 않는다는 이유가 말하지 않을 이유였던 적은 없다([ADR-024](adr/ADR-024-plan-completed-event.md) 의 거울상: 사실의 단위와 토픽의 단위를 맞춘다) · 페이로드 여섯 칸(`routeId`·`campId`·`revision`·`plannedDeparture`·`departedAt`·`stopCount`)은 **마이그레이션 없이** 나온다 · `revision` 을 싣는 이유는 「어느 개정본의 계획에 대해 늦었나」를 말해야 하기 때문 · 스키마·예시·토픽·발행은 **소비자가 먼저**(묶음 B, ops 의 `rm_routes`) | 정의하지 않는다(더 단순하지만 그 대가가 **마지막 개입 창을 숨기는 것**이다 — `rm_routes` 는 없는 사실을 만들어 내지 못한다), `delivery.status` 의 `status` 에 `DEPARTED_CAMP` 추가(한 사실이 stop 수만큼 반복된다 — 5-1b 가 발행하지 않기로 한 그 이유), `route.assigned` 에 `departedAt` 을 나중에 채우기(계획 이벤트를 사실로 갱신하면 개정으로 거르는 소비자가 사실을 함께 버린다), ops-api 가 tracking 에 동기 조회(출발은 사건이지 조회 대상이 아니다 — 해상도가 폴링 주기가 된다), 페이로드를 `{routeId, departedAt}` 둘로(편차의 기준선 `plannedDeparture` 가 개정마다 다르다) | [ADR-050](adr/ADR-050-route-departure-is-an-event.md) |
+| 049 | **Spring 을 아는 공유 코드는 자기 lib 에 산다, common 은 순수하게 남는다** — `ProblemDetailsAdvice` 가 세 서비스에 거의 글자 그대로 있었고 갈라지는 칸은 `RETRY_AFTER_SECONDS` **하나**였다 · 자리는 **새 모듈 `libs/web`** 이다(`libs/messaging`·`libs/observability` 옆 — 저장소에 이미 그 패턴이 있다) · 훅은 **추상 메서드**라 「이 서비스에는 그런 오류가 없다」는 판단이 코드에 남는다 · ArchUnit 규칙 9(`@ControllerAdvice` 계열은 전부 이 기반을 쓴다 — **열거가 아니라 조건**이라 ops-api 가 스스로 대상이 된다)와 규칙 10(`libs/common` 의 main 은 Spring·JPA 비의존)이 그 둘을 강제한다 | `libs/common` 의 Gradle 피처 변형(가드 둘이 모르는 구조 — `check` 컴파일 의존과 JaCoCo `classDirectories` 를 손으로 고쳐야 한다), `libs/common` 의 main 에 그냥 넣기(`tools/benchmark` 가 Spring 없이 쓴다), 사본 셋 유지(네 번째가 Phase 6 에 있다), `libs/observability` 에 얹기(오류 응답의 모양은 관측이 아니다) | [ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) |
 | 048 | **재계획은 자기 DB 로 푼다 — 페이로드는 트리거다** — 「미완료 stop 만」은 <em>어느 stop 이 남았나</em>만 말하고, 다시 푸는 데는 **기사가 지금 어디에 얼마나 늦게 있나**가 더 필요하다 · 그 편차를 `delivery.at-risk` 에서 읽으면 진실이 «소속은 dispatch · 시각은 tracking» 으로 갈리므로 **V10 `route_stops.actual_at`**(처음 닿은 시각, 덮어쓰지 않는다 — 덮으면 도착이 아니라 완료를 재게 된다)을 5-5 전이가 채우고 편차 = `마지막으로 닿은 stop 의 actual_at − planned_arrival` · 페이로드의 값은 **대조값**이고 60초 넘게 갈리면 `dawnline_at_risk_deviation_mismatch_total` (둘이 갈리는 것이 정보다 — 두 relocate 카운터와 같은 형식) · **편차는 평가 시계를 민다**: 저장되는 `planned_arrival` 은 계획 시계 그대로라 닿은 stop 의 기준선이 재계획을 지나도 안 움직인다(ETA 는 tracking 의 것이다) · 닿은 stop 이 없으면 **모름**이고 `no-anchor` — 출발 지연 at-risk 는 stop 하나 뒤에 닫힌다 · `relocate` 세 조건(현재 위치 이후만 · [ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) 조합 게이트 · 두 라우트 모두 재검증·revision 증가, 미출발 차량의 고정비는 `CostModel` 에 **이미 있다**) · 실패는 DLQ 가 아니라 `dawnline_replan_total{outcome}` 다섯 갈래 · `applied` 는 `plan_explanations`(`AT_RISK_RELOCATE`)에 「어느 주문이 어디서 어디로, Δ비용 얼마」 · `no-gain` 은 **소프트 룰까지 포함한 두 라우트 총비용**(§6.1 그대로) | 페이로드를 입력으로(코드 한 줄이지만 진실이 갈린다 — 불변규칙 4 가 허락하는 것과 이 자리에서 옳은 것은 다르다), `deviationSeconds` 를 아예 무시(갈리는 것이 정보다), 전체 재최적화(§6.8 3단계 — 얼어 있는 앞자락을 뺄 방법이 파이프라인에 없다), `planned_arrival` 에 편차 반영(기준선이 사라지고 ETA 를 두 테이블에 적는다), DLQ(고칠 수 없는 것이 재시도된다), 쿨다운을 tracking 의 Redis 하나로([ADR-046](adr/ADR-046-at-risk-is-an-event.md) 가 이미 기각), `actual_at` 덮어쓰기(뜻이 바뀌는데 값을 보아서는 알 수 없다), 편차를 모를 때 0(모름은 0 이 아니다) | [ADR-048](adr/ADR-048-replan-reads-its-own-db.md) |
 | 047 | **배송 상태는 사실이고 개정은 계획이다** — **계획은 `(route, revision, seq)` 로, 사실은 `orderId` 로 식별한다**(같은 열쇠를 스캔 API·tracking·dispatch 세 자리가 쓴다 — 스캔 API 는 2026-09-23 에 `orderIds` 필수로 바뀌었고, `DEPARTED_CAMP` 만 라우트의 사건이라 예외다. 찍은 자리가 다르면 적용하고 `dawnline_scan_after_relocate_total` 로 센다) · dispatch 의 `route_stops.status` 가 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **네 번째 자리**다 · stop 은 `stopSeq` 로 찾지 않고 **`routeId` 로 좁히지도 않는다**: 다른 라우트에서 찾으면 거기 적용하고 `dawnline_status_after_relocate_total`(= §6.8 경합 창의 크기)로 세며, **어느 라우트에도 없을 때만** stale · **개정 번호로 거르지 않는다**: `route.assigned` 는 계획이라 옛 것을 버려야 하지만 `delivery.status` 는 사실이라 버리면 일어난 일이 사라지고, 그것이 §6.8 「미완료 stop 만」이 읽는 값이다(근거: **관측(재현됨)** — 2026-09-23 에 5-3 의 `ReplanIT` 이 재현 수단을 만들었다. 그전에는 「추정」이었고 돌릴 재계획이 없었다) · `CANCELLED` stop 의 상태는 무시하고 `dawnline_scan_after_cancel_total` 로 센다(tracking 과 같은 이름, 자리로 갈린다 — 한쪽만 오르는 것이 정보다) · `FAILED` 도 종결 · 이 전이가 §6.10 넷째 분기를 처음으로 발화 가능하게 한다(「구조적으로 0」 문단을 닫는다) · `route_stop_orders (order_id)` 인덱스 하나(V9, 빈도가 취소마다→방문마다로 바뀌었다) | `stopSeq` 로 찾기(개정이 뜻을 바꾼다), **「이 라우트에 없으면 stale」(첫 판 — `seq` 만 버리고 `routeId` 를 남긴 것은 같은 오류의 절반이고, 카운터가 갈리지 않는 것이 그 신호였다)**, `revision` 을 계약에 더해 ADR-045 를 그대로 옮기기(대칭은 이름의 대칭이지 의미의 대칭이 아니다), `CANCELLED` stop 을 `COMPLETED` 로 옮기기(계획 테이블을 배송 원장으로 쓰면 §6.8 과 §6.10 이 다른 질문의 답을 읽는다), stop 애그리거트 메서드(120 stop 을 메모리로 올린다 — 대신 도메인 순수 함수 + §13 매핑표) | [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) |
 | 046 | **at-risk 는 사건이고, 쿨다운은 알림 수를 지킨다** — 위험이 커지면 다시 발행하고(쿨다운이 주기) **사라지는 경우는 알리지 않는다**(재계획을 취소할 방법이 없고 해소는 ops 의 ETA 가 보여 준다) · 페이로드는 위험한 stop 이 아니라 **남은 구간 전부** + stop 마다의 `atRisk`(여유 15분은 tracking 의 정책이다) · **쿨다운 둘은 집이 다르다**: tracking=Redis/알림 수, dispatch=DB `routes.last_replanned_at`/정확성 — 「멱등 소비자가 흡수한다」는 틀렸다(두 at-risk 는 `eventId` 가 달라 둘 다 처음 보는 이벤트다, §7.2 정정) · Redis 장애에는 **발행한다**(fail-open, `dawnline_at_risk_cooldown_bypassed_total`) | 위험 해제 이벤트(소비자가 할 일이 없다 — 재계획은 되돌릴 수 없다), at-risk 를 라우트의 **상태 칼럼**으로 (갱신을 놓친 라우트가 조용히 안전해지고, 상태로 두면 「해제」가 자연스러워 보인다), 쿨다운을 DB 로 옮겨 tracking 이 정확성까지(막아야 할 중복은 재계획이고 그것은 dispatch 의 것이다), 쿨다운 없이 매번 발행 (`peak` 에서 라우트당 최대 90건이 거르기 **전에** 토픽·컨슈머·`processed_events` 를 지난다) | [ADR-046](adr/ADR-046-at-risk-is-an-event.md) |

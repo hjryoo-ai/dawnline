@@ -1770,6 +1770,10 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    어차피 읽으므로 캐시는 조회를 아끼지 않고 **같은 사실의 두 번째 출처**만 만든다.
    §6.8 과 [ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 에 정정으로 적었고, 그 캐시의 첫
    소비자는 ops 의 읽기 모델(§5.5, Phase 6)이 된다.
+   **그 예상도 빗나갔다 (2026-09-23, Phase 6-0c — 키를 지웠다).** ops 는 이벤트로 프로젝션하고
+   `GET /routes/{routeId}` 가 stop 마다 살아 있는 상태를 이미 돌려준다. 예정한 소비자가 **두
+   번 연속** 오지 않은 것이고, 그것이 「쓰는 쪽을 먼저 둔다」가 이 키에서 틀렸다는 근거다 —
+   부재는 첫 소비자가 채운다(§11).
 3. **5-3 이 §5.3 의 결함을 하나 드러냈다.** `moveOrder` 가 목적지에 *새* stop 을 만들 때
    약속창을 비운 채 INSERT 하고 있었다(V6 이 그 칸을 더한 이유가 개정 발행이었는데도). 재배정의
    발행은 도메인 객체에서 페이로드를 만들어 그것을 덮고 있었고, **DB 를 읽는 발행 경로가 생겨서야
@@ -1787,24 +1791,44 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 > Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
 
 **작업**
-0-b. **(선결) `delivery.route-departed` 를 정할지 결정한다** (Phase 5-1b 이월). tracking 은
-   `DEPARTED_CAMP` 를 브로커로 내보내지 않는다 — 라우트의 사건을 stop 수만큼 반복하는 꼴이고,
-   order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다(§5.4). **ops 화면이 「출발했는가」를
-   보여야 한다면** 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 그때
-   소비자 주도로 정한다. 지금 정하지 않는 이유는 소비자가 없기 때문이다 — 소비자 없는 이벤트는
-   무엇을 실어야 하는지 정할 근거가 없고, 그 상태로 만든 계약은 첫 소비자가 나타나는 순간
-   바뀐다. ops 가 `rm_routes` 프로젝션으로 충분하면 **정의하지 않는 것이 결정**이고 그것도 적는다.
+0-a. **(선결) `ProblemDetailsAdvice` 셋을 `libs/web` 으로 뽑는다**
+   ([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md)). order·tracking·dispatch
+   에 거의 글자 그대로 있던 사본 셋이고 갈라지는 칸은 `RETRY_AFTER_SECONDS` 하나였다. **넷째가
+   이 Phase 에 온다**(ops-api) — 그것이 이 뽑기의 실제 수요다.
+   *6-0 앞에 두는 이유*: 생성물이 말하는 것의 절반이 오류 본문이라, 뽑기가 advice 를 바꾸면
+   `dispatch-service.yaml` 을 두 번 만들게 된다. 그리고 계약 IT 의 어설션 한 벌(`OpenApiResponses`)이
+   세 서비스에서 같으려면 advice 가 먼저 한 벌이어야 한다.
+   자리가 `libs/common` 의 피처 변형이 아니라 **새 모듈**인 이유는 이 저장소의 가드 둘(`check` 의
+   컴파일 의존 · JaCoCo `classDirectories`)이 피처 변형을 모르기 때문이다 — 모듈은 둘 다 공짜로
+   받는다. ArchUnit 규칙 9·10 이 그 경계를 지킨다.
 
-0-c. **(선결) `route:{id}:progress` 의 소비자를 정하거나 키를 지운다** (Phase 5-3 이월,
-   [ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 재검토 지점 4). 5-5 가 그 키를 채우고 5-3 이
-   첫 소비자가 될 예정이었으나, §6.8 은 같은 행을 어차피 읽으므로 캐시를 읽지 않기로 했다 —
-   같은 사실의 둘째 출처만 생기고 불변규칙 7 이 그것을 진실로 못 쓴다. 지금 이 키는 **쓰는 쪽만
-   있고 읽는 쪽이 없다.** ops-api 는 이벤트로 프로젝션하므로 dispatch 의 Redis 를 읽지 않는다.
-   **소비자가 생기는 형태 하나**: 6-0 의 dispatch REST 표면에 `GET /routes/{id}` 가 실시간 진행
-   필드를 이 캐시에서 채우고 ops-api 가 그것을 위임 조회한다(작업 1 의 커맨드 위임과 같은 방향).
-   그 형태를 택하지 않으면 **5-5 의 쓰기 경로와 §7.2 의 행을 함께 지운다** — 「부재는 첫 소비자가
-   채운다」의 거울상이고, 소비자 없는 쓰기는 §7.2 에 행이 있다는 이유로 유지되면 안 된다.
-   6-0 뒤에 판정하는 이유는 그 표면이 정해지기 전에 지우면 같은 키를 다시 만들게 되기 때문이다.
+0-b. **(선결, 판정 완료) `delivery.route-departed` 를 정한다**
+   ([ADR-050](adr/ADR-050-route-departure-is-an-event.md), Phase 5-1b 이월 — 2026-09-23).
+   tracking 은 `DEPARTED_CAMP` 를 브로커로 내보내지 않는다 — 라우트의 사건을 stop 수만큼 반복하는
+   꼴이고, order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다(§5.4). **정의하는 쪽으로 정했고,
+   근거는 ops 화면이 아니라 사실의 가시성이다**: 5-1b 가 출발을 **첫 편차의 출처**로 만들었는데
+   (늦은 출발이 가장 흔한 at-risk 원인이고 그 편차는 첫 `ARRIVED` 전에 이미 존재한다) 지금 그
+   사실을 아는 것은 tracking 뿐이라, ops 는 첫 `ARRIVED` 가 올 때까지 「출발 안 함」과 「출발했는데
+   아직 도착 없음」을 구별하지 못한다. **그 구간이 운영자가 개입할 수 있는 마지막 창이다** —
+   아직 안 나간 차는 다시 짤 수 있다. 그리고 `plannedDeparture − departedAt` 은 라스트마일의
+   고전 KPI(출발 정시율)라 peak-day 스토리에서 「출발 지연 → at-risk → 재계획」의 첫 칸이 된다.
+   **「정의하지 않는다」가 더 단순하다는 것을 알고 취하지 않았다** — 그 단순함의 대가가 운영자
+   에게서 마지막 개입 창을 숨기는 것이기 때문이고, 그 문장이 이 결정의 근거다.
+   계약은 §4.1 과 ADR-050 에 적었다(`delivery.route-departed.v1`, 키 `routeId`). **스키마·예시·토픽 생성·발행은
+   아래 작업 1 에서 한다** — 소비자(ops 의 `rm_routes` 프로젝션)가 먼저 정의하고 tracking 이
+   outbox 로 낸다. 소비자 주도를 지키는 것이 이 순서다.
+
+0-c. **(선결, 판정 완료) `route:{id}:progress` 를 지운다** (Phase 5-3 이월,
+   [ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 재검토 지점 4 — 2026-09-23 에 닫았다).
+   5-5 가 그 키를 채우고 5-3 이 첫 소비자가 될 예정이었으나, §6.8 은 같은 행을 어차피 읽으므로
+   캐시를 읽지 않기로 했다 — 같은 사실의 둘째 출처만 생기고 불변규칙 7 이 그것을 진실로 못 쓴다.
+   **판정은 6-0 이 표면을 정한 뒤에 났고, 답은 「지운다」다.** 소비자가 생기는 형태로 적어 둔
+   것은 「`GET /routes/{id}` 가 실시간 진행 필드를 이 캐시에서 채우고 ops-api 가 위임 조회」였는데,
+   6-0 에서 확인해 보니 그 엔드포인트는 **stop 마다 살아 있는 상태를 이미 돌려준다** —
+   `nextSeq`·`completed`·`failed` 는 그 응답이 싣고 있는 행들에서 나오므로 캐시를 읽으면 필드가
+   아니라 둘째 출처가 는다. 지운 것: `RouteProgressCache` 포트·Redis 어댑터·
+   `RouteMutations.progressOf`·`RecordDeliveryStatusService` 의 쓰기 한 줄·`RouteProgressFallbackIT`·
+   §7.2 의 행. 폴링이 필요해지면 답은 그 응답을 캐시하는 것이지 다른 키를 두는 것이 아니다.
 
 0. **(선결, 6-0) dispatch OpenAPI 생성물 + 오류·성공 본문 검사.** `contracts/openapi/dispatch-service.yaml`
    과 `OpenApiContractIT` 를 만들고, 오류 본문은 `ProblemDetail`·성공 본문은 이름 있는 타입인지

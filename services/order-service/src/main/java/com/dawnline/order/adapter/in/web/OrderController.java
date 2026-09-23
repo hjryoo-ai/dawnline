@@ -13,6 +13,7 @@ import com.dawnline.order.application.port.out.RateLimiter;
 import com.dawnline.order.domain.OrderErrorCode;
 import com.dawnline.order.domain.OrderStatus;
 import com.dawnline.common.error.DomainException;
+import com.dawnline.web.ProblemDetailsAdviceSupport;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -154,7 +155,7 @@ public class OrderController {
         }
         throw new DomainException(OrderErrorCode.RATE_LIMITED,
                 "요청이 너무 잦습니다. 잠시 후 다시 시도하세요.",
-                Map.of(ProblemDetailsAdvice.RETRY_AFTER_DETAIL, decision.retryAfterSeconds()));
+                Map.of(ProblemDetailsAdviceSupport.RETRY_AFTER_DETAIL, decision.retryAfterSeconds()));
     }
 
     /**

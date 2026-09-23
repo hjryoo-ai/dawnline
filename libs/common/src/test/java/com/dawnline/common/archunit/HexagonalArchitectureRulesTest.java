@@ -178,7 +178,7 @@ class HexagonalArchitectureRulesTest {
     void 서비스별_규칙_전부를_만들_수_있고_대상이_없으면_통과한다(String service) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
-        assertThat(rules).hasSize(8);
+        assertThat(rules).hasSize(9);
         // GOOD 표본에는 위반이 없으므로 전부 통과해야 한다. 규칙 3·4 는 이 표본에 대상이 0개이고,
         // allowEmptyShould(true) 덕분에 "대상 없음" 이 실패가 되지 않는다.
         // 그 둘의 탐지 능력은 위의 전용 테스트가 확인한다.
