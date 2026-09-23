@@ -829,7 +829,12 @@ CREATE TABLE route_plans (id UUID PK, wave_id UUID NOT NULL UNIQUE, camp_id UUID
   seed BIGINT, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ,
   total_cost_krw BIGINT, assigned_count INTEGER, unassigned_count INTEGER, plan_duration_ms INTEGER, version BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE routes (id UUID PK, plan_id UUID REFERENCES route_plans, vehicle_id UUID, driver_id UUID, seq_no SMALLINT,
-  status VARCHAR(16), stop_count INTEGER, distance_m INTEGER, duration_s INTEGER, cost_krw INTEGER, version BIGINT NOT NULL DEFAULT 0);
+  status VARCHAR(16), revision INTEGER NOT NULL DEFAULT 1, stop_count INTEGER, distance_m INTEGER, duration_s INTEGER,
+  cost_krw INTEGER, planned_departure TIMESTAMPTZ,       -- 캠프 출발 계획 시각 (V7, Phase 5-1b)
+  -- §6.8 재계획 쿨다운(라우트당 10분). 재계획 트랜잭션 안에서 비교·갱신한다 (V10, ADR-046 결정 3).
+  -- tracking 의 Redis 쿨다운은 알림 수를 지키지 정확성을 지키지 않는다 — 두 at-risk 는 eventId 가
+  -- 달라 processed_events 가 막지 못한다. NULL 이면 아직 재계획한 적이 없다.
+  last_replanned_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE route_stops (id UUID PK, route_id UUID REFERENCES routes, seq SMALLINT NOT NULL, lat NUMERIC(9,6), lng NUMERIC(9,6),
   planned_arrival TIMESTAMPTZ, planned_departure TIMESTAMPTZ, service_s INTEGER,
   -- PLANNED | CANCELLED | ARRIVED | COMPLETED | FAILED. 뒤의 셋은 delivery.status 소비가 옮긴다
@@ -837,6 +842,11 @@ CREATE TABLE route_stops (id UUID PK, route_id UUID REFERENCES routes, seq SMALL
   -- enum 값 추가를 허용하므로, 제약을 걸면 값이 하나 늘 때마다 마이그레이션이 필요해진다.
   status VARCHAR(16),
   promised_start TIMESTAMPTZ, promised_end TIMESTAMPTZ,  -- 이 stop 의 약속창 (V6, Phase 5-1a)
+  -- 그 stop 에 **처음 닿은** 시각 (V10, Phase 5-3, ADR-048 결정 1). delivery.status 의 occurredAt 을
+  -- 5-5 의 전이가 함께 적는다. ARRIVED|COMPLETED|FAILED 중 먼저 온 것이 쓰고 덮어쓰지 않는다 —
+  -- 덮으면 이 값은 도착이 아니라 완료가 되고, §6.8 의 편차가 체류 시간까지 더한 값으로 바뀐다.
+  -- NULL 이면 아직 닿지 않았다(= §6.8 이 다시 푸는 대상). 편차를 모르는 것과 0 은 다르다.
+  actual_at TIMESTAMPTZ,
   UNIQUE (route_id, seq));
 CREATE TABLE route_stop_orders (stop_id UUID REFERENCES route_stops, order_id UUID, PRIMARY KEY (stop_id, order_id));
 -- 사실은 orderId 로 식별한다 (V9, Phase 5-5, ADR-047 결정 2). PK 의 선두 컬럼이 stop_id 라
@@ -1678,6 +1688,84 @@ public interface DispatchStrategy {
 ([ADR-026](adr/ADR-026-dispatch-cancellation-window.md) 결정 1). 트리거를 늘리면 같은 판단을 하는
 회로가 둘이 되고, 둘은 갈라진다.
 
+**입력은 자기 DB 다 — 페이로드는 트리거다**
+([ADR-048](adr/ADR-048-replan-reads-its-own-db.md), 2026-09-23).
+위 1단계의 「미완료 stop」은 <em>어느 stop 이 남았나</em>만 말한다. 다시 푸는 데는 그것만으로
+모자란다 — **기사가 지금 어디에, 얼마나 늦게 있나**가 있어야 남은 구간의 도착 시각이 나오고,
+그래야 지각 페널티가 나오고, 그래야 「옮기면 나아지는가」에 답할 수 있다. 소속은 5-5 가 채운
+`route_stops.status` 가 말한다([ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md)).
+**시각도 같은 테이블에서 읽는다**:
+
+- `route_stops.actual_at` — 그 stop 에 **처음 닿은** 시각. `delivery.status` 의 `occurredAt` 을
+  5-5 의 전이가 함께 적는다(계약은 이미 싣고 있었다). `ARRIVED`·`COMPLETED`·`FAILED` 중 먼저 온
+  것이 쓰고 **덮어쓰지 않는다** — 덮으면 이 값은 도착이 아니라 완료가 되고, 아래 편차가
+  「얼마나 늦게 도착했나」에서 「거기서 머문 시간까지 더한 값」으로 조용히 바뀐다.
+- **편차 = 마지막으로 닿은 stop 의 `actual_at − planned_arrival`.**
+- **닿은 stop 이 없으면 편차는 «모름» 이고, 모름은 0 이 아니다** — 재계획하지 않고
+  `dawnline_replan_total{outcome=no-anchor}` 로 센다. 출발 지연만으로 난 at-risk 가 그 자리이고,
+  첫 `ARRIVED` 뒤 tracking 의 5분 쿨다운이 다시 발화하므로 구멍은 **stop 하나 뒤에 닫힌다**.
+
+`delivery.at-risk` 의 `deviationSeconds` 는 **입력이 아니라 대조값**이다. 자기 값과 60초 넘게
+갈리면 `dawnline_at_risk_deviation_mismatch_total` 을 올린다 — tracking 과 dispatch 가 같은
+라우트를 다르게 보고 있다는 뜻이고, 그 신호가 없으면 갈리기 시작한 순간이 어디에도 나타나지
+않는다(§9.1 의 두 relocate 카운터와 같은 형식이다 — <em>둘이 갈리는 것이 정보다</em>).
+페이로드에서 편차를 읽으면 「진실 하나」가 **소속은 dispatch · 시각은 tracking** 으로 갈린다.
+
+`route:{id}:progress`(§7.2)의 **첫 소비자가 여기다**. 없거나 못 읽으면 `route_stops` 로
+간다(불변규칙 7) — 캐시는 조회를 아끼는 것이지 진실을 정하는 것이 아니다.
+
+**편차는 «평가 시계» 를 민다 — 저장되는 `planned_arrival` 은 계획 시계 그대로다.**
+
+| | 시계 | 쓰는 곳 |
+|---|---|---|
+| 평가 | `계획 시작 + 편차` | 「옮기면 총비용이 주는가」, 하드 룰 재검증 |
+| 저장 | `계획 시작` | `route_stops.planned_arrival`·`planned_departure` 재작성 |
+
+편차를 저장까지 반영하면 **다음 편차의 기준선이 사라진다** — `actual_at − planned_arrival` 에서
+빼는 쪽이 방금 `actual_at` 으로 밀렸기 때문이고, 그러면 두 번째 at-risk 에서 dispatch 는 자기
+편차를 0 으로 본다. 반대편에서 말하면 **`planned_arrival` 은 계획이고 ETA 는 tracking 의 것이다**
+(`shipments.eta_at`, §5.4). 두 테이블이 ETA 를 적으면 둘은 갈라진다. 저장 시계가 계획 시계
+그대로이므로 닿은 stop 들의 `planned_arrival` 은 재계획을 지나도 움직이지 않는다 — 기준선의
+안정성이 위의 편차 계산을 성립시킨다.
+
+**3단계 「`relocate` 만」이 뜻하는 것 셋** ([ADR-048] 결정 4).
+
+1. **삽입 위치는 «현재 위치 이후» 만이다.** 마지막으로 닿은 stop 까지가 <strong>얼어 있는
+   앞자락</strong>이고 그 뒤에만 넣는다. 지나간 자리에 넣으면 기사가 이미 떠난 지점으로 돌아가는
+   계획이 나온다. **빼는 쪽도 같다** — 앞자락의 stop 은 옮길 수 없다.
+2. **[ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) 의 제약 조합 게이트가 여기에도
+   걸린다.** 냉장 ∧ 위험물 stop 은 그 조합을 싣는 차량으로만 간다. 재계획이 게이트 밖에 있으면
+   §6.5 3단계가 좌석으로 지킨 것을 이 절이 뒷문으로 푼다. 구현은 별도 코드가 아니라 **두 라우트를
+   `RuleSet` 으로 다시 쌓는 것**이고, 그 안에 `VEHICLE_ATTRIBUTE_MATCH` 가 들어 있다.
+3. **원 라우트와 대상 라우트 둘 다 재검증하고 둘 다 `revision` 을 올린다** — §5.3 운영자 재배정과
+   같은 경로다. 떠난 쪽은 짐이 줄어 하드 룰을 어길 수 없지만 시간이 당겨져 지각 판정이 바뀌고,
+   그 사실이 발행에 실려야 한다.
+
+2단계의 **미출발 차량으로 옮기는 것은 새 라우트를 여는 일**이라 고정비가 든다. 비용식에 따로
+더하지 않는다 — `CostModel.routeCost` 는 `stopCount > 0` 일 때만 고정비를 물므로(§6.4), 빈
+라우트가 첫 stop 을 받는 순간 그 비용이 총합에 **저절로** 나타난다.
+
+**탐색에는 상한이 있다.** 한 번의 재계획이 옮기는 stop 수와 평가 횟수에 상수 상한을 둔다 —
+「대규모 재편 금지」가 성능의 문장이기도 하기 때문이다. 상한에 닿는지는 [ADR-048] 재검토 지점 3 이다.
+
+**결과는 outcome 으로 갈린다 — 실패해도 DLQ 로 보내지 않는다.** `dawnline_replan_total{outcome}`
+의 다섯 갈래는 `applied` · `cooldown` · `no-anchor` · `no-candidate` · `no-gain` 이다(§9.1).
+DLQ 로 보내면 <em>고칠 수 없는 것</em>이 재시도된다 — 「후보가 없다」는 재시도로 달라지지 않고,
+사람이 열어도 할 일이 없다. **`no-gain` 의 기준은 소프트 룰까지 포함한 두 라우트의 총비용**이다:
+지각 페널티가 줄어도 거리·시간이 더 늘면 옮기지 않는다(§6.1 목적함수 그대로).
+
+**`applied` 는 설명을 남긴다.** `plan_explanations` 에 `rule_name = 'AT_RISK_RELOCATE'`,
+`outcome = ASSIGNED`, `detail` 에 「어느 주문이 어느 라우트에서 어느 라우트로, Δ비용 얼마」를
+주문 한 건에 한 행씩. §6.3 이 룰을 데이터로 둔 이유가 「왜 이 주문이 이 차인가」에 답하기
+위해서였고, **운영자가 그것을 가장 많이 묻는 자리가 재계획이다** — 기사에게서 전화가 오는
+자리이기 때문이다. 최초 계획에만 설명이 있으면 그 물음의 답은 「계획 때는 A 차였습니다」로 끝난다.
+
+**5단계의 쿨다운은 `routes.last_replanned_at` 이고, 재계획 트랜잭션 안에서 비교·갱신한다**
+([ADR-046](adr/ADR-046-at-risk-is-an-event.md) 결정 3). tracking 의 Redis 쿨다운은 **알림 수**를
+지키지 정확성을 지키지 않는다 — Redis 가 죽으면 중복 at-risk 가 나가고(§7.2 가 허용으로 정한
+폴백), 두 at-risk 는 `eventId` 가 달라 `processed_events` 가 막지 못한다. **「쿨다운은 이미
+있으니 됐다」가 이 자리의 함정이다.**
+
 ### 6.9 벤치마크 방법
 
 - 데이터셋: `tools/benchmark/datasets/` — `small`(500 주문/5 차량), `medium`(2,000/20), `large`(5,000/40), `peak`(15,000/**88**), `overload`(15,000/60), 각각 seed 고정 생성. 좌표는 서울 근사 격자(캠프 중심 반경 8 km, 밀도 불균일).
@@ -2086,6 +2174,8 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_scan_after_cancel_total` | counter | tracking, **dispatch** | 라벨 없음 — `CANCELLED` 인 shipment 에 도착해 **무시한** 기사 스캔 (§5.4). 기사가 취소를 못 받고 배송한 것이다. dispatch 의 `dawnline_cancel_too_late_total` 과 **한 쌍**이고 둘은 같은 경합 창의 양 끝이다 — 저쪽은 「배송된 주문에 취소가 왔다」, 이쪽은 「취소된 주문이 배송됐다」. camp 라벨을 붙이지 않는 이유는 `shipments` 에 칸이 없기 때문이다 — `dawnline_at_risk_total` 이 camp 를 갖게 되는 시점에 같이 붙인다. **dispatch 도 같은 이름으로 센다**(2026-09-22, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md)): `CANCELLED` 인 `route_stops` 행에 도착한 `delivery.status` 다. 자리는 `job` 으로 갈리고, **둘이 갈리는 것이 정보다** — 개정이 tracking 에 닿기 전에는 dispatch 쪽만 오른다. 저쪽이 「취소된 배송이 스캔됐다」이면 이쪽은 「계획에서 뺀 지점에 배송이 일어났다」이고, 뒤쪽은 다음 계획을 틀리게 할 수 있다 |
 | `dawnline_status_after_relocate_total` | counter | dispatch | 라벨 없음 — 이벤트가 말한 라우트가 아니라 **다른 라우트**의 stop 에 적용한 `delivery.status` ([ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 결정 2). 재계획이 주문을 옮기는 동안 기사가 옛 라우트에서 배송을 끝낸 것이다. **`dawnline_event_stale_total` 과 섞지 않는다** — 저쪽은 버린 것이고 이쪽은 <em>적용한</em> 것이며, 이 값이 §6.8 재계획의 **경합 창의 크기**다. 0 이 정상이 아니라 재계획이 도는 동안 조금씩 오르는 값이고, 급히 오르면 볼 곳은 dispatch 가 아니라 `delivery.status` 컨슈머 랙이다. `dawnline_cancel_too_late_total` 과 같은 종류의 수치다 — 이상이 아니라 **폭** |
 | `dawnline_scan_after_relocate_total` | counter | tracking | 라벨 없음 — 기사가 찍은 `(routeId, stopSeq)` 가 **지금 tracking 이 아는 자리와 다른** 스캔 ([ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 결정 1). 단말은 개정 r 의 번호로 찍고 tracking 은 r+1 을 이미 적용한 창이다. 무시하지 않는다 — `orderIds` 로 풀어 **적용하고** 센다. dispatch 의 `dawnline_status_after_relocate_total` 과 **한 쌍**이고 같은 경합의 양 끝이다: 이쪽은 「기사가 옛 계획으로 찍었다」, 저쪽은 「옛 계획으로 찍힌 사실이 dispatch 에 닿았다」. **이쪽이 먼저 오른다** — 기사가 개정을 늦게 받는 것이 원인이면 이쪽만 오르고, dispatch 의 컨슈머 랙이 원인이면 저쪽만 오른다. 둘이 갈리는 것이 그 구별이다 |
+| `dawnline_replan_total` | counter | dispatch | outcome(applied/cooldown/no-anchor/no-candidate/no-gain) — §6.8 부분 재계획이 `delivery.at-risk` 하나를 받고 **무엇을 했는가**([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 5). 다섯 갈래를 한 카운터의 라벨로 두는 이유는 **합이 곧 트리거 수**여야 하기 때문이다 — 나누면 「받았는데 아무 갈래에도 안 들어간 것」이 보이지 않는다. 실패를 DLQ 로 보내지 않으므로 이 라벨이 그 자리를 대신한다: `no-candidate`·`no-gain` 은 재시도로 달라지지 않는 <em>결과</em>이고 DLQ 는 「처리하지 못했다」의 자리다(§4.6). **`no-anchor` 가 `no-gain` 과 따로 있는 이유**는 모름이 0 이 아니기 때문이다 — 편차를 모른 채 0 으로 두면 출발 지연 라우트가 「옮겨도 이득 없음」으로 조용히 닫힌다(`PlanModeReason.LAG_UNKNOWN` 과 같은 규칙) |
+| `dawnline_at_risk_deviation_mismatch_total` | counter | dispatch | 라벨 없음 — dispatch 가 자기 `route_stops.actual_at` 으로 계산한 편차와 `delivery.at-risk` 페이로드의 `deviationSeconds` 가 **60초 넘게 갈린** 횟수 ([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 2). 페이로드는 입력이 아니라 **대조값**이고, 이 값이 오른다는 것은 tracking 과 dispatch 가 같은 라우트를 다르게 보고 있다는 뜻이다 — 원인은 `delivery.status` 컨슈머 랙 · 개정이 한쪽에만 닿음 · 기사 단말의 밀린 스캔 중 하나다. 셋을 이 카운터 혼자 가르지는 못하지만 **갈린다는 사실 자체가 먼저 필요하다.** 허용 오차를 둔 이유: 두 값은 서로 다른 시각 원천에서 오므로(스캔의 `occurredAt` 과 저장 정밀도로 자른 `Clock`) 초 단위 일치를 요구하면 이 카운터는 늘 켜져 있어 아무 말도 하지 않는다 |
 | `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다 |
 
@@ -2478,6 +2568,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 041 | **「차 한 대 몫」에는 stop 슬롯이 들어간다** — 목표 클러스터 수 = `min(차량 수, max(중량, 부피, ceil(stop 수 / routeStopCap)))` · 룰의 파라미터를 읽는 것이 아니라 **룰이 답하는 질문**을 하나 더 묻는다([ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md)) · **클러스터 수 상한(차량 수)은 남긴다** — 셋을 한꺼번에 바꾼 판이 진 이유가 그 상한 제거였다(`peak` 클러스터 121개 > 차량 88대, +1,507,476원) · 그리고 **「빈 차를 먼저 본다」를 설계서에 올린다**(그 휴리스틱만 뺀 변형이 `peak` +2,203,845원 · 미배정 2 → 70) · 재기준 −26.15% → **−26.60%** · −16.12% → **−17.37%** · −14.56% → **−14.93%** · −23.37% → **−24.18%** | 축·차량급·상한을 한꺼번에 바꾸기(`large` −12.87% · `peak` −18.66% — 범인은 상한 제거였다), 이분법에 계속 맡기기(클러스터러의 오류를 메우는 것이지 설계가 아니다 — 이분법을 빼면 `small` 미배정 3), 클러스터 수 상한 제거(남는 클러스터가 이미 실은 차에 얹혀 지그재그), 가장 작은 차량급 기준(묶어서 재지 않으려고 남겼다 — 따로 잰다), FAST 가 나빠지므로 넣지 않기(FULL 이 기본이고 네 데이터셋을 다 이긴다 — 열화가 더 나빠지는 것은 열화의 성질이다) | [ADR-041](adr/ADR-041-cluster-target-counts-stop-slots.md) |
 | 042 | **savings 의 병합은 제약 조합을 안다** — `savings-cw+ls` 구성 단계. 쌍은 **개선 단계와 같은 K-최근접 표**([ADR-032](adr/ADR-032-local-search-budget-and-approximations.md), K=20 — 완전 목록은 `peak` 에서 3,500만 쌍) · 병합 가능성은 **합집합 조합을 덮는 차량 중 가장 큰 것**으로 · [ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) 의 **집계 좌석 불변식을 구성 단계로** 옮긴다(예약은 배정의 장치인데 CW 에서 배정은 라우트가 다 만들어진 뒤에 온다) · 뒤 단계(재삽입·개선)는 **같은 클래스** · 라우트를 뒤집지 않는다 | 「가장 큰 차량」 기준 단순 병합([ADR-038]·[ADR-039] 의 결함을 CW 안에서 되살린다 — 지는 이유가 「구성 방식」이 아니라 「희소 좌석」이 된다), 완전한 savings 목록(3,500만 쌍), K 를 이름에 넣기(표가 읽히지 않는다), 라우트 뒤집기(순서는 5단계의 일), 다중 패스(재 봤다 — 두 번째 패스가 한 건도 더 잇지 못한다), 부착에서 재시퀀싱(구성이 정한 순서를 배정이 덮는다), 전용 재삽입·개선(§6.6 이 이미 기각한 「두 구현의 차이」) | [ADR-042](adr/ADR-042-savings-merges-are-class-aware.md) |
 | 044 | **끝점은 전부 본다 — 근사는 stop 이 많을 때의 것이지 라우트가 적을 때의 것이 아니다** — savings 구성에 2단계를 붙인다: 1단계(K-최근접) 뒤 남은 라우트들의 (꼬리, 머리) 쌍을 **전부** 만들어 같은 게이트로 잇고 고정점까지 돈다 · 쌍 예산 `R(R−1) ≤ n·K`(성능 가드이지 동작 게이트가 아니다 — 부등식이 참인 구간의 쌍은 K 표가 이미 본 것이다) · 상한에 찬 라우트는 후보에서 뺀다 · **`peak` 라우트 216 → 90**(stop 하나짜리 67개가 0 이 된다), 밀린 라우트 128 → 2, FULL 이 13,018 ms 에 수렴 · `large` 차량 40 → 35 | 전체 K 키우기(개선 단계 K 도 움직여야 해 비교가 표 크기를 잰다 · 157 까지밖에 안 내려간다 · **206 ms 로 더 비싸다**), 끝점만 K_end=50·100(같은 이유로 비싸고 상한 미달), 라우트 뒤집기(순서는 5단계의 일), 2단계에서 게이트 느슨하게(집계가 2단계에서도 638건을 거절한다), 부착이 한 차에 둘(증상을 고친다 — 90개가 88대에 맞으므로 지금은 불필요), 쌍 예산 없이(못 이은 입력에서 `O(n²)` 가 마감을 먹는다) | [ADR-044](adr/ADR-044-endpoints-are-few-enough-to-see-all.md) |
+| 048 | **재계획은 자기 DB 로 푼다 — 페이로드는 트리거다** — 「미완료 stop 만」은 <em>어느 stop 이 남았나</em>만 말하고, 다시 푸는 데는 **기사가 지금 어디에 얼마나 늦게 있나**가 더 필요하다 · 그 편차를 `delivery.at-risk` 에서 읽으면 진실이 «소속은 dispatch · 시각은 tracking» 으로 갈리므로 **V10 `route_stops.actual_at`**(처음 닿은 시각, 덮어쓰지 않는다 — 덮으면 도착이 아니라 완료를 재게 된다)을 5-5 전이가 채우고 편차 = `마지막으로 닿은 stop 의 actual_at − planned_arrival` · 페이로드의 값은 **대조값**이고 60초 넘게 갈리면 `dawnline_at_risk_deviation_mismatch_total` (둘이 갈리는 것이 정보다 — 두 relocate 카운터와 같은 형식) · **편차는 평가 시계를 민다**: 저장되는 `planned_arrival` 은 계획 시계 그대로라 닿은 stop 의 기준선이 재계획을 지나도 안 움직인다(ETA 는 tracking 의 것이다) · 닿은 stop 이 없으면 **모름**이고 `no-anchor` — 출발 지연 at-risk 는 stop 하나 뒤에 닫힌다 · `relocate` 세 조건(현재 위치 이후만 · [ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md) 조합 게이트 · 두 라우트 모두 재검증·revision 증가, 미출발 차량의 고정비는 `CostModel` 에 **이미 있다**) · 실패는 DLQ 가 아니라 `dawnline_replan_total{outcome}` 다섯 갈래 · `applied` 는 `plan_explanations`(`AT_RISK_RELOCATE`)에 「어느 주문이 어디서 어디로, Δ비용 얼마」 · `no-gain` 은 **소프트 룰까지 포함한 두 라우트 총비용**(§6.1 그대로) | 페이로드를 입력으로(코드 한 줄이지만 진실이 갈린다 — 불변규칙 4 가 허락하는 것과 이 자리에서 옳은 것은 다르다), `deviationSeconds` 를 아예 무시(갈리는 것이 정보다), 전체 재최적화(§6.8 3단계 — 얼어 있는 앞자락을 뺄 방법이 파이프라인에 없다), `planned_arrival` 에 편차 반영(기준선이 사라지고 ETA 를 두 테이블에 적는다), DLQ(고칠 수 없는 것이 재시도된다), 쿨다운을 tracking 의 Redis 하나로([ADR-046](adr/ADR-046-at-risk-is-an-event.md) 가 이미 기각), `actual_at` 덮어쓰기(뜻이 바뀌는데 값을 보아서는 알 수 없다), 편차를 모를 때 0(모름은 0 이 아니다) | [ADR-048](adr/ADR-048-replan-reads-its-own-db.md) |
 | 047 | **배송 상태는 사실이고 개정은 계획이다** — **계획은 `(route, revision, seq)` 로, 사실은 `orderId` 로 식별한다**(같은 열쇠를 스캔 API·tracking·dispatch 세 자리가 쓴다 — 스캔 API 는 2026-09-23 에 `orderIds` 필수로 바뀌었고, `DEPARTED_CAMP` 만 라우트의 사건이라 예외다. 찍은 자리가 다르면 적용하고 `dawnline_scan_after_relocate_total` 로 센다) · dispatch 의 `route_stops.status` 가 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **네 번째 자리**다 · stop 은 `stopSeq` 로 찾지 않고 **`routeId` 로 좁히지도 않는다**: 다른 라우트에서 찾으면 거기 적용하고 `dawnline_status_after_relocate_total`(= §6.8 경합 창의 크기)로 세며, **어느 라우트에도 없을 때만** stale · **개정 번호로 거르지 않는다**: `route.assigned` 는 계획이라 옛 것을 버려야 하지만 `delivery.status` 는 사실이라 버리면 일어난 일이 사라지고, 그것이 §6.8 「미완료 stop 만」이 읽는 값이다(근거: 추정 — 5-3 전에는 재현할 재계획이 없다) · `CANCELLED` stop 의 상태는 무시하고 `dawnline_scan_after_cancel_total` 로 센다(tracking 과 같은 이름, 자리로 갈린다 — 한쪽만 오르는 것이 정보다) · `FAILED` 도 종결 · 이 전이가 §6.10 넷째 분기를 처음으로 발화 가능하게 한다(「구조적으로 0」 문단을 닫는다) · `route_stop_orders (order_id)` 인덱스 하나(V9, 빈도가 취소마다→방문마다로 바뀌었다) | `stopSeq` 로 찾기(개정이 뜻을 바꾼다), **「이 라우트에 없으면 stale」(첫 판 — `seq` 만 버리고 `routeId` 를 남긴 것은 같은 오류의 절반이고, 카운터가 갈리지 않는 것이 그 신호였다)**, `revision` 을 계약에 더해 ADR-045 를 그대로 옮기기(대칭은 이름의 대칭이지 의미의 대칭이 아니다), `CANCELLED` stop 을 `COMPLETED` 로 옮기기(계획 테이블을 배송 원장으로 쓰면 §6.8 과 §6.10 이 다른 질문의 답을 읽는다), stop 애그리거트 메서드(120 stop 을 메모리로 올린다 — 대신 도메인 순수 함수 + §13 매핑표) | [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) |
 | 046 | **at-risk 는 사건이고, 쿨다운은 알림 수를 지킨다** — 위험이 커지면 다시 발행하고(쿨다운이 주기) **사라지는 경우는 알리지 않는다**(재계획을 취소할 방법이 없고 해소는 ops 의 ETA 가 보여 준다) · 페이로드는 위험한 stop 이 아니라 **남은 구간 전부** + stop 마다의 `atRisk`(여유 15분은 tracking 의 정책이다) · **쿨다운 둘은 집이 다르다**: tracking=Redis/알림 수, dispatch=DB `routes.last_replanned_at`/정확성 — 「멱등 소비자가 흡수한다」는 틀렸다(두 at-risk 는 `eventId` 가 달라 둘 다 처음 보는 이벤트다, §7.2 정정) · Redis 장애에는 **발행한다**(fail-open, `dawnline_at_risk_cooldown_bypassed_total`) | 위험 해제 이벤트(소비자가 할 일이 없다 — 재계획은 되돌릴 수 없다), at-risk 를 라우트의 **상태 칼럼**으로 (갱신을 놓친 라우트가 조용히 안전해지고, 상태로 두면 「해제」가 자연스러워 보인다), 쿨다운을 DB 로 옮겨 tracking 이 정확성까지(막아야 할 중복은 재계획이고 그것은 dispatch 의 것이다), 쿨다운 없이 매번 발행 (`peak` 에서 라우트당 최대 90건이 거르기 **전에** 토픽·컨슈머·`processed_events` 를 지난다) | [ADR-046](adr/ADR-046-at-risk-is-an-event.md) |
 | 045 | **개정 번호는 라우트의 것이다** — tracking 은 `route_revisions`(route_id PK)와 비교해 낮거나 같은 `revision` 을 무시한다 · §8.5 가 적은 「routeId + revision」 의 자리를 §5.4 DDL 이 비워 두고 있었다 · `processed_events` 와 겹치지 않는다(저쪽은 같은 이벤트의 재배달, 이쪽은 옛 개정의 뒤늦은 도착) · 보존 정책이 없다는 것을 **적어 둔다** — Phase 6 에서 `shipments` 와 함께 정한다 | `shipments` 에 `route_revision` 컬럼 + `MAX(...) WHERE route_id = ?` (§6.8 의 `relocate` 가 라우트를 비우면 비교할 값이 NULL 이 되고, 그때 DLQ replay 가 **이미 옮겨간 주문을 되돌린다**), shipment 행마다 비교(번호가 라우트마다 독립이라 A(5)→B(2) 이동이 **역행으로 읽힌다**), 비교 없이 마지막 도착본 적용(§6.8 4단계가 금지한다 — replay 가 있는 시스템에서 「마지막에 도착」은 「마지막에 일어난」이 아니다), `routes` 전체를 프로젝션(안 쓰는 칸이 낡았는지 아무도 모른다) | [ADR-045](adr/ADR-045-revision-comparison-is-per-route.md) |
