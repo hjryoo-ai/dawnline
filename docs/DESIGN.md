@@ -1071,6 +1071,8 @@ CREATE TABLE rm_waves (wave_id UUID PK, camp_id UUID, service_tier VARCHAR(16), 
 CREATE TABLE rm_routes (route_id UUID PK, plan_id UUID, camp_id UUID, vehicle_id UUID, driver_id UUID,
   revision INTEGER, status VARCHAR(16), planned_departure TIMESTAMPTZ, departed_at TIMESTAMPTZ,   -- 2026-09-24
   stop_count INTEGER, completed_count INTEGER, failed_count INTEGER, at_risk BOOLEAN, distance_m INTEGER, cost_krw INTEGER);
+CREATE INDEX ix_rmo_route ON rm_orders (route_id);   -- 라우트 개수 재집계 (ADR-051 결정 4)
+CREATE INDEX ix_rmo_wave  ON rm_orders (wave_id);    -- 웨이브 개수 재집계
 CREATE TABLE rm_kpi_hourly (camp_id UUID, bucket_hour TIMESTAMPTZ, orders INTEGER, dispatched INTEGER, delivered INTEGER,
   on_time INTEGER, late INTEGER, failed INTEGER, cost_krw BIGINT, PRIMARY KEY (camp_id, bucket_hour));
 CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), target_type VARCHAR(24), target_id UUID,
@@ -1203,6 +1205,13 @@ Phase 2-7 에서 order-service 쪽을 구현하며 드러났고, Phase 5-1a 에�
 사실의 사본이다. 먼저 온 행이 캠프 대시보드에 보이려면 그 칸이 필요하다. 이 예외는 **키에만**
 적용한다 — 개정으로 바뀔 수 있는 값(`stop_count`·`planned_departure`)은 사본이 아니라 그 개정의
 사실이므로 한 토픽만 쓴다.
+
+**인덱스 둘 — 개수를 다시 세는 질의의 것** (2026-09-24, ADR-051 결정 4 가 미뤄 둔 판단,
+[측정](benchmarks/phase6-rm-orders-aggregate-index.md)). `rm_orders` 에는 보존 정책이 없어 피크일
+15만 행씩 쌓이고, 재집계는 **이벤트마다** 돈다(`delivery.status` 피크 673 건/초). 인덱스 없이
+라우트 재집계가 1일치 9.2 ms · 30일치 172 ms 이고, `(route_id)`·`(wave_id)` 로 0.19–0.31 ms 에서
+평평하다. 다른 질의(`lock` 의 키 조회)는 PK 로 충분하다 — 그 판단도 같은 문서에 있다.
+`RmOrdersIndexIT` 가 통계를 첫 어설션으로 말한 뒤 두 계획을 본다.
 
 **`updated_at` 은 사실이 아니라 프로젝션의 기록이다** — 마지막으로 행을 만진 시각이라 정의상 처리
 순서를 탄다. 순서를 뒤섞는 IT 가 비교에서 빼는 칸은 이것 하나이고, 그 IT 는 칸도 토픽처럼
