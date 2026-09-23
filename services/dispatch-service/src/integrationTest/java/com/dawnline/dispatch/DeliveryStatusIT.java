@@ -180,6 +180,41 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
     }
 
     @Test
+    void 닿은_시각이_적히고_두_번째_보고가_그것을_덮지_않는다() {
+        // §6.8 의 편차가 나오는 자리다 (ADR-048 결정 1). 실물 SQL 의 COALESCE 가 「처음 닿은
+        // 시각」을 지키는지 본다 — 덮으면 이 컬럼은 도착이 아니라 완료를 재게 되고, 그 변화는
+        // 값을 보아서는 알 수 없다.
+        Planned planned = plannedRoute();
+        RouteView.StopView first = planned.stops().getFirst();
+        Instant arrivedAt = PlanningClock.PLAN_AT.plus(Duration.ofMinutes(21));
+        Instant completedAt = arrivedAt.plus(Duration.ofMinutes(4));
+
+        send(planned.routeId(),
+                envelope(planned.routeId(), first.seq(), first.orderIds(), "ARRIVED", arrivedAt));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(statusOf(planned.routeId(), first.seq())).isEqualTo("ARRIVED"));
+        assertThat(actualAtOf(planned.routeId(), first.seq())).isEqualTo(arrivedAt);
+
+        send(planned.routeId(), envelope(planned.routeId(), first.seq(), first.orderIds(),
+                "COMPLETED", completedAt));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(statusOf(planned.routeId(), first.seq())).isEqualTo("COMPLETED"));
+
+        assertThat(actualAtOf(planned.routeId(), first.seq()))
+                .as("도착의 시각이지 완료의 시각이 아니다")
+                .isEqualTo(arrivedAt);
+    }
+
+    @Test
+    void 아직_닿지_않은_stop_의_시각은_비어_있다() {
+        // NULL 은 「아직 닿지 않았다」는 참인 사실이다 — 편차를 모르는 것과 0 은 다르다
+        // (ADR-048 결정 1, 기각 (8)).
+        Planned planned = plannedRoute();
+
+        assertThat(actualAtOf(planned.routeId(), planned.stops().getFirst().seq())).isNull();
+    }
+
+    @Test
     void 같은_이벤트를_두_번_보내도_한_번만_반영된다() {
         // 불변규칙 2. 같은 eventId 라 processed_events 가 막는다 — 그리고 전이 규칙도 두 번째를
         // STALE 로 흡수한다. 둘 다 있어야 한다: 저쪽은 같은 이벤트를, 이쪽은 다른 이벤트를 막는다.
@@ -287,6 +322,15 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
     /** 계약을 통과한 봉투만 보낸다 — 통과하지 못하는 이벤트로 소비자를 시험할 이유가 없다. */
     private static String envelope(UUID routeId, int seq, List<UUID> orderIds, String status) {
+        return envelope(routeId, seq, orderIds, status, PlanningClock.PLAN_AT);
+    }
+
+    /**
+     * {@code occurredAt} 을 달리 싣는 봉투. 시각 리터럴을 쓰지 않는다 — 값은
+     * {@link PlanningClock#PLAN_AT} 에서 파생한다 (CLAUDE.md 코딩 컨벤션).
+     */
+    private static String envelope(UUID routeId, int seq, List<UUID> orderIds, String status,
+            Instant occurredAt) {
         String ids = orderIds.stream().map(id -> "\"" + id + "\"")
                 .reduce((a, b) -> a + "," + b).orElseThrow();
         String json = """
@@ -295,7 +339,7 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
                  "payload":{"routeId":"%s","stopSeq":%d,"orderIds":[%s],"status":"%s",
                             "occurredAt":"%s"}}
                 """.formatted(Ids.newId(), PlanningClock.PLAN_AT, routeId, routeId, seq, ids,
-                status, PlanningClock.PLAN_AT);
+                status, occurredAt);
         EventContracts.load().validateRecord(json);
         return json;
     }
@@ -304,6 +348,12 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
     private TransactionTemplate tx() {
         return new TransactionTemplate(transactionManager);
+    }
+
+    private Instant actualAtOf(UUID routeId, int seq) {
+        return tx().execute(status -> (Instant) entityManager.createNativeQuery(
+                        "SELECT actual_at FROM route_stops WHERE route_id = ? AND seq = ?")
+                .setParameter(1, routeId).setParameter(2, seq).getSingleResult());
     }
 
     private String statusOf(UUID routeId, int seq) {

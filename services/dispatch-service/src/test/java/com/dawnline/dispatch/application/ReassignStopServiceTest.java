@@ -122,9 +122,22 @@ class ReassignStopServiceTest {
         }
 
         @Override
-        public void markStopStatus(UUID stopId, RouteStopStatus status) {
+        public void markStopStatus(UUID stopId, RouteStopStatus status, java.time.Instant actualAt) {
             throw new UnsupportedOperationException(
                     "이 페이크는 배송 상태를 모른다 — RecordDeliveryStatusServiceTest 를 보라");
+        }
+
+        @Override
+        public Optional<SettledStop> lastSettledStop(UUID routeId) {
+            throw new UnsupportedOperationException(
+                    "이 페이크는 배송 상태를 모른다 — ReplanRouteServiceTest 를 보라");
+        }
+
+        @Override
+        public boolean tryStartReplan(UUID routeId, java.time.Instant now,
+                java.time.Duration cooldown) {
+            throw new UnsupportedOperationException(
+                    "이 페이크는 재계획을 모른다 — ReplanRouteServiceTest 를 보라");
         }
 
         @Override

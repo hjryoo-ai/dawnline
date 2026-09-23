@@ -14,6 +14,7 @@ import com.dawnline.dispatch.domain.optimizer.PlannedStop;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -253,11 +254,53 @@ public class JdbcRouteMutations implements RouteMutations {
     }
 
     @Override
-    public void markStopStatus(UUID stopId, RouteStopStatus status) {
-        entityManager.createNativeQuery("UPDATE route_stops SET status = ? WHERE id = ?")
+    public void markStopStatus(UUID stopId, RouteStopStatus status, Instant actualAt) {
+        // COALESCE 가 「처음 닿은 시각」을 지킨다 (ADR-048 결정 1). 값이 이미 있으면 그대로 두고,
+        // 없을 때만 쓴다 — 덮으면 이 컬럼은 도착이 아니라 완료를 재게 되고, 그 변화는 값을
+        // 보아서는 알 수 없다. 규칙이 한 줄의 SQL 인 이유는 읽고-판단하고-쓰는 세 걸음이
+        // 같은 것을 하면서 경합 창만 만들기 때문이다.
+        entityManager.createNativeQuery("""
+                UPDATE route_stops SET status = ?, actual_at = COALESCE(actual_at, ?) WHERE id = ?
+                """)
                 .setParameter(1, status.name())
-                .setParameter(2, stopId)
+                .setParameter(2, actualAt)
+                .setParameter(3, stopId)
                 .executeUpdate();
+    }
+
+    @Override
+    public boolean tryStartReplan(UUID routeId, Instant now, Duration cooldown) {
+        // 비교와 갱신이 한 문장이다 (§6.8 5단계). 읽고 나서 쓰면 두 소비자가 같은 값을 읽는
+        // 창이 생기고, 막아야 하는 것이 바로 그 창이다 — 두 at-risk 는 eventId 가 달라
+        // processed_events 에게는 둘 다 처음 보는 이벤트다 (ADR-046 결정 3).
+        return entityManager.createNativeQuery("""
+                UPDATE routes SET last_replanned_at = ?
+                 WHERE id = ? AND (last_replanned_at IS NULL OR last_replanned_at <= ?)
+                """)
+                .setParameter(1, now)
+                .setParameter(2, routeId)
+                .setParameter(3, now.minus(cooldown))
+                .executeUpdate() == 1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<SettledStop> lastSettledStop(UUID routeId) {
+        // 「마지막」은 actual_at 이 아니라 seq 다 — 순서가 뒤바뀐 보고가 있어도 기사가 서 있는
+        // 자리는 순번이 가장 큰 «닿은» stop 이고, §6.8 의 얼어 있는 앞자락이 거기까지다.
+        // UNIQUE (route_id, seq) 를 역순으로 한 건 읽는다. 새 인덱스는 없다 (불변규칙 11).
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT seq, planned_arrival, actual_at FROM route_stops
+                 WHERE route_id = ? AND actual_at IS NOT NULL
+                 ORDER BY seq DESC
+                 LIMIT 1
+                """).setParameter(1, routeId).getResultList();
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        Object[] row = rows.getFirst();
+        return Optional.of(new SettledStop(((Number) row[0]).intValue(), (Instant) row[1],
+                (Instant) row[2]));
     }
 
     @Override

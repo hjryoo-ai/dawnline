@@ -215,6 +215,9 @@ final class InMemoryDispatchPorts {
         /** 계획 출발 시각. 개정 발행이 required 로 싣는다 (§5.3 V7, Phase 5-1b). */
         private final Map<UUID, Instant> departures = new LinkedHashMap<>();
 
+        /** {@code routes.last_replanned_at} (V10). 재계획 쿨다운이 보는 값이다. */
+        private final Map<UUID, Instant> lastReplannedAt = new LinkedHashMap<>();
+
         /** 시각을 다시 쓴 결과. {@code null} 이면 살아 있는 stop 이 하나도 없었다는 뜻이다. */
         final Map<UUID, PlannedRoute> retimed = new LinkedHashMap<>();
 
@@ -234,6 +237,8 @@ final class InMemoryDispatchPorts {
             final TimeWindow promised;
             Instant arrival;
             RouteStopStatus status = RouteStopStatus.PLANNED;
+            /** 그 stop 에 처음 닿은 시각 (V10, ADR-048 결정 1). 닿지 않았으면 null 이다. */
+            Instant actualAt;
 
             StopRow(int seq, GeoPoint point, int serviceSeconds, Instant arrival,
                     List<UUID> orderIds, TimeWindow promised) {
@@ -308,10 +313,32 @@ final class InMemoryDispatchPorts {
         }
 
         @Override
-        public void markStopStatus(UUID stopId, RouteStopStatus status) {
-            rows.values().stream().flatMap(List::stream)
-                    .filter(stop -> stop.id.equals(stopId)).findFirst().orElseThrow()
-                    .status = status;
+        public void markStopStatus(UUID stopId, RouteStopStatus status, Instant actualAt) {
+            StopRow row = rows.values().stream().flatMap(List::stream)
+                    .filter(stop -> stop.id.equals(stopId)).findFirst().orElseThrow();
+            row.status = status;
+            // 실물의 COALESCE 와 같다 — 처음 닿은 시각만 남는다 (ADR-048 결정 1).
+            if (row.actualAt == null) {
+                row.actualAt = actualAt;
+            }
+        }
+
+        @Override
+        public Optional<SettledStop> lastSettledStop(UUID routeId) {
+            return rows.getOrDefault(routeId, List.of()).stream()
+                    .filter(row -> row.actualAt != null)
+                    .max(java.util.Comparator.comparingInt(row -> row.seq))
+                    .map(row -> new SettledStop(row.seq, row.arrival, row.actualAt));
+        }
+
+        @Override
+        public boolean tryStartReplan(UUID routeId, Instant now, java.time.Duration cooldown) {
+            Instant last = lastReplannedAt.get(routeId);
+            if (last != null && last.isAfter(now.minus(cooldown))) {
+                return false;
+            }
+            lastReplannedAt.put(routeId, now);
+            return true;
         }
 
         @Override

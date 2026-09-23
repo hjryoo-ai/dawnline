@@ -119,7 +119,11 @@ public class RecordDeliveryStatusService implements RecordDeliveryStatusUseCase 
      * 캐시는 §7.2 의 폴백이 <em>발동하지 않는</em> 경우라 아무도 고쳐 주지 않는다.
      */
     private void apply(DeliveryStatusCommand command, RouteMutations.AssignedStop stop) {
-        routes.markStopStatus(stop.stopId(), command.status());
+        // occurredAt 을 함께 적는다 — 계약은 그 값을 이미 싣고 있었고 버리고 있었다.
+        // 이 한 칸이 §6.8 의 편차를 dispatch 안에 만든다 (ADR-048 결정 1): 없으면 재계획이
+        // 편차를 at-risk 페이로드에서 읽게 되고, 그 순간 「진실 하나」가 소속은 dispatch ·
+        // 시각은 tracking 으로 갈린다. 처음 닿은 시각만 남는 것은 어댑터가 지킨다.
+        routes.markStopStatus(stop.stopId(), command.status(), command.occurredAt());
         // 이벤트가 말한 라우트가 아니라 stop 이 «지금 있는» 라우트의 진행을 다시 만든다.
         // 재배치된 건에서 둘은 다르고, 값이 틀리는 쪽은 언제나 이벤트 쪽이다.
         routes.progressOf(stop.routeId())
