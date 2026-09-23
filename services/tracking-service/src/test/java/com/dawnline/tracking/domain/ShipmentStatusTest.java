@@ -121,10 +121,10 @@ class ShipmentStatusTest {
     @Test
     void 캠프_출발만_발행하지_않는다() {
         // delivery.status.v1 의 status enum 은 셋이다 (ARRIVED/COMPLETED/FAILED).
-        assertThat(ScanType.DEPARTED_CAMP.isPublished()).isFalse();
+        assertThat(ScanType.DEPARTED_CAMP.isDeliveryStatus()).isFalse();
         for (ScanType published
                 : EnumSet.of(ScanType.ARRIVED, ScanType.COMPLETED, ScanType.FAILED)) {
-            assertThat(published.isPublished()).as("%s", published).isTrue();
+            assertThat(published.isDeliveryStatus()).as("%s", published).isTrue();
         }
     }
 }

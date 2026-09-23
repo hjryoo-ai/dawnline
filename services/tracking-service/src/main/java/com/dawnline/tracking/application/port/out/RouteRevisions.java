@@ -54,9 +54,11 @@ public interface RouteRevisions {
      * 라우트당 한 행이 말하는 것.
      *
      * @param campId           캠프 (§9.1 {@code camp} 라벨)
+     * @param revision         지금 적용해 둔 개정 — 출발이 「어느 개정본의 계획에 대해」 늦었는지를
+     *                         말한다({@code delivery.route-departed}, ADR-050 결정 3)
      * @param plannedDeparture 계획 출발 시각 (§5.4 {@code DEPARTED_CAMP} 편차 기준)
      */
-    record RoutePlanned(UUID campId, Instant plannedDeparture) {
+    record RoutePlanned(UUID campId, int revision, Instant plannedDeparture) {
 
         public RoutePlanned {
             Objects.requireNonNull(campId, "campId");

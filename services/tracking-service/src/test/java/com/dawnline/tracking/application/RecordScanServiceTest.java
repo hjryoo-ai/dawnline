@@ -92,7 +92,7 @@ class RecordScanServiceTest {
         service = new RecordScanService(shipments, events, delivery,
                 new EtaPropagator(shipments, revisions),
                 new AtRiskDetector(revisions, cooldown, delivery, metrics, CLOCK, MARGIN),
-                metrics, new Ids(CLOCK, RandomGenerator.getDefault()));
+                metrics, new Ids(CLOCK, RandomGenerator.getDefault()), revisions);
     }
 
     // --- 적용 ---------------------------------------------------------------
@@ -327,14 +327,39 @@ class RecordScanServiceTest {
     }
 
     @Test
-    void 캠프_출발은_브로커로_나가지_않는다() {
-        // 한 사실을 stop 수만큼 반복해 말하는 꼴이고, order-service 의 상태 머신은
-        // DISPATCHED 로 그 구간을 이미 덮는다 (ScanType.isPublished()).
+    void 캠프_출발은_delivery_status_가_아니라_라우트에_하나_나간다() {
+        // stop 의 사건이 아니라 라우트의 사건이다 — delivery.status 로 내면 한 사실을 stop 수만큼
+        // 반복해 말하는 꼴이다 (ScanType.isDeliveryStatus()). 대신 route-departed 하나 (ADR-050).
         shipments.put(scheduled(ORDER));
+        shipments.put(scheduled(SIBLING));
 
         service.record(departure(NOW));
 
         assertThat(delivery.sent).isEmpty();
+        assertThat(delivery.departed).singleElement().isEqualTo(
+                new Departed(ROUTE, CAMP, revisions.revision, DEPARTURE, NOW));
+    }
+
+    @Test
+    void 같은_출발을_다시_찍으면_나가지_않는다() {
+        // 단말의 재시도 — 전부 STALE 이라 새 사실이 없다. 「라우트 하나에 하나」가 여기서 지켜진다.
+        shipments.put(scheduled(ORDER));
+        service.record(departure(NOW));
+        delivery.departed.clear();
+
+        service.record(departure(NOW.plusSeconds(30)));
+
+        assertThat(delivery.departed).isEmpty();
+    }
+
+    @Test
+    void 출발이_아닌_스캔은_출발을_내보내지_않는다() {
+        shipments.put(scheduled(ORDER));
+        shipments.put(scheduled(SIBLING));
+
+        service.record(scan(ScanType.ARRIVED));
+
+        assertThat(delivery.departed).isEmpty();
     }
 
     @Test
@@ -530,6 +555,7 @@ class RecordScanServiceTest {
 
         private final List<Published> sent = new ArrayList<>();
         private final List<UUID> atRisk = new ArrayList<>();
+        private final List<Departed> departed = new ArrayList<>();
 
         @Override
         public void deliveryStatus(UUID routeId, int stopSeq, List<UUID> orderIds, ScanType type,
@@ -543,6 +569,16 @@ class RecordScanServiceTest {
                 Duration deviation, List<Shipment> remaining, Duration margin) {
             atRisk.add(routeId);
         }
+
+        @Override
+        public void routeDeparted(UUID routeId, UUID campId, int revision, Instant plannedDeparture,
+                Instant departedAt) {
+            departed.add(new Departed(routeId, campId, revision, plannedDeparture, departedAt));
+        }
+    }
+
+    private record Departed(UUID routeId, UUID campId, int revision, Instant plannedDeparture,
+            Instant departedAt) {
     }
 
     /** 언제나 창을 여는 쿨다운. 쿨다운 자체는 AtRiskDetectorTest 가 본다. */
@@ -562,6 +598,7 @@ class RecordScanServiceTest {
             implements com.dawnline.tracking.application.port.out.RouteRevisions {
 
         private Instant plannedDeparture = DEPARTURE;
+        private int revision = 2;
 
         @Override
         public boolean claim(UUID routeId, int revision, UUID campId, Instant departure,
@@ -571,7 +608,7 @@ class RecordScanServiceTest {
 
         @Override
         public java.util.Optional<RoutePlanned> find(UUID routeId) {
-            return java.util.Optional.of(new RoutePlanned(CAMP, plannedDeparture));
+            return java.util.Optional.of(new RoutePlanned(CAMP, revision, plannedDeparture));
         }
     }
 

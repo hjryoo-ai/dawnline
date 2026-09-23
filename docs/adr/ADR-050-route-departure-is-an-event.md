@@ -134,7 +134,8 @@ ops 는 첫 `ARRIVED` 가 올 때까지 **「출발 안 함」과 「출발했�
 - **`ScanType.isPublished()` 의 뜻이 좁아진다.** 지금은 「발행되는가」로 읽히지만 앞으로는
   「`delivery.status.v1` 로 발행되는가」다. 메서드 이름이 그 구별을 말하지 않으므로 묶음 B 에서
   자바독을 고치거나 이름을 좁힌다 — 고치지 않으면 다음 사람은 `DEPARTED_CAMP` 가 아무 데도
-  안 나간다고 읽는다.
+  안 나간다고 읽는다. **좁혔다**(2026-09-24): `isDeliveryStatus()` — 「`delivery.status.v1` 의
+  `status` 값인가」. 같은 날 발행이 `RecordScanService` 의 `fromCamp` 갈래에 붙었다.
 - **비용**: 토픽 하나, 파티션 12개, DLQ 하나. 발행량은 하루 라우트 수(peak 한 캠프 90 × 10 캠프)
   라 다른 토픽 대비 무시할 수준이다 — `delivery.status` 는 같은 날 stop 수만큼 나간다.
 - **되돌리는 방법**: 소비자가 ops 하나뿐이므로 `rm_routes` 에서 그 칸을 빼고 발행을 끄면 된다.

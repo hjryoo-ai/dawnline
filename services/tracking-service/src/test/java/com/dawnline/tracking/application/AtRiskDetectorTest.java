@@ -147,7 +147,7 @@ class AtRiskDetectorTest {
 
         @Override
         public Optional<RoutePlanned> find(UUID routeId) {
-            return Optional.of(new RoutePlanned(CAMP, CLOCK.instant()));
+            return Optional.of(new RoutePlanned(CAMP, 1, CLOCK.instant()));
         }
     }
 
@@ -181,6 +181,12 @@ class AtRiskDetectorTest {
         public void deliveryAtRisk(UUID routeId, UUID campId, Instant detectedAt,
                 Duration deviation, List<Shipment> remaining, Duration margin) {
             atRisk.add(new Sent(routeId, campId, detectedAt, deviation, List.copyOf(remaining)));
+        }
+
+        @Override
+        public void routeDeparted(UUID routeId, UUID campId, int revision, Instant plannedDeparture,
+                Instant departedAt) {
+            throw new UnsupportedOperationException("at-risk 판정은 출발을 내보내지 않습니다");
         }
     }
 }
