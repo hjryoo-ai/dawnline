@@ -1851,6 +1851,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 **작업**
 1. Grafana 대시보드 4종 JSON, Prometheus 알림 규칙(§9.4) 커밋.
+   **Phase 5 가 만든 카운터 넷은 여기서 패널이 된다**(2026-09-23 이월 — 계기는 5-3·5-5 에 있었고
+   대시보드는 이 Phase 다). `dawnline_replan_total{outcome}`(다섯 갈래를 **쌓아** 그린다 — 합이
+   트리거 수라는 것이 한눈에 보여야 한다) · `dawnline_at_risk_deviation_mismatch_total` ·
+   `dawnline_status_after_relocate_total` · `dawnline_scan_after_relocate_total`.
+   **뒤의 셋은 한 패널에 겹쳐 놓는다** — 쌍이 *갈리는 것*이 정보이기 때문이다(§9.1):
+   relocate 둘은 「기사가 옛 계획으로 찍었다」(tracking) 대 「그 사실이 dispatch 에 닿았다」로
+   갈리고, mismatch 는 그 둘 중 어느 쪽 랙인지를 좁힌다. 따로 그리면 사람이 눈으로 겹쳐야 하고,
+   장애 중에 그 일은 일어나지 않는다.
 2. 트레이싱 검증: 주문 1건 traceId로 4개 서비스 span이 Tempo에서 연결됨(스크린샷 README).
 3. 카오스 스크립트: `make chaos-kafka`, `make chaos-redis`, `make chaos-kill dispatch`. 각 실행 후 검증 SQL(주문 수 = 후보 수 + 취소 수, 라우트 stop 주문 중복 0, processed_events 중복 0)을 자동 실행.
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
