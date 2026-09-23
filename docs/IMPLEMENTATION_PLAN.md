@@ -1733,6 +1733,50 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 ---
 
+### Phase 5 마감 대조표
+
+기준일 **2026-09-23**. CLAUDE.md 「작업 방식」 — *기억이 아니라 표로 확인한다*. **빠진 항목은
+표에 남긴다**(지우지 않는다).
+
+> **커밋 열은 머지 커밋 SHA 다.** Phase 5 의 PR 은 전부 머지 커밋으로 들어갔으므로 `main` 에서
+> 그대로 유효하다(Phase 4 대조표의 같은 문단). 아직 머지되지 않은 것은 **PR 번호로** 가리킨다 —
+> 브랜치 SHA 는 squash 에서 죽는다(§6.9).
+
+| # | 작업 (계획 문장) | 상태 | 커밋 / 근거 |
+|---|---|---|---|
+| 0 | 테스트 격리 축 둘 — 시드 행 · 릴레이 리더(fulfillment) | ✅ | `4ebfa3f`(#35). Phase 4 대조표 9번의 이월이고 **여기서 닫혔다** — 캠프 범위 픽스처 행(되돌리지 말고 만들고 지운다) · 발행을 보지 않는 IT 가 자기 자리에서 릴레이를 끈다 |
+| 1a | tracking 골격 — `Shipment` 상태 머신, `route.assigned` 소비(revision 비교), 스캔 API, Flyway | ✅ | `9bfa50f`(#37) · `e22704e`(#38 계약 가드). [ADR-045](adr/ADR-045-revision-comparison-is-per-route.md)(`route_revisions`) · 일 파티션 함수 둘 + 스케줄러 · `dawnline_shipment_partitions_ahead`. 계약 변경 둘: `promisedWindow`·`summary.plannedDeparture`(둘 다 additive required, `contracts/events/README.md` §5 예외 표) |
+| 1b | ETA·at-risk — 재계산·전파, 판정, 쿨다운(Redis), `delivery.status`/`delivery.at-risk` 발행 | ✅ | `8c40f40`(#39). [ADR-046](adr/ADR-046-at-risk-is-an-event.md)(사건이지 상태가 아니다) · `EtaPropagator`(전파는 애그리거트 밖) · 첫 편차의 출처는 **출발**(`DEPARTED_CAMP`) · `TrackingPublishIT` 이 팬아웃 `2 × stop 수` 를 못박는다 |
+| 2 | `sim-runner` 기사 시뮬레이터 — 구독·순회·지연·실패·위치 보고 | ✅ | `ec9d4cc`(#40) · `b5e9075`(#42 스캔에 송장을 싣는다). seed 결정론 · 시뮬레이션 시각과 벽시계를 가른다 · `SimDriverIT`(브로커 → 스캔 API 전 구간) |
+| **3** | **dispatch 재계획(§6.8) — `delivery.at-risk` 리스너, 미완료 stop 부분 재계획, `revision` 증가 발행, 쿨다운** | ✅ | **PR #44** — [ADR-048](adr/ADR-048-replan-reads-its-own-db.md). 쿨다운은 **첫 커밋**에(`routes.last_replanned_at`, V10) · 편차는 `route_stops.actual_at` 에서(페이로드는 대조값) · `relocate` 세 조건 · `dawnline_replan_total{outcome}` 다섯 갈래 · `applied` 는 `plan_explanations`(`AT_RISK_RELOCATE`)에 설명을 남긴다 |
+| 4 | 테스트 — 역행 스캔 거부, at-risk 1회 발행(쿨다운), 재계획 후 tracking 이 새 revision 만 반영 | ◐ **부분** | 앞의 둘 ✅ (`ShipmentTest`·`AtRiskIT` — 1a·1b 안에서). 셋째는 **서비스 하나 안에서만** 닫혔다: dispatch 쪽은 PR #44 의 `ReplanIT`, tracking 쪽은 1a 의 revision 비교(`ADR-045`)다. **두 서비스를 잇는 한 시나리오는 없다** — 아래 DoD 첫 줄과 같은 빈칸이고, 그 자리는 §8.2 의 compose 시나리오다 |
+| 5 | dispatch 의 `delivery.status` 소비 — `route_stops.status` 전이 | ✅ | `17e31db`(#41) · `b5e9075`(#42 사실은 주문에 귀속된다). [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) · `route_stop_orders (order_id)` 인덱스(V9, [측정](benchmarks/phase5-route-stop-orders-order-lookup.md)) · §6.10 넷째 분기가 처음으로 발화 가능해졌다 |
+
+**DoD 대조**
+
+| DoD 문장 | 상태 | 근거 |
+|---|---|---|
+| `late-injection` 시나리오에서 at-risk → 재계획 → revision 반영이 **로그·DB 로 확인** | ◐ **부분** | dispatch 안에서는 `ReplanIT` 이 실물 브로커·실물 PostgreSQL 로 못박는다(at-risk → 쿨다운 → 옮김 → 두 라우트 revision 2 → `plan_explanations`). **compose 전 구간의 한 번은 없다** — `late-injection` 은 기사 시뮬레이터까지만 돌고 거기서 재계획을 보지 않는다. 그 자리는 §8.2 의 시나리오 확장이고 **Phase 7-4 의 peak-day 시뮬레이션**에서 닫는다 |
+| 정시율이 `rm_kpi`/메트릭에 집계됨 | ⛔ **미구현 — Phase 6** | 두 기준 정시율(`basis=promised/revised`)은 **ops-api 가 낸다**(§9.1 의 문단 · §8.1). tracking 은 개정본 약속 하나만 알아서 그 라벨을 만들 수 없다. 읽기 모델이 없는 지금은 구현이 아니라 **미구현**이다 |
+| 5번에서 소비자 처리량을 다시 잰다 (Phase 4-0 의 조건) | ✅ | [측정](benchmarks/phase5-delivery-status-throughput.md). 팬아웃 배수는 문서가 아니라 `TrackingPublishIT` 의 어설션이 든다 |
+
+**대조표가 잡은 것 셋**
+
+1. **4번은 ✅ 가 아니라 ◐ 다.** 「재계획 후 tracking 이 새 revision 만 반영」은 *두 서비스*의
+   문장인데 검사는 서비스마다 따로 있다. 각자는 옳고, 그 둘이 한 시각에 맞물리는지는 아무도
+   보지 않는다 — DoD 첫 줄과 **같은 빈칸**이고, 표가 그것을 두 번 말하는 것이 지금은 옳다.
+2. **`route:{id}:progress` 의 「첫 소비자는 5-3」이 뒤집혔다.** 5-5 가 그렇게 적어 두었지만
+   재계획이 필요한 것은 캐시의 세 칸이 아니라 `actual_at`·`planned_arrival` 이었다. 같은 행을
+   어차피 읽으므로 캐시는 조회를 아끼지 않고 **같은 사실의 두 번째 출처**만 만든다.
+   §6.8 과 [ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 에 정정으로 적었고, 그 캐시의 첫
+   소비자는 ops 의 읽기 모델(§5.5, Phase 6)이 된다.
+3. **5-3 이 §5.3 의 결함을 하나 드러냈다.** `moveOrder` 가 목적지에 *새* stop 을 만들 때
+   약속창을 비운 채 INSERT 하고 있었다(V6 이 그 칸을 더한 이유가 개정 발행이었는데도). 재배정의
+   발행은 도메인 객체에서 페이로드를 만들어 그것을 덮고 있었고, **DB 를 읽는 발행 경로가 생겨서야
+   보였다.** 검사는 발견한 자리(`DispatchAdminIT`)에 두었다 — 열거하지 않고 「창이 빈 행이 0」으로.
+
+---
+
 ## Phase 6 — 백오피스 (ops-api + ops-web)
 
 > **선결 — `rm_orders` 는 약속을 두 개 든다.** §8.1 의 정시율은 *원 약속* 기준인데
