@@ -2,6 +2,7 @@ package com.dawnline.sim.driver;
 
 import static com.dawnline.sim.driver.DriverFixtures.DEPARTURE;
 import static com.dawnline.sim.driver.DriverFixtures.ROUTE;
+import static com.dawnline.sim.driver.DriverFixtures.order;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
@@ -50,7 +51,8 @@ class ScanContractTest {
         // 문자열 비교가 아니라 실제로 나간 요청과 비교한다 — PATH 상수를 고쳐 놓고
         // 상수끼리 비교하면 언제나 초록이다.
         try (LocalScanServer server = LocalScanServer.alwaysAnswering(200, "{}")) {
-            server.client().report(ROUTE, new ScanCall(7, ScanType.ARRIVED, DEPARTURE, null, null, null));
+            server.client().report(ROUTE, new ScanCall(7, List.of(order(1)), ScanType.ARRIVED,
+                    DEPARTURE, null, null, null));
 
             String expected = SCAN_PATH.replace("{routeId}", ROUTE.toString()).replace("{stopSeq}", "7");
             assertThat(server.received().getFirst().path()).isEqualTo(expected);
