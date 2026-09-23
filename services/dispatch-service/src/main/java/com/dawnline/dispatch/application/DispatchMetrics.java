@@ -119,6 +119,20 @@ public class DispatchMetrics {
     /** {@link #REPLAN} 의 라벨 이름. */
     public static final String TAG_OUTCOME = "outcome";
 
+    /**
+     * {@link #PLAN_DURATION} 의 태그 — 계획이 <strong>어떻게 끝났나</strong>(§6.7, §6.9 재현 조건).
+     * {@link #TERMINATION_CONVERGED} 면 할 일을 다 하고 끝났고 같은 입력이면 같은 결과다.
+     * {@link #TERMINATION_DEADLINE} 이면 마감(§6.7)에 잘려 하지 못한 일이 있다 — 그 결과는 그날의
+     * 기계 속도에 달렸다([ADR-036]). 시간은 러너를 따라 흔들리지만 이 값은 흔들리지 않는다.
+     */
+    public static final String TAG_TERMINATION = "termination";
+
+    /** 수렴으로 끝났다. */
+    public static final String TERMINATION_CONVERGED = "converged";
+
+    /** 마감에 잘렸다. */
+    public static final String TERMINATION_DEADLINE = "deadline";
+
     /** {@code dawnline_event_stale_total} 의 {@code consumer} 태그. */
     public static final String DELIVERY_STATUS_CONSUMER = "dispatch";
 
@@ -177,9 +191,10 @@ public class DispatchMetrics {
     /**
      * 계획 하나가 끝났다.
      *
-     * @param plan 발행까지 끝난 계획
+     * @param plan            발행까지 끝난 계획
+     * @param budgetExhausted 마감 때문에 하지 못한 일이 있었는가 ({@code PlanResult#budgetExhausted})
      */
-    public void planPublished(RoutePlan plan) {
+    public void planPublished(RoutePlan plan, boolean budgetExhausted) {
         Objects.requireNonNull(plan, "plan");
         String strategy = plan.strategy().orElse("unknown");
         PlanMode mode = plan.mode().orElse(PlanMode.FULL);
@@ -188,6 +203,7 @@ public class DispatchMetrics {
                 .description("계획 소요 시간 (DESIGN.md §6.7)")
                 .tag("strategy", strategy)
                 .tag("mode", mode.name())
+                .tag(TAG_TERMINATION, budgetExhausted ? TERMINATION_DEADLINE : TERMINATION_CONVERGED)
                 .register(registry)
                 .record(Duration.ofMillis(plan.planDurationMs().orElse(0)));
 

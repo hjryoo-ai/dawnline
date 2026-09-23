@@ -31,17 +31,19 @@ class EventContractsTest {
     private static final EventContracts CONTRACTS = EventContracts.load();
 
     /** §4.1 의 토픽별 파티션 키. 봉투의 partitionKey 가 이 필드와 같아야 순서 보장이 성립한다 (§4.5). */
-    private static final Map<String, String> PARTITION_KEY_FIELD = Map.of(
-            "order.placed", "orderId",
-            "order.cancelled", "orderId",
-            "order.dispatched", "orderId",
-            "fulfillment.planned", "orderId",
-            "wave.closed", "campId",
-            "route.assigned", "routeId",
-            "plan.completed", "waveId",
-            "plan.failed", "waveId",
-            "delivery.status", "routeId",
-            "delivery.at-risk", "routeId");
+    // 열한 번째(delivery.route-departed, ADR-050)에서 Map.of 의 인자 상한(10쌍)을 넘었다.
+    private static final Map<String, String> PARTITION_KEY_FIELD = Map.ofEntries(
+            Map.entry("order.placed", "orderId"),
+            Map.entry("order.cancelled", "orderId"),
+            Map.entry("order.dispatched", "orderId"),
+            Map.entry("fulfillment.planned", "orderId"),
+            Map.entry("wave.closed", "campId"),
+            Map.entry("route.assigned", "routeId"),
+            Map.entry("plan.completed", "waveId"),
+            Map.entry("plan.failed", "waveId"),
+            Map.entry("delivery.status", "routeId"),
+            Map.entry("delivery.at-risk", "routeId"),
+            Map.entry("delivery.route-departed", "routeId"));
 
     static Stream<Path> examples() {
         return EventContracts.load().examples().stream();

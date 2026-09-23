@@ -178,6 +178,7 @@ services:
         dawnline.plan.failed.v1
         dawnline.delivery.status.v1
         dawnline.delivery.at-risk.v1
+        dawnline.delivery.route-departed.v1
         "
         create() {
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$$BOOTSTRAP" \

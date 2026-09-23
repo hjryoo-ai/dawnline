@@ -250,7 +250,7 @@ public class RunPlanService implements RunPlanUseCase {
         events.planCompleted(plan, result);
         // 메트릭은 트랜잭션에 참여하지 않는다 — 계획이 롤백되면 이 수치는 남지만, 그것이
         // 발행을 막는 것보다 낫다 (fulfillment 와 같은 판단).
-        metrics.planPublished(plan);
+        metrics.planPublished(plan, result.budgetExhausted());
         metrics.planPersisted(plan.campId(), Duration.ofNanos(System.nanoTime() - persistFrom));
         return Outcome.PUBLISHED;
     }

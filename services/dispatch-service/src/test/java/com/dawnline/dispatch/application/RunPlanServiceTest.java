@@ -116,6 +116,58 @@ class RunPlanServiceTest {
     }
 
     @Test
+    void 수렴으로_끝난_계획은_termination_converged_로_센다() {
+        // 계획 시간은 러너를 따라 흔들리지만 종료 사유는 흔들리지 않는다 — CI 가 보는 값이 이것이다
+        // (PhaseThreeDoDIT, §6.9 재현 조건).
+        UUID waveId = Ids.newId();
+        seed(waveId, 5);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+
+        service(registry, Duration.ofSeconds(30)).run(new RunPlanCommand(waveId, CAMP_ID,
+                InMemoryDispatchPorts.CAMP, "sweep-greedy-nn+ls", null, 1L, null));
+
+        assertThat(terminations(registry, DispatchMetrics.TERMINATION_CONVERGED)).isEqualTo(1);
+        assertThat(terminations(registry, DispatchMetrics.TERMINATION_DEADLINE)).isZero();
+    }
+
+    @Test
+    void 마감에_잘린_계획은_termination_deadline_으로_센다() {
+        // 「잘렸지만 발행된」 계획은 서비스 경로에서 결정적으로 만들 수 없다 — 마감은 스톱워치
+        // (System.nanoTime)이고, 너무 짧으면 아무도 싣지 못해 계획이 실패로 끝난다(발행 없음).
+        // 그래서 여기서는 표지만 본다: 발행된 계획에 budgetExhausted=true 가 오면 deadline 이다.
+        // 이 값이 converged 로 나오면 CI 의 수렴 어설션은 아무것도 검사하지 않는 셈이다.
+        UUID waveId = Ids.newId();
+        seed(waveId, 5);
+        service(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), Duration.ofSeconds(30))
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+
+        new DispatchMetrics(registry).planPublished(plans.findByWaveId(waveId).orElseThrow(), true);
+
+        assertThat(terminations(registry, DispatchMetrics.TERMINATION_DEADLINE)).isEqualTo(1);
+        assertThat(terminations(registry, DispatchMetrics.TERMINATION_CONVERGED)).isZero();
+    }
+
+    private RunPlanService service(io.micrometer.core.instrument.MeterRegistry registry, Duration budget) {
+        return new RunPlanService(plans, candidates, routes, events,
+                InMemoryDispatchPorts.fleet(2, NOW),
+                InMemoryDispatchPorts.rules(RuleSet.empty()),
+                new HaversineDistance(1.3d, 25.0d),
+                new DispatchMetrics(registry),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                "baseline-nn", new PlanningBudget(budget, Duration.ofSeconds(3)),
+                new PlanModeSelector(3L, 0.8d, 0.5d));
+    }
+
+    private static long terminations(io.micrometer.core.instrument.MeterRegistry registry, String termination) {
+        io.micrometer.core.instrument.Timer timer = registry.find(DispatchMetrics.PLAN_DURATION)
+                .tag(DispatchMetrics.TAG_TERMINATION, termination).timer();
+        return timer == null ? 0 : timer.count();
+    }
+
+    @Test
     void 계획이_PUBLISHED_로_끝난다() {
         UUID waveId = Ids.newId();
         seed(waveId, 3);

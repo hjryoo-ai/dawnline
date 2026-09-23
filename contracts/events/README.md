@@ -39,7 +39,8 @@ Phase 0 에서는 §4.3 에 페이로드 구조가 명시된 4종만 만들었�
 | `dawnline.delivery.status.v1` | O | Phase 1 (order-service — **소비자 주도**), 발행은 Phase 5 |
 | `dawnline.plan.completed.v1` | O | Phase 2 (fulfillment-service — **소비자 주도**), 발행은 Phase 3 |
 | `dawnline.plan.failed.v1` | O | Phase 2 (fulfillment-service — **소비자 주도**), 발행은 Phase 3 |
-| `dawnline.delivery.at-risk.v1` | X | Phase 5 (tracking-service) |
+| `dawnline.delivery.at-risk.v1` | O | Phase 5-1b (tracking-service — 발행자) |
+| `dawnline.delivery.route-departed.v1` | O | Phase 6 묶음 B (ops-api — **소비자 주도**, [ADR-050](../../docs/adr/ADR-050-route-departure-is-an-event.md)), 발행은 같은 묶음의 tracking |
 
 없는 스키마를 추측으로 미리 만들지 않는다. §4.3 에 페이로드가 정의되어 있지 않은 것을 지금 만들면
 서비스 구현 시점에 반드시 틀린다. 해당 Phase 에서 **스키마를 먼저** 추가하고 이 표를 갱신한다.
