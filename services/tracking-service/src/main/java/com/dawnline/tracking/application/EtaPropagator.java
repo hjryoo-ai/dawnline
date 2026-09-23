@@ -59,9 +59,10 @@ public class EtaPropagator {
      * 다른 트랜잭션이 되면 「도착했는데 뒤 stop 은 옛 ETA 를 들고 있는」 창이 생기고, 그 창에
      * at-risk 판정이 걸리면 이미 해소된 위험을 알리게 된다.
      *
-     * @param routeId    라우트 id
+     * @param routeId    라우트 id — <strong>배송이 지금 있는</strong> 라우트다 (ADR-047 결정 1)
      * @param type       스캔 종류
-     * @param stopSeq    스캔이 난 stop 순번
+     * @param stopSeq    스캔이 난 stop 순번. 마찬가지로 요청이 말한 번호가 아니라 배송의 것이다 —
+     *                   요청의 번호로 밀면 개정이 옮긴 stop 의 ETA 를 엉뚱하게 옮긴다
      * @param occurredAt 사건 시각 — 기사 단말이 말한 시각이다
      * @return 전파 결과
      */
@@ -95,8 +96,9 @@ public class EtaPropagator {
     /**
      * 편차의 기준값.
      *
-     * @throws NoSuchElementException 스캔이 난 stop 이 목록에 없으면. 부르는 쪽이 방금 그 stop 의
-     *     배송을 읽었으므로 여기까지 오면 같은 트랜잭션 안에서 사라졌다는 뜻이고, 그런 경로는
+     * @throws NoSuchElementException 스캔이 난 stop 이 목록에 없으면. 부르는 쪽은
+     *     {@code (routeId, stopSeq)} 를 <em>요청</em>이 아니라 방금 읽은 배송에서 뽑아 주므로
+     *     (ADR-047 결정 1) 여기까지 오면 같은 트랜잭션 안에서 사라졌다는 뜻이고, 그런 경로는
      *     이 서비스에 없다 — 조용히 0 으로 두면 편차가 통째로 사라진다
      */
     private Instant baselineOf(UUID routeId, ScanType type, int stopSeq, List<Shipment> onRoute) {

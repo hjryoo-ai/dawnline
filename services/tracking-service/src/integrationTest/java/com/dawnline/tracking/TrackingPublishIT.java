@@ -20,7 +20,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -115,6 +117,8 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
 
     private TransactionTemplate transactions;
     private UUID routeId;
+    /** stop 순번 → 그 stop 의 주문들. 스캔의 열쇠다 (ADR-047 결정 1). */
+    private final Map<Integer, List<UUID>> stopOrders = new LinkedHashMap<>();
     private Instant departure;
     private Instant firstArrival;
 
@@ -285,6 +289,8 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
     }
 
     private AssignedStop stop(int seq, List<UUID> orderIds, Instant arrival, Instant promisedEnd) {
+        // 스캔이 송장으로 오므로(ADR-047 결정 1) 픽스처가 그 목록을 들고 있어야 한다.
+        stopOrders.put(seq, orderIds);
         return new AssignedStop(seq, orderIds, Set.of(), arrival, promisedEnd);
     }
 
@@ -294,7 +300,11 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
     }
 
     private void scan(int seq, ScanType type, Instant at) {
-        recordScan.record(new ScanCommand(routeId, seq, type, at, null, null, null));
+        // 캠프 출발은 라우트의 사건이라 주문을 싣지 않는다 — 실으면 400 이다 (§5.4).
+        List<UUID> orderIds = type == ScanType.DEPARTED_CAMP
+                ? List.of()
+                : stopOrders.getOrDefault(seq, List.of());
+        recordScan.record(new ScanCommand(routeId, seq, orderIds, type, at, null, null, null));
     }
 
     private ConsumerRecord<String, String> awaitOne(String topic) {

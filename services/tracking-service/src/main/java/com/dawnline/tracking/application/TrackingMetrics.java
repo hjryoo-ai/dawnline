@@ -17,6 +17,9 @@ public class TrackingMetrics {
     /** §9.1 — 취소된 배송에 도착해 무시한 기사 스캔. 라벨 없음. */
     public static final String SCAN_AFTER_CANCEL = "dawnline.scan.after.cancel";
 
+    /** §9.1 — 기사가 찍은 자리가 지금 아는 자리와 다른 스캔. 라벨 없음 (ADR-047 결정 1). */
+    public static final String SCAN_AFTER_RELOCATE = "dawnline.scan.after.relocate";
+
     /** §9.1 — 발행한 {@code delivery.at-risk}. 라벨 {@code camp}. */
     public static final String AT_RISK = "dawnline.at.risk";
 
@@ -28,6 +31,7 @@ public class TrackingMetrics {
 
     private final MeterRegistry registry;
     private final Counter scanAfterCancel;
+    private final Counter scanAfterRelocate;
     private final Counter cooldownBypassed;
 
     /**
@@ -43,6 +47,27 @@ public class TrackingMetrics {
                 .description("CANCELLED 인 shipment 에 도착해 무시한 기사 스캔 (DESIGN.md §5.4). "
                         + "dispatch 의 dawnline_cancel_too_late_total 과 한 쌍이다")
                 .register(registry);
+        this.scanAfterRelocate = Counter.builder(SCAN_AFTER_RELOCATE)
+                .description("기사가 찍은 (routeId, stopSeq) 가 지금 tracking 이 아는 자리와 "
+                        + "다른 스캔 (DESIGN.md §5.4, ADR-047 결정 1). 무시하지 않고 orderIds 로 "
+                        + "풀어 적용한 뒤 센다. dispatch 의 dawnline_status_after_relocate_total "
+                        + "과 한 쌍이고, 이쪽이 먼저 오른다")
+                .register(registry);
+    }
+
+    /**
+     * 기사가 옛 개정의 번호로 찍은 스캔을 센다 (§5.4, ADR-047 결정 1).
+     *
+     * <p><strong>적용한 뒤에</strong> 부른다. 판정에 쓰이지 않는 값이므로 세는 것이 전부이고,
+     * 세는 자리가 적재 앞으로 올라가면 롤백된 스캔이 이 숫자에 남는다 — 그리고 그 오해는
+     * 「재계획이 돌고 있다」로 읽히므로 가장 나쁜 방향이다.
+     *
+     * @param count 이번 스캔에서 자리가 어긋난 주문의 수
+     */
+    public void countScanAfterRelocate(int count) {
+        if (count > 0) {
+            scanAfterRelocate.increment(count);
+        }
     }
 
     /**

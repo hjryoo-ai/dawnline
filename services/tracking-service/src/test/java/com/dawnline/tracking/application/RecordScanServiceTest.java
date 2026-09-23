@@ -2,6 +2,7 @@ package com.dawnline.tracking.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.dawnline.common.Ids;
 import com.dawnline.common.error.NotFoundException;
@@ -41,6 +42,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 기사 스캔 적용 규칙 (DESIGN.md §5.4, §8.5).
  *
+ * <p>명령은 <strong>송장으로</strong> 온다 — {@code routeId}·{@code stopSeq} 는 확인용이다
+ * (ADR-047 결정 1). 그래서 「요청이 말한 번호」와 「배송이 지금 있는 번호」가 다른 경우가
+ * 이 파일의 새 축이고, 기대값은 언제나 <em>뒤쪽</em>이다.
+ *
  * <p>시각 픽스처는 전부 <strong>주입된 시계에서 파생</strong>한다(CLAUDE.md). 완료 시각은
  * 단말이 말한 시각이 그대로 들어가는 자리라, 리터럴을 쓰면 「어디서 온 값인가」가 흐려진다.
  */
@@ -52,8 +57,12 @@ class RecordScanServiceTest {
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
 
     private static final UUID ROUTE = UUID.randomUUID();
+    /** 재계획이 주문을 옮겨 간 라우트. 기사는 아직 이 번호를 모른다. */
+    private static final UUID OTHER_ROUTE = UUID.randomUUID();
     private static final UUID ORDER = UUID.randomUUID();
     private static final UUID SIBLING = UUID.randomUUID();
+    /** 요청이 싣는 송장들 — 이 열쇠로 찾는다 (ADR-047 결정 1). */
+    private static final List<UUID> ORDERS = List.of(ORDER, SIBLING);
     private static final int SEQ = 3;
 
     private static final UUID CAMP = UUID.randomUUID();
@@ -135,7 +144,7 @@ class RecordScanServiceTest {
         shipments.put(scheduled(ORDER));
         Instant scannedAt = NOW.minus(Duration.ofMinutes(7));
 
-        service.record(new ScanCommand(ROUTE, SEQ, ScanType.COMPLETED, scannedAt, null, null, null));
+        service.record(new ScanCommand(ROUTE, SEQ, ORDERS, ScanType.COMPLETED, scannedAt, null, null, null));
 
         assertThat(shipments.stored.get(ORDER).deliveredAt()).isEqualTo(scannedAt);
     }
@@ -144,7 +153,7 @@ class RecordScanServiceTest {
     void 좌표는_그대로_사건에_실린다() {
         shipments.put(scheduled(ORDER));
 
-        service.record(new ScanCommand(ROUTE, SEQ, ScanType.ARRIVED, NOW, 37.4979, 127.0276, null));
+        service.record(new ScanCommand(ROUTE, SEQ, ORDERS, ScanType.ARRIVED, NOW, 37.4979, 127.0276, null));
 
         assertThat(events.appended).singleElement().satisfies(event -> {
             assertThat(event.lat()).isEqualTo(37.4979);
@@ -233,7 +242,8 @@ class RecordScanServiceTest {
         // 아직 route.assigned 를 소비하지 않은 창일 수 있어 단말은 그대로 재시도하면 된다.
         assertThatThrownBy(() -> service.record(scan(ScanType.ARRIVED)))
                 .isInstanceOf(NotFoundException.class)
-                .hasMessageContaining(ROUTE.toString());
+                .as("무엇을 못 찾았는지는 라우트가 아니라 주문으로 말한다 (ADR-047 결정 1)")
+                .hasMessageContaining(ORDER.toString());
         assertThat(events.appended).isEmpty();
     }
 
@@ -242,7 +252,7 @@ class RecordScanServiceTest {
         shipments.put(scheduled(ORDER));
 
         assertThatThrownBy(() -> service.record(
-                new ScanCommand(ROUTE, SEQ, ScanType.COMPLETED, NOW, null, null, "부재")))
+                new ScanCommand(ROUTE, SEQ, ORDERS, ScanType.COMPLETED, NOW, null, null, "부재")))
                 .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("failureReason");
     }
@@ -254,7 +264,7 @@ class RecordScanServiceTest {
         String reason = "우편함 비밀번호 1234, 옆집에 맡김";
 
         assertThatThrownBy(() -> service.record(
-                new ScanCommand(ROUTE, SEQ, ScanType.ARRIVED, NOW, null, null, reason)))
+                new ScanCommand(ROUTE, SEQ, ORDERS, ScanType.ARRIVED, NOW, null, null, reason)))
                 .isInstanceOf(ValidationException.class)
                 .satisfies(thrown -> assertThat(thrown.getMessage()).doesNotContain("1234"));
     }
@@ -263,7 +273,7 @@ class RecordScanServiceTest {
     void 실패_사유는_사건에_실린다() {
         shipments.put(scheduled(ORDER));
 
-        service.record(new ScanCommand(ROUTE, SEQ, ScanType.FAILED, NOW, null, null, "부재"));
+        service.record(new ScanCommand(ROUTE, SEQ, ORDERS, ScanType.FAILED, NOW, null, null, "부재"));
 
         assertThat(events.appended).singleElement()
                 .satisfies(event -> assertThat(event.failureReason()).isEqualTo("부재"));
@@ -272,7 +282,7 @@ class RecordScanServiceTest {
     @Test
     void stop_순번은_1_부터다() {
         // 경로 변수라 클라이언트가 만든 값이다. IllegalArgumentException 이면 500 으로 나간다.
-        assertThatThrownBy(() -> new ScanCommand(ROUTE, 0, ScanType.ARRIVED, NOW, null, null, null))
+        assertThatThrownBy(() -> new ScanCommand(ROUTE, 0, ORDERS, ScanType.ARRIVED, NOW, null, null, null))
                 .isInstanceOf(ValidationException.class);
     }
 
@@ -322,7 +332,7 @@ class RecordScanServiceTest {
         // DISPATCHED 로 그 구간을 이미 덮는다 (ScanType.isPublished()).
         shipments.put(scheduled(ORDER));
 
-        service.record(new ScanCommand(ROUTE, SEQ, ScanType.DEPARTED_CAMP, NOW, null, null, null));
+        service.record(departure(NOW));
 
         assertThat(delivery.sent).isEmpty();
     }
@@ -349,8 +359,7 @@ class RecordScanServiceTest {
         shipments.put(Shipment.scheduled(SIBLING, ROUTE, SEQ + 2, ARRIVAL.plus(Duration.ofMinutes(20)),
                 PROMISED_END));
 
-        ScanResult result = service.record(new ScanCommand(ROUTE, SEQ, ScanType.DEPARTED_CAMP,
-                NOW, null, null, null));
+        ScanResult result = service.record(departure(NOW));
 
         assertThat(result.orders()).extracting(OrderScan::orderId)
                 .as("응답에도 라우트의 모든 주문이 들어온다 — 단말이 무엇이 옮겨졌는지 알아야 한다")
@@ -361,8 +370,7 @@ class RecordScanServiceTest {
 
     @Test
     void 배송이_없는_라우트의_캠프_출발은_404_다() {
-        assertThatThrownBy(() -> service.record(new ScanCommand(ROUTE, SEQ,
-                ScanType.DEPARTED_CAMP, NOW, null, null, null)))
+        assertThatThrownBy(() -> service.record(departure(NOW)))
                 .isInstanceOf(NotFoundException.class);
     }
 
@@ -372,8 +380,7 @@ class RecordScanServiceTest {
         shipments.put(scheduled(ORDER));
         Duration late = Duration.ofMinutes(12);
 
-        service.record(new ScanCommand(ROUTE, SEQ, ScanType.DEPARTED_CAMP,
-                DEPARTURE.plus(late), null, null, null));
+        service.record(departure(DEPARTURE.plus(late)));
 
         assertThat(shipments.stored.get(ORDER).etaAt()).isEqualTo(ARRIVAL.plus(late));
     }
@@ -385,7 +392,7 @@ class RecordScanServiceTest {
                 ARRIVAL.plus(Duration.ofMinutes(10)), PROMISED_END));
         Duration late = Duration.ofMinutes(9);
 
-        service.record(new ScanCommand(ROUTE, SEQ, ScanType.ARRIVED,
+        service.record(new ScanCommand(ROUTE, SEQ, List.of(ORDER), ScanType.ARRIVED,
                 ARRIVAL.plus(late), null, null, null));
 
         assertThat(shipments.stored.get(SIBLING).etaAt())
@@ -395,8 +402,112 @@ class RecordScanServiceTest {
                 .isEqualTo(ARRIVAL);
     }
 
+    // --- 번호는 확인용이다 (ADR-047 결정 1) ------------------------------------
+
+    @Test
+    void 요청의_번호가_옛것이어도_주문으로_찾아_적용한다() {
+        // 기사는 개정 r 의 (ROUTE, SEQ) 로 찍었고 우리는 r+1 을 적용해 그 주문을 옮겼다.
+        // 번호로 찾으면 404 이거나 엉뚱한 주문을 완료로 적는다 — 둘 다 기사가 고칠 수 없다.
+        shipments.put(Shipment.scheduled(ORDER, OTHER_ROUTE, 9, ARRIVAL, PROMISED_END));
+
+        ScanResult result = service.record(scan(ScanType.COMPLETED));
+
+        assertThat(result.count(ScanOutcome.APPLIED)).isEqualTo(1);
+        assertThat(shipments.stored.get(ORDER).status()).isEqualTo(ShipmentStatus.COMPLETED);
+        assertThat(relocateCount())
+                .as("무시하지 않고 적용한 뒤 센다 — 이 값이 기사와 개정이 어긋난 창의 크기다")
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    void 자리가_맞는_스캔은_어긋남으로_세지_않는다() {
+        // 평상시에 오르면 그 카운터는 아무것도 말하지 않는다.
+        shipments.put(scheduled(ORDER));
+
+        service.record(scan(ScanType.COMPLETED));
+
+        assertThat(relocateCount()).isZero();
+    }
+
+    @Test
+    void 재배치된_건의_발행은_배송이_지금_있는_좌표로_나간다() {
+        // 옛 좌표를 실어 보내면 dispatch 의 확인용 컨텍스트가 틀린 값을 받고, 저쪽의
+        // dawnline_status_after_relocate_total 이 우리 탓으로 오른다.
+        shipments.put(Shipment.scheduled(ORDER, OTHER_ROUTE, 9, ARRIVAL, PROMISED_END));
+
+        service.record(scan(ScanType.COMPLETED));
+
+        assertThat(delivery.sent).singleElement().satisfies(sent -> {
+            assertThat(sent.routeId()).isEqualTo(OTHER_ROUTE);
+            assertThat(sent.stopSeq()).isEqualTo(9);
+            assertThat(sent.orderIds()).containsExactly(ORDER);
+        });
+    }
+
+    @Test
+    void 주문들이_지금_다른_stop_에_있으면_발행이_둘이다() {
+        // 한 건으로 합치면 둘 중 하나의 좌표가 거짓이 된다.
+        shipments.put(scheduled(ORDER));
+        shipments.put(Shipment.scheduled(SIBLING, OTHER_ROUTE, 9, ARRIVAL, PROMISED_END));
+
+        service.record(scan(ScanType.COMPLETED));
+
+        assertThat(delivery.sent).hasSize(2)
+                .extracting(Published::routeId, Published::stopSeq)
+                .containsExactlyInAnyOrder(tuple(ROUTE, SEQ), tuple(OTHER_ROUTE, 9));
+    }
+
+    @Test
+    void 적재가_실패하면_어긋남도_세지_않는다() {
+        // 카운터는 트랜잭션을 모른다. 이 값이 틀리는 방향은 「재계획이 돌고 있다」이고,
+        // 그것은 대시보드에서 풀리지 않는 오해다.
+        shipments.put(Shipment.scheduled(ORDER, OTHER_ROUTE, 9, ARRIVAL, PROMISED_END));
+        events.failWith = new IllegalStateException("no partition of relation \"shipment_events\"");
+
+        assertThatThrownBy(() -> service.record(scan(ScanType.COMPLETED)))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(relocateCount()).isZero();
+    }
+
+    @Test
+    void 캠프_출발에_주문을_실으면_거절한다() {
+        // 라우트의 사건이라 열쇠가 라우트다. 조용히 버리면 단말은 자기가 보낸 것이 사라진 줄
+        // 모르고, 「어느 주문이 출발했나」를 물은 단말은 라우트 전체를 받은 응답을 오해한다.
+        shipments.put(scheduled(ORDER));
+
+        assertThatThrownBy(() -> service.record(new ScanCommand(ROUTE, SEQ, ORDERS,
+                ScanType.DEPARTED_CAMP, NOW, null, null, null)))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("orderIds");
+        assertThat(shipments.stored.get(ORDER).status()).isEqualTo(ShipmentStatus.SCHEDULED);
+    }
+
+    @Test
+    void 주문_없는_stop_스캔은_거절한다() {
+        assertThatThrownBy(() -> service.record(
+                new ScanCommand(ROUTE, SEQ, List.of(), ScanType.ARRIVED, NOW, null, null, null)))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("orderIds");
+    }
+
+    // --- 픽스처 (이어서) -------------------------------------------------------
+
     private static ScanCommand scan(ScanType type) {
-        return new ScanCommand(ROUTE, SEQ, type, NOW, null, null, null);
+        return new ScanCommand(ROUTE, SEQ, ORDERS, type, NOW, null, null, null);
+    }
+
+    /** 캠프 출발은 라우트의 사건이라 주문을 싣지 않는다 (ADR-047 결정 1). */
+    private static ScanCommand departure(Instant at) {
+        return new ScanCommand(ROUTE, SEQ, List.of(), ScanType.DEPARTED_CAMP, at, null, null, null);
+    }
+
+    private double relocateCount() {
+        try {
+            return meters.get(TrackingMetrics.SCAN_AFTER_RELOCATE).counter().count();
+        } catch (MeterNotFoundException e) {
+            return 0.0;
+        }
     }
 
     private static Shipment scheduled(UUID orderId) {
@@ -490,13 +601,6 @@ class RecordScanServiceTest {
         @Override
         public List<Shipment> findAll(Collection<UUID> orderIds) {
             return orderIds.stream().map(stored::get).filter(Objects::nonNull).toList();
-        }
-
-        @Override
-        public List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq) {
-            return stored.values().stream()
-                    .filter(shipment -> shipment.routeId().equals(routeId) && shipment.stopSeq() == stopSeq)
-                    .toList();
         }
 
         @Override
