@@ -1787,6 +1787,17 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 > Phase 2-7 에서 order-service 쪽을 구현하며 드러났다.
 
 **작업**
+0-a. **(선결) `ProblemDetailsAdvice` 셋을 `libs/web` 으로 뽑는다**
+   ([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md)). order·tracking·dispatch
+   에 거의 글자 그대로 있던 사본 셋이고 갈라지는 칸은 `RETRY_AFTER_SECONDS` 하나였다. **넷째가
+   이 Phase 에 온다**(ops-api) — 그것이 이 뽑기의 실제 수요다.
+   *6-0 앞에 두는 이유*: 생성물이 말하는 것의 절반이 오류 본문이라, 뽑기가 advice 를 바꾸면
+   `dispatch-service.yaml` 을 두 번 만들게 된다. 그리고 계약 IT 의 어설션 한 벌(`OpenApiResponses`)이
+   세 서비스에서 같으려면 advice 가 먼저 한 벌이어야 한다.
+   자리가 `libs/common` 의 피처 변형이 아니라 **새 모듈**인 이유는 이 저장소의 가드 둘(`check` 의
+   컴파일 의존 · JaCoCo `classDirectories`)이 피처 변형을 모르기 때문이다 — 모듈은 둘 다 공짜로
+   받는다. ArchUnit 규칙 9·10 이 그 경계를 지킨다.
+
 0-b. **(선결) `delivery.route-departed` 를 정할지 결정한다** (Phase 5-1b 이월). tracking 은
    `DEPARTED_CAMP` 를 브로커로 내보내지 않는다 — 라우트의 사건을 stop 수만큼 반복하는 꼴이고,
    order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다(§5.4). **ops 화면이 「출발했는가」를
