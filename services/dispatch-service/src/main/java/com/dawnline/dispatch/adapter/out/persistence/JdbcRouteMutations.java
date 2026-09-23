@@ -113,7 +113,8 @@ public class JdbcRouteMutations implements RouteMutations {
     @SuppressWarnings("unchecked")
     public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
         List<Object[]> candidate = entityManager.createNativeQuery("""
-                SELECT lat, lng, service_seconds FROM dispatch_candidates WHERE order_id = ?
+                SELECT lat, lng, service_seconds, promised_start, promised_end
+                  FROM dispatch_candidates WHERE order_id = ?
                 """).setParameter(1, orderId).getResultList();
         if (candidate.isEmpty()) {
             throw new IllegalStateException("후보가 없는 주문은 옮길 수 없습니다: " + orderId);
@@ -132,7 +133,8 @@ public class JdbcRouteMutations implements RouteMutations {
                 .getResultList();
 
         UUID targetStopId = existing.isEmpty()
-                ? createStop(targetRouteId, lat, lng, ((Number) candidate.getFirst()[2]).intValue())
+                ? createStop(targetRouteId, lat, lng, ((Number) candidate.getFirst()[2]).intValue(),
+                        (Instant) candidate.getFirst()[3], (Instant) candidate.getFirst()[4])
                 : existing.getFirst();
 
         entityManager.createNativeQuery(
@@ -148,19 +150,36 @@ public class JdbcRouteMutations implements RouteMutations {
                 """).setParameter(1, fromStopId).executeUpdate();
     }
 
-    private UUID createStop(UUID routeId, BigDecimal lat, BigDecimal lng, int serviceSeconds) {
+    /**
+     * 목적지에 새 stop 을 만든다.
+     *
+     * <p><strong>약속창을 함께 쓴다</strong> (2026-09-23, Phase 5-3). V6 이 그 컬럼을 더한 이유가
+     * 「개정 발행이 {@code promisedWindow} 를 required 로 싣는다」였는데(§5.3), 이 INSERT 만 그
+     * 두 칸을 비운 채 두고 있었다 — 그래서 재배정·재계획이 <em>새</em> stop 을 만든 라우트는
+     * 그 다음 개정 발행에서 「약속창 없이 개정을 발행할 수 없습니다」로 터졌다.
+     * 값은 통합 전 후보의 창이다: {@code StopMerger} 의 병합 키가 「같은 지점 + 같은 약속창」이라
+     * (§6.5 1단계) stop 하나의 창은 그 위 주문들의 창과 같다.
+     *
+     * <p>드러난 경로는 §6.8 재계획이지만 결함은 §5.3 운영자 재배정에도 있었다 — 저쪽은 목적지에
+     * 같은 지점의 stop 이 있는 경우만 IT 가 보고 있었다.
+     */
+    private UUID createStop(UUID routeId, BigDecimal lat, BigDecimal lng, int serviceSeconds,
+            @Nullable Instant promisedStart, @Nullable Instant promisedEnd) {
+
         UUID stopId = Ids.newId();
         Number maxSeq = (Number) entityManager.createNativeQuery(
                         "SELECT COALESCE(max(seq), 0) FROM route_stops WHERE route_id = ?")
                 .setParameter(1, routeId).getSingleResult();
         entityManager.createNativeQuery("""
                 INSERT INTO route_stops (id, route_id, seq, lat, lng, planned_arrival,
-                                         planned_departure, service_s, status)
-                VALUES (?, ?, ?, ?, ?, now(), now(), ?, 'PLANNED')
+                                         planned_departure, service_s, status,
+                                         promised_start, promised_end)
+                VALUES (?, ?, ?, ?, ?, now(), now(), ?, 'PLANNED', ?, ?)
                 """)
                 .setParameter(1, stopId).setParameter(2, routeId)
                 .setParameter(3, (short) (maxSeq.intValue() + 1))
                 .setParameter(4, lat).setParameter(5, lng).setParameter(6, serviceSeconds)
+                .setParameter(7, promisedStart).setParameter(8, promisedEnd)
                 .executeUpdate();
         return stopId;
     }
