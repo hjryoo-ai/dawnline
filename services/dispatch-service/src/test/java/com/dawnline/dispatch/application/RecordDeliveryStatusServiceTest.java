@@ -92,6 +92,11 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
+        public List<RouteHeader> routesOfPlan(UUID planId) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다");
+        }
+
+        @Override
         public boolean tryStartReplan(UUID routeId, java.time.Instant now,
                 java.time.Duration cooldown) {
             throw new UnsupportedOperationException();
@@ -108,7 +113,7 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
-        public List<com.dawnline.dispatch.domain.optimizer.Stop> loadStops(UUID routeId) {
+        public List<PositionedStop> loadPositionedStops(UUID routeId) {
             throw new UnsupportedOperationException();
         }
 

@@ -229,9 +229,11 @@ final class InMemoryDispatchPorts {
         static final class StopRow {
 
             final UUID id = Ids.newId();
-            final int seq;
+            /** {@code rewrite} 가 다시 매긴다 — 실물과 같다. */
+            int seq;
             final GeoPoint point;
             final int serviceSeconds;
+            /** {@code moveOrder} 가 줄이고 늘린다. */
             final List<UUID> orderIds;
             /** 이 stop 의 약속창. 개정 발행이 required 로 싣는다 (§5.3, Phase 5-1a). */
             final TimeWindow promised;
@@ -246,7 +248,7 @@ final class InMemoryDispatchPorts {
                 this.point = point;
                 this.serviceSeconds = serviceSeconds;
                 this.arrival = arrival;
-                this.orderIds = List.copyOf(orderIds);
+                this.orderIds = new ArrayList<>(orderIds);
                 this.promised = Objects.requireNonNull(promised, "promised");
             }
 
@@ -276,8 +278,8 @@ final class InMemoryDispatchPorts {
         }
 
         @Override
-        public List<Stop> loadStops(UUID routeId) {
-            List<Stop> live = new ArrayList<>();
+        public List<PositionedStop> loadPositionedStops(UUID routeId) {
+            List<PositionedStop> live = new ArrayList<>();
             for (StopRow row : rows.getOrDefault(routeId, List.of())) {
                 if (row.cancelled()) {
                     continue;
@@ -294,12 +296,19 @@ final class InMemoryDispatchPorts {
                         .map(candidate -> new Parcel(candidate.weightG(), candidate.volumeCm3(),
                                 candidate.requiresCold(), candidate.hazmat()))
                         .reduce(Parcel.EMPTY, Parcel::plus);
-                live.add(new Stop(row.point,
+                live.add(new PositionedStop(row.seq, new Stop(row.point,
                         alive.stream().map(candidate -> OrderId.of(candidate.orderId())).toList(),
                         parcel, alive.getFirst().promised(), row.serviceSeconds,
-                        alive.stream().mapToInt(DispatchCandidate::priority).max().orElse(0)));
+                        alive.stream().mapToInt(DispatchCandidate::priority).max().orElse(0))));
             }
             return live;
+        }
+
+        @Override
+        public List<RouteHeader> routesOfPlan(UUID planId) {
+            return headers.values().stream()
+                    .filter(header -> header.planId().equals(planId))
+                    .toList();
         }
 
         @Override
@@ -415,22 +424,66 @@ final class InMemoryDispatchPorts {
 
         @Override
         public Optional<UUID> findStopOf(UUID routeId, UUID orderId) {
-            throw new UnsupportedOperationException("재배정은 ReassignStopServiceTest 가 본다");
+            return rows.getOrDefault(routeId, List.of()).stream()
+                    .filter(row -> row.orderIds.contains(orderId))
+                    .map(row -> row.id)
+                    .findFirst();
         }
 
         @Override
         public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
-            throw new UnsupportedOperationException("재배정은 ReassignStopServiceTest 가 본다");
+            StopRow from = rows.values().stream().flatMap(List::stream)
+                    .filter(row -> row.id.equals(fromStopId)).findFirst().orElseThrow();
+            DispatchCandidate candidate = candidates.findById(orderId).orElseThrow();
+            from.orderIds.remove(orderId);
+
+            List<StopRow> target = rows.computeIfAbsent(targetRouteId, id -> new ArrayList<>());
+            StopRow into = target.stream()
+                    .filter(row -> !row.cancelled() && row.point.equals(candidate.location()))
+                    .findFirst()
+                    .orElseGet(() -> {
+                        // 실물과 같다: 없으면 맨 뒤에 새로 만들고, 순번은 rewrite 가 다시 매긴다.
+                        int maxSeq = target.stream().mapToInt(row -> row.seq).max().orElse(0);
+                        StopRow created = new StopRow(maxSeq + 1, candidate.location(),
+                                candidate.serviceSeconds(), from.arrival,
+                                new ArrayList<>(), candidate.promised());
+                        target.add(created);
+                        return created;
+                    });
+            into.orderIds.add(orderId);
+            // 비워진 stop 은 지운다 — 남겨 두면 seq 재부여가 유령 지점을 셈에 넣는다.
+            rows.get(routeOf(from)).removeIf(row -> row.id.equals(fromStopId)
+                    && row.orderIds.isEmpty());
+        }
+
+        private UUID routeOf(StopRow row) {
+            return rows.entrySet().stream().filter(entry -> entry.getValue().contains(row))
+                    .map(Map.Entry::getKey).findFirst().orElseThrow();
         }
 
         @Override
         public void rewrite(UUID routeId, PlannedRoute route) {
-            throw new UnsupportedOperationException("취소는 rewrite 하지 않는다 — retime 이다 (§6.10)");
+            summaries.put(routeId, route);
+            int seq = 1;
+            for (var planned : route.stops()) {
+                StopRow row = rows.get(routeId).stream()
+                        .filter(candidate -> !candidate.cancelled()
+                                && candidate.point.equals(planned.stop().point()))
+                        .findFirst().orElseThrow(() -> new IllegalStateException(
+                                "다시 쓸 stop 을 찾지 못했습니다: " + planned.seq()));
+                row.seq = seq++;
+                row.arrival = planned.arrival();
+            }
+            for (StopRow row : rows.get(routeId)) {
+                if (row.cancelled()) {
+                    row.seq = seq++;
+                }
+            }
         }
 
         @Override
         public void clear(UUID routeId) {
-            throw new UnsupportedOperationException("취소는 라우트를 비우지 않는다 (§6.10)");
+            rows.put(routeId, new ArrayList<>());
         }
     }
 

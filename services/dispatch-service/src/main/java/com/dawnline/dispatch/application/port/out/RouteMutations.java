@@ -39,7 +39,35 @@ public interface RouteMutations {
      *
      * @param routeId 라우트 id
      */
-    List<Stop> loadStops(UUID routeId);
+    default List<Stop> loadStops(UUID routeId) {
+        return loadPositionedStops(routeId).stream().map(PositionedStop::stop).toList();
+    }
+
+    /**
+     * {@link #loadStops} 와 <strong>같은 목록</strong>에 순번을 붙인 것 (§6.8, ADR-048 결정 4).
+     *
+     * <p>재계획은 「얼어 있는 앞자락이 몇 개인가」를 알아야 하고, 그것은 <em>저장된 순번</em>과
+     * <em>이 목록의 자리</em>를 잇는 일이다. 두 목록을 따로 두지 않고 이쪽이 원본이고 위쪽이
+     * 파생인 이유가 그것이다 — 「A 와 B 는 같은 내용」이라고 <em>적어 둔</em> 두 곳은 그 문장이
+     * 아직 참인지 아무도 묻지 않으면 갈라지고, 갈라진 쪽은 빈자리라서 눈에 띄지 않는다
+     * (CLAUDE.md 코딩 컨벤션). 파생으로 두면 갈라질 자리가 없다.
+     *
+     * @param routeId 라우트 id
+     */
+    List<PositionedStop> loadPositionedStops(UUID routeId);
+
+    /**
+     * 이 계획의 라우트들 — {@code seq_no} 순서 (§6.8 2단계).
+     *
+     * <p>재계획의 후보 차량이다. 같은 계획 안이므로 캠프도 같고, 「여유 용량이 있는 진행 중
+     * 라우트」와 「미출발 차량」의 구분은 <strong>상태 칼럼이 아니라 사실</strong>로 한다 —
+     * 닿은 stop 이 있으면 떠난 것이다({@link #lastSettledStop}). {@code routes.status} 는
+     * 저장 시점의 값이고 출발을 알리는 이벤트가 없다(§5.4 {@code DEPARTED_CAMP} 는 브로커로
+     * 나가지 않는다).
+     *
+     * @param planId 계획 id
+     */
+    List<RouteHeader> routesOfPlan(UUID planId);
 
     /**
      * 이 주문이 실린 stop.
@@ -209,6 +237,20 @@ public interface RouteMutations {
      * @param vehicleId 차량
      */
     record RouteHeader(UUID routeId, UUID planId, UUID vehicleId) {
+    }
+
+    /**
+     * stop 하나와 그 저장된 순번.
+     *
+     * @param seq  {@code route_stops.seq}. 취소된 stop 이 빠져 있으므로 <strong>연속이 아닐 수
+     *             있다</strong> — 목록의 자리와 다른 값이고, 그래서 따로 든다
+     * @param stop 계산에 쓰는 stop
+     */
+    record PositionedStop(int seq, Stop stop) {
+
+        public PositionedStop {
+            Objects.requireNonNull(stop, "stop");
+        }
     }
 
     /**

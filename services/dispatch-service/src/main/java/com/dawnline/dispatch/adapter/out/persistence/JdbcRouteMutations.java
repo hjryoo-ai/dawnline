@@ -55,7 +55,7 @@ public class JdbcRouteMutations implements RouteMutations {
 
     @Override
     @SuppressWarnings("unchecked")
-    public List<Stop> loadStops(UUID routeId) {
+    public List<PositionedStop> loadPositionedStops(UUID routeId) {
         List<Object[]> rows = entityManager.createNativeQuery("""
                 SELECT s.id, s.seq, s.lat, s.lng, s.service_s, o.order_id,
                        c.weight_g, c.volume_cm3, c.requires_cold, c.hazmat,
@@ -68,18 +68,34 @@ public class JdbcRouteMutations implements RouteMutations {
                 """).setParameter(1, routeId).getResultList();
 
         Map<UUID, Builder> byStop = new LinkedHashMap<>();
+        Map<UUID, Integer> seqOf = new LinkedHashMap<>();
         for (Object[] row : rows) {
             Builder builder = byStop.computeIfAbsent((UUID) row[0], id -> new Builder(
                     GeoPoint.of(((BigDecimal) row[2]).doubleValue(),
                             ((BigDecimal) row[3]).doubleValue()),
                     ((Number) row[4]).intValue(),
                     new TimeWindow((Instant) row[10], (Instant) row[11])));
+            seqOf.putIfAbsent((UUID) row[0], ((Number) row[1]).intValue());
             builder.add(OrderId.of((UUID) row[5]),
                     new Parcel(((Number) row[6]).intValue(), ((Number) row[7]).intValue(),
                             (Boolean) row[8], (Boolean) row[9]),
                     ((Number) row[12]).intValue());
         }
-        return byStop.values().stream().map(Builder::build).toList();
+        return byStop.entrySet().stream()
+                .map(entry -> new PositionedStop(seqOf.get(entry.getKey()),
+                        entry.getValue().build()))
+                .toList();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<RouteHeader> routesOfPlan(UUID planId) {
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT id, plan_id, vehicle_id FROM routes WHERE plan_id = ? ORDER BY seq_no
+                """).setParameter(1, planId).getResultList();
+        return rows.stream()
+                .map(row -> new RouteHeader((UUID) row[0], (UUID) row[1], (UUID) row[2]))
+                .toList();
     }
 
     @Override

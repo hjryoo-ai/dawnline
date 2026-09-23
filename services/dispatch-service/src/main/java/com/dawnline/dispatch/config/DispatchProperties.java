@@ -12,10 +12,27 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param distance 거리 계산 설정
  * @param priority 후보 우선도 점수표
  * @param degrade  열화 모드 임계 (§6.7)
+ * @param replan   부분 재계획 설정 (§6.8)
  */
 @ConfigurationProperties(prefix = "dawnline.dispatch")
 public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance distance,
-        @DefaultValue Priority priority, @DefaultValue Degrade degrade) {
+        @DefaultValue Priority priority, @DefaultValue Degrade degrade,
+        @DefaultValue Replan replan) {
+
+    /**
+     * 부분 재계획 (§6.8, [ADR-048]).
+     *
+     * @param cooldown           라우트당 쿨다운. 설계서 §6.8 5단계가 <strong>10분</strong>으로
+     *                           정했다. 지키는 것은 알림 수가 아니라 <strong>정확성</strong>이다 —
+     *                           tracking 의 Redis 쿨다운과 집이 다른 이유다([ADR-046] 결정 3)
+     * @param deviationTolerance 페이로드의 편차와 자기 편차가 이만큼까지는 갈려도 세지 않는다.
+     *                           두 값은 서로 다른 시각 원천에서 오므로(스캔의 {@code occurredAt}
+     *                           과 저장 정밀도로 자른 {@code Clock}) 초 단위 일치를 요구하면 그
+     *                           카운터는 늘 켜져 있어 아무 말도 하지 않는다
+     */
+    public record Replan(@DefaultValue("10m") Duration cooldown,
+            @DefaultValue("60s") Duration deviationTolerance) {
+    }
 
     /**
      * 열화 사다리의 임계 (§6.7, [ADR-034] + 후속 정정). 앞의 두 수는 설계서 그대로다 —

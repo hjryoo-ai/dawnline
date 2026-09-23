@@ -67,8 +67,11 @@ class ReassignStopServiceTest {
         }
 
         @Override
-        public List<Stop> loadStops(UUID routeId) {
-            return List.copyOf(stops.getOrDefault(routeId, List.of()));
+        public List<PositionedStop> loadPositionedStops(UUID routeId) {
+            List<Stop> live = stops.getOrDefault(routeId, List.of());
+            return java.util.stream.IntStream.range(0, live.size())
+                    .mapToObj(index -> new PositionedStop(index + 1, live.get(index)))
+                    .toList();
         }
 
         @Override
@@ -131,6 +134,11 @@ class ReassignStopServiceTest {
         public Optional<SettledStop> lastSettledStop(UUID routeId) {
             throw new UnsupportedOperationException(
                     "이 페이크는 배송 상태를 모른다 — ReplanRouteServiceTest 를 보라");
+        }
+
+        @Override
+        public List<RouteHeader> routesOfPlan(UUID planId) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다");
         }
 
         @Override

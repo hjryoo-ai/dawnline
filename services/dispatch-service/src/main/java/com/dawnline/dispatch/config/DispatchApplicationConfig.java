@@ -1,11 +1,14 @@
 package com.dawnline.dispatch.config;
 
 import com.dawnline.dispatch.adapter.in.messaging.FulfillmentPlannedListener;
+import com.dawnline.dispatch.adapter.in.messaging.AtRiskListener;
 import com.dawnline.dispatch.adapter.in.messaging.DeliveryStatusListener;
 import com.dawnline.dispatch.adapter.in.messaging.OrderCancelledListener;
 import com.dawnline.dispatch.adapter.out.redis.RedisRouteProgressCache;
 import com.dawnline.dispatch.application.RecordDeliveryStatusService;
+import com.dawnline.dispatch.application.ReplanRouteService;
 import com.dawnline.dispatch.application.port.in.RecordDeliveryStatusUseCase;
+import com.dawnline.dispatch.application.port.in.ReplanRouteUseCase;
 import com.dawnline.dispatch.application.port.out.RouteProgressCache;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
@@ -308,6 +311,46 @@ public class DispatchApplicationConfig {
     public DeliveryStatusListener deliveryStatusListener(IdempotentConsumer consumer,
             RecordDeliveryStatusUseCase recordStatus, EventJson json, DispatchMetrics metrics) {
         return new DeliveryStatusListener(consumer, recordStatus, json, metrics);
+    }
+
+    /**
+     * §6.8 부분 재계획 (ADR-048).
+     *
+     * <p>{@code PlannedRouteRepository} 를 받는 이유는 <strong>설명</strong> 때문이다 —
+     * {@code applied} 는 {@code plan_explanations} 에 「어느 주문이 어디서 어디로, Δ비용 얼마」를
+     * 남긴다(결정 6). 라우트 저장은 {@code RouteMutations} 가 한다.
+     *
+     * @param routes       라우트 조작
+     * @param plans        계획 저장소
+     * @param explanations 설명 저장소 (§6.3)
+     * @param reference    차량·룰
+     * @param events       발행
+     * @param distance     거리 제공자
+     * @param metrics      §9.1 메트릭
+     * @param clock        주입된 시계 (불변규칙 12)
+     * @param properties   쿨다운·허용 오차
+     */
+    @Bean
+    public ReplanRouteUseCase replanRouteUseCase(RouteMutations routes, RoutePlanRepository plans,
+            PlannedRouteRepository explanations, JdbcReferenceData reference, DispatchEvents events,
+            DistanceProvider distance, DispatchMetrics metrics, Clock clock,
+            DispatchProperties properties) {
+
+        return new ReplanRouteService(routes, plans, explanations, reference, reference, events,
+                distance, metrics, clock, properties.replan().cooldown(),
+                properties.replan().deviationTolerance());
+    }
+
+    /**
+     * @param consumer 멱등 게이트
+     * @param replan   재계획 유스케이스
+     * @param json     봉투 역직렬화
+     * @param metrics  §9.1 메트릭
+     */
+    @Bean
+    public AtRiskListener atRiskListener(IdempotentConsumer consumer, ReplanRouteUseCase replan,
+            EventJson json, DispatchMetrics metrics) {
+        return new AtRiskListener(consumer, replan, json, metrics);
     }
 
     /**
