@@ -1727,7 +1727,7 @@ public interface DispatchStrategy {
 
 | 항목 | 목표 (8코어 노트북, Docker Compose) | 측정 방법 |
 |---|---|---|
-| 웨이브 5,000 주문 / 40 차량 계획 시간 | p95 ≤ 30초 (기본 전략) | `dawnline_plan_duration_seconds{strategy}` |
+| 웨이브 5,000 주문 / 40 차량 계획 시간 | p95 ≤ 30초 (기본 전략) | `dawnline_plan_duration_seconds{strategy}` — 참조 기계의 벤치마크가 **기록**하는 사실이다. CI 게이트는 시간이 아니라 **종료 사유**(`termination=converged`)를 넉넉한 예산(120초)에서 본다 — 「이 문제에서 알고리즘이 수렴한다」가 지킬 성질이고, 운영 예산을 주면 느린 러너에서 그것이 러너 속도와 섞인다(2026-09-24, §6.9 규칙 2) |
 | 같은 웨이브의 **영속화** 시간 | ≤ 3초 | `dawnline_plan_persist_seconds` — **목표이지 게이트가 아니다**(2026-09-24). CI 게이트는 시간이 아니라 영속화의 **구조**(flush 횟수·세션 적재 엔티티)를 센다 — §6.9 규칙 2, [ADR-029 후속 정정](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) |
 | 같은 조건 fast mode | ≤ 5초 | 동일 |
 | 메모리 | 계획 1회 힙 증가 ≤ 1 GB | JFR/actuator |
@@ -2344,7 +2344,7 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_promise_revised_total` | counter | fulfillment | camp, tier — 하류가 상류의 약속을 개정한 횟수 (§5.2, Phase 2) |
 | `dawnline_geo_index_loaded` | gauge | fulfillment | index(fc/camp) — Redis GEO 적재 성공 여부 0/1. **레디니스가 아니라 이 게이지가 GEO 상태를 말한다**(§8.6, ADR-016 후속 정정). 0 이어도 서비스는 폴백으로 정상 동작한다 |
 | `dawnline_geo_lookups_total` | counter | fulfillment | index, outcome(redis/bypassed) — `bypassed` 는 Redis 를 건너뛰고 DB 전체 조회 + 메모리 하버사인으로 답한 것이다(§7.2). 레이트 리밋의 `bypassed` 와 같은 어휘를 쓴다 — **폴백은 조용히 일어나면 안 된다** |
-| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode — **알고리즘 시간만**이다(§6.7). 영속화는 아래 짝이 잰다 |
+| `dawnline_plan_duration_seconds` | histogram | dispatch | strategy, mode, **termination**(converged/deadline) — **알고리즘 시간만**이다(§6.7). 영속화는 아래 짝이 잰다. `termination` 은 2026-09-24 에 붙었다: `deadline` 이면 마감에 잘려 하지 못한 일이 있고 그 결과는 그날의 기계 속도에 달린다([ADR-036](adr/ADR-036-deadline-belongs-to-the-plan.md)) — 운영에서는 **잘린 계획의 비율**이고, CI 에서는 시간 대신 보는 값이다 |
 | `dawnline_plan_persist_seconds` | histogram | dispatch | camp — 라우트·stop·설명 저장과 outbox 기록에 걸린 시간. `dawnline_plan_duration_seconds` 와 **한 쌍**이고, 둘을 나눠 두는 것이 [ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) 의 요점이다 — 한 수치였을 때 30초 예산의 75% 를 ORM 이 쓰고 있는 것이 보이지 않았다. 목표 5,000건 ≤ 3초 |
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |
 | `dawnline_plan_unassigned` | gauge | dispatch | camp |

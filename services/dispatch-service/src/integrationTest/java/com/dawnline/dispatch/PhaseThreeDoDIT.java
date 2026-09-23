@@ -61,8 +61,15 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
     private static final UUID CAMP_ID = UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
     private static final GeoPoint CAMP = GeoPoint.of(37.640000, 127.030000);
 
-    /** §6.7 목표 — 기본 전략 계획 시간 p95 ≤ 30초. <strong>알고리즘 예산이다</strong>(ADR-029). */
-    private static final Duration BUDGET = Duration.ofSeconds(30);
+    /**
+     * 이 IT 의 계획 예산 — 운영값(30초)이 아니라 <strong>넉넉히</strong> (2026-09-24).
+     *
+     * <p>여기서 보는 것은 「빠르다」가 아니라 <strong>「이 문제에서 알고리즘이 수렴한다」</strong>다.
+     * 운영 예산을 주면 느린 러너에서 마감이 물고, 그러면 수렴 여부가 러너 속도에 섞인다. 넉넉한
+     * 예산은 peak 게이트가 「120초 수렴값 = 재현 기준」으로 쓴 방식과 같다. 30초 안에 끝나는지는
+     * 참조 기계의 벤치마크가 기록하는 사실이다(§6.7 · §6.9 규칙 2).
+     */
+    private static final String IT_BUDGET = "120s";
 
     /**
      * 영속화 경로의 <strong>구조</strong> 상한 — 시간이 아니라 센 값이다(ADR-029 후속 정정, §6.9 게이트 규칙 2).
@@ -107,6 +114,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
     static void relayOff(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         registry.add("spring.jpa.properties.hibernate.generate_statistics", () -> "true");
+        registry.add("dawnline.dispatch.plan.budget", () -> IT_BUDGET);
     }
 
     @BeforeEach
@@ -178,6 +186,8 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
         // 배정 수가 흔들린다 — 마감 문서에 옮겨 적을 수 없는 값이 된다.
         Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
         statistics.clear();
+        long convergedBefore = terminations(DispatchMetrics.TERMINATION_CONVERGED);
+        long deadlineBefore = terminations(DispatchMetrics.TERMINATION_DEADLINE);
         long startedNanos = System.nanoTime();
         tx().executeWithoutResult(status ->
                 runPlan.run(new RunPlanCommand(waveId, CAMP_ID, CAMP, null, null, 20260905L, null)));
@@ -205,10 +215,15 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
                 flushes, entityLoads, preparedStatements);
 
         assertThat(plan.status()).as("완주하지 못하면 시간은 의미가 없다").isEqualTo("PUBLISHED");
-        assertThat(plan.planDurationMs()).isNotNull();
-        assertThat(Duration.ofMillis(plan.planDurationMs()))
-                .as("§6.7 목표: 기본 전략 계획 시간 p95 ≤ 30초")
-                .isLessThan(BUDGET);
+        // 게이트는 시간이 아니라 종료 사유다 (2026-09-24). 예전 어설션은 「계획 < 30초」였고 CI 에서
+        // 4.3배 여유로 통과했지만, 그것은 러너 속도를 재고 있었다 — 영속화 게이트가 3초를 넘긴 것과
+        // 같은 종류다. 수렴은 러너와 무관하게 같은 입력이면 같다.
+        assertThat(terminations(DispatchMetrics.TERMINATION_DEADLINE) - deadlineBefore)
+                .as("마감(%s)에 잘리지 않았다 — 잘렸다면 결과가 기계 속도에 달린다(ADR-036)", IT_BUDGET)
+                .isZero();
+        assertThat(terminations(DispatchMetrics.TERMINATION_CONVERGED) - convergedBefore)
+                .as("이 계획은 수렴으로 끝났다 (§6.9 재현 조건)")
+                .isEqualTo(1);
         // 영속화 게이트는 시간이 아니라 구조를 센다 (ADR-029 후속 정정, 2026-09-24). 처음에는
         // 「영속화 ≤ 3초」였고 로컬 실측이 800 ms 였지만, CI 러너에서는 같은 코드가 789–2,919 ms
         // (3.7배)로 흔들렸고 이웃 모듈의 IT 가 동시에 돌자 3,013 · 3,045 ms 로 넘었다 — 코드가
@@ -242,6 +257,12 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
      */
     private static UUID deterministicOrderId(String prefix, int index) {
         return UUID.fromString("01a07200-%s-7000-8000-%012d".formatted(prefix, index));
+    }
+
+    private long terminations(String termination) {
+        io.micrometer.core.instrument.Timer timer = meterRegistry.find(DispatchMetrics.PLAN_DURATION)
+                .tag(DispatchMetrics.TAG_TERMINATION, termination).timer();
+        return timer == null ? 0 : timer.count();
     }
 
     private Set<UUID> vehiclesWhere(boolean cold) {
