@@ -13,7 +13,9 @@ import com.dawnline.tracking.domain.ScanType;
 import com.dawnline.tracking.domain.Shipment;
 import com.dawnline.tracking.domain.ShipmentEvent;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -23,10 +25,22 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 기사 스캔 적용 (DESIGN.md §5.4).
  *
+ * <h2>대상은 주문으로 찾는다 — 번호로 찾지 않는다</h2>
+ * {@code orderIds} 로 {@code shipments} 의 PK 를 푼다
+ * ([ADR-047](docs/adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 결정 1). 요청의
+ * {@code routeId}·{@code stopSeq} 는 <strong>확인용</strong>이고, 찾은 배송이 지금 있는 자리와
+ * 다르면 <em>그대로 적용하고</em> {@code dawnline_scan_after_relocate_total} 로 센다 — 기사가
+ * 개정을 늦게 받은 것이지 스캔이 틀린 것이 아니다.
+ *
+ * <p>그래서 <strong>편차 전파도 발행도 배송이 지금 있는 좌표에서</strong> 한다. 요청이 말한
+ * 번호로 전파하면 {@link EtaPropagator} 가 그 stop 을 찾지 못하고, 옛 좌표를 그대로 실어
+ * 보내면 dispatch 의 확인용 컨텍스트가 틀린 값을 받는다. 한 스캔의 주문들이 지금 서로 다른
+ * stop 에 있으면 발행이 <strong>두 건</strong>이다 — 그것은 두 지점의 사실이다.
+ *
  * <h2>캠프 출발은 라우트의 사건이다</h2>
- * {@code DEPARTED_CAMP} 는 경로의 {@code {stopSeq}} 를 <strong>무시하고 라우트 전체</strong>에
- * 적용한다 — 기사는 캠프를 한 번 떠나고, 그 순간 그 라우트의 모든 배송이 길 위에 있다. stop
- * 하나만 옮기면 나머지는 {@code SCHEDULED} 로 남아 「아직 출발하지 않은 배송」처럼 보인다.
+ * {@code DEPARTED_CAMP} 는 <strong>{@code orderIds} 없이 라우트 전체</strong>에 적용한다(실어
+ * 보내면 400 이다) — 기사는 캠프를 한 번 떠나고, 그 순간 그 라우트의 모든 배송이 길 위에 있다.
+ * stop 하나만 옮기면 나머지는 {@code SCHEDULED} 로 남아 「아직 출발하지 않은 배송」처럼 보인다.
  * 브로커로는 나가지 않는다: 한 사실을 stop 수만큼 반복해 말하는 것이고, order-service 의 상태
  * 머신은 {@code DISPATCHED} 로 그 구간을 이미 덮는다({@code ScanType.isPublished()}). 운영자가
  * 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나를 Phase 6 에서 소비자 주도로 정한다.
@@ -89,30 +103,36 @@ public class RecordScanService implements RecordScanUseCase {
     public ScanResult record(ScanCommand command) {
         Objects.requireNonNull(command, "command");
         requireReasonOnlyOnFailure(command);
+        requireOrdersMatchScope(command);
 
         boolean fromCamp = command.type() == ScanType.DEPARTED_CAMP;
         List<Shipment> targets = fromCamp
                 ? shipments.findByRouteFrom(command.routeId(), FIRST_SEQ)
-                : shipments.findByRouteAndStop(command.routeId(), command.stopSeq());
+                : shipments.findAll(command.orderIds());
         if (targets.isEmpty()) {
-            // 라우트를 잘못 알았거나 순번이 틀렸다. 아직 route.assigned 를 소비하지 않은 창일
-            // 수도 있으므로 단말은 그대로 재시도하면 된다 — 그래서 404 이지 422 가 아니다.
-            throw NotFoundException.of(fromCamp ? "Route" : "Stop",
-                    fromCamp ? command.routeId().toString()
-                            : command.routeId() + "/" + command.stopSeq());
+            // 그 주문들의 배송이 아직 없다(또는 라우트를 잘못 알았다). route.assigned 를 아직
+            // 소비하지 않은 창일 수 있으므로 단말은 그대로 재시도하면 된다 — 404 이지 422 가 아니다.
+            throw NotFoundException.of(fromCamp ? "Route" : "Shipment",
+                    fromCamp ? command.routeId() : command.orderIds());
         }
         List<OrderScan> outcomes = new ArrayList<>(targets.size());
         List<ShipmentEvent> appended = new ArrayList<>(targets.size());
-        List<UUID> moved = new ArrayList<>(targets.size());
+        List<Shipment> moved = new ArrayList<>(targets.size());
         int afterCancel = 0;
+        int offPlan = 0;
 
         for (Shipment shipment : targets) {
+            if (!fromCamp && isElsewhere(command, shipment)) {
+                // 기사가 개정 r 의 번호로 찍었고 우리는 r+1 을 적용했다. 스캔은 그대로 맞다 —
+                // 판정에 쓰지 않고 세기만 한다(카운터는 적재 뒤에 올린다).
+                offPlan++;
+            }
             ScanOutcome outcome = shipment.recordScan(command.type(), command.occurredAt());
             switch (outcome) {
                 case APPLIED -> {
                     shipments.update(shipment);
                     appended.add(eventOf(command, shipment));
-                    moved.add(shipment.orderId());
+                    moved.add(shipment);
                 }
                 case AFTER_CANCEL -> afterCancel++;
                 case STALE -> {
@@ -125,46 +145,111 @@ public class RecordScanService implements RecordScanUseCase {
         }
 
         // 편차 전파는 상태 전이 <em>뒤</em>다. 순서가 뒤바뀌면 방금 도착한 stop 의 ETA 를
-        // 자기 편차로 다시 미는 일이 생긴다.
-        Propagation propagation = eta.propagate(command.routeId(), command.type(),
-                command.stopSeq(), command.occurredAt());
-        atRisk.evaluate(command.routeId(), propagation);
+        // 자기 편차로 다시 미는 일이 생긴다. 좌표는 요청이 아니라 «찾은 배송»이 말한다.
+        propagate(command, targets);
 
         events.appendAll(appended);
         publish(command, moved);
         metrics.countScanAfterCancel(afterCancel);
+        metrics.countScanAfterRelocate(offPlan);
 
         // 사유도 좌표도 남기지 않는다 (§9.3 — 고객 식별 정보 금지).
         log.debug("스캔을 적용했다. routeId={}, stopSeq={}, type={}, applied={}, stale={}, "
-                        + "afterCancel={}, etaMoved={}, deviationS={}",
+                        + "afterCancel={}, offPlan={}",
                 command.routeId(), command.stopSeq(), command.type(), appended.size(),
-                outcomes.size() - appended.size() - afterCancel, afterCancel,
-                propagation.moved().size(), propagation.deviation().toSeconds());
+                outcomes.size() - appended.size() - afterCancel, afterCancel, offPlan);
 
         return new ScanResult(command.routeId(), command.stopSeq(), command.type(),
                 command.occurredAt(), outcomes);
     }
 
     /**
-     * {@code delivery.status} 를 stop 하나에 <strong>한 번</strong> 내보낸다 (§4.1).
+     * {@code delivery.status} 를 stop <strong>마다</strong> 한 번 내보낸다 (§4.1).
+     *
+     * <p>좌표는 요청이 아니라 <strong>배송이 지금 있는 자리</strong>다. 옛 좌표를 실어 보내면
+     * dispatch 의 확인용 컨텍스트가 틀린 값을 받고, 저쪽의
+     * {@code dawnline_status_after_relocate_total} 이 우리 탓으로 오른다 (ADR-047 결정 1·2).
+     * 그래서 옮겨진 주문들이 지금 서로 다른 stop 에 있으면 <strong>두 건</strong>이 나간다 —
+     * 한 건으로 합치면 둘 중 하나의 좌표가 거짓이 된다.
      *
      * <p>내보내지 않는 두 경우가 있고 둘 다 「소비자에게 새 사실이 없다」는 같은 이유다.
      * {@code DEPARTED_CAMP} 는 계약의 {@code status} 셋에 없고(라우트의 사건이다,
      * {@link ScanType#isPublished()}), 옮겨진 주문이 없으면 {@code STALE}·{@code AFTER_CANCEL}
      * 뿐이라 상태가 움직이지 않았다.
      */
-    private void publish(ScanCommand command, List<UUID> moved) {
-        if (!command.type().isPublished() || moved.isEmpty()) {
+    private void publish(ScanCommand command, List<Shipment> moved) {
+        if (!command.type().isPublished()) {
             return;
         }
-        delivery.deliveryStatus(command.routeId(), command.stopSeq(), moved, command.type(),
-                command.occurredAt(), command.failureReason());
+        Map<StopKey, List<UUID>> byStop = new LinkedHashMap<>();
+        for (Shipment shipment : moved) {
+            byStop.computeIfAbsent(StopKey.of(shipment), key -> new ArrayList<>())
+                    .add(shipment.orderId());
+        }
+        byStop.forEach((stop, orderIds) -> delivery.deliveryStatus(stop.routeId(), stop.stopSeq(),
+                orderIds, command.type(), command.occurredAt(), command.failureReason()));
+    }
+
+    /**
+     * 편차를 전파하고 위험을 판정한다 — <strong>찾은 배송이 있는 라우트마다</strong>.
+     *
+     * <p>기준이 되는 순번은 그 라우트에서 찾은 것 중 <strong>가장 앞</strong>이다. 전파 대상이
+     * 「뒤따르는 stop」이므로 가장 앞의 stop 이 가장 넓게 민다. 보통 이 맵은 한 줄이다 — 여러
+     * 줄이 되는 것은 한 스캔의 주문들이 지금 다른 라우트에 흩어진, 재배치 직후의 창뿐이다.
+     */
+    private void propagate(ScanCommand command, List<Shipment> targets) {
+        Map<UUID, Integer> scanned = new LinkedHashMap<>();
+        for (Shipment shipment : targets) {
+            scanned.merge(shipment.routeId(), shipment.stopSeq(), Math::min);
+        }
+        scanned.forEach((routeId, stopSeq) -> {
+            Propagation propagation = eta.propagate(routeId, command.type(), stopSeq,
+                    command.occurredAt());
+            atRisk.evaluate(routeId, propagation);
+            log.debug("편차를 전파했다. routeId={}, stopSeq={}, etaMoved={}, deviationS={}",
+                    routeId, stopSeq, propagation.moved().size(),
+                    propagation.deviation().toSeconds());
+        });
+    }
+
+    /** 기사가 찍은 자리와 우리가 아는 자리가 다른가. 판정이 아니라 <em>계량</em>에만 쓴다. */
+    private static boolean isElsewhere(ScanCommand command, Shipment shipment) {
+        return !shipment.routeId().equals(command.routeId())
+                || shipment.stopSeq() != command.stopSeq();
+    }
+
+    /** 발행을 묶는 자리. 이 값이 이벤트의 {@code routeId}·{@code stopSeq} 가 된다. */
+    private record StopKey(UUID routeId, int stopSeq) {
+
+        static StopKey of(Shipment shipment) {
+            return new StopKey(shipment.routeId(), shipment.stopSeq());
+        }
     }
 
     private ShipmentEvent eventOf(ScanCommand command, Shipment shipment) {
         return new ShipmentEvent(ids.newUuid(), shipment.orderId(), shipment.routeId(),
                 command.type(), command.occurredAt(), command.lat(), command.lng(),
                 command.failureReason());
+    }
+
+    /**
+     * 주문 목록은 <strong>종류가 정한다</strong> — {@code DEPARTED_CAMP} 는 라우트의 사건이라
+     * 열쇠가 라우트이고, 나머지는 송장이 열쇠다 (ADR-047 결정 1).
+     *
+     * <p>캠프 출발에 실린 목록을 조용히 무시하지 않는 이유는 {@code failureReason} 과 같다:
+     * 버리면 단말은 자기가 보낸 것이 사라진 줄 모르고, 「어느 주문이 출발했나」를 목록으로
+     * 물은 단말은 라우트 전체를 받은 응답을 오해한다.
+     */
+    private static void requireOrdersMatchScope(ScanCommand command) {
+        boolean fromCamp = command.type() == ScanType.DEPARTED_CAMP;
+        if (fromCamp && !command.orderIds().isEmpty()) {
+            throw ValidationException.field("orderIds", command.type(),
+                    "캠프 출발은 라우트의 사건이라 주문을 싣지 않습니다");
+        }
+        if (!fromCamp && command.orderIds().isEmpty()) {
+            throw ValidationException.field("orderIds", command.type(),
+                    "스캔할 주문이 있어야 합니다");
+        }
     }
 
     /**

@@ -20,7 +20,7 @@
  * <h2>이 도구에는 {@code processed_events} 가 없다</h2>
  * 불변규칙 2 의 예외이며, 성립하는 이유는 「도구라서」가 아니라 <strong>하류가 멱등이라서</strong>다 —
  * 중복 소비가 만드는 것은 tracking 으로 가는 중복 스캔이고, 그것은 §8.5 의
- * 「{@code (routeId, seq, type)} + 상태 머신」이 {@code STALE} 로 흡수한다. 하류가 멱등이 아닌
+ * 「{@code (orderIds, type)} + 상태 머신」이 {@code STALE} 로 흡수한다. 하류가 멱등이 아닌
  * 도구는 같은 예외를 쓸 수 없다. 이 도구가 하는 것은 {@link com.dawnline.sim.driver.DriverFleet}
  * 의 개정 단조 증가 검사뿐이고, 그것은 tracking 의 {@code route_revisions} 와 같은 모양이다
  * (DESIGN.md §13 매핑표 규칙 2).

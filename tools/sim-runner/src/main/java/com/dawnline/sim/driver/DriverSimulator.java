@@ -14,6 +14,12 @@ import java.util.Objects;
  * 그래서 「이 라우트를 이렇게 돈다」를 서버 없이 어설션할 수 있고, 개정이 오면 같은 함수를
  * 새 위치로 다시 부르기만 하면 된다.
  *
+ * <h2>스캔은 송장을 싣는다</h2>
+ * 각 {@link ScanCall} 이 그 stop 의 {@code orderIds} 를 그대로 나른다 — 서버가 대상을 찾는
+ * 열쇠이기 때문이다 (DESIGN.md §5.4, ADR-047 결정 1). 개정이 바꾸는 것은 번호이지 송장이
+ * 아니므로 재계획 뒤에 찍어도 같은 것을 가리킨다. {@code DEPARTED_CAMP} 만 비운다: 캠프
+ * 출발은 라우트의 사건이다.
+ *
  * <h2>시간 모형</h2>
  * 계획에서 파생한다. {@code Instant.now()} 를 부르지 않는다 (불변규칙 12).
  *
@@ -78,9 +84,10 @@ public final class DriverSimulator {
             actual = route.plannedDeparture()
                     .plusSeconds(jitter.departureDelaySeconds(route.routeId(), route.revision()));
             // 캠프 좌표는 route.assigned 에 없다. 위치를 모르는 것과 보내지 않는 것은 같고,
-            // 단말도 위치를 못 잡으면 비워 보낸다 (ScanRequest.lat 의 계약).
-            calls.add(new ScanCall(route.stops().getFirst().seq(), ScanType.DEPARTED_CAMP,
-                    actual, null, null, null));
+            // 단말도 위치를 못 잡으면 비워 보낸다 (ScanRequest.lat 의 계약). 송장도 싣지
+            // 않는다 — 라우트의 사건이다. 순번만 경로 변수라 첫 stop 의 것을 쓴다.
+            calls.add(new ScanCall(route.stops().getFirst().seq(), List.of(),
+                    ScanType.DEPARTED_CAMP, actual, null, null, null));
         } else {
             actual = readyAt;
         }
@@ -100,14 +107,17 @@ public final class DriverSimulator {
             long legSeconds = Math.max(0L, Duration.between(plannedAnchor, plannedArrival).toSeconds());
             double factor = jitter.delayFactor(route.routeId(), route.revision(), stop.seq());
             Instant arrival = actual.plusSeconds(Math.round(legSeconds * (1.0 + factor)));
-            calls.add(new ScanCall(stop.seq(), ScanType.ARRIVED, arrival, stop.lat(), stop.lng(), null));
+            calls.add(new ScanCall(stop.seq(), stop.orderIds(), ScanType.ARRIVED, arrival,
+                    stop.lat(), stop.lng(), null));
 
             Instant finished = arrival.plusSeconds(stop.serviceSeconds());
             boolean fails = jitter.fails(route.routeId(), route.revision(), stop.seq());
             calls.add(fails
-                    ? new ScanCall(stop.seq(), ScanType.FAILED, finished, stop.lat(), stop.lng(),
+                    ? new ScanCall(stop.seq(), stop.orderIds(), ScanType.FAILED, finished,
+                            stop.lat(), stop.lng(),
                             jitter.failureReason(route.routeId(), route.revision(), stop.seq()))
-                    : new ScanCall(stop.seq(), ScanType.COMPLETED, finished, stop.lat(), stop.lng(), null));
+                    : new ScanCall(stop.seq(), stop.orderIds(), ScanType.COMPLETED, finished,
+                            stop.lat(), stop.lng(), null));
 
             actual = finished;
             plannedAnchor = plannedFinish;

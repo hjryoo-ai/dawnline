@@ -42,18 +42,19 @@ public record TripProgress(@Nullable Instant readyAt, Set<UUID> completedOrders)
     /**
      * 스캔 하나를 보낸 뒤의 위치.
      *
-     * @param call  보낸 스캔
-     * @param route 그 스캔이 속한 개정. 종결 스캔의 주문 id 를 여기서 찾는다
+     * <p>끝낸 주문은 <strong>스캔 자신이</strong> 말한다 — 개정에서 {@code seq} 로 되찾지
+     * 않는다. 되찾는 형태는 「보낸 것」과 「셌다고 적는 것」이 같은 축이 아니어서, 그 사이에
+     * 개정이 끼면 조용히 다른 stop 의 주문을 끝났다고 적는다 (ADR-047 결정 1).
+     *
+     * @param call 보낸 스캔
      * @return 다음 위치
      */
-    public TripProgress after(ScanCall call, AssignedRoute route) {
+    public TripProgress after(ScanCall call) {
         if (!call.type().isTerminal()) {
             return new TripProgress(call.occurredAt(), completedOrders);
         }
         Set<UUID> done = new LinkedHashSet<>(completedOrders);
-        route.stops().stream()
-                .filter(stop -> stop.seq() == call.stopSeq())
-                .forEach(stop -> done.addAll(stop.orderIds()));
+        done.addAll(call.orderIds());
         return new TripProgress(call.occurredAt(), done);
     }
 }

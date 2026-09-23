@@ -44,6 +44,32 @@ class DriverSimulatorTest {
     }
 
     @Test
+    void 스캔은_그_stop_의_송장을_싣고_캠프_출발만_비운다() {
+        // 서버가 대상을 찾는 열쇠다 (ADR-047 결정 1). 번호는 개정이 뜻을 바꾸지만 송장은 아니다.
+        List<ScanCall> calls = calls(ON_TIME);
+
+        assertThat(calls.getFirst().orderIds())
+                .as("캠프 출발은 라우트의 사건이라 열쇠가 라우트다")
+                .isEmpty();
+        assertThat(calls.subList(1, calls.size()))
+                .allSatisfy(call -> assertThat(call.orderIds())
+                        .as("stop %s 의 송장", call.stopSeq())
+                        .containsExactly(order(call.stopSeq())));
+    }
+
+    @Test
+    void 캠프_출발이_아닌_스캔에_송장이_없으면_보내기_전에_터진다() {
+        // 서버가 400 으로 답할 요청이다. 그 400 은 이 도구의 결함이지 시나리오의 결과가 아니다.
+        assertThatThrownBy(() -> new ScanCall(1, List.of(), ScanType.ARRIVED, DEPARTURE, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("orderIds");
+        assertThatThrownBy(() -> new ScanCall(1, List.of(order(1)), ScanType.DEPARTED_CAMP,
+                DEPARTURE, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("orderIds");
+    }
+
+    @Test
     void 계획대로_돌면_시각이_계획_그대로다() {
         List<ScanCall> calls = calls(ON_TIME);
 
@@ -118,7 +144,7 @@ class DriverSimulatorTest {
         // stop 1 까지 끝낸 자리에서 개정 2 를 받는다. 새 개정은 3 을 2 보다 먼저 돈다.
         TripProgress progress = TripProgress.start();
         for (ScanCall call : first.subList(0, 3)) {
-            progress = progress.after(call, route(1));
+            progress = progress.after(call);
         }
         AssignedRoute revised = new AssignedRoute(ROUTE, 2, DRIVER, new AssignedRoute.Summary(DEPARTURE),
                 List.of(stop(1, 20, 5, null), stop(3, 45, 5, null), stop(2, 65, 5, null)));

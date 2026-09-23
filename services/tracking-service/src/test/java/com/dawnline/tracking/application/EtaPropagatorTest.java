@@ -198,11 +198,6 @@ class EtaPropagatorTest {
         }
 
         @Override
-        public List<Shipment> findByRouteAndStop(UUID routeId, int stopSeq) {
-            throw new UnsupportedOperationException("전파는 stop 하나만 보지 않습니다");
-        }
-
-        @Override
         public List<Shipment> findByRouteFrom(UUID routeId, int fromSeq) {
             return stored.values().stream()
                     .filter(shipment -> shipment.routeId().equals(routeId)

@@ -1,6 +1,7 @@
 package com.dawnline.sim.driver;
 
 import static com.dawnline.sim.driver.DriverFixtures.DEPARTURE;
+import static com.dawnline.sim.driver.DriverFixtures.order;
 import static com.dawnline.sim.driver.DriverFixtures.ROUTE;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -8,6 +9,7 @@ import com.dawnline.messaging.json.EventJson;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
@@ -17,8 +19,8 @@ import tools.jackson.databind.JsonNode;
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 class HttpScanClientTest {
 
-    private static final ScanCall COMPLETED =
-            new ScanCall(3, ScanType.COMPLETED, DEPARTURE, 37.51, 127.02, null);
+    private static final ScanCall COMPLETED = new ScanCall(3, List.of(order(1), order(2)),
+            ScanType.COMPLETED, DEPARTURE, 37.51, 127.02, null);
 
     @Test
     void 받아들여지면_200_이고_주문별_결과를_센다() throws IOException {
@@ -104,7 +106,8 @@ class HttpScanClientTest {
     @Test
     void 위치를_모르면_필드째_보내지_않는다() throws IOException {
         try (LocalScanServer server = LocalScanServer.alwaysAnswering(200, "{}")) {
-            ScanCall noPosition = new ScanCall(1, ScanType.DEPARTED_CAMP, DEPARTURE, null, null, null);
+            ScanCall noPosition = new ScanCall(1, List.of(), ScanType.DEPARTED_CAMP, DEPARTURE,
+                    null, null, null);
 
             server.client().report(ROUTE, noPosition);
 
@@ -112,6 +115,9 @@ class HttpScanClientTest {
             assertThat(body.has("lat")).isFalse();
             assertThat(body.has("lng")).isFalse();
             assertThat(body.has("failureReason")).isFalse();
+            assertThat(body.has("orderIds"))
+                    .as("캠프 출발은 라우트의 사건이라 송장이 없다 — 빈 배열도 보내지 않는다")
+                    .isFalse();
         }
     }
 }

@@ -44,22 +44,25 @@ paths:
         "200":
           description: "받았다. `orders[]` 의 `outcome` 이 주문마다의 결과다 — `APPLIED`(상태가 옮겨\
             졌다) · `STALE`(이미 지나온 지점, 중복 스캔) · `AFTER_CANCEL`(취소된 주문이라 무시했다). **재시도\
-            해도 안전하다**. `DEPARTED_CAMP` 는 `{stopSeq}` 를 무시하고 **라우트 전체**에 적용되므로 `orders[]`\
-            \ 에 그 라우트의 모든 주문이 들어온다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다"
+            해도 안전하다**. 응답의 `routeId`·`stopSeq` 는 **요청을 그대로 되비친 값**이다 — 개정이 그 주문을 옮\
+            겼으면 실제로 적용된 자리는 다르고, 단말이 알아야 하는 것은 주문마다의 `outcome` 이다. `DEPARTED_CAMP`\
+            \ 는 `orderIds` 없이 **라우트 전체**에 적용되므로 `orders[]` 에 그 라우트의 모든 주문이 들어온다 —\
+            \ 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다"
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ScanResult"
         "400":
           description: "요청 값이 유효하지 않다. 본문은 Problem Details 이고 `errors[]` 에 어긋난 필드가\
-            \ 모두 들어온다. 지원하지 않는 API 버전도 여기로 온다"
+            \ 모두 들어온다. **`orderIds` 가 비어 있는 stop 스캔**과 **`orderIds` 를 실은 `DEPARTED_CAMP`**\
+            \ 도 여기로 온다 — 캠프 출발은 라우트의 사건이라 열쇠가 라우트다. 지원하지 않는 API 버전도 마찬가지다"
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "404":
-          description: 그 라우트의 그 순번에 배송이 없다(`DEPARTED_CAMP` 는 그 라우트에 배송이 하나도 없다). 아직
-            `route.assigned` 를 받지 못한 창일 수 있으므로 **잠시 후 같은 요청을 다시 보내도 된다**
+          description: 그 `orderIds` 의 배송이 하나도 없다(`DEPARTED_CAMP` 는 그 라우트에 배송이 하나도
+            없다). 아직 `route.assigned` 를 받지 못한 창일 수 있으므로 **잠시 후 같은 요청을 다시 보내도 된다**
           content:
             '*/*':
               schema:
@@ -76,6 +79,13 @@ components:
     ScanRequest:
       type: object
       properties:
+        orderIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 200
+          minItems: 0
         type:
           type: string
           enum:

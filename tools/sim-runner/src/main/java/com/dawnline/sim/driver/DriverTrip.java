@@ -117,7 +117,7 @@ public final class DriverTrip implements Runnable {
                 tally.routeAbandoned();
                 return null;
             }
-            progress = progress.after(call, route);
+            progress = progress.after(call);
         }
         // 마지막 스캔 뒤에 도착한 개정을 놓치지 않는다. 그 개정의 stop 은 대개 전부 종결이라
         // 빈 계획이 나오고 여정이 곧 끝나지만, 새 주문이 실려 왔다면 그것은 가야 할 곳이다.

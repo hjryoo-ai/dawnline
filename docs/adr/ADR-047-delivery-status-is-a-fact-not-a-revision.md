@@ -4,9 +4,9 @@
 |---|---|
 | 상태 | Accepted |
 | 결정일 | 2026-09-22 |
-| 관련 문서 | `docs/DESIGN.md` §4.1(소비자 목록) · §5.1(축 규칙) · §5.3(dispatch 스키마) · §6.8(부분 재계획) · §6.10(취소 창) · §7.2(Redis 키) · §9.1 · §16 |
+| 관련 문서 | `docs/DESIGN.md` §4.1(소비자 목록) · §5.1(축 규칙) · §5.3(dispatch 스키마) · §6.8(부분 재계획) · §6.10(취소 창) · §7.2(Redis 키) · §8.5(멱등 키) · §9.1 · §16 |
 | 관련 ADR | [ADR-017](ADR-017-order-state-machine-absorbs-out-of-order-events.md) (순서 뒤바뀜은 상태 머신이 흡수한다 — 이 ADR 의 원형), [ADR-026](ADR-026-dispatch-cancellation-window.md) (취소 창의 dispatch 쪽 끝), [ADR-045](ADR-045-revision-comparison-is-per-route.md) (개정 번호는 라우트의 것이다) |
-| 구현 | `services/dispatch-service/.../adapter/in/messaging/DeliveryStatusListener.java` · `application/RecordDeliveryStatusService.java` |
+| 구현 | `services/dispatch-service/.../adapter/in/messaging/DeliveryStatusListener.java` · `application/RecordDeliveryStatusService.java` · `services/tracking-service/.../adapter/in/web/ScanController.java` · `application/RecordScanService.java` |
 
 ---
 
@@ -50,7 +50,7 @@ id 는 개정을 가로질러 같은 것을 가리킨다 — 그리고 **현실�
 
 | 자리 | 열쇠 | 상태 |
 |---|---|---|
-| 기사 단말 → tracking 스캔 API (§5.4) | `orderIds` 필수, `routeId`·`stopSeq` 는 **확인용** | Phase 5-3 **앞의 별도 PR** |
+| 기사 단말 → tracking 스캔 API (§5.4) | `orderIds` 필수, `routeId`·`stopSeq` 는 **확인용** | 있음 (2026-09-23) |
 | tracking `shipments` | `order_id` (PK) | 있음 (§5.4) |
 | dispatch `route_stops` | `orderIds` → `route_stop_orders` | **이 ADR** |
 
@@ -58,6 +58,33 @@ id 는 개정을 가로질러 같은 것을 가리킨다 — 그리고 **현실�
 `seq` 로 찍는데 tracking 은 이미 r+1 을 적용했을 수 있고, 그때 `(route, seq)` 는 다른 주문을
 가리키거나 아무것도 가리키지 않는다. 열쇠를 여기서만 바꾸면 dispatch 는 주문으로 판단하는데
 그 앞 단계가 번호로 판단하는 상태가 된다.
+
+**스캔 API 가 실제로 바뀐 모양** (2026-09-23). 경로는 그대로 두고 본문에 `orderIds` 를
+required 로 더했다 — 경로를 `/orders/...` 로 옮기지 않은 이유는 `routeId`·`stopSeq` 가 *사라지는
+것이 아니라 역할이 바뀌는 것*이기 때문이다. 확인용 컨텍스트는 로그와 카운터가 읽고, 그것이
+없으면 「기사가 옛 개정으로 찍었다」를 잴 방법이 없다.
+
+| | 전 | 후 |
+|---|---|---|
+| 대상 조회 | `shipments (route_id, stop_seq)` | `shipments.order_id` (**PK**) |
+| `routeId`·`stopSeq` | 조회 조건 | **확인용** — 어긋나면 적용하고 `dawnline_scan_after_relocate_total` |
+| 편차 전파·발행의 좌표 | 요청이 말한 것 | **배송이 지금 있는 것** |
+| 404 | 그 라우트의 그 순번에 배송이 없다 | 그 **주문들의** 배송이 하나도 없다 |
+| 멱등 키 (§8.5) | `(routeId, seq, type)` + 상태 머신 | `(orderIds, type)` + 상태 머신 |
+
+세 줄이 따라 나온다.
+
+- **`DEPARTED_CAMP` 는 `orderIds` 를 싣지 않는다 — 실으면 400 이다.** 캠프 출발은 *라우트의*
+  사건이라(§5.4) 열쇠가 라우트이고, 그 하나만 계속 번호 없이 라우트로 푼다. 싣게 두고 무시하는
+  쪽도 가능했지만 그러면 단말이 보낸 목록이 조용히 사라진다 — `failureReason` 을 `FAILED` 에만
+  허용하는 것과 같은 판단이다(종류가 필드의 뜻을 정하고, 어긋나면 거절한다).
+- **한 스캔이 `delivery.status` 를 두 건 낼 수 있다.** 옮겨진 주문들이 지금 서로 다른 stop 에
+  있으면 그것은 두 지점의 사실이고, 한 건으로 합치면 둘 중 하나의 좌표가 거짓이 된다. 발행은
+  *옮겨진* 배송들을 `(routeId, stopSeq)` 로 묶어 묶음마다 한 건이다.
+- **새 인덱스가 없다.** 조회가 `shipments` 의 PK 로 가고(불변규칙 11 — 넣지 않기로 한 판단),
+  `ix_ship_route (route_id, stop_seq)` 는 그대로 둔다: `DEPARTED_CAMP` 와 편차 전파가
+  `findByRouteFrom` 으로 계속 쓴다. 대신 `findByRouteAndStop` 은 **지웠다** — 쓰는 곳이 없어졌고,
+  남겨 두면 「스캔의 대상을 찾는 질의」라고 적힌 죽은 메서드가 다음 사람을 옛 열쇠로 되돌린다.
 
 ### 2. stop 은 「이 주문이 **지금** 있는 stop」이다 — 라우트로 좁히지 않는다
 
@@ -217,7 +244,9 @@ dispatch 쪽이 오른다. **한쪽만 오르는 것이 정보다.**
   줄여 두었고, 막지는 않았다.** 막으려면 stop 의 살아 있는 주문이 이벤트의 `orderIds` 에 전부
   들어 있는지 확인해야 하고 그것은 조회를 하나 더 부른다 — 5-3 이 `relocate` 를 실제로 돌리기
   시작하면 그때 빈도를 보고 정한다. **근거: 추정** (재현하지 않았다 — 재계획이 아직 없다).
-- **재검토 지점 ⑤ — 스캔 API**: 결정 1 의 표 첫 줄은 아직 코드가 아니다. `POST
-  /api/v1/routes/{id}/stops/{seq}/events`(§5.4)가 `orderIds` 필수로 바뀌기 전까지 세 자리 중
-  하나는 여전히 번호로 판단한다. Phase 5-3 **앞**에 닫는다 — 5-3 의 재검토 지점 ① IT 가 그
-  형태를 전제한다.
+- **재검토 지점 ⑤ — 스캔 API: 닫혔다** (2026-09-23, Phase 5-3 앞). `POST
+  /api/v1/routes/{id}/stops/{seq}/events`(§5.4)가 `orderIds` 필수가 되었고, 세 자리가 같은
+  열쇠를 쓴다. 남은 관찰 지점은 `dawnline_scan_after_relocate_total` 이다 — 5-3 이 재계획을
+  돌리기 전까지 이 값은 **0 이어야 한다**(개정이 하나뿐이면 기사와 tracking 이 어긋날 창이
+  없다). 0 이 아니면 어긋나는 것은 재계획이 아니라 `route.assigned` 소비 순서이고, 그것은
+  ADR-045 의 자리다.

@@ -16,6 +16,7 @@ import io.micrometer.core.instrument.search.MeterNotFoundException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -143,8 +144,9 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         assign(route, 1, stop(1, List.of(order), Set.of()));
 
         mockMvc.perform(scan(route, 1, """
-                        {"type":"ARRIVED","occurredAt":"%s","lat":37.4979,"lng":127.0276}"""
-                        .formatted(clock.instant())))
+                        {"type":"ARRIVED","occurredAt":"%s","orderIds":["%s"],\
+                        "lat":37.4979,"lng":127.0276}"""
+                        .formatted(clock.instant(), order)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.type").value("ARRIVED"))
                 .andExpect(jsonPath("$.stopSeq").value(1))
@@ -166,7 +168,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         UUID second = newOrder();
         assign(route, 1, stop(2, List.of(first, second), Set.of()));
 
-        mockMvc.perform(scan(route, 2, completedBody()))
+        mockMvc.perform(scan(route, 2, completedBody(first, second)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(2));
 
@@ -184,7 +186,8 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         Instant scannedAt = clock.instant().minus(Duration.ofMinutes(9));
 
         mockMvc.perform(scan(route, 1,
-                        "{\"type\":\"COMPLETED\",\"occurredAt\":\"%s\"}".formatted(scannedAt)))
+                        "{\"type\":\"COMPLETED\",\"occurredAt\":\"%s\",\"orderIds\":[\"%s\"]}"
+                                .formatted(scannedAt, order)))
                 .andExpect(status().isOk());
 
         assertThat(jdbc.queryForObject(
@@ -200,8 +203,9 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         assign(route, 1, stop(1, List.of(order), Set.of()));
 
         mockMvc.perform(scan(route, 1, """
-                        {"type":"FAILED","occurredAt":"%s","failureReason":"부재 \\"1층\\""}"""
-                        .formatted(clock.instant())))
+                        {"type":"FAILED","occurredAt":"%s","orderIds":["%s"],\
+                        "failureReason":"부재 \\"1층\\""}"""
+                        .formatted(clock.instant(), order)))
                 .andExpect(status().isOk());
 
         assertThat(jdbc.queryForObject(
@@ -219,7 +223,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         UUID route = newRoute();
         UUID order = newOrder();
         assign(route, 1, stop(1, List.of(order), Set.of()));
-        String body = completedBody();
+        String body = completedBody(order);
 
         mockMvc.perform(scan(route, 1, body)).andExpect(status().isOk());
         mockMvc.perform(scan(route, 1, body))
@@ -235,9 +239,9 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         UUID route = newRoute();
         UUID order = newOrder();
         assign(route, 1, stop(1, List.of(order), Set.of()));
-        mockMvc.perform(scan(route, 1, completedBody())).andExpect(status().isOk());
+        mockMvc.perform(scan(route, 1, completedBody(order))).andExpect(status().isOk());
 
-        mockMvc.perform(scan(route, 1, bodyOf("ARRIVED")))
+        mockMvc.perform(scan(route, 1, bodyOf("ARRIVED", order)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders[0].outcome").value("STALE"))
                 .andExpect(jsonPath("$.orders[0].status").value("COMPLETED"));
@@ -257,7 +261,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         assign(route, 1, stop(1, List.of(cancelled, alive), Set.of(cancelled)));
         double before = scanAfterCancelCount();
 
-        mockMvc.perform(scan(route, 1, completedBody()))
+        mockMvc.perform(scan(route, 1, completedBody(cancelled, alive)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(2));
 
@@ -268,11 +272,78 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         assertThat(scanAfterCancelCount() - before).isEqualTo(1.0);
     }
 
+    // --- 열쇠는 주문이다 (ADR-047 결정 1) ---------------------------------------
+
+    @Test
+    void 옮겨간_주문의_스캔은_옮겨간_stop_에_적용된다() throws Exception {
+        // 재계획이 주문을 B 로 옮겼고(§6.8 relocate) 기사는 아직 A 의 번호로 찍는다. 번호로
+        // 찾으면 404 다 — 그리고 그 404 는 기사가 고칠 수 없으므로 단말이 재시도만 반복한다.
+        UUID from = newRoute();
+        UUID to = newRoute();
+        UUID order = newOrder();
+        assign(from, 1, stop(1, List.of(order), Set.of()));
+        assign(to, 1, stop(5, List.of(order), Set.of()));
+        double before = scanAfterRelocateCount();
+
+        mockMvc.perform(scan(from, 1, completedBody(order)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders[0].outcome").value("APPLIED"))
+                .andExpect(jsonPath("$.routeId").value(from.toString()));
+
+        assertThat(statusOf(order)).isEqualTo("COMPLETED");
+        assertThat(routeOf(order))
+                .as("스캔은 사실이지 계획이 아니다 — 옮겨간 자리를 되돌리지 않는다")
+                .isEqualTo(to);
+        assertThat(seqOf(order)).isEqualTo(5);
+        assertThat(scanAfterRelocateCount() - before)
+                .as("무시하지 않고 적용한 뒤 센다 — 기사와 개정이 어긋난 창의 크기다")
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    void 캠프_출발은_주문_없이_라우트_전체를_옮긴다() throws Exception {
+        // 열쇠가 라우트인 유일한 종류다. 「비어 있으면 400」의 반례가 여기 있어야 그 규칙이
+        // 「주문을 싣는 스캔에만 해당한다」로 읽힌다.
+        UUID route = newRoute();
+        UUID first = newOrder();
+        UUID second = newOrder();
+        assign(route, 1, stop(1, List.of(first), Set.of()), stop(2, List.of(second), Set.of()));
+
+        mockMvc.perform(scan(route, 1, bodyOf("DEPARTED_CAMP")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(2));
+
+        assertThat(statusOf(first)).isEqualTo("OUT_FOR_DELIVERY");
+        assertThat(statusOf(second)).isEqualTo("OUT_FOR_DELIVERY");
+    }
+
+    @Test
+    void 캠프_출발에_주문을_실으면_400_이다() throws Exception {
+        UUID route = newRoute();
+        UUID order = newOrder();
+        assign(route, 1, stop(1, List.of(order), Set.of()));
+
+        mockMvc.perform(scan(route, 1, bodyOf("DEPARTED_CAMP", order)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("validation-failed"));
+
+        assertThat(statusOf(order)).as("거절된 요청은 아무것도 바꾸지 않는다").isEqualTo("SCHEDULED");
+    }
+
+    @Test
+    void 주문_없는_stop_스캔은_400_이다() throws Exception {
+        // 열쇠 없이 온 요청이다. 번호로 대신 찾으면 이 PR 이 없앤 경로가 그대로 살아난다.
+        mockMvc.perform(scan(newRoute(), 1, bodyOf("ARRIVED")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("validation-failed"));
+    }
+
     // --- 거절 ---------------------------------------------------------------
 
     @Test
-    void 없는_stop_은_404_와_Problem_Details_다() throws Exception {
-        mockMvc.perform(scan(newRoute(), 9, bodyOf("ARRIVED")))
+    void 없는_주문은_404_와_Problem_Details_다() throws Exception {
+        // 「그 라우트의 그 순번」이 아니라 「그 송장들」을 못 찾은 것이다 (ADR-047 결정 1).
+        mockMvc.perform(scan(newRoute(), 9, bodyOf("ARRIVED", newOrder())))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("not-found"))
                 .andExpect(jsonPath("$.type").exists());
@@ -281,7 +352,8 @@ class ScanApiIT extends TrackingIntegrationTestBase {
     @Test
     void 종류가_없으면_400_이고_어긋난_필드를_돌려준다() throws Exception {
         mockMvc.perform(scan(newRoute(), 1,
-                        "{\"occurredAt\":\"%s\"}".formatted(clock.instant())))
+                        "{\"occurredAt\":\"%s\",\"orderIds\":[\"%s\"]}"
+                                .formatted(clock.instant(), newOrder())))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("validation-failed"))
                 .andExpect(jsonPath("$.errors[0].field").value("type"));
@@ -291,7 +363,8 @@ class ScanApiIT extends TrackingIntegrationTestBase {
     void 사건_시각이_없으면_400_이다() throws Exception {
         // 기본값을 두지 않는다 — 빠뜨린 요청이 조용히 「지금」이 되면 정시율이 어긋난 이유를
         // 아무도 찾을 수 없다 (§8.1).
-        mockMvc.perform(scan(newRoute(), 1, "{\"type\":\"ARRIVED\"}"))
+        mockMvc.perform(scan(newRoute(), 1,
+                        "{\"type\":\"ARRIVED\",\"orderIds\":[\"%s\"]}".formatted(newOrder())))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("occurredAt"));
     }
@@ -299,7 +372,8 @@ class ScanApiIT extends TrackingIntegrationTestBase {
     @Test
     void 범위를_벗어난_좌표는_400_이다() throws Exception {
         mockMvc.perform(scan(newRoute(), 1, """
-                        {"type":"ARRIVED","occurredAt":"%s","lat":91.0}""".formatted(clock.instant())))
+                        {"type":"ARRIVED","occurredAt":"%s","orderIds":["%s"],"lat":91.0}"""
+                        .formatted(clock.instant(), newOrder())))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("lat"));
     }
@@ -311,8 +385,9 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         assign(route, 1, stop(1, List.of(order), Set.of()));
 
         mockMvc.perform(scan(route, 1, """
-                        {"type":"ARRIVED","occurredAt":"%s","failureReason":"부재"}"""
-                        .formatted(clock.instant())))
+                        {"type":"ARRIVED","occurredAt":"%s","orderIds":["%s"],\
+                        "failureReason":"부재"}"""
+                        .formatted(clock.instant(), order)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("validation-failed"));
 
@@ -321,7 +396,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
 
     @Test
     void stop_순번은_1_부터다() throws Exception {
-        mockMvc.perform(scan(newRoute(), 0, bodyOf("ARRIVED")))
+        mockMvc.perform(scan(newRoute(), 0, bodyOf("ARRIVED", newOrder())))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("validation-failed"));
     }
@@ -334,7 +409,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         // 지원하지 않는다」이고, 기사 단말은 404 를 보면 라우트가 사라진 줄 안다.
         mockMvc.perform(post("/api/v2/routes/%s/stops/1/events".formatted(newRoute()))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(bodyOf("ARRIVED")))
+                        .content(bodyOf("ARRIVED", newOrder())))
                 .andExpect(status().isBadRequest());
     }
 
@@ -361,12 +436,22 @@ class ScanApiIT extends TrackingIntegrationTestBase {
                 .content(body);
     }
 
-    private String bodyOf(String type) {
-        return "{\"type\":\"%s\",\"occurredAt\":\"%s\"}".formatted(type, clock.instant());
+    /**
+     * 스캔 본문. {@code orderIds} 가 <strong>열쇠</strong>다 (ADR-047 결정 1) — 비우고 부르는
+     * 자리는 「열쇠 없이 보낸 요청」을 보는 테스트뿐이다.
+     */
+    private String bodyOf(String type, UUID... orderIds) {
+        return "{\"type\":\"%s\",\"occurredAt\":\"%s\",\"orderIds\":[%s]}"
+                .formatted(type, clock.instant(), quoted(orderIds));
     }
 
-    private String completedBody() {
-        return bodyOf("COMPLETED");
+    private String completedBody(UUID... orderIds) {
+        return bodyOf("COMPLETED", orderIds);
+    }
+
+    private static String quoted(UUID... orderIds) {
+        return Arrays.stream(orderIds).map(id -> "\"" + id + "\"")
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     private void assign(UUID routeId, int revision, AssignedStop... stops) {
@@ -388,6 +473,25 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         Integer count = jdbc.queryForObject(
                 "SELECT count(*) FROM shipment_events WHERE order_id = ?", Integer.class, orderId);
         return count == null ? 0 : count;
+    }
+
+    private UUID routeOf(UUID orderId) {
+        return jdbc.queryForObject("SELECT route_id FROM shipments WHERE order_id = ?",
+                UUID.class, orderId);
+    }
+
+    private int seqOf(UUID orderId) {
+        Integer seq = jdbc.queryForObject("SELECT stop_seq FROM shipments WHERE order_id = ?",
+                Integer.class, orderId);
+        return seq == null ? 0 : seq;
+    }
+
+    private double scanAfterRelocateCount() {
+        try {
+            return meters.get(TrackingMetrics.SCAN_AFTER_RELOCATE).counter().count();
+        } catch (MeterNotFoundException e) {
+            return 0.0;
+        }
     }
 
     private double scanAfterCancelCount() {

@@ -8,6 +8,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -20,7 +21,7 @@ import tools.jackson.databind.ObjectMapper;
  * 이유는 {@code HttpOrderClient} 와 같다.
  *
  * <p>멱등 키 헤더를 보내지 않는다. 스캔 API 는 그것을 요구하지 않는다 — §8.5 의 멱등 키는
- * 「{@code (routeId, seq, type)} + 상태 머신」이고, 같은 스캔이 다시 가면 {@code STALE} 로
+ * 「{@code (orderIds, type)} + 상태 머신」이고, 같은 스캔이 다시 가면 {@code STALE} 로
  * 흡수된다 ({@code ScanController} javadoc).
  */
 public final class HttpScanClient implements ScanClient {
@@ -71,19 +72,24 @@ public final class HttpScanClient implements ScanClient {
      * <p>{@code stopSeq} 는 경로 변수라 본문에 없다. 두 곳이 같은 내용인지는
      * {@code ScanContractTest} 가 {@code contracts/openapi/tracking-service.yaml} 과 대조한다.
      *
+     * @param orderIds      찍는 송장들 — 서버가 대상을 찾는 열쇠다 (ADR-047 결정 1).
+     *                      {@code DEPARTED_CAMP} 는 빈 목록이고, 그때 필드째 빠진다
      * @param type          스캔 종류
      * @param occurredAt    <strong>시뮬레이션 시각</strong> (불변규칙 12)
      * @param lat           위도. 없으면 필드째 빠진다
      * @param lng           경도
      * @param failureReason {@code FAILED} 의 사유
      */
-    record ScanBody(String type, Instant occurredAt, @Nullable Double lat, @Nullable Double lng,
-            @Nullable String failureReason) {
+    record ScanBody(@Nullable List<UUID> orderIds, String type, Instant occurredAt,
+            @Nullable Double lat, @Nullable Double lng, @Nullable String failureReason) {
     }
 
     private static ScanBody bodyOf(ScanCall call) {
-        return new ScanBody(call.type().name(), call.occurredAt(), call.lat(), call.lng(),
-                call.failureReason());
+        // 빈 목록을 보내지 않고 필드째 뺀다 — 계약에서 orderIds 는 선택이고, 「없다」와
+        // 「비었다」를 서버가 같게 읽더라도 보내는 쪽이 둘을 섞을 이유는 없다.
+        List<UUID> orderIds = call.orderIds().isEmpty() ? null : call.orderIds();
+        return new ScanBody(orderIds, call.type().name(), call.occurredAt(), call.lat(),
+                call.lng(), call.failureReason());
     }
 
     /** 오류 본문에서 {@code code} 를 꺼낸다. 본문이 JSON 이 아니어도 실행을 멈추지 않는다. */
