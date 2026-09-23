@@ -1,5 +1,6 @@
 package com.dawnline.dispatch.application;
 
+import com.dawnline.dispatch.application.port.in.ReplanRouteUseCase;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
@@ -92,6 +93,32 @@ public class DispatchMetrics {
      */
     public static final String STATUS_AFTER_RELOCATE = "dawnline.status.after.relocate";
 
+    /**
+     * §6.8 부분 재계획이 {@code delivery.at-risk} 하나를 받고 <strong>무엇을 했는가</strong>
+     * (§9.1, [ADR-048] 결정 5). 라벨 {@code outcome} 다섯 갈래.
+     *
+     * <p>다섯을 한 카운터의 라벨로 두는 이유는 <strong>합이 곧 트리거 수</strong>여야 하기
+     * 때문이다 — 나누면 「받았는데 아무 갈래에도 안 들어간 것」이 보이지 않는다. 실패를 DLQ 로
+     * 보내지 않으므로 이 라벨이 그 자리를 대신한다: {@code no-candidate}·{@code no-gain} 은
+     * 재시도로 달라지지 않는 <em>결과</em>이고, DLQ 는 「처리하지 못했다」의 자리다(§4.6).
+     */
+    public static final String REPLAN = "dawnline.replan";
+
+    /**
+     * dispatch 가 자기 {@code route_stops.actual_at} 으로 계산한 편차와 {@code delivery.at-risk}
+     * 페이로드의 {@code deviationSeconds} 가 <strong>허용 오차를 넘게 갈린</strong> 횟수
+     * (§9.1, [ADR-048] 결정 2).
+     *
+     * <p>페이로드는 입력이 아니라 <strong>대조값</strong>이다. 이 값이 오른다는 것은 tracking 과
+     * dispatch 가 같은 라우트를 다르게 보고 있다는 뜻이고, 원인은 {@code delivery.status} 컨슈머
+     * 랙 · 개정이 한쪽에만 닿음 · 기사 단말의 밀린 스캔 중 하나다. 셋을 이 카운터 혼자 가르지는
+     * 못하지만 <em>갈린다는 사실 자체가 먼저 필요하다.</em>
+     */
+    public static final String AT_RISK_DEVIATION_MISMATCH = "dawnline.at_risk.deviation.mismatch";
+
+    /** {@link #REPLAN} 의 라벨 이름. */
+    public static final String TAG_OUTCOME = "outcome";
+
     /** {@code dawnline_event_stale_total} 의 {@code consumer} 태그. */
     public static final String DELIVERY_STATUS_CONSUMER = "dispatch";
 
@@ -110,6 +137,41 @@ public class DispatchMetrics {
      */
     public DispatchMetrics(MeterRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "registry");
+        // 다섯 갈래를 기동에서 등록한다. 「0 이다」와 「그런 지표가 없다」는 다른 말이고,
+        // 재계획이 한 번도 돌지 않은 새벽에 대시보드가 그 둘을 구별하지 못하면 안 된다.
+        for (ReplanRouteUseCase.Outcome outcome : ReplanRouteUseCase.Outcome.values()) {
+            replanCounter(outcome);
+        }
+    }
+
+    /**
+     * 재계획 하나가 끝났다 (§6.8, [ADR-048] 결정 5).
+     *
+     * <p><strong>커밋 뒤에 부른다</strong> — 롤백된 재계획의 숫자가 남으면 그 차이는 장애 때
+     * 가장 커진다.
+     *
+     * @param outcome 무엇을 했는가
+     */
+    public void replanned(ReplanRouteUseCase.Outcome outcome) {
+        Objects.requireNonNull(outcome, "outcome");
+        replanCounter(outcome).increment();
+    }
+
+    /**
+     * 두 편차가 갈렸다 ([ADR-048] 결정 2).
+     *
+     * <p>tracking 이 본 편차와 dispatch 가 자기 테이블에서 계산한 편차의 차이다. 갈리는 것이
+     * 정보이므로 <strong>버리지도 않고 입력으로 쓰지도 않는다</strong> — 센다.
+     */
+    public void atRiskDeviationMismatch() {
+        registry.counter(AT_RISK_DEVIATION_MISMATCH).increment();
+    }
+
+    private Counter replanCounter(ReplanRouteUseCase.Outcome outcome) {
+        return Counter.builder(REPLAN)
+                .description("§6.8 부분 재계획의 결과 (ADR-048)")
+                .tag(TAG_OUTCOME, outcome.label())
+                .register(registry);
     }
 
     /**

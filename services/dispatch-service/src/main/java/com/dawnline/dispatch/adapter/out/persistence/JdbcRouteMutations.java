@@ -14,6 +14,7 @@ import com.dawnline.dispatch.domain.optimizer.PlannedStop;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -54,7 +55,7 @@ public class JdbcRouteMutations implements RouteMutations {
 
     @Override
     @SuppressWarnings("unchecked")
-    public List<Stop> loadStops(UUID routeId) {
+    public List<PositionedStop> loadPositionedStops(UUID routeId) {
         List<Object[]> rows = entityManager.createNativeQuery("""
                 SELECT s.id, s.seq, s.lat, s.lng, s.service_s, o.order_id,
                        c.weight_g, c.volume_cm3, c.requires_cold, c.hazmat,
@@ -67,18 +68,34 @@ public class JdbcRouteMutations implements RouteMutations {
                 """).setParameter(1, routeId).getResultList();
 
         Map<UUID, Builder> byStop = new LinkedHashMap<>();
+        Map<UUID, Integer> seqOf = new LinkedHashMap<>();
         for (Object[] row : rows) {
             Builder builder = byStop.computeIfAbsent((UUID) row[0], id -> new Builder(
                     GeoPoint.of(((BigDecimal) row[2]).doubleValue(),
                             ((BigDecimal) row[3]).doubleValue()),
                     ((Number) row[4]).intValue(),
                     new TimeWindow((Instant) row[10], (Instant) row[11])));
+            seqOf.putIfAbsent((UUID) row[0], ((Number) row[1]).intValue());
             builder.add(OrderId.of((UUID) row[5]),
                     new Parcel(((Number) row[6]).intValue(), ((Number) row[7]).intValue(),
                             (Boolean) row[8], (Boolean) row[9]),
                     ((Number) row[12]).intValue());
         }
-        return byStop.values().stream().map(Builder::build).toList();
+        return byStop.entrySet().stream()
+                .map(entry -> new PositionedStop(seqOf.get(entry.getKey()),
+                        entry.getValue().build()))
+                .toList();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<RouteHeader> routesOfPlan(UUID planId) {
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT id, plan_id, vehicle_id FROM routes WHERE plan_id = ? ORDER BY seq_no
+                """).setParameter(1, planId).getResultList();
+        return rows.stream()
+                .map(row -> new RouteHeader((UUID) row[0], (UUID) row[1], (UUID) row[2]))
+                .toList();
     }
 
     @Override
@@ -96,7 +113,8 @@ public class JdbcRouteMutations implements RouteMutations {
     @SuppressWarnings("unchecked")
     public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
         List<Object[]> candidate = entityManager.createNativeQuery("""
-                SELECT lat, lng, service_seconds FROM dispatch_candidates WHERE order_id = ?
+                SELECT lat, lng, service_seconds, promised_start, promised_end
+                  FROM dispatch_candidates WHERE order_id = ?
                 """).setParameter(1, orderId).getResultList();
         if (candidate.isEmpty()) {
             throw new IllegalStateException("후보가 없는 주문은 옮길 수 없습니다: " + orderId);
@@ -115,7 +133,8 @@ public class JdbcRouteMutations implements RouteMutations {
                 .getResultList();
 
         UUID targetStopId = existing.isEmpty()
-                ? createStop(targetRouteId, lat, lng, ((Number) candidate.getFirst()[2]).intValue())
+                ? createStop(targetRouteId, lat, lng, ((Number) candidate.getFirst()[2]).intValue(),
+                        (Instant) candidate.getFirst()[3], (Instant) candidate.getFirst()[4])
                 : existing.getFirst();
 
         entityManager.createNativeQuery(
@@ -131,19 +150,36 @@ public class JdbcRouteMutations implements RouteMutations {
                 """).setParameter(1, fromStopId).executeUpdate();
     }
 
-    private UUID createStop(UUID routeId, BigDecimal lat, BigDecimal lng, int serviceSeconds) {
+    /**
+     * 목적지에 새 stop 을 만든다.
+     *
+     * <p><strong>약속창을 함께 쓴다</strong> (2026-09-23, Phase 5-3). V6 이 그 컬럼을 더한 이유가
+     * 「개정 발행이 {@code promisedWindow} 를 required 로 싣는다」였는데(§5.3), 이 INSERT 만 그
+     * 두 칸을 비운 채 두고 있었다 — 그래서 재배정·재계획이 <em>새</em> stop 을 만든 라우트는
+     * 그 다음 개정 발행에서 「약속창 없이 개정을 발행할 수 없습니다」로 터졌다.
+     * 값은 통합 전 후보의 창이다: {@code StopMerger} 의 병합 키가 「같은 지점 + 같은 약속창」이라
+     * (§6.5 1단계) stop 하나의 창은 그 위 주문들의 창과 같다.
+     *
+     * <p>드러난 경로는 §6.8 재계획이지만 결함은 §5.3 운영자 재배정에도 있었다 — 저쪽은 목적지에
+     * 같은 지점의 stop 이 있는 경우만 IT 가 보고 있었다.
+     */
+    private UUID createStop(UUID routeId, BigDecimal lat, BigDecimal lng, int serviceSeconds,
+            @Nullable Instant promisedStart, @Nullable Instant promisedEnd) {
+
         UUID stopId = Ids.newId();
         Number maxSeq = (Number) entityManager.createNativeQuery(
                         "SELECT COALESCE(max(seq), 0) FROM route_stops WHERE route_id = ?")
                 .setParameter(1, routeId).getSingleResult();
         entityManager.createNativeQuery("""
                 INSERT INTO route_stops (id, route_id, seq, lat, lng, planned_arrival,
-                                         planned_departure, service_s, status)
-                VALUES (?, ?, ?, ?, ?, now(), now(), ?, 'PLANNED')
+                                         planned_departure, service_s, status,
+                                         promised_start, promised_end)
+                VALUES (?, ?, ?, ?, ?, now(), now(), ?, 'PLANNED', ?, ?)
                 """)
                 .setParameter(1, stopId).setParameter(2, routeId)
                 .setParameter(3, (short) (maxSeq.intValue() + 1))
                 .setParameter(4, lat).setParameter(5, lng).setParameter(6, serviceSeconds)
+                .setParameter(7, promisedStart).setParameter(8, promisedEnd)
                 .executeUpdate();
         return stopId;
     }
@@ -253,11 +289,53 @@ public class JdbcRouteMutations implements RouteMutations {
     }
 
     @Override
-    public void markStopStatus(UUID stopId, RouteStopStatus status) {
-        entityManager.createNativeQuery("UPDATE route_stops SET status = ? WHERE id = ?")
+    public void markStopStatus(UUID stopId, RouteStopStatus status, Instant actualAt) {
+        // COALESCE 가 「처음 닿은 시각」을 지킨다 (ADR-048 결정 1). 값이 이미 있으면 그대로 두고,
+        // 없을 때만 쓴다 — 덮으면 이 컬럼은 도착이 아니라 완료를 재게 되고, 그 변화는 값을
+        // 보아서는 알 수 없다. 규칙이 한 줄의 SQL 인 이유는 읽고-판단하고-쓰는 세 걸음이
+        // 같은 것을 하면서 경합 창만 만들기 때문이다.
+        entityManager.createNativeQuery("""
+                UPDATE route_stops SET status = ?, actual_at = COALESCE(actual_at, ?) WHERE id = ?
+                """)
                 .setParameter(1, status.name())
-                .setParameter(2, stopId)
+                .setParameter(2, actualAt)
+                .setParameter(3, stopId)
                 .executeUpdate();
+    }
+
+    @Override
+    public boolean tryStartReplan(UUID routeId, Instant now, Duration cooldown) {
+        // 비교와 갱신이 한 문장이다 (§6.8 5단계). 읽고 나서 쓰면 두 소비자가 같은 값을 읽는
+        // 창이 생기고, 막아야 하는 것이 바로 그 창이다 — 두 at-risk 는 eventId 가 달라
+        // processed_events 에게는 둘 다 처음 보는 이벤트다 (ADR-046 결정 3).
+        return entityManager.createNativeQuery("""
+                UPDATE routes SET last_replanned_at = ?
+                 WHERE id = ? AND (last_replanned_at IS NULL OR last_replanned_at <= ?)
+                """)
+                .setParameter(1, now)
+                .setParameter(2, routeId)
+                .setParameter(3, now.minus(cooldown))
+                .executeUpdate() == 1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<SettledStop> lastSettledStop(UUID routeId) {
+        // 「마지막」은 actual_at 이 아니라 seq 다 — 순서가 뒤바뀐 보고가 있어도 기사가 서 있는
+        // 자리는 순번이 가장 큰 «닿은» stop 이고, §6.8 의 얼어 있는 앞자락이 거기까지다.
+        // UNIQUE (route_id, seq) 를 역순으로 한 건 읽는다. 새 인덱스는 없다 (불변규칙 11).
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT seq, planned_arrival, actual_at FROM route_stops
+                 WHERE route_id = ? AND actual_at IS NOT NULL
+                 ORDER BY seq DESC
+                 LIMIT 1
+                """).setParameter(1, routeId).getResultList();
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        Object[] row = rows.getFirst();
+        return Optional.of(new SettledStop(((Number) row[0]).intValue(), (Instant) row[1],
+                (Instant) row[2]));
     }
 
     @Override

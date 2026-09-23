@@ -3,7 +3,10 @@ package com.dawnline.dispatch.application.port.out;
 import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
 import com.dawnline.dispatch.domain.optimizer.Stop;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -36,7 +39,35 @@ public interface RouteMutations {
      *
      * @param routeId 라우트 id
      */
-    List<Stop> loadStops(UUID routeId);
+    default List<Stop> loadStops(UUID routeId) {
+        return loadPositionedStops(routeId).stream().map(PositionedStop::stop).toList();
+    }
+
+    /**
+     * {@link #loadStops} 와 <strong>같은 목록</strong>에 순번을 붙인 것 (§6.8, ADR-048 결정 4).
+     *
+     * <p>재계획은 「얼어 있는 앞자락이 몇 개인가」를 알아야 하고, 그것은 <em>저장된 순번</em>과
+     * <em>이 목록의 자리</em>를 잇는 일이다. 두 목록을 따로 두지 않고 이쪽이 원본이고 위쪽이
+     * 파생인 이유가 그것이다 — 「A 와 B 는 같은 내용」이라고 <em>적어 둔</em> 두 곳은 그 문장이
+     * 아직 참인지 아무도 묻지 않으면 갈라지고, 갈라진 쪽은 빈자리라서 눈에 띄지 않는다
+     * (CLAUDE.md 코딩 컨벤션). 파생으로 두면 갈라질 자리가 없다.
+     *
+     * @param routeId 라우트 id
+     */
+    List<PositionedStop> loadPositionedStops(UUID routeId);
+
+    /**
+     * 이 계획의 라우트들 — {@code seq_no} 순서 (§6.8 2단계).
+     *
+     * <p>재계획의 후보 차량이다. 같은 계획 안이므로 캠프도 같고, 「여유 용량이 있는 진행 중
+     * 라우트」와 「미출발 차량」의 구분은 <strong>상태 칼럼이 아니라 사실</strong>로 한다 —
+     * 닿은 stop 이 있으면 떠난 것이다({@link #lastSettledStop}). {@code routes.status} 는
+     * 저장 시점의 값이고 출발을 알리는 이벤트가 없다(§5.4 {@code DEPARTED_CAMP} 는 브로커로
+     * 나가지 않는다).
+     *
+     * @param planId 계획 id
+     */
+    List<RouteHeader> routesOfPlan(UUID planId);
 
     /**
      * 이 주문이 실린 stop.
@@ -131,10 +162,45 @@ public interface RouteMutations {
      * 그 조건이 <em>규칙</em>이고 규칙은 한 곳에만 있어야 하기 때문이다. 같은 트랜잭션 안에서
      * 읽고 쓰므로 그 사이에 끼어들 수 있는 것은 다른 트랜잭션이고, 그건 행 잠금이 막는다.
      *
-     * @param stopId stop id
-     * @param status 새 상태
+     * <p>{@code actualAt} 은 <strong>이 행이 아직 비어 있을 때만</strong> 쓴다 — 그 stop 에
+     * <em>처음</em> 닿은 시각이기 때문이다(ADR-048 결정 1). 덮어쓰면 이 값은 도착이 아니라
+     * 완료가 되고, §6.8 의 편차가 「얼마나 늦게 도착했나」에서 「거기서 머문 시간까지 더한 값」
+     * 으로 조용히 바뀐다. 그 변화는 <strong>값을 보아서는 알 수 없다.</strong>
+     *
+     * @param stopId   stop id
+     * @param status   새 상태
+     * @param actualAt 그 stop 에 닿은 시각 ({@code delivery.status} 의 {@code occurredAt})
      */
-    void markStopStatus(UUID stopId, RouteStopStatus status);
+    void markStopStatus(UUID stopId, RouteStopStatus status, Instant actualAt);
+
+    /**
+     * 재계획 쿨다운을 <strong>한 문장으로</strong> 집는다 (§6.8 5단계, ADR-046 결정 3).
+     *
+     * <p>읽고 나서 쓰면 두 소비자가 같은 값을 읽는 창이 생긴다. 비교와 갱신이 한
+     * {@code UPDATE} 여야 하고, 그것이 이 메서드가 포트에 있는 이유다 — 「최근 재계획 시각을
+     * 돌려준다」로 두면 그 창이 호출부로 옮겨갈 뿐이다.
+     *
+     * <p>멱등 소비자는 이 자리를 대신하지 못한다. 두 {@code delivery.at-risk} 는 서로 다른
+     * {@code eventId} 라 {@code processed_events} 에게는 둘 다 처음 보는 이벤트다.
+     *
+     * @param routeId  라우트 id
+     * @param now      지금 (주입된 시계, 불변규칙 12)
+     * @param cooldown 쿨다운 길이
+     * @return 이 호출이 쿨다운을 집었으면 참. 거짓이면 그 안에 이미 재계획이 돌았다
+     */
+    boolean tryStartReplan(UUID routeId, Instant now, Duration cooldown);
+
+    /**
+     * 이 라우트에서 기사가 <strong>가장 멀리 닿은</strong> stop (§6.8, ADR-048 결정 1).
+     *
+     * <p>「마지막」의 기준은 {@code actual_at} 이 아니라 {@code seq} 다. 순서가 뒤바뀌어 도착한
+     * 상태 보고가 있어도 기사가 서 있는 자리는 <em>순번이 가장 큰</em> 닿은 stop 이고, §6.8 의
+     * 「얼어 있는 앞자락」이 바로 거기까지다.
+     *
+     * @param routeId 라우트 id
+     * @return 아직 아무 데도 닿지 않았으면 빈 값 — <strong>편차 0 이 아니라 «모름» 이다</strong>
+     */
+    Optional<SettledStop> lastSettledStop(UUID routeId);
 
     /**
      * 라우트의 진행 상황을 {@code route_stops} 에서 다시 만든다 — §7.2 의 폴백 경로다.
@@ -171,5 +237,40 @@ public interface RouteMutations {
      * @param vehicleId 차량
      */
     record RouteHeader(UUID routeId, UUID planId, UUID vehicleId) {
+    }
+
+    /**
+     * stop 하나와 그 저장된 순번.
+     *
+     * @param seq  {@code route_stops.seq}. 취소된 stop 이 빠져 있으므로 <strong>연속이 아닐 수
+     *             있다</strong> — 목록의 자리와 다른 값이고, 그래서 따로 든다
+     * @param stop 계산에 쓰는 stop
+     */
+    record PositionedStop(int seq, Stop stop) {
+
+        public PositionedStop {
+            Objects.requireNonNull(stop, "stop");
+        }
+    }
+
+    /**
+     * 기사가 닿은 stop 하나 — 계획과 사실을 나란히 든다 (ADR-048 결정 1).
+     *
+     * @param seq            방문 순번. §6.8 의 「얼어 있는 앞자락」이 여기까지다
+     * @param plannedArrival 계획 도착 시각. 재계획을 지나도 움직이지 않는다 — 저장 시계가 계획
+     *                       시계 그대로이기 때문이고, 그 안정성이 아래 편차를 성립시킨다
+     * @param actualAt       실제로 닿은 시각
+     */
+    record SettledStop(int seq, Instant plannedArrival, Instant actualAt) {
+
+        public SettledStop {
+            Objects.requireNonNull(plannedArrival, "plannedArrival");
+            Objects.requireNonNull(actualAt, "actualAt");
+        }
+
+        /** 편차 — 이르면 음수다. §6.8 이 평가 시계를 미는 값이고, 페이로드의 값과 견주는 값이다. */
+        public Duration deviation() {
+            return Duration.between(plannedArrival, actualAt);
+        }
     }
 }

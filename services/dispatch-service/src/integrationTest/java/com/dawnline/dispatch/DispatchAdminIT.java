@@ -318,6 +318,38 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         assertThat(revisions).containsExactly(2, 2);
     }
 
+    @Test
+    void 재배정이_만든_stop_도_약속창을_들고_있다() {
+        // 2026-09-23, Phase 5-3 에서 드러났다. moveOrder 가 목적지에 «새» stop 을 만들 때
+        // promised_start/end 를 비워 두고 있었고, 그 라우트의 다음 개정 발행이
+        // 「약속창 없이 개정을 발행할 수 없습니다」로 터졌다. 여기서 안 보였던 이유는 이쪽의
+        // 발행이 PlannedRoute(도메인)에서 페이로드를 만들기 때문이다 — 그쪽에는 창이 있다.
+        // DB 를 읽는 발행 경로는 §6.10 취소와 §6.8 재계획이고, 둘 다 나중에 온다.
+        TwoRoutes routes = twoRoutes();
+        long before = stopCount(routes.toRouteId());
+
+        reassign.reassign(routes.fromRouteId(), routes.orderId(), routes.toRouteId());
+
+        assertThat(stopCount(routes.toRouteId()))
+                .as("이 테스트는 «새» stop 이 생기는 경우를 본다 — 합쳐지면 검사할 것이 없다")
+                .isEqualTo(before + 1);
+        // 열거하지 않고 전체에서 뺀다 — stop 이 생기는 경로가 늘어도 이 검사가 따라온다.
+        assertThat(stopsWithoutWindow()).isZero();
+    }
+
+    private long stopCount(UUID routeId) {
+        return ((Number) tx().execute(status -> entityManager.createNativeQuery(
+                        "SELECT count(*) FROM route_stops WHERE route_id = ?")
+                .setParameter(1, routeId).getSingleResult())).longValue();
+    }
+
+    private long stopsWithoutWindow() {
+        return ((Number) tx().execute(status -> entityManager.createNativeQuery("""
+                SELECT count(*) FROM route_stops
+                 WHERE promised_start IS NULL OR promised_end IS NULL
+                """).getSingleResult())).longValue();
+    }
+
     @SuppressWarnings("unchecked")
     private List<String> published(UUID fromRouteId, UUID toRouteId) {
         return tx().execute(status -> (List<String>) entityManager.createNativeQuery("""

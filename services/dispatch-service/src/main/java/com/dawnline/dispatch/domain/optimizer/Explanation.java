@@ -23,6 +23,15 @@ import java.util.Objects;
 public record Explanation(OrderId orderId, Outcome outcome, String ruleName, VehicleId vehicle,
         Map<String, Object> detail) {
 
+    /**
+     * §6.8 재계획이 남기는 {@code rule_name}.
+     *
+     * <p>룰 이름 자리를 쓰지만 {@code dispatch_rules} 의 행은 아니다 — 이 배정을 만든 것이
+     * 룰이 아니라 <em>재계획</em>이라는 사실 자체가 답이기 때문이다. 운영자 화면은 이 값으로
+     * 「계획이 준 차」와 「재계획이 옮긴 차」를 가른다.
+     */
+    public static final String RELOCATED_BY_AT_RISK = "AT_RISK_RELOCATE";
+
     /** 판정 결과. */
     public enum Outcome {
         /** 라우트에 배정됐다. */
@@ -82,6 +91,32 @@ public record Explanation(OrderId orderId, Outcome outcome, String ruleName, Veh
         detail.put("marginalCostKrw", marginalCost);
         detail.put("reason", blocked.reason());
         return new Explanation(orderId, Outcome.ASSIGNED, blocked.ruleName(), vehicle, detail);
+    }
+
+    /**
+     * <strong>재계획이 옮긴</strong> 배정 설명 (§6.8, [ADR-048] 결정 6).
+     *
+     * <p>운영자가 「왜 이 주문이 이 차인가」를 가장 많이 묻는 자리가 재계획이다 — 기사에게서
+     * 전화가 오는 자리이기 때문이다. 최초 계획에만 설명이 있으면 그 물음의 답은 「계획 때는
+     * A 차였습니다」로 끝나고, 실제로 물은 것에는 답하지 못한다.
+     *
+     * <p>{@code outcome} 은 {@code ASSIGNED} 다. 결과가 배정이기 때문이고, 미배정이 아닌데
+     * {@code UNASSIGNED} 를 쓰면 §6.7 의 미배정 집계가 재계획마다 틀린다.
+     *
+     * @param orderId     옮겨진 주문
+     * @param vehicle     받은 차량
+     * @param fromRouteId 떠난 라우트
+     * @param toRouteId   받은 라우트
+     * @param gainKrw     이 이동이 줄인 <strong>두 라우트 합</strong>의 비용
+     */
+    public static Explanation relocated(OrderId orderId, VehicleId vehicle, java.util.UUID fromRouteId,
+            java.util.UUID toRouteId, long gainKrw) {
+
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("fromRouteId", Objects.requireNonNull(fromRouteId, "fromRouteId").toString());
+        detail.put("toRouteId", Objects.requireNonNull(toRouteId, "toRouteId").toString());
+        detail.put("gainKrw", gainKrw);
+        return new Explanation(orderId, Outcome.ASSIGNED, RELOCATED_BY_AT_RISK, vehicle, detail);
     }
 
     /**

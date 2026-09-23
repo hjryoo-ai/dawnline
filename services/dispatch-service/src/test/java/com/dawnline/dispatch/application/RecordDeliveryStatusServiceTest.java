@@ -81,8 +81,25 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
-        public void markStopStatus(UUID stopId, RouteStopStatus status) {
+        public void markStopStatus(UUID stopId, RouteStopStatus status,
+                java.time.Instant actualAt) {
             throw new IllegalStateException("적재 실패");
+        }
+
+        @Override
+        public Optional<SettledStop> lastSettledStop(UUID routeId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<RouteHeader> routesOfPlan(UUID planId) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다");
+        }
+
+        @Override
+        public boolean tryStartReplan(UUID routeId, java.time.Instant now,
+                java.time.Duration cooldown) {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -96,7 +113,7 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
-        public List<com.dawnline.dispatch.domain.optimizer.Stop> loadStops(UUID routeId) {
+        public List<PositionedStop> loadPositionedStops(UUID routeId) {
             throw new UnsupportedOperationException();
         }
 
@@ -164,6 +181,58 @@ class RecordDeliveryStatusServiceTest {
                 RouteStopStatus.COMPLETED));
 
         assertThat(routes.row(route.routeId(), 1).status).isEqualTo(RouteStopStatus.COMPLETED);
+    }
+
+    // ------------------------------------------------------------ 편차의 출처 (ADR-048 결정 1)
+
+    @Test
+    void 전이는_닿은_시각도_함께_적는다() {
+        // 이 한 칸이 §6.8 의 편차를 dispatch 안에 만든다. 없으면 재계획이 편차를 at-risk
+        // 페이로드에서 읽게 되고, 그 순간 「진실 하나」가 소속과 시각으로 갈린다.
+        Route route = route();
+
+        service.record(command(route.routeId(), 1, List.of(route.firstOrderId()),
+                RouteStopStatus.ARRIVED));
+
+        assertThat(routes.row(route.routeId(), 1).actualAt).isEqualTo(SCANNED_AT);
+    }
+
+    @Test
+    void 닿은_시각은_처음_것만_남는다() {
+        // 덮으면 이 값은 도착이 아니라 «완료» 가 되고, 편차가 「얼마나 늦게 도착했나」에서
+        // 「거기서 머문 시간까지 더한 값」으로 바뀐다 — 그 변화는 값을 보아서는 알 수 없다.
+        Route route = route();
+        Instant completedAt = SCANNED_AT.plus(Duration.ofMinutes(4));
+
+        service.record(command(route.routeId(), 1, List.of(route.firstOrderId()),
+                RouteStopStatus.ARRIVED));
+        service.record(new DeliveryStatusCommand(route.routeId(), 1,
+                List.of(route.firstOrderId()), RouteStopStatus.COMPLETED, completedAt));
+
+        assertThat(routes.row(route.routeId(), 1).status).isEqualTo(RouteStopStatus.COMPLETED);
+        assertThat(routes.row(route.routeId(), 1).actualAt)
+                .as("도착의 시각이지 완료의 시각이 아니다")
+                .isEqualTo(SCANNED_AT);
+    }
+
+    @Test
+    void 적용하지_않은_이벤트는_닿은_시각도_적지_않는다() {
+        // 철 지난 보고가 actual_at 을 쓰면 가지 않은 stop 이 「닿았다」가 되고, §6.8 의
+        // 앵커가 기사보다 앞서 간다.
+        Route route = route();
+        service.record(command(route.routeId(), 1, List.of(route.firstOrderId()),
+                RouteStopStatus.COMPLETED));
+
+        service.record(new DeliveryStatusCommand(route.routeId(), 2,
+                List.of(route.middleOrderId()), RouteStopStatus.ARRIVED, SCANNED_AT));
+        service.record(new DeliveryStatusCommand(route.routeId(), 1,
+                List.of(route.firstOrderId()), RouteStopStatus.ARRIVED,
+                SCANNED_AT.plus(Duration.ofMinutes(9))));
+
+        assertThat(routes.row(route.routeId(), 1).actualAt).isEqualTo(SCANNED_AT);
+        assertThat(routes.lastSettledStop(route.routeId()))
+                .as("기사가 가장 멀리 닿은 자리는 2 번이다")
+                .hasValueSatisfying(settled -> assertThat(settled.seq()).isEqualTo(2));
     }
 
     // ------------------------------------------------------------ 결정 1·2 — 사실은 주문의 것
