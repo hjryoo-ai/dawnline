@@ -1728,7 +1728,7 @@ public interface DispatchStrategy {
 | 항목 | 목표 (8코어 노트북, Docker Compose) | 측정 방법 |
 |---|---|---|
 | 웨이브 5,000 주문 / 40 차량 계획 시간 | p95 ≤ 30초 (기본 전략) | `dawnline_plan_duration_seconds{strategy}` |
-| 같은 웨이브의 **영속화** 시간 | ≤ 3초 | `dawnline_plan_persist_seconds` |
+| 같은 웨이브의 **영속화** 시간 | ≤ 3초 | `dawnline_plan_persist_seconds` — **목표이지 게이트가 아니다**(2026-09-24). CI 게이트는 시간이 아니라 영속화의 **구조**(flush 횟수·세션 적재 엔티티)를 센다 — §6.9 규칙 2, [ADR-029 후속 정정](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) |
 | 같은 조건 fast mode | ≤ 5초 | 동일 |
 | 메모리 | 계획 1회 힙 증가 ≤ 1 GB | JFR/actuator |
 | 베이스라인 대비 총비용 | ≥ 15% 절감 | benchmark 리포트 — `large` **−18.20% (`savings-cw+ls`, 수렴)** · 기본 전략은 −14.93% ([ADR-043](adr/ADR-043-default-strategy-stays-until-peak-converges.md)). 2026-09-17 [ADR-044](adr/ADR-044-endpoints-are-few-enough-to-see-all.md) 로 −19.30% → −18.20% 로 **내려갔다** — 같은 변경이 `peak` 을 수렴시켰다([측정](benchmarks/phase4-endpoint-merges.md) §5). **Phase 4 마감 수치는 [phase4-strategies.md](benchmarks/phase4-strategies.md) §1·§8** 이다 |

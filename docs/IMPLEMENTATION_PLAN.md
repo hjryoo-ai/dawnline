@@ -1065,6 +1065,9 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
     §7.1 에 원칙 한 줄(**최적화기 I/O 경로는 ORM 이 아니라 벌크**), §9.1 에
     `dawnline_plan_persist_seconds`, §6.7 에 목표 **5,000건 영속화 ≤ 3초** 를 넣었고
     `PhaseThreeDoDIT` 가 그 목표를 게이트로 어설션한다 — 문서가 아니라 게이트다.
+    **(2026-09-24 정정)** 그 게이트는 CI 러너의 시간이라 §6.9 규칙 2 의 예외였다 — 같은 코드가
+    789–2,919 ms 로 흔들리다 3,013 ms 로 넘었다. 게이트를 flush 횟수·세션 적재 엔티티로 옮겼고
+    시간은 기록만 한다([ADR-029 후속 정정](adr/ADR-029-optimizer-io-is-bulk-not-orm.md)).
 
 14. **겹친 제약은 한 대에 몰리지 않는다 — ✅ 완료** (2026-09-09 발견 · 결정 **B → 데이터셋 → 재기준 → A → 재기준** · [ADR-033](adr/ADR-033-constraint-classes.md) · [측정](benchmarks/phase4-constraint-classes.md)).
 

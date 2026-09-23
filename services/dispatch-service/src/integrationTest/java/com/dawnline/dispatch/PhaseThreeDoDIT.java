@@ -14,6 +14,7 @@ import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -23,6 +24,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import org.hibernate.SessionFactory;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -61,8 +64,19 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
     /** §6.7 목표 — 기본 전략 계획 시간 p95 ≤ 30초. <strong>알고리즘 예산이다</strong>(ADR-029). */
     private static final Duration BUDGET = Duration.ofSeconds(30);
 
-    /** §6.7 목표 — 같은 웨이브의 영속화 ≤ 3초 (ADR-029). 알고리즘 예산과 별개다. */
-    private static final Duration PERSIST_BUDGET = Duration.ofSeconds(3);
+    /**
+     * 영속화 경로의 <strong>구조</strong> 상한 — 시간이 아니라 센 값이다(ADR-029 후속 정정, §6.9 게이트 규칙 2).
+     *
+     * <p>ADR-029 가 막은 회귀는 「느리다」가 아니라 <em>세션에 후보 5,000개가 올라가고 네이티브
+     * INSERT 마다 auto-flush 가 도는</em> 모양이었다 — 그때 flush 10,652 · 적재 엔티티 5,001. 벌크
+     * 경로에서는 flush 22 · 적재 1 이다. 상한은 그 사이에 둔다: 벌크 경로의 작은 변동(라우트 수)에는
+     * 흔들리지 않고, ORM 경로로 돌아가면 <strong>두 자릿수 배</strong>로 넘는다. 이 값들은 러너와
+     * 무관하게 같은 입력이면 같다 — seed·주문 id·계획 시각이 고정이기 때문이다.
+     */
+    private static final long MAX_FLUSHES = 200;
+
+    /** 세션에 적재되는 엔티티 상한 — 벌크 경로는 1, ORM 경로는 후보 수(5,000)다. */
+    private static final long MAX_ENTITY_LOADS = 50;
 
     @Autowired
     private RunPlanUseCase runPlan;
@@ -82,10 +96,17 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
     @Autowired
     private MeterRegistry meterRegistry;
 
-    /** 릴레이는 끈다 — 검사 대상은 발행이 아니다. 발행은 {@code PlanExecutionIT} 가 본다. */
+    @Autowired
+    private EntityManagerFactory entityManagerFactory;
+
+    /**
+     * 릴레이는 끈다 — 검사 대상은 발행이 아니다. 발행은 {@code PlanExecutionIT} 가 본다.
+     * Hibernate 통계는 <strong>이 클래스에서만</strong> 켠다 — 영속화 게이트가 그 값을 센다.
+     */
     @DynamicPropertySource
     static void relayOff(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
+        registry.add("spring.jpa.properties.hibernate.generate_statistics", () -> "true");
     }
 
     @BeforeEach
@@ -155,35 +176,50 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
 
         // seed 를 고정한다(불변규칙 12). 기본값은 waveId 에서 유도되는데 그 id 가 실행마다 달라
         // 배정 수가 흔들린다 — 마감 문서에 옮겨 적을 수 없는 값이 된다.
+        Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+        statistics.clear();
         long startedNanos = System.nanoTime();
         tx().executeWithoutResult(status ->
                 runPlan.run(new RunPlanCommand(waveId, CAMP_ID, CAMP, null, null, 20260905L, null)));
         Duration wallClock = Duration.ofNanos(System.nanoTime() - startedNanos);
+        long flushes = statistics.getFlushCount();
+        long entityLoads = statistics.getEntityLoadCount();
+        long preparedStatements = statistics.getPrepareStatementCount();
 
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
 
         // 측정값을 표준 출력에 남긴다. 마감 문서가 옮겨 적는 값이고, 어설션만 있으면 통과했다는
-        // 사실만 남고 *얼마나* 는 사라진다 (§6.9 「환경 없는 수치」와 같은 이유).
+        // 사실만 남고 *얼마나* 는 사라진다 (§6.9 「환경 없는 수치」와 같은 이유). 시간은 <em>기록만</em>
+        // 하므로 환경을 함께 적는다 — 환경 없는 시간은 다른 실행의 시간과 견줄 수 없다.
         Duration persisted = Duration.ofMillis((long) meterRegistry
                 .get(DispatchMetrics.PLAN_PERSIST).timer().totalTime(TimeUnit.MILLISECONDS));
+        System.out.printf("[Phase 3 DoD] 환경: %s %s · %d 코어 · CI=%s%n", System.getProperty("os.name"),
+                System.getProperty("os.arch"), Runtime.getRuntime().availableProcessors(),
+                System.getenv().getOrDefault("CI", "false"));
         System.out.printf("[Phase 3 DoD] 5,000건 통합 계획: 왕복 %d ms · 계획 %s ms · 영속화 %d ms · "
                         + "라우트 %d · 배정 %d · 미배정 %d · 비용 %,d원%n",
                 wallClock.toMillis(), plan.planDurationMs(), persisted.toMillis(),
                 plan.routes().size(), plan.assignedCount(), plan.unassignedCount(),
                 plan.totalCostKrw());
+        System.out.printf("[Phase 3 DoD] 영속화 구조: flush %d · 적재 엔티티 %d · Hibernate prepared statement %d%n",
+                flushes, entityLoads, preparedStatements);
 
         assertThat(plan.status()).as("완주하지 못하면 시간은 의미가 없다").isEqualTo("PUBLISHED");
         assertThat(plan.planDurationMs()).isNotNull();
         assertThat(Duration.ofMillis(plan.planDurationMs()))
                 .as("§6.7 목표: 기본 전략 계획 시간 p95 ≤ 30초")
                 .isLessThan(BUDGET);
-        // §6.7 의 두 번째 행을 문서가 아니라 게이트로 만든다 (ADR-029). 실측 800 ms 이므로
-        // 여유는 3.7배다. 여기서 깨지면 둘 중 하나다 — 영속화 경로가 다시 ORM 을 지나기
-        // 시작했거나, 목표가 이 기계에서 현실적이지 않거나. **조용히 늘리지 않는다**:
-        // 어느 쪽인지 재서 ADR-029 재검토 지점에 적는다.
-        assertThat(persisted)
-                .as("§6.7 목표: 5,000건 영속화 ≤ 3초 (ADR-029). 실측 800 ms")
-                .isLessThan(PERSIST_BUDGET);
+        // 영속화 게이트는 시간이 아니라 구조를 센다 (ADR-029 후속 정정, 2026-09-24). 처음에는
+        // 「영속화 ≤ 3초」였고 로컬 실측이 800 ms 였지만, CI 러너에서는 같은 코드가 789–2,919 ms
+        // (3.7배)로 흔들렸고 이웃 모듈의 IT 가 동시에 돌자 3,013 · 3,045 ms 로 넘었다 — 코드가
+        // 아니라 러너의 부하였다. §6.9 규칙 2(「게이트는 비용만, 시간은 기록만」)의 예외였던 것이다.
+        // ADR-029 가 막은 회귀는 느림이 아니라 모양이었고, 모양은 러너와 무관하게 센다.
+        assertThat(flushes)
+                .as("flush 횟수 — 벌크 경로 22 근처, ORM 경로로 돌아가면 10,652 (ADR-029)")
+                .isLessThanOrEqualTo(MAX_FLUSHES);
+        assertThat(entityLoads)
+                .as("세션에 적재된 엔티티 — 벌크 경로 1, 후보를 관리 엔티티로 읽으면 5,000 (ADR-029 결정 1)")
+                .isLessThanOrEqualTo(MAX_ENTITY_LOADS);
         assertThat(plan.assignedCount() + plan.unassignedCount())
                 .as("한 건도 잃지 않는다 — 배정되지 않았으면 미배정으로 세어져야 한다")
                 .isEqualTo(5_000);
