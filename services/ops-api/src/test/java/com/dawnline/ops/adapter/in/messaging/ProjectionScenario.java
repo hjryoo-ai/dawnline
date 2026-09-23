@@ -77,6 +77,10 @@ public final class ProjectionScenario {
     public final Instant o2EtaFirst = at(300);
     public final Instant o2EtaSecond = at(320);
     public final Instant o2ArrivalOnR2 = at(290);
+    /** 재계획이 R1·R2 를 개정한 트랜잭션의 발행 시각 — 봉투의 {@code occurredAt}. */
+    public final Instant replanPublished = at(215);
+    /** R2 의 at-risk 판정 시각 — 페이로드의 {@code detectedAt}. */
+    public final Instant r2AtRiskDetected = at(240);
 
     private final EventContracts contracts;
     private final List<Event> causal = new ArrayList<>();
@@ -132,11 +136,11 @@ public final class ProjectionScenario {
         atRisk(r1, at(210), List.of(new Eta(List.of(o2), o2EtaFirst)));
 
         // 재계획 — O2 를 R1 에서 R2 로 옮긴다. 두 라우트가 같은 트랜잭션에서 개정된다(§6.8 3단계의 3).
-        Instant replanned = at(215);
+        Instant replanned = replanPublished;
         routeAssigned(r1, 2, replanned, List.of(List.of(o1)), List.of(at(190)));
         routeAssigned(r2, 2, replanned, List.of(List.of(o3), List.of(o4), List.of(o2)),
                 List.of(at(250), at(265), o2ArrivalOnR2));
-        atRisk(r2, at(240), List.of(new Eta(List.of(o3), at(258)), new Eta(List.of(o4), at(268)),
+        atRisk(r2, r2AtRiskDetected, List.of(new Eta(List.of(o3), at(258)), new Eta(List.of(o4), at(268)),
                 new Eta(List.of(o2), o2EtaSecond)));
 
         deliveryStatus(r2, "ARRIVED", at(255), o3);

@@ -78,6 +78,10 @@ class ProjectionShuffleTest {
                 .containsEntry("delivery_outcome", "FAILED")
                 .containsEntry("route_id", scenario.r2)
                 .containsEntry("planned_arrival", scenario.o2ArrivalOnR2)
+                // 판정 키는 사건 시각이다 — 소비자의 now() 가 아니다(§5.5 「판정 키」). 이 리플레이의
+                // 시계는 EPOCH 에 멈춰 있으므로, 핸들러가 시계를 읽었다면 여기서 드러난다.
+                .containsEntry("planned_as_of", scenario.replanPublished)
+                .containsEntry("eta_as_of", scenario.r2AtRiskDetected)
                 .containsEntry("eta_at", scenario.o2EtaSecond)
                 .containsEntry("promised_end_original", scenario.promisedEnd)
                 .containsEntry("promised_end_revised", scenario.revisedEnd)

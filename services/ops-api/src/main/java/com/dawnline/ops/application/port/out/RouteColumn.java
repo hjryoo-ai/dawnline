@@ -5,16 +5,27 @@ package com.dawnline.ops.application.port.out;
  * 집계라서 {@link RouteRows#recount} 가 쓴다(ADR-051 결정 4).
  */
 public enum RouteColumn {
-    PLAN_ID,
-    CAMP_ID,
-    VEHICLE_ID,
-    DRIVER_ID,
-    REVISION,
-    STATUS,
-    PLANNED_DEPARTURE,
-    DEPARTED_AT,
-    STOP_COUNT,
-    AT_RISK,
-    DISTANCE_M,
-    COST_KRW
+    PLAN_ID(ColumnFamily.PLAN),
+    CAMP_ID(ColumnFamily.KEY),
+    VEHICLE_ID(ColumnFamily.PLAN),
+    DRIVER_ID(ColumnFamily.PLAN),
+    REVISION(ColumnFamily.PLAN),
+    STATUS(ColumnFamily.AXIS),
+    PLANNED_DEPARTURE(ColumnFamily.PLAN),
+    DEPARTED_AT(ColumnFamily.TRACKING),
+    STOP_COUNT(ColumnFamily.PLAN),
+    AT_RISK(ColumnFamily.TRACKING),
+    DISTANCE_M(ColumnFamily.PLAN),
+    COST_KRW(ColumnFamily.PLAN);
+
+    private final ColumnFamily family;
+
+    RouteColumn(ColumnFamily family) {
+        this.family = family;
+    }
+
+    /** 이 칸의 계열 — 무엇이 판정 키인가(§5.5). */
+    public ColumnFamily family() {
+        return family;
+    }
 }

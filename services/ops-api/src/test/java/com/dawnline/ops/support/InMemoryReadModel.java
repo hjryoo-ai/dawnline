@@ -13,7 +13,11 @@ import com.dawnline.ops.domain.RouteStatus;
 import com.dawnline.ops.domain.WaveStatus;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -36,6 +40,9 @@ public final class InMemoryReadModel {
     private final Map<UUID, Map<String, Object>> orders = new HashMap<>();
     private final Map<UUID, Map<String, Object>> routes = new HashMap<>();
     private final Map<UUID, Map<String, Object>> waves = new HashMap<>();
+
+    /** 쓰기 기록 — 패치마다 칸 집합 하나. {@link #drainWrites()} 가 비운다. */
+    private final List<Set<Enum<?>>> writes = new ArrayList<>();
 
     private final OrderRows orderRows = new Orders();
     private final RouteRows routeRows = new Routes();
@@ -63,6 +70,13 @@ public final class InMemoryReadModel {
         tables.put("rm_routes", copy(routes));
         tables.put("rm_waves", copy(waves));
         return tables;
+    }
+
+    /** 지난 호출 뒤로 적힌 패치들의 칸 집합 — 어느 사실이 어느 칸을 썼는가를 보는 검사가 쓴다. */
+    public List<Set<Enum<?>>> drainWrites() {
+        List<Set<Enum<?>>> drained = new ArrayList<>(writes);
+        writes.clear();
+        return drained;
     }
 
     /** 한 주문 행. */
@@ -166,7 +180,10 @@ public final class InMemoryReadModel {
         return copy;
     }
 
-    private static <C extends Enum<C>> void apply(Map<UUID, Map<String, Object>> table, UUID key, Patch<C> patch) {
+    private <C extends Enum<C>> void apply(Map<UUID, Map<String, Object>> table, UUID key, Patch<C> patch) {
+        if (!patch.isEmpty()) {
+            writes.add(new HashSet<>(patch.writes().keySet()));
+        }
         Map<String, Object> row = Objects.requireNonNull(table.get(key), () -> "잠그지 않은 행에 썼다: " + key);
         patch.writes().forEach((column, write) -> {
             String name = column.name().toLowerCase(Locale.ROOT);

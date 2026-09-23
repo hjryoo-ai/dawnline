@@ -8,18 +8,29 @@ package com.dawnline.ops.application.port.out;
  * 대조한다 — 칸이 늘었는데 여기 없으면 그 칸은 아무도 쓰지 않는 칸이다.
  */
 public enum OrderColumn {
-    CUSTOMER_ID,
-    SERVICE_TIER,
-    ORDER_STATUS,
-    DELIVERY_OUTCOME,
-    CAMP_ID,
-    WAVE_ID,
-    ROUTE_ID,
-    PROMISED_END_ORIGINAL,
-    PROMISED_END_REVISED,
-    PLANNED_ARRIVAL,
-    PLANNED_AS_OF,
-    ETA_AT,
-    ETA_AS_OF,
-    DELIVERED_AT
+    CUSTOMER_ID(ColumnFamily.ORDER),
+    SERVICE_TIER(ColumnFamily.ORDER),
+    ORDER_STATUS(ColumnFamily.ORDER),
+    DELIVERY_OUTCOME(ColumnFamily.TRACKING),
+    CAMP_ID(ColumnFamily.ORDER),
+    WAVE_ID(ColumnFamily.ORDER),
+    ROUTE_ID(ColumnFamily.PLAN),
+    PROMISED_END_ORIGINAL(ColumnFamily.ORDER),
+    PROMISED_END_REVISED(ColumnFamily.ORDER),
+    PLANNED_ARRIVAL(ColumnFamily.PLAN),
+    PLANNED_AS_OF(ColumnFamily.PLAN),
+    ETA_AT(ColumnFamily.TRACKING),
+    ETA_AS_OF(ColumnFamily.TRACKING),
+    DELIVERED_AT(ColumnFamily.TRACKING);
+
+    private final ColumnFamily family;
+
+    OrderColumn(ColumnFamily family) {
+        this.family = family;
+    }
+
+    /** 이 칸의 계열 — 무엇이 판정 키인가(§5.5). */
+    public ColumnFamily family() {
+        return family;
+    }
 }

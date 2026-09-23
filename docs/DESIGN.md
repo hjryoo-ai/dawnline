@@ -1196,6 +1196,29 @@ Phase 2-7 에서 order-service 쪽을 구현하며 드러났고, Phase 5-1a 에�
   「출발했어야 하는데 안 했다」는 **출발 전에** 계획 출발 시각을 알아야 한다 — 그래서 뒤의 것은
   `route.assigned` 의 `summary.plannedDeparture` 에서 온다(개정으로 거른다).
 
+**판정 키 — 계획 칸은 revision 이, 추적 칸은 사건 시각이 판정한다** (2026-09-24).
+[ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 의 「계획은 `(route, revision, seq)` 로,
+사실은 `orderId` 로」를 읽기 모델로 옮긴 한 줄이다. 한 행에 두 계열이 같이 앉으므로(주문 행에 계획
+도착과 배송 결과, 라우트 행에 계획 거리와 출발 시각) 칸마다 계열을 적고(`ColumnFamily`), 판정 키는
+계열이 정한다.
+
+| 계열 | 칸 | 판정 키 |
+|---|---|---|
+| 계획 | `rm_routes` 의 `plan_id`·`vehicle_id`·`driver_id`·`stop_count`·`distance_m`·`cost_krw`·`planned_departure` | `revision` |
+| 계획 | `rm_orders` 의 `route_id`·`planned_arrival` | `planned_as_of` = 계획 이벤트(`route.assigned`)의 `occurredAt` — **라우트를 넘기 때문이다**. 재계획이 주문을 R1 에서 R2 로 옮기면 R1 개정 1 과 R2 개정 2 를 견줘야 하는데 `revision` 은 라우트마다 독립이라 견줄 수 없다([ADR-045](adr/ADR-045-revision-comparison-is-per-route.md)). 계획을 내는 것은 dispatch 하나이므로 그 발행 시각이 계획의 순서다 |
+| 추적 | `eta_at` | `eta_as_of` = at-risk 의 `detectedAt` |
+| 추적 | `delivery_outcome`·`delivered_at` | **추적 축**(`FAILED → COMPLETED`) — 시각이 아니다. 종료 상태는 한 번 오고, 뒤 시각의 `ARRIVED` 가 `COMPLETED` 를 덮으면 안 된다 |
+| 추적 | `departed_at`·`at_risk` | 라우트에 하나뿐인 사실이라 견줄 둘째 값이 없다 |
+
+**판정 키는 언제나 사실을 낸 쪽의 시계다 — 소비자의 `now()` 가 아니다.** 「늦게 온 사실이 이긴다」를
+도착 순서가 아니라 사건 순서로 판정하는 칸이라, 소비자의 시계를 적으면 그 칸이 다시 도착 순서가
+된다. 웨이브의 계획 칸(`plan.completed` 가 쓰는 다섯)은 판정 키가 없다 — 웨이브에 한 번만 온다(ADR-024).
+
+지키는 것은 둘이다. `ColumnFamilyTest` 가 순서 검사와 같은 시나리오를 인과 순서와 셔플 20회로 돌며
+(1) 토픽이 자기 계열의 칸과 키·축만 쓰는지, (2) 판정 키가 있는 칸이 판정 키와 **같은 패치에서만**
+쓰이는지 본다. `ProjectionShuffleTest` 는 시계를 EPOCH 에 멈춘 채 판정 키가 사건 시각과 같은지 본다 —
+핸들러가 시계를 읽었다면 거기서 드러난다.
+
 **생성 칸 둘.** `on_time_promised`·`on_time_revised` 는 핸들러가 쓰지 않고 PostgreSQL 의 생성 칸
 (`GENERATED ALWAYS AS … STORED`)으로 둔다. 입력(`delivery_outcome`·`delivered_at`·`promised_end_*`)이
 세 토픽에서 오므로, 핸들러가 계산하면 **셋 중 마지막으로 온 핸들러**만 맞는 값을 적는다 — 그
