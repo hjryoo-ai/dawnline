@@ -1717,7 +1717,7 @@ public interface DispatchStrategy {
 거기서 나오기 때문이고(위 문단), 그 값은 캐시에 없다. 같은 행을 어차피 읽으므로 캐시를 먼저
 보는 것은 조회를 아끼지 않고 <em>같은 사실의 두 번째 출처</em>만 만든다. 캐시가 진실이 될 수
 없다는 것은 불변규칙 7 이 이미 정했고, 아끼지도 못하면 남는 것은 갈라질 자리뿐이다.
-그 캐시의 첫 소비자는 ops 의 읽기 모델(§5.5, Phase 6)이 된다.
+**그러면 이 캐시는 쓰는 쪽만 남는다.** ops 의 읽기 모델(§5.5)은 이벤트로 프로젝션하지 dispatch 의 Redis 를 읽지 않으므로, Phase 6 에서도 소비자가 안 생길 수 있다 — 그때는 **이 키와 5-5 의 쓰기 경로를 함께 지운다**(Phase 6-0c 에서 판정). §7.2 에 행이 있다는 것은 유지할 이유가 아니다.
 
 **편차는 «평가 시계» 를 민다 — 저장되는 `planned_arrival` 은 계획 시계 그대로다.**
 
@@ -1994,7 +1994,7 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `lock:wave:{id}` | STRING NX | fulfillment | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
-| `route:{id}:progress` | HASH | dispatch/tracking | 2d | DB 조회 — `route_stops` 에서 `nextSeq`(종결되지 않은 가장 작은 `seq`, 취소된 stop 제외)·`completed`·`failed` 를 한 번의 조회로 다시 만든다. **채우는 쪽은 Phase 5-5** 의 `delivery.status` 전이이고(ADR-047), **첫 소비자는 Phase 5-3** 의 부분 재계획(§6.8 「미완료 stop 만」)이다 — 그때까지 이 키를 읽는 운영 코드는 없고 폴백을 지키는 것은 IT 다. `driver:{id}:pos` 와 달리 *쓰는* 쪽을 먼저 두는 이유는 값이 **사건이 지나갈 때만** 만들어지기 때문이다: 5-3 에 가서 켜면 그전에 지나간 스캔은 Redis 에 없고, 그 차이는 폴백이 있어야만 드러나지 않는다 |
+| `route:{id}:progress` | HASH | dispatch/tracking | 2d | DB 조회 — `route_stops` 에서 `nextSeq`(종결되지 않은 가장 작은 `seq`, 취소된 stop 제외)·`completed`·`failed` 를 한 번의 조회로 다시 만든다. **채우는 쪽은 Phase 5-5** 의 `delivery.status` 전이이고(ADR-047), **첫 소비자는 Phase 5-3** 의 부분 재계획(§6.8 「미완료 stop 만」)이다 — 그때까지 이 키를 읽는 운영 코드는 없고 폴백을 지키는 것은 IT 다. `driver:{id}:pos` 와 달리 *쓰는* 쪽을 먼저 두는 이유는 값이 **사건이 지나갈 때만** 만들어지기 때문이다: 5-3 에 가서 켜면 그전에 지나간 스캔은 Redis 에 없고, 그 차이는 폴백이 있어야만 드러나지 않는다. **그런데 그 첫 소비자는 오지 않았다** (2026-09-23, Phase 5-3 정정): §6.8 은 같은 행을 어차피 읽으므로 캐시를 먼저 보면 조회를 아끼는 것이 아니라 **같은 사실의 둘째 출처만 생기고**, 불변규칙 7 이 그 출처를 진실로 못 쓴다고 이미 정했으니 남는 것은 갈라질 자리뿐이다([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 1). 지금 이 키는 **쓰는 쪽만 있고 읽는 쪽이 없다** — Phase 6-0c 에서 소비자를 정하거나, 정하지 않기로 하면 **이 행과 5-5 의 쓰기 경로를 함께 지운다.** 행이 있다는 것은 유지할 이유가 아니다 |
 | `driver:{id}:pos` | GEO | tracking | 1h | 없음(시각화용). **아직 아무도 쓰지 않는다**(2026-09-19, Phase 5-2) — 쓰는 코드도 읽는 코드도 없고 tracking 은 `route.assigned` 의 `driverId` 를 읽지도 않는다(`RouteAssignedPayload`). 채우는 시점은 **첫 소비자가 나타날 때**, 즉 Phase 6 의 ops-web 지도다 — dispatch OpenAPI 산출물·`delivery.route-departed` 와 같은 원칙이다(「부재는 첫 소비자가 나타나는 시점에 채운다」). 그때까지 기사 시뮬레이터는 스캔마다 `lat`·`lng` 를 실어 보내 데이터가 비어 있지 않게만 한다 |
 | `route:{id}:atrisk:cooldown` | STRING NX | tracking | 5m | 중복 at-risk 허용. **흡수하는 쪽은 멱등 소비자가 아니다**(2026-09-19 정정) — 두 at-risk 는 서로 다른 `eventId` 라 `processed_events` 에는 둘 다 처음 보는 이벤트다. 중복이 *재계획 두 번*이 되지 않게 하는 것은 dispatch 의 DB 쿨다운이고(§6.8 `routes.last_replanned_at`, 재계획 트랜잭션 안에서 비교·갱신), 이 키가 지키는 것은 **알림 수**다 ([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 폴백은 세어 둔다 — `dawnline_at_risk_cooldown_bypassed_total` |
 
@@ -2442,6 +2442,19 @@ dawnline/
    띄우다 `Failed to determine a suitable driver class` 로 죽었을 때다. 위의 OpenAPI 건과 같은
    모양이다 — **대조는 있었는데 보는 자리가 대상보다 좁았다.** 고친 검사는 같은 어설션을 두
    클래스패스에서 돌린다(`MessagingDependencyTest` · `MessagingDependencyIT`, 어설션은 한 벌).
+
+   **그리고 같은 사실을 만드는 길이 둘이면, 하나가 다른 하나의 결손을 덮는다** (2026-09-23,
+   Phase 5-3). `route.revised` 페이로드를 만드는 길은 둘이었다 — §5.3 운영자 재배정은 도메인
+   객체(`PlannedRoute`)에서 만들고, §6.8 재계획은 **DB 의 `route_stops` 를 다시 읽어** 만든다.
+   그 둘이 서로를 비추는 관계인데 대조가 없었고, `moveOrder` 가 만드는 새 stop 행은
+   `promised_start/end` 를 넣지 않고 있었다. **도메인 경로는 그 결손을 볼 수 없다** — 약속창을
+   메모리의 객체에서 가져오기 때문이다. 결손은 *DB 를 읽는 발행 경로가 생겨서야* 터졌고
+   (`ReplanIT` → `약속창 없이 개정을 발행할 수 없습니다 (V6 이전 행)`), 그때까지 §5.3 의 IT 는
+   전부 초록이었다. 위의 OpenAPI·클래스패스 건이 「대조는 있었는데 보는 자리가 좁았다」라면
+   이쪽은 **대조할 짝이 아직 안 태어난 동안 한쪽이 옳아 보인 것**이다. 닫은 방식은 같다 —
+   재배정 IT 가 「새 stop 이 생겼다」를 전제로 말하고 `promised_start/end` 가 `NULL` 인 행이
+   **0 인지**를 확인한다(`DispatchAdminIT`, 빼는 방식). 이 축이 다음에 나올 자리는 「저장된 행에서
+   다시 만드는」 경로가 새로 생기는 곳이다.
 
    그리고 제외 자체는 **모듈 전체에 한 번** 선언한다(`configurations.configureEach`).
    「선언이 늘 때마다 같은 한 줄을 기억한다」는 규칙은 조용히 샌다 — 기억에 기대는 규칙을
