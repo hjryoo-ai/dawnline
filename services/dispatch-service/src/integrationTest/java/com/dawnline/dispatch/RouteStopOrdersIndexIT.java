@@ -47,6 +47,14 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
     private static final int ROUTES = 71;
     private static final int STOPS_PER_ROUTE = 120;
 
+    /** {@code JdbcRouteMutations.lastSettledStop} 의 질의 그대로 (§6.8, ADR-048). */
+    private static final String ANCHOR = """
+            SELECT seq, planned_arrival, actual_at FROM route_stops
+             WHERE route_id = '%s' AND actual_at IS NOT NULL
+             ORDER BY seq DESC
+             LIMIT 1
+            """;
+
     /** {@code JdbcRouteMutations.findAssignedStop} 의 질의 그대로. */
     private static final String LOOKUP = """
             SELECT s.route_id, s.id, s.seq, s.status
@@ -103,6 +111,30 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
                 .doesNotContain("Seq Scan on route_stop_orders");
     }
 
+    @Test
+    void 마지막으로_닿은_stop_을_찾는_질의는_새_인덱스가_필요하지_않다() {
+        // 불변규칙 11 은 «넣지 않기로 한 판단도 행 수와 함께» 기록하라고 한다. 이 클래스에
+        // 두는 이유는 seed 를 함께 쓰기 때문이다 — 같은 크기에서 두 질의를 나란히 본다.
+        // 재계획은 라우트마다 이 조회를 한 번씩 한다(원 라우트 + 후보 전부, §6.8 2단계).
+        seed();
+        markSettled();
+        analyze();
+
+        assertThat(reltuples("route_stops"))
+                .as("통계가 있다 — 없으면 플래너는 짐작한다").isGreaterThan(0.0d);
+        assertThat(count("route_stops"))
+                .as("피크일 한 캠프치에 가깝다 (§8.2)").isGreaterThan(8_000L);
+
+        String plan = explainAnchor(probeRouteId());
+
+        assertThat(plan)
+                .as("UNIQUE (route_id, seq) 를 역순으로 한 건 읽으면 된다 — 부분 인덱스를 더하면 "
+                        + "쓰기마다 그것을 갱신하는 비용만 남는다")
+                .contains("route_stops_route_id_seq_key");
+        assertThat(plan).as("순차 스캔이면 후보 라우트 수만큼 테이블 전체를 읽는다")
+                .doesNotContain("Seq Scan on route_stops");
+    }
+
     // --- 픽스처 --------------------------------------------------------------
 
     private void seed() {
@@ -138,6 +170,30 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
                     SELECT s.id, gen_random_uuid() FROM route_stops s WHERE s.seq % 4 <> 0
                     """).executeUpdate();
         });
+    }
+
+    /** 기사가 라우트의 4분의 1쯤 간 상태 — 닿은 stop 이 있고 남은 stop 이 더 많다. */
+    private void markSettled() {
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery("""
+                UPDATE route_stops SET actual_at = planned_arrival, status = 'COMPLETED'
+                 WHERE seq <= 30
+                """).executeUpdate());
+    }
+
+    private UUID probeRouteId() {
+        return tx().execute(status -> (UUID) entityManager
+                .createNativeQuery("SELECT id FROM routes LIMIT 1").getSingleResult());
+    }
+
+    @SuppressWarnings("unchecked")
+    private String explainAnchor(UUID routeId) {
+        List<String> lines = tx().execute(status -> entityManager
+                .createNativeQuery("EXPLAIN (ANALYZE, BUFFERS) " + ANCHOR.formatted(routeId))
+                .getResultList());
+        String plan = String.join("\n", lines);
+        // 측정값을 문서로 옮길 수 있게 남긴다 (docs/benchmarks/phase5-replan-anchor-lookup.md).
+        System.out.println("[ANCHOR PLAN]\n" + plan);
+        return plan;
     }
 
     private UUID probeOrderId() {
