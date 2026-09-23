@@ -23,6 +23,8 @@ dependencies {
     implementation(project(":libs:common"))
     implementation(project(":libs:messaging"))
     implementation(project(":libs:observability"))
+    // 오류 응답의 모양 — ProblemDetailsAdviceSupport (ADR-049).
+    implementation(project(":libs:web"))
 
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.validation)
