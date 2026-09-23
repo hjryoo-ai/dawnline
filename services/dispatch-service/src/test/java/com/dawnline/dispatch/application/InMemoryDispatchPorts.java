@@ -7,11 +7,13 @@ import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.DispatchEvents;
 import com.dawnline.dispatch.application.port.out.PlannedRouteRepository;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
+import com.dawnline.dispatch.application.port.out.RouteProgress;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.CandidateStatus;
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
@@ -231,7 +233,7 @@ final class InMemoryDispatchPorts {
             /** 이 stop 의 약속창. 개정 발행이 required 로 싣는다 (§5.3, Phase 5-1a). */
             final TimeWindow promised;
             Instant arrival;
-            String status = "PLANNED";
+            RouteStopStatus status = RouteStopStatus.PLANNED;
 
             StopRow(int seq, GeoPoint point, int serviceSeconds, Instant arrival,
                     List<UUID> orderIds, TimeWindow promised) {
@@ -244,7 +246,7 @@ final class InMemoryDispatchPorts {
             }
 
             boolean cancelled() {
-                return "CANCELLED".equals(status);
+                return status == RouteStopStatus.CANCELLED;
             }
         }
 
@@ -300,22 +302,44 @@ final class InMemoryDispatchPorts {
             return rows.entrySet().stream()
                     .flatMap(entry -> entry.getValue().stream()
                             .filter(row -> row.orderIds.contains(orderId))
-                            .map(row -> new AssignedStop(entry.getKey(), row.id, row.status)))
+                            .map(row -> new AssignedStop(entry.getKey(), row.id, row.seq,
+                                    row.status)))
                     .findFirst();
+        }
+
+        @Override
+        public void markStopStatus(UUID stopId, RouteStopStatus status) {
+            rows.values().stream().flatMap(List::stream)
+                    .filter(stop -> stop.id.equals(stopId)).findFirst().orElseThrow()
+                    .status = status;
+        }
+
+        @Override
+        public Optional<RouteProgress> progressOf(UUID routeId) {
+            List<StopRow> stops = rows.getOrDefault(routeId, List.of());
+            if (stops.isEmpty()) {
+                return Optional.empty();
+            }
+            Integer nextSeq = stops.stream()
+                    .filter(stop -> !stop.status.isTerminal())
+                    .mapToInt(stop -> stop.seq).min().stream().boxed().findFirst().orElse(null);
+            return Optional.of(new RouteProgress(nextSeq,
+                    (int) stops.stream().filter(s -> s.status == RouteStopStatus.COMPLETED).count(),
+                    (int) stops.stream().filter(s -> s.status == RouteStopStatus.FAILED).count()));
         }
 
         @Override
         public boolean cancelStopIfAllOrdersCancelled(UUID stopId) {
             StopRow row = rows.values().stream().flatMap(List::stream)
                     .filter(stop -> stop.id.equals(stopId)).findFirst().orElseThrow();
-            if (!"PLANNED".equals(row.status)) {
+            if (row.status != RouteStopStatus.PLANNED) {
                 return false;
             }
             boolean allDead = row.orderIds.stream().map(candidates::findById)
                     .flatMap(Optional::stream)
                     .allMatch(candidate -> candidate.status() == CandidateStatus.CANCELLED);
             if (allDead) {
-                row.status = "CANCELLED";
+                row.status = RouteStopStatus.CANCELLED;
             }
             return allDead;
         }

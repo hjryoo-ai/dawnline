@@ -35,3 +35,19 @@ application {
 tasks.named<JavaExec>("run") {
     workingDir = rootProject.projectDir
 }
+
+// -----------------------------------------------------------------------------
+// DeliveryStatusFanoutTest 는 저장소의 문서를 읽는다(측정 조건 문서 · DESIGN §8.2).
+// 입력으로 선언하지 않으면 **문서만 바꾼 실행에서 Gradle 이 test 를 UP-TO-DATE 로 건너뛴다** —
+// 검사가 돌지 않는데 초록이고, 그것이 바로 이 테스트가 막으려는 모양이다(DESIGN.md §13).
+// libs/common 이 AdrIndexConsistencyTest 에 같은 것을 걸어 두었다.
+// -----------------------------------------------------------------------------
+tasks.named<Test>("test") {
+    inputs.file(rootProject.layout.projectDirectory.file(
+        "docs/benchmarks/phase5-delivery-status-throughput.md"))
+        .withPropertyName("throughputConditions")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+        .withPropertyName("designDocument")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

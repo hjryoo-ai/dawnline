@@ -13,6 +13,7 @@ import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -188,7 +189,7 @@ class CancelOrderServiceTest {
     @Test
     void 배송이_끝난_stop_의_취소는_거부하고_센다() {
         Published published = publishedRoute();
-        routes.row(published.routeId(), 2).status = "COMPLETED";
+        routes.row(published.routeId(), 2).status = RouteStopStatus.COMPLETED;
 
         CancelOrderUseCase.Outcome outcome = service.cancel(published.middleOrderId(), CANCELLED_AT);
 
@@ -205,7 +206,7 @@ class CancelOrderServiceTest {
     void 도착만_한_stop_도_거부한다() {
         // ARRIVED 는 기사가 그 지점에 닿았다는 뜻이다. 경계는 "출발했는가" 가 아니라 "닿았는가" 다.
         Published published = publishedRoute();
-        routes.row(published.routeId(), 2).status = "ARRIVED";
+        routes.row(published.routeId(), 2).status = RouteStopStatus.ARRIVED;
 
         assertThat(service.cancel(published.middleOrderId(), CANCELLED_AT))
                 .isEqualTo(CancelOrderUseCase.Outcome.TOO_LATE);
@@ -215,7 +216,7 @@ class CancelOrderServiceTest {
     void 아직_닿지_않은_stop_은_출발_여부와_무관하게_받는다() {
         // 미출발과 출발 후 미도착은 처리가 같다 — 둘 다 "건너뛴다" 다 (ADR-026 결정 2).
         Published published = publishedRoute();
-        routes.row(published.routeId(), 2).status = "PLANNED";
+        routes.row(published.routeId(), 2).status = RouteStopStatus.PLANNED;
 
         assertThat(service.cancel(published.middleOrderId(), CANCELLED_AT))
                 .isEqualTo(CancelOrderUseCase.Outcome.ROUTE_REVISED);

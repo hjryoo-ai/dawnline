@@ -1,7 +1,13 @@
 package com.dawnline.dispatch.config;
 
 import com.dawnline.dispatch.adapter.in.messaging.FulfillmentPlannedListener;
+import com.dawnline.dispatch.adapter.in.messaging.DeliveryStatusListener;
 import com.dawnline.dispatch.adapter.in.messaging.OrderCancelledListener;
+import com.dawnline.dispatch.adapter.out.redis.RedisRouteProgressCache;
+import com.dawnline.dispatch.application.RecordDeliveryStatusService;
+import com.dawnline.dispatch.application.port.in.RecordDeliveryStatusUseCase;
+import com.dawnline.dispatch.application.port.out.RouteProgressCache;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
 import com.dawnline.dispatch.adapter.out.messaging.OutboxDispatchEvents;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcPlanQueries;
@@ -264,6 +270,44 @@ public class DispatchApplicationConfig {
     public OrderCancelledListener orderCancelledListener(IdempotentConsumer consumer,
             CancelOrderUseCase cancelOrder, EventJson json) {
         return new OrderCancelledListener(consumer, cancelOrder, json);
+    }
+
+    /**
+     * {@code route:{id}:progress} 캐시 (§7.2, ADR-047).
+     *
+     * <p>진실 저장소가 아니다(불변규칙 7) — 이 빈이 실패해도 {@code RouteMutations.progressOf}
+     * 가 같은 값을 만든다.
+     *
+     * @param redis 문자열 템플릿
+     */
+    @Bean
+    public RouteProgressCache routeProgressCache(StringRedisTemplate redis) {
+        return new RedisRouteProgressCache(redis);
+    }
+
+    /**
+     * {@code delivery.status} 전이 (§4.1·§6.10, ADR-047).
+     *
+     * @param routes   라우트 조작
+     * @param progress 진행 캐시
+     * @param metrics  §9.1 메트릭
+     */
+    @Bean
+    public RecordDeliveryStatusUseCase recordDeliveryStatusUseCase(RouteMutations routes,
+            RouteProgressCache progress, DispatchMetrics metrics) {
+        return new RecordDeliveryStatusService(routes, progress, metrics);
+    }
+
+    /**
+     * @param consumer     멱등 게이트
+     * @param recordStatus 전이 유스케이스
+     * @param json         봉투 역직렬화
+     * @param metrics      §9.1 메트릭
+     */
+    @Bean
+    public DeliveryStatusListener deliveryStatusListener(IdempotentConsumer consumer,
+            RecordDeliveryStatusUseCase recordStatus, EventJson json, DispatchMetrics metrics) {
+        return new DeliveryStatusListener(consumer, recordStatus, json, metrics);
     }
 
     /**
