@@ -4,13 +4,10 @@ import com.dawnline.dispatch.adapter.in.messaging.FulfillmentPlannedListener;
 import com.dawnline.dispatch.adapter.in.messaging.AtRiskListener;
 import com.dawnline.dispatch.adapter.in.messaging.DeliveryStatusListener;
 import com.dawnline.dispatch.adapter.in.messaging.OrderCancelledListener;
-import com.dawnline.dispatch.adapter.out.redis.RedisRouteProgressCache;
 import com.dawnline.dispatch.application.RecordDeliveryStatusService;
 import com.dawnline.dispatch.application.ReplanRouteService;
 import com.dawnline.dispatch.application.port.in.RecordDeliveryStatusUseCase;
 import com.dawnline.dispatch.application.port.in.ReplanRouteUseCase;
-import com.dawnline.dispatch.application.port.out.RouteProgressCache;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
 import com.dawnline.dispatch.adapter.out.messaging.OutboxDispatchEvents;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcPlanQueries;
@@ -276,29 +273,17 @@ public class DispatchApplicationConfig {
     }
 
     /**
-     * {@code route:{id}:progress} 캐시 (§7.2, ADR-047).
-     *
-     * <p>진실 저장소가 아니다(불변규칙 7) — 이 빈이 실패해도 {@code RouteMutations.progressOf}
-     * 가 같은 값을 만든다.
-     *
-     * @param redis 문자열 템플릿
-     */
-    @Bean
-    public RouteProgressCache routeProgressCache(StringRedisTemplate redis) {
-        return new RedisRouteProgressCache(redis);
-    }
-
-    /**
      * {@code delivery.status} 전이 (§4.1·§6.10, ADR-047).
      *
-     * @param routes   라우트 조작
-     * @param progress 진행 캐시
-     * @param metrics  §9.1 메트릭
+     * <p>{@code route:{id}:progress} 캐시 빈이 이 위에 있었다 (2026-09-23 제거, Phase 6-0c).
+     *
+     * @param routes  라우트 조작
+     * @param metrics §9.1 메트릭
      */
     @Bean
     public RecordDeliveryStatusUseCase recordDeliveryStatusUseCase(RouteMutations routes,
-            RouteProgressCache progress, DispatchMetrics metrics) {
-        return new RecordDeliveryStatusService(routes, progress, metrics);
+            DispatchMetrics metrics) {
+        return new RecordDeliveryStatusService(routes, metrics);
     }
 
     /**

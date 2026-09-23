@@ -205,7 +205,9 @@ com.dawnline.<service>
 
 - §6.8 부분 재계획은 "미완료 stop 만" 다시 푼다. 어디까지 완료됐는지를 모르면 그 문장이 성립하지 않는다.
 - §7.2 의 `route:{id}:progress`(HASH: nextSeq, completed, failed)는 소유자가 dispatch/tracking 인데,
-  dispatch 쪽 값을 채울 입력이 없었다.
+  dispatch 쪽 값을 채울 입력이 없었다. **이 줄은 2026-09-23 에 근거를 잃었다** — 그 키는
+  지웠다(§7.2 표 아래). 지우지 않고 남기는 이유는 *그때 소비자 목록을 바꾼 판단*이 이 셋을
+  근거로 했기 때문이고, 셋 중 하나가 나중에 사라졌다는 것이 나머지 둘을 무르지 않는다.
 - §6.10 넷째 분기(배송이 끝난 뒤 도착한 취소를 거부)와 `dawnline_cancel_too_late_total` 이
   **구조적으로 발화하지 않는다** — `route_stops.status` 를 옮기는 코드가 없기 때문이다.
 
@@ -873,7 +875,9 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
 > 파생이 아니다: `StopMerger` 의 병합 키가 「같은 약속창」이므로(§6.5 1단계) 그 값은 stop 이
 > 만들어지는 순간 확정된다.
 
-**Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시), `route:{id}:progress` (HASH: nextSeq, completed, failed).
+**Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시).
+
+`route:{id}:progress` 는 **설계에서 뺐다**(2026-09-23, Phase 6-0c — §7.2 표 아래에 근거가 있다). 5-5 가 채우던 키인데 읽는 쪽이 끝내 나타나지 않았고, `GET /routes/{routeId}` 가 stop 마다 살아 있는 상태를 이미 돌려주므로 그 캐시를 읽는 것은 같은 사실의 둘째 출처를 만드는 일이었다.
 
 `lock:plan:{waveId}` 는 **설계에서 뺐다**(2026-09-05). "이중 안전장치" 라고 적혀 있었지만 `route_plans.wave_id` 의 UNIQUE 제약이 이미 그 안전장치이고, 계획 유스케이스는 그 제약 위에서 `openPlan` 이 경합을 흡수하도록 짜여 있다(§5.3 `RunPlanService`). 두 번째 장치는 없는 문제를 막으면서 Redis 장애 시 무엇이 맞는지를 새로 정하게 만든다 — **폴백을 정해야 하는 키를 하나 늘리는 것이 안전장치를 하나 늘리는 것보다 비싸다.**
 
@@ -1717,7 +1721,10 @@ public interface DispatchStrategy {
 거기서 나오기 때문이고(위 문단), 그 값은 캐시에 없다. 같은 행을 어차피 읽으므로 캐시를 먼저
 보는 것은 조회를 아끼지 않고 <em>같은 사실의 두 번째 출처</em>만 만든다. 캐시가 진실이 될 수
 없다는 것은 불변규칙 7 이 이미 정했고, 아끼지도 못하면 남는 것은 갈라질 자리뿐이다.
-**그러면 이 캐시는 쓰는 쪽만 남는다.** ops 의 읽기 모델(§5.5)은 이벤트로 프로젝션하지 dispatch 의 Redis 를 읽지 않으므로, Phase 6 에서도 소비자가 안 생길 수 있다 — 그때는 **이 키와 5-5 의 쓰기 경로를 함께 지운다**(Phase 6-0c 에서 판정). §7.2 에 행이 있다는 것은 유지할 이유가 아니다.
+**그러면 이 캐시는 쓰는 쪽만 남았고, 그래서 지웠다** (Phase 6-0c 판정, 같은 날). ops 의 읽기
+모델(§5.5)은 이벤트로 프로젝션하지 dispatch 의 Redis 를 읽지 않고, `GET /routes/{routeId}` 가
+stop 마다 살아 있는 상태를 이미 돌려주므로 위임 조회도 그 캐시를 필요로 하지 않는다.
+근거와 지운 목록은 §7.2 표 아래에 있다.
 
 **편차는 «평가 시계» 를 민다 — 저장되는 `planned_arrival` 은 계획 시계 그대로다.**
 
@@ -1948,7 +1955,8 @@ medium 1.52 · large 1.50). `medium`(20대)이 그것이 처음 생기는 크기
 **네 번째 행은 Phase 5 까지 발화하지 않는다.** `route_stops.status` 를 `ARRIVED`/`COMPLETED` 로
 옮기는 코드가 아직 없기 때문이다. 원인은 소비자 목록이었고 **그것은 2026-09-05 에 고쳤다** —
 §4.1 에서 dispatch 가 `delivery.status` 의 소비자가 됐다(그 표 아래 문단에 근거가 있다: §6.8 의
-"미완료 stop 만" 과 §7.2 의 `route:{id}:progress` 도 같은 결손을 겪고 있었다). 남은 것은 발행자다.
+"미완료 stop 만" 과 §7.2 의 `route:{id}:progress` 도 같은 결손을 겪고 있었다 — 그 키는
+2026-09-23 에 지웠고, 그래도 §6.8 과 이 분기는 그대로 남는다). 남은 것은 발행자다.
 tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 들어가고, 그때까지
 `dawnline_cancel_too_late_total` 은 구조적으로 0 이며 아래 "재검토 지점" 의 판정은 아무것도
 검사하지 않는다. **0 을 "경합 창이 좁다" 로 읽으면 안 되는 기간이 여기다.**
@@ -1994,11 +2002,23 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `lock:wave:{id}` | STRING NX | fulfillment | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
-| `route:{id}:progress` | HASH | dispatch/tracking | 2d | DB 조회 — `route_stops` 에서 `nextSeq`(종결되지 않은 가장 작은 `seq`, 취소된 stop 제외)·`completed`·`failed` 를 한 번의 조회로 다시 만든다. **채우는 쪽은 Phase 5-5** 의 `delivery.status` 전이이고(ADR-047), **첫 소비자는 Phase 5-3** 의 부분 재계획(§6.8 「미완료 stop 만」)이다 — 그때까지 이 키를 읽는 운영 코드는 없고 폴백을 지키는 것은 IT 다. `driver:{id}:pos` 와 달리 *쓰는* 쪽을 먼저 두는 이유는 값이 **사건이 지나갈 때만** 만들어지기 때문이다: 5-3 에 가서 켜면 그전에 지나간 스캔은 Redis 에 없고, 그 차이는 폴백이 있어야만 드러나지 않는다. **그런데 그 첫 소비자는 오지 않았다** (2026-09-23, Phase 5-3 정정): §6.8 은 같은 행을 어차피 읽으므로 캐시를 먼저 보면 조회를 아끼는 것이 아니라 **같은 사실의 둘째 출처만 생기고**, 불변규칙 7 이 그 출처를 진실로 못 쓴다고 이미 정했으니 남는 것은 갈라질 자리뿐이다([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 1). 지금 이 키는 **쓰는 쪽만 있고 읽는 쪽이 없다** — Phase 6-0c 에서 소비자를 정하거나, 정하지 않기로 하면 **이 행과 5-5 의 쓰기 경로를 함께 지운다.** 행이 있다는 것은 유지할 이유가 아니다 |
 | `driver:{id}:pos` | GEO | tracking | 1h | 없음(시각화용). **아직 아무도 쓰지 않는다**(2026-09-19, Phase 5-2) — 쓰는 코드도 읽는 코드도 없고 tracking 은 `route.assigned` 의 `driverId` 를 읽지도 않는다(`RouteAssignedPayload`). 채우는 시점은 **첫 소비자가 나타날 때**, 즉 Phase 6 의 ops-web 지도다 — dispatch OpenAPI 산출물·`delivery.route-departed` 와 같은 원칙이다(「부재는 첫 소비자가 나타나는 시점에 채운다」). 그때까지 기사 시뮬레이터는 스캔마다 `lat`·`lng` 를 실어 보내 데이터가 비어 있지 않게만 한다 |
 | `route:{id}:atrisk:cooldown` | STRING NX | tracking | 5m | 중복 at-risk 허용. **흡수하는 쪽은 멱등 소비자가 아니다**(2026-09-19 정정) — 두 at-risk 는 서로 다른 `eventId` 라 `processed_events` 에는 둘 다 처음 보는 이벤트다. 중복이 *재계획 두 번*이 되지 않게 하는 것은 dispatch 의 DB 쿨다운이고(§6.8 `routes.last_replanned_at`, 재계획 트랜잭션 안에서 비교·갱신), 이 키가 지키는 것은 **알림 수**다 ([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 폴백은 세어 둔다 — `dawnline_at_risk_cooldown_bypassed_total` |
 
 원칙: Redis는 **성능·조정(coordination)** 용도이며 **유일한 진실 저장소가 아니다**. 어떤 키가 사라져도 정확성은 DB로 회복된다.
+
+**이 표에서 행 하나가 빠졌다 — `route:{id}:progress`(HASH: nextSeq, completed, failed)** (2026-09-23,
+Phase 6-0c). 5-5 가 `delivery.status` 전이의 끝에서 그 키를 채웠고 5-3 이 첫 소비자가 될
+예정이었는데, 재계획이 필요한 값은 그 세 칸이 아니라 `actual_at`·`planned_arrival` 이어서
+읽는 쪽이 오지 않았다([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 1). Phase 6 에서도
+오지 않는다 — ops 는 이벤트로 프로젝션하고, **`GET /routes/{routeId}` 가 stop 마다 살아 있는
+상태를 이미 돌려주므로**(§5.3 `RouteView.StopView.status`) `nextSeq`·`completed`·`failed` 는
+그 응답이 싣고 있는 행들에서 나온다. 캐시를 읽으면 조회를 아끼는 것이 아니라 **같은 사실의
+둘째 출처**만 생기고, 불변규칙 7 이 그 출처를 진실로 못 쓴다고 이미 정했다. 「부재는 첫
+소비자가 채운다」(§11)의 거울상이다 — **소비자 없는 쓰기는 이 표에 행이 있다는 이유로 유지되면
+안 된다.** 지운 것: 어댑터·포트·`RouteMutations.progressOf`·그 폴백을 보던 IT·이 행. 폴링이
+필요해지면 답은 `GET /routes/{routeId}` 이고, 그것이 느리면 **그 응답을 캐시하는 것이지 다른
+키를 두는 것이 아니다.**
 
 **이 표에는 2026-09-05 하루 동안 예외가 하나 있었다.** `lock:relay:{service}` 행의 폴백 칸에는
 "없다 — 발행을 멈춘다" 가 적혀 있었다(ADR-027). 폴백이 없는 이유는 맞았다 — 락 없이 진행하면

@@ -7,7 +7,6 @@ import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.DispatchEvents;
 import com.dawnline.dispatch.application.port.out.PlannedRouteRepository;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
-import com.dawnline.dispatch.application.port.out.RouteProgress;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
@@ -348,20 +347,6 @@ final class InMemoryDispatchPorts {
             }
             lastReplannedAt.put(routeId, now);
             return true;
-        }
-
-        @Override
-        public Optional<RouteProgress> progressOf(UUID routeId) {
-            List<StopRow> stops = rows.getOrDefault(routeId, List.of());
-            if (stops.isEmpty()) {
-                return Optional.empty();
-            }
-            Integer nextSeq = stops.stream()
-                    .filter(stop -> !stop.status.isTerminal())
-                    .mapToInt(stop -> stop.seq).min().stream().boxed().findFirst().orElse(null);
-            return Optional.of(new RouteProgress(nextSeq,
-                    (int) stops.stream().filter(s -> s.status == RouteStopStatus.COMPLETED).count(),
-                    (int) stops.stream().filter(s -> s.status == RouteStopStatus.FAILED).count()));
         }
 
         @Override

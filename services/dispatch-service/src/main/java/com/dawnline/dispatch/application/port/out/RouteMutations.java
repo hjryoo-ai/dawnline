@@ -203,16 +203,6 @@ public interface RouteMutations {
     Optional<SettledStop> lastSettledStop(UUID routeId);
 
     /**
-     * 라우트의 진행 상황을 {@code route_stops} 에서 다시 만든다 — §7.2 의 폴백 경로다.
-     *
-     * <p>Redis 가 살아 있든 없든 <strong>이 값이 진실</strong>이다(불변규칙 7).
-     *
-     * @param routeId 라우트 id
-     * @return 라우트에 stop 이 하나도 없으면 빈 값
-     */
-    Optional<RouteProgress> progressOf(UUID routeId);
-
-    /**
      * 주문이 실린 stop 과 그 stop 의 상태.
      *
      * @param routeId 라우트 id

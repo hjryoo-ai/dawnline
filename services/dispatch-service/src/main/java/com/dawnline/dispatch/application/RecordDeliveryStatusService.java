@@ -2,7 +2,6 @@ package com.dawnline.dispatch.application;
 
 import com.dawnline.dispatch.application.port.in.RecordDeliveryStatusUseCase;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
-import com.dawnline.dispatch.application.port.out.RouteProgressCache;
 import com.dawnline.dispatch.domain.RouteStopTransition;
 import com.dawnline.dispatch.domain.RouteStopTransition.Verdict;
 import java.util.Objects;
@@ -16,10 +15,16 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code delivery.status} 를 {@code route_stops.status} 로 옮긴다 (DESIGN.md §4.1·§6.10, ADR-047).
  *
  * <h2>이것이 무엇을 여는가</h2>
- * 셋이다 — §6.8 부분 재계획의 「미완료 stop 만」, §7.2 {@code route:{id}:progress} 의 dispatch 쪽
- * 입력, 그리고 §6.10 넷째 분기({@code dawnline_cancel_too_late_total}). 셋째는 <strong>코드가
- * 더해지지 않는다</strong>: {@link CancelOrderService} 의 거부는 Phase 3 부터 있었고 없던 것은
+ * 둘이다 — §6.8 부분 재계획의 「미완료 stop 만」, 그리고 §6.10 넷째 분기
+ * ({@code dawnline_cancel_too_late_total}). 둘째는 <strong>코드가 더해지지 않는다</strong>:
+ * {@link CancelOrderService} 의 거부는 Phase 3 부터 있었고 없던 것은
  * {@code route_stops.status} 가 {@code ARRIVED} 에 닿는 경로였다.
+ *
+ * <p>셋이라고 적혀 있었다 (2026-09-23, Phase 6-0c 정정). 셋째는 §7.2 의
+ * {@code route:{id}:progress} 를 채우는 것이었는데 <strong>그 키는 지웠다</strong> — 읽는 쪽이
+ * 끝내 나타나지 않았고, {@code GET /routes/{routeId}} 가 stop 마다 살아 있는 상태를 이미
+ * 돌려주므로 캐시를 읽는 것은 같은 사실의 둘째 출처를 만드는 일이었다
+ * (ADR-048 결정 1 과 같은 근거).
  *
  * <h2>계획은 {@code (route, revision, seq)} 로, 사실은 {@code orderId} 로 식별한다</h2>
  * ADR-047 결정 1 이다. 계약은 {@code routeId} 와 {@code stopSeq} 를 싣지만 <strong>조회에 쓰지
@@ -45,19 +50,14 @@ public class RecordDeliveryStatusService implements RecordDeliveryStatusUseCase 
     private static final Logger log = LoggerFactory.getLogger(RecordDeliveryStatusService.class);
 
     private final RouteMutations routes;
-    private final RouteProgressCache progress;
     private final DispatchMetrics metrics;
 
     /**
-     * @param routes   라우트 조작
-     * @param progress 진행 캐시 (§7.2)
-     * @param metrics  §9.1 메트릭
+     * @param routes  라우트 조작
+     * @param metrics §9.1 메트릭
      */
-    public RecordDeliveryStatusService(RouteMutations routes, RouteProgressCache progress,
-            DispatchMetrics metrics) {
-
+    public RecordDeliveryStatusService(RouteMutations routes, DispatchMetrics metrics) {
         this.routes = Objects.requireNonNull(routes, "routes");
-        this.progress = Objects.requireNonNull(progress, "progress");
         this.metrics = Objects.requireNonNull(metrics, "metrics");
     }
 
@@ -112,11 +112,11 @@ public class RecordDeliveryStatusService implements RecordDeliveryStatusUseCase 
     }
 
     /**
-     * 상태를 옮기고 <strong>그 뒤에</strong> 진행 캐시를 다시 쓴다.
+     * 상태를 옮긴다 — 그게 전부다.
      *
-     * <p>캐시는 증분이 아니라 DB 에서 다시 만든 값으로 덮는다. 증분으로 올리면 캐시가 「스캔을
-     * 몇 번 받았는가」를 세게 되고, 그 수는 놓친 이벤트 하나로 영영 어긋난다 — 그리고 어긋난
-     * 캐시는 §7.2 의 폴백이 <em>발동하지 않는</em> 경우라 아무도 고쳐 주지 않는다.
+     * <p>여기에 §7.2 진행 캐시를 다시 쓰는 줄이 있었다 (2026-09-23 제거, Phase 6-0c). 그 캐시를
+     * 읽는 코드는 끝내 나타나지 않았고, 소비자 없는 쓰기는 §7.2 에 행이 있다는 이유로 유지되면
+     * 안 된다.
      */
     private void apply(DeliveryStatusCommand command, RouteMutations.AssignedStop stop) {
         // occurredAt 을 함께 적는다 — 계약은 그 값을 이미 싣고 있었고 버리고 있었다.
@@ -124,10 +124,6 @@ public class RecordDeliveryStatusService implements RecordDeliveryStatusUseCase 
         // 편차를 at-risk 페이로드에서 읽게 되고, 그 순간 「진실 하나」가 소속은 dispatch ·
         // 시각은 tracking 으로 갈린다. 처음 닿은 시각만 남는 것은 어댑터가 지킨다.
         routes.markStopStatus(stop.stopId(), command.status(), command.occurredAt());
-        // 이벤트가 말한 라우트가 아니라 stop 이 «지금 있는» 라우트의 진행을 다시 만든다.
-        // 재배치된 건에서 둘은 다르고, 값이 틀리는 쪽은 언제나 이벤트 쪽이다.
-        routes.progressOf(stop.routeId())
-                .ifPresent(value -> progress.put(stop.routeId(), value));
 
         log.debug("stop 상태를 옮겼다. routeId={}, stopSeq={}, status={}, occurredAt={}",
                 stop.routeId(), stop.seq(), command.status(), command.occurredAt());
