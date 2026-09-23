@@ -101,6 +101,7 @@ public final class HexagonalArchitectureRules {
     private static final String KAFKA_LISTENER = "org.springframework.kafka.annotation.KafkaListener";
     private static final String SPRING_TRANSACTIONAL = "org.springframework.transaction.annotation.Transactional";
     private static final String JAKARTA_TRANSACTIONAL = "jakarta.transaction.Transactional";
+    private static final String CONTROLLER_ADVICE = "org.springframework.web.bind.annotation.ControllerAdvice";
 
     /**
      * 규칙 1 — {@code ..domain..} 은 Spring 과 JPA 에 의존하지 않는다.
@@ -360,7 +361,72 @@ public final class HexagonalArchitectureRules {
                 .allowEmptyShould(true);
     }
 
-    /** 한 서비스에 적용할 8개 규칙 전부. */
+    /**
+     * 규칙 9 가 가리키는 기반 클래스의 이름. <strong>문자열</strong>인 이유는 방향이다 —
+     * {@code libs/web} 이 {@code libs/common} 에 의존하므로 그 반대는 성립하지 않는다.
+     *
+     * <p>문자열 링크는 <strong>끊어져도 조용하다</strong>: 클래스 이름이 바뀌면 규칙은 아무것도
+     * 매치하지 않으면서 통과한다. 그래서 {@code libs/web} 의
+     * {@code ProblemDetailsAdviceRuleTest} 가 이 값과 실제 클래스 이름을 <em>대조한다</em>
+     * (DESIGN.md §13 규칙 3).
+     */
+    public static final String ERROR_ADVICE_BASE = "com.dawnline.web.ProblemDetailsAdviceSupport";
+
+    /**
+     * 규칙 9 — {@code @ControllerAdvice} 계열 클래스는 {@code libs/web} 의 기반을 쓴다.
+     *
+     * <p>[ADR-049] 결정 4. RFC 9457 오류 본문의 모양은 클라이언트가 계약으로 삼는 것이므로
+     * 서비스마다 갈라지면 안 된다. <strong>열거가 아니라 조건</strong>으로 적는다 — 서비스
+     * 이름을 드는 대신 어노테이션이 붙은 클래스 전부에 묻는다. 새 서비스(ops-api)는 스스로
+     * 대상이 된다. 열거였던 규칙이 새 구성원을 놓친 일이 이 저장소에 있었고(ADR-009 의 버전
+     * 규칙, 2026-09-19), 그것이 규칙 8 이 생긴 이유다.
+     *
+     * <p>{@code @RestControllerAdvice} 는 {@code @ControllerAdvice} 를 메타 어노테이션으로
+     * 달고 있으므로 둘 다 걸린다.
+     */
+    public static final ArchRule ERROR_SHAPE_COMES_FROM_ONE_PLACE =
+            ArchRuleDefinition.classes()
+                    .that(isControllerAdvice())
+                    .should()
+                    .beAssignableTo(ERROR_ADVICE_BASE)
+                    .because("오류 응답의 모양은 libs/web 의 " + ERROR_ADVICE_BASE
+                            + " 한 곳에서 정한다 (ADR-049)")
+                    .allowEmptyShould(true);
+
+    /**
+     * 규칙 10 — {@code libs/common} 의 {@code main} 은 Spring 과 JPA 에 의존하지 않는다.
+     *
+     * <p>[ADR-049] 결정 2. {@code libs/common/build.gradle.kts} 의 첫 줄 선언은
+     * <strong>문장이지 강제가 아니다</strong> — Spring 의존을 한 줄 추가하면 그 주석은 그대로
+     * 있고 빌드는 통과한다. 규칙 1 이 {@code ..domain..} 을 지키듯 이 규칙이 그 모듈을 지킨다.
+     *
+     * <p>분석 대상을 {@code main} 출력으로 좁히는 것은 <strong>호출하는 쪽</strong>의 몫이다 —
+     * 이 모듈의 {@code test} 소스셋에는 Spring 을 일부러 참조하는 위반 표본들이 산다
+     * ({@code archunit/samples/bad}). 좁히기가 실패하면 규칙은 0 개를 검사하고 통과하므로,
+     * {@code LibsCommonIsFrameworkFreeTest} 가 <em>읽은 클래스가 있다</em>를 첫 어설션으로 말한다.
+     */
+    public static final ArchRule LIBS_COMMON_MAIN_IS_FRAMEWORK_FREE =
+            ArchRuleDefinition.noClasses()
+                    .should()
+                    .dependOnClassesThat()
+                    .resideInAnyPackage(SPRING_PACKAGE, JPA_PACKAGE)
+                    .because("libs/common 은 프레임워크 비의존 순수 Java 다 "
+                            + "(CLAUDE.md 불변규칙 5, ADR-049 결정 2) — "
+                            + "Spring 을 아는 공유 코드는 libs/web 에 산다")
+                    .allowEmptyShould(true);
+
+    /** {@code @ControllerAdvice} 가 직접 또는 메타로 붙은 클래스. */
+    private static DescribedPredicate<JavaClass> isControllerAdvice() {
+        return new DescribedPredicate<>("@ControllerAdvice 계열이 붙은") {
+            @Override
+            public boolean test(JavaClass javaClass) {
+                return javaClass.isAnnotatedWith(CONTROLLER_ADVICE)
+                        || javaClass.isMetaAnnotatedWith(CONTROLLER_ADVICE);
+            }
+        };
+    }
+
+    /** 한 서비스에 적용할 9개 규칙 전부. 규칙 10 은 서비스가 아니라 libs/common 에 건다. */
     public static List<ArchRule> allRulesFor(String service) {
         String owner = requireKnownService(service);
         List<ArchRule> rules = new ArrayList<>();
@@ -372,6 +438,7 @@ public final class HexagonalArchitectureRules {
         rules.add(transactionalOnlyInApplicationLayer(owner));
         rules.add(clocksAreInjected(owner));
         rules.add(apiVersionIsNotHardcodedInMappings(owner));
+        rules.add(ERROR_SHAPE_COMES_FROM_ONE_PLACE);
         return List.copyOf(rules);
     }
 
