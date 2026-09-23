@@ -4,12 +4,15 @@ import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.in.ReassignStopUseCase;
 import com.dawnline.dispatch.application.port.in.RouteView;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.util.Objects;
 import java.util.UUID;
+import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -51,7 +54,12 @@ public class RouteController {
     @GetMapping("/{routeId}")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "라우트 상세"),
-            @ApiResponse(responseCode = "404", description = "없는 라우트")})
+            // 오류 본문의 스키마를 명시한다. 적지 않으면 springdoc 이 <메서드 반환 타입>을 모든
+            // 응답에 붙여 문서가 「404 의 본문은 RouteView」라고 말하게 된다 (§11, ADR-044 와 같은 부류).
+            @ApiResponse(responseCode = "400", description = "`routeId` 가 UUID 형식이 아니다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "없는 라우트",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public RouteView get(@PathVariable UUID routeId) {
         return queries.findRoute(routeId)
                 .orElseThrow(() -> NotFoundException.of("Route", routeId.toString()));
@@ -69,9 +77,14 @@ public class RouteController {
      */
     @PostMapping("/{routeId}/stops/{orderId}/reassign")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "옮겼다"),
-            @ApiResponse(responseCode = "404", description = "없는 라우트·주문"),
-            @ApiResponse(responseCode = "409", description = "옮기면 하드 룰을 어긴다")})
+            @ApiResponse(responseCode = "200", description = "옮겼다. 두 라우트의 새 revision 이 온다"),
+            @ApiResponse(responseCode = "400", description = "`targetRouteId` 가 없거나 UUID 형식이 아니다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "없는 라우트·주문",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409",
+                    description = "옮기면 하드 룰을 어긴다. 재시도해도 결과가 같아 `Retry-After` 는 없다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public ReassignStopUseCase.Result reassign(@PathVariable UUID routeId,
             @PathVariable UUID orderId, @Valid @RequestBody ReassignRequest request) {
 

@@ -1,0 +1,722 @@
+openapi: 3.1.0
+info:
+  title: Dawnline dispatch-service
+  description: |-
+    운영자 배차 API (DESIGN.md §5.3). 계획 실행·조회, 라우트 조회, stop 재배정, 자원·룰 관리.
+
+    **고객 API 가 아니다.** 이 표면은 ops-api 를 통해서만 노출된다 (불변규칙 4 — 코어 서비스 간 동기 호출은 금지이고 ops-api → 코어 방향만 있다). 그래서 §7.2 의 고객 레이트 리밋이 붙지 않는다.
+
+    **계획 실행은 멱등이다.** 같은 웨이브에 다시 돌려도 답이 같다 (§5.3 `wave_id` UNIQUE). 그래서 `Retry-After` 를 쓰는 오류가 없다 — 재시도가 통하는 오류와 통하지 않는 오류를 나눌 필요가 아직 없다.
+
+    **재배정은 두 라우트를 모두 바꾼다.** 옮긴 쪽과 받은 쪽 둘 다 `revision` 이 오르고 `route.assigned` 가 다시 나간다. 소비자는 자신이 이미 본 revision 이하를 무시하므로(§6.8 4단계) 순서가 뒤바뀌어도 안전하다.
+
+    오류 응답은 RFC 9457 Problem Details 이고 `type` 과 `code` 가 항상 채워진다.
+  version: 1.0.0
+servers:
+- url: http://localhost:8083
+  description: 로컬 개발
+paths:
+  /api/v1/rules/{ruleId}:
+    put:
+      tags:
+      - resource-controller
+      operationId: updateRule
+      parameters:
+      - name: ruleId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRule"
+        required: true
+      responses:
+        "200":
+          description: 새 rule_version
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RuleVersion"
+        "400":
+          description: '`params` 가 없거나 id 가 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 없는 룰
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/vehicles:
+    get:
+      tags:
+      - resource-controller
+      operationId: vehicles
+      parameters:
+      - name: campId
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 그 캠프의 차량
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VehicleView"
+        "400":
+          description: '`campId` 가 없거나 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    post:
+      tags:
+      - resource-controller
+      operationId: createVehicle
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewVehicle"
+        required: true
+      responses:
+        "201":
+          description: 등록됨. `Location` 에 차량 주소가 온다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CreatedId"
+        "400":
+          description: 필수 값이 없거나 형식이 올바르지 않다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/routes/{routeId}/stops/{orderId}/reassign:
+    post:
+      tags:
+      - route-controller
+      operationId: reassign
+      parameters:
+      - name: routeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReassignRequest"
+        required: true
+      responses:
+        "200":
+          description: 옮겼다. 두 라우트의 새 revision 이 온다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Result"
+        "400":
+          description: '`targetRouteId` 가 없거나 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 없는 라우트·주문
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: 옮기면 하드 룰을 어긴다. 재시도해도 결과가 같아 `Retry-After` 는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/plans/{waveId}/run:
+    post:
+      tags:
+      - plan-controller
+      operationId: run
+      parameters:
+      - name: waveId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: campId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: strategy
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: mode
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 계획 실행 결과
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RunPlanResponse"
+        "400":
+          description: '`mode` 가 §6.7 의 값이 아니거나 id 가 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 계획이 없고 campId 도 주지 않았다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/drivers:
+    get:
+      tags:
+      - resource-controller
+      operationId: drivers
+      parameters:
+      - name: campId
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 그 캠프의 기사
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DriverView"
+        "400":
+          description: '`campId` 가 없거나 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    post:
+      tags:
+      - resource-controller
+      operationId: createDriver
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewDriver"
+        required: true
+      responses:
+        "201":
+          description: 등록됨. `Location` 에 기사 주소가 온다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CreatedId"
+        "400":
+          description: 필수 값이 없거나 형식이 올바르지 않다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/rules:
+    get:
+      tags:
+      - resource-controller
+      operationId: rules
+      parameters:
+      - name: campId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 룰 목록. 전역과 캠프 오버라이드가 함께 온다
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RuleView"
+        "400":
+          description: '`campId` 가 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/routes/{routeId}:
+    get:
+      tags:
+      - route-controller
+      operationId: get
+      parameters:
+      - name: routeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 라우트 상세
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RouteView"
+        "400":
+          description: '`routeId` 가 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 없는 라우트
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/plans/{planId}:
+    get:
+      tags:
+      - plan-controller
+      operationId: get_1
+      parameters:
+      - name: planId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 계획 상세
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/PlanView"
+        "400":
+          description: '`planId` 가 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 없는 계획
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+components:
+  schemas:
+    UpdateRule:
+      type: object
+      properties:
+        params:
+          type: object
+          additionalProperties: {}
+        enabled:
+          type: boolean
+      required:
+      - params
+    ProblemDetail:
+      type: object
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+        properties:
+          type: object
+          additionalProperties: {}
+    RuleVersion:
+      type: object
+      properties:
+        ruleVersion:
+          type: integer
+          format: int32
+    NewVehicle:
+      type: object
+      properties:
+        campId:
+          type: string
+          format: uuid
+        code:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          minLength: 1
+        maxWeightG:
+          type: integer
+          format: int32
+          exclusiveMinimum: 0
+        maxVolumeCm3:
+          type: integer
+          format: int32
+          exclusiveMinimum: 0
+        cold:
+          type: boolean
+        allowsHazmat:
+          type: boolean
+        fixedCostKrw:
+          type: integer
+          format: int32
+          minimum: 0
+        costPerKmKrw:
+          type: integer
+          format: int32
+          minimum: 0
+        costPerMinKrw:
+          type: integer
+          format: int32
+          minimum: 0
+        shiftStart:
+          type: string
+          format: time-local
+        shiftEnd:
+          type: string
+          format: time-local
+      required:
+      - campId
+      - code
+      - shiftEnd
+      - shiftStart
+      - type
+    CreatedId:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+    ReassignRequest:
+      type: object
+      properties:
+        targetRouteId:
+          type: string
+          format: uuid
+      required:
+      - targetRouteId
+    Result:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        fromRouteId:
+          type: string
+          format: uuid
+        fromRevision:
+          type: integer
+          format: int32
+        toRouteId:
+          type: string
+          format: uuid
+        toRevision:
+          type: integer
+          format: int32
+    RunPlanResponse:
+      type: object
+      properties:
+        waveId:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+    NewDriver:
+      type: object
+      properties:
+        campId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
+        code:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+      required:
+      - campId
+      - code
+      - name
+    VehicleView:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        campId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        type:
+          type: string
+        maxWeightG:
+          type: integer
+          format: int32
+        maxVolumeCm3:
+          type: integer
+          format: int32
+        cold:
+          type: boolean
+        allowsHazmat:
+          type: boolean
+        fixedCostKrw:
+          type: integer
+          format: int32
+        costPerKmKrw:
+          type: integer
+          format: int32
+        costPerMinKrw:
+          type: integer
+          format: int32
+        shiftStart:
+          type: string
+          format: time-local
+        shiftEnd:
+          type: string
+          format: time-local
+        active:
+          type: boolean
+    RuleView:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        campId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+        severity:
+          type: string
+        priority:
+          type: integer
+          format: int32
+        enabled:
+          type: boolean
+        ruleVersion:
+          type: integer
+          format: int32
+        params:
+          type: string
+    RouteView:
+      type: object
+      properties:
+        routeId:
+          type: string
+          format: uuid
+        planId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
+        driverId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        revision:
+          type: integer
+          format: int32
+        distanceM:
+          type: integer
+          format: int32
+        durationS:
+          type: integer
+          format: int32
+        costKrw:
+          type: integer
+          format: int64
+        stops:
+          type: array
+          items:
+            $ref: "#/components/schemas/StopView"
+    StopView:
+      type: object
+      properties:
+        stopId:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+          format: int32
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        plannedArrival:
+          type: string
+          format: date-time
+        plannedDeparture:
+          type: string
+          format: date-time
+        serviceSeconds:
+          type: integer
+          format: int32
+        status:
+          type: string
+        orderIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    ExplanationView:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+        ruleName:
+          type: string
+        vehicleId:
+          type: string
+          format: uuid
+        detail:
+          type: string
+    PlanView:
+      type: object
+      properties:
+        planId:
+          type: string
+          format: uuid
+        waveId:
+          type: string
+          format: uuid
+        campId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        strategy:
+          type: string
+        mode:
+          type: string
+        ruleVersion:
+          type: integer
+          format: int32
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        totalCostKrw:
+          type: integer
+          format: int64
+        assignedCount:
+          type: integer
+          format: int32
+        unassignedCount:
+          type: integer
+          format: int32
+        planDurationMs:
+          type: integer
+          format: int32
+        failureReason:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteSummary"
+        explanations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExplanationView"
+    RouteSummary:
+      type: object
+      properties:
+        routeId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
+        seqNo:
+          type: integer
+          format: int32
+        revision:
+          type: integer
+          format: int32
+        stopCount:
+          type: integer
+          format: int32
+        distanceM:
+          type: integer
+          format: int32
+        durationS:
+          type: integer
+          format: int32
+        costKrw:
+          type: integer
+          format: int64
+    DriverView:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        campId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
