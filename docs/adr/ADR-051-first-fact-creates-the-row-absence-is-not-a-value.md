@@ -18,7 +18,7 @@ DB 를 읽지 않으므로(불변규칙 4) 이 열한 개가 운영자 화면이
 
 | 표 | 키 | 그 행에 쓰는 토픽 |
 |---|---|---|
-| `rm_orders` | `order_id` | **여섯** — `order.placed` · `fulfillment.planned` · `order.dispatched` · `delivery.status` · `order.cancelled` · `delivery.at-risk` |
+| `rm_orders` | `order_id` | **여섯** — `order.placed` · `fulfillment.planned` · `order.dispatched` · `delivery.status` · `order.cancelled` · `delivery.at-risk` (2026-09-24 정정 뒤 **일곱** — `route.assigned` 가 `planned_arrival` 을 쓴다, 재검토 지점 2) |
 | `rm_waves` | `wave_id` | 넷 — `fulfillment.planned`(웨이브를 처음 이름으로 부른다) · `wave.closed` · `plan.completed` · `plan.failed` |
 | `rm_routes` | `route_id` | 넷 — `route.assigned` · `delivery.status` · `delivery.at-risk` · `delivery.route-departed` |
 | `rm_kpi_hourly` | `(camp_id, bucket_hour)` | 위 전부의 파생 |
@@ -86,7 +86,10 @@ ADR-017 이 §4.5 의 예고를 받아 규칙으로 만든 것과 같은 자리�
 두 토픽 이상이 같은 칸을 쓰는 곳은 `rm_orders.status` 와 `rm_waves.status` 둘이고, 둘 다
 [ADR-017](ADR-017-order-state-machine-absorbs-out-of-order-events.md) 의 진행 축 비교를 쓴다 —
 `PLACED(0) → PLANNED(1) → DISPATCHED(2) → DELIVERED·FAILED(3)` 와
-`OPEN(0) → CLOSING(1) → CLOSED(2) → PLAN_FAILED(3) → PLANNED(4)`. 뒤로 가는 전이는 무시하고
+`OPEN(0) → CLOSING(1) → CLOSED(2) → PLAN_FAILED(3) → PLANNED(4)`.
+**(2026-09-24 정정)** 앞의 것은 한 칸에 두 출처를 접고 있었고(재검토 지점 1), 정정 뒤의 상태
+칸은 넷이다 — `rm_orders.order_status` · `rm_orders.delivery_outcome` · `rm_waves.status` ·
+`rm_routes.status`. 값과 축은 `docs/DESIGN.md` §5.5 의 「DDL 정정」 표가 기준이다. 뒤로 가는 전이는 무시하고
 `dawnline_event_stale_total{consumer,eventType}` 로 센다(§9.1 — 그 카운터는 이미 「전 소비자」가
 대상이다).
 
@@ -103,6 +106,8 @@ ops 가 **다시 판정하는** 이유는 order-service 가 `orders.status` 를 
 증감이 틀리는 이유는 순서다. `delivery.status` 는 `order.dispatched` 보다 먼저 올 수 있고,
 그 순간 프로젝션은 **그 주문이 어느 라우트의 것인지 아직 모른다** — 올릴 라우트가 없다.
 나중에 `order.dispatched` 가 `route_id` 를 채워도 이미 지나간 `+1` 은 돌아오지 않는다.
+(2026-09-24 정정 뒤 `route_id` 를 채우는 것은 `route.assigned` 다 — 재계획이 옮긴 주문은 개정에만
+나타나기 때문이다(`docs/DESIGN.md` §5.5). 논증은 같다: 멤버십이 늦게 온다.)
 집계는 같은 상황에서 그냥 맞는다: 멤버십이든 상태든 바뀐 뒤에 다시 세면 답이 하나다.
 
 이 형태는 이 저장소에 이미 있다 —
@@ -234,7 +239,12 @@ IT 가 있는 한 정방향 전제를 다시 넣으면 빨강이 된다. 되돌�
 
 ## 재검토 지점
 
-1. **`CANCELLED` 와 `DELIVERED` 는 한 칸에 같이 앉지 못한다 — 그리고 그것은 순서 문제가
+1. **(답했다, 2026-09-24 — `docs/DESIGN.md` §5.5 「DDL 정정」.)** 답은 축이 아니라 칸의 수였고,
+   원칙은 **「한 칸에 두 출처의 사실을 접지 않는다」** — 결정 2 의 적용이다. `order_status`(주문 쪽
+   축)와 `delivery_outcome`(`delivery.status` 만)으로 나눴고, 「취소됐는데 배송됨」은 두 칸의
+   **조합**이며 그것이 운영자의 예외 목록이다. 아래는 물음을 적었던 원문이다.
+
+   **`CANCELLED` 와 `DELIVERED` 는 한 칸에 같이 앉지 못한다 — 그리고 그것은 순서 문제가
    아니다.** order-service 에서 `CANCELLED` 는 진행 축 **밖**이고(§5.1, 설계된 경합 창),
    취소된 주문이 실제로 배송되는 경우가 있다 — 그 쌍을 `dawnline_scan_after_cancel_total`
    (tracking)과 `dawnline_cancel_too_late_total`(dispatch)이 센다. ops 는 **운영자의 화면**이라
@@ -242,7 +252,12 @@ IT 가 있는 한 정방향 전제를 다시 넣으면 빨강이 된다. 되돌�
    어느 쪽이 먼저 오든 같은 답이 나오게 할 뿐, 그 답이 무엇이어야 하는지는 정하지 않는다.
    **프로젝션 커밋에서 §5.5 DDL 과 함께 답한다** — 두 사실 다 영구히 참이므로 답은 축이
    아니라 칸의 수일 가능성이 높다.
-2. **`rm_orders.eta_at` 의 출처가 하나뿐이다.** ETA 를 싣는 토픽은 `delivery.at-risk` 뿐이고
+2. **(답했다, 2026-09-24 — 같은 정정.)** 답은 같다 — 칸 둘. `planned_arrival` 은 `route.assigned`
+   가 **언제나**, `eta_at` 은 at-risk 가 **개정됐을 때만** 쓰고 화면은 `eta_at ?? planned_arrival` 에
+   「개정됨」을 붙인다. 부재를 이벤트를 늘려 채우지 않았다 — 전 stop 의 ETA 를 스캔마다 팬아웃하는
+   것은 처리량을 부재 하나와 바꾸는 일이다. 묶음 C 의 결정이 아니라 DDL 의 결정이었다. 아래는 원문이다.
+
+   **`rm_orders.eta_at` 의 출처가 하나뿐이다.** ETA 를 싣는 토픽은 `delivery.at-risk` 뿐이고
    (§5.4), 그래서 **위험하지 않은 주문의 ETA 는 ops 에 오지 않는다.** 이것도 순서가 아니라
    부재의 문제다. 화면이 그 칸을 요구하면 답은 ADR-050 과 같은 절차(소비자 주도로 토픽을
    정한다)이거나, 그 칸을 DDL 에서 빼는 것이다. 지금 고르지 않는다 — 고르는 자리는 묶음 C 의
