@@ -17,6 +17,7 @@ import com.dawnline.fulfillment.domain.FulfillmentOrder;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.UnserviceableReason;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.Zone;
 import java.time.Clock;
 import java.time.Instant;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,6 +47,10 @@ import org.springframework.transaction.annotation.Transactional;
  * {@link TierSchedule} 이 준다 — §2.2 표를 여기에 다시 적지 않는다(ADR-020 후속 정정 2).
  * 그렇게 밀린 주문은 {@code promiseRevised: true} 로 나가고, order-service 가 그것을 받아 고객의
  * 약속을 갱신한다. <strong>조용히 밀지 않는 것이 이 경로의 요점이다.</strong>
+ *
+ * <p>(2026-09-24, ADR-054) 웨이브를 닫는 쪽이 둘이 되었다 — grace 뒤의 스케줄러와 컷오프 전에도 닫는 운영자.
+ * 개정 카운터의 {@code cause} 는 <strong>주문의 원래 컷오프 웨이브</strong>를 누가 닫았는지({@code close_cause})
+ * 에서 온다. 밀린 경로는 같고 원인만 다르다.
  */
 public class PlanOrderService implements PlanOrderUseCase {
 
@@ -138,13 +144,13 @@ public class PlanOrderService implements PlanOrderUseCase {
             FcSelectionResult.Selected selected) {
 
         ServiceTier tier = ServiceTier.valueOf(snapshot.serviceTier());
-        Optional<Wave> admitted = openWaveFor(camp, tier, snapshot.cutoffAt());
+        Optional<Admission> admitted = openWaveFor(camp, tier, snapshot.cutoffAt());
         if (admitted.isEmpty()) {
             // 밀 수 있는 웨이브를 못 찾았다 = 이 주문을 오늘 일로 볼 수 없다.
             return reject(snapshot, placedEventId, UnserviceableReason.STALE_PLACED, camp.id());
         }
 
-        Wave wave = admitted.get();
+        Wave wave = admitted.get().wave();
         boolean revised = !wave.cutoffAt().equals(snapshot.cutoffAt());
         TimeWindow window = revised
                 ? schedule.windowFor(snapshot.serviceTier(), wave.cutoffAt())
@@ -168,7 +174,7 @@ public class PlanOrderService implements PlanOrderUseCase {
         // 않는다 — 다만 메트릭은 트랜잭션에 참여하지 않으므로 롤백 시 카운터만 남는다.
         // 그 편차는 관측값의 성격상 받아들인다(정확성이 아니라 추세를 보는 값이다).
         if (revised) {
-            metrics.promiseRevised(camp.code(), tier);
+            metrics.promiseRevised(camp.code(), tier, admitted.get().pushedBy());
         }
         if (selected.fallbackReason() != null) {
             metrics.fcFallback(camp.code(), selected.fallbackReason());
@@ -181,9 +187,13 @@ public class PlanOrderService implements PlanOrderUseCase {
      *
      * <p>없으면 만들고({@code ON CONFLICT DO NOTHING} 후 재조회), 공유 잠금으로 상태를 확인한다.
      * 이미 마감 중이면 다음 컷오프로 민다 — 그 순간부터 이 주문은 <em>개정된 약속</em>을 받는다.
+     *
+     * <p>민 원인은 <strong>첫 번째로 거절한 웨이브</strong>(주문의 원래 컷오프)의 {@code close_cause} 다 —
+     * 약속을 깬 것은 그 웨이브가 닫혀 있었다는 사실이고, 그 뒤에 또 밀렸다면 그것은 같은 사건의 연장이다.
      */
-    private Optional<Wave> openWaveFor(Camp camp, ServiceTier tier, Instant cutoffAt) {
+    private Optional<Admission> openWaveFor(Camp camp, ServiceTier tier, Instant cutoffAt) {
         Instant target = cutoffAt;
+        @Nullable WaveCloseCause pushedBy = null;
         for (int push = 0; push <= MAX_WAVE_PUSHES; push++) {
             if (selection.isStale(target)) {
                 // 컷오프가 상한을 넘겼다. 다음 웨이브를 찾아 봐야 유령 배송이다 (ADR-020 후속 정정).
@@ -193,13 +203,25 @@ public class PlanOrderService implements PlanOrderUseCase {
             // FOR SHARE — 이 트랜잭션이 끝날 때까지 이 웨이브는 마감될 수 없다 (ADR-025).
             Optional<Wave> locked = waves.findByIdForShare(wave.id());
             if (locked.isPresent() && locked.get().acceptsOrders()) {
-                return locked;
+                return Optional.of(new Admission(locked.get(), pushedBy));
+            }
+            if (push == 0 && locked.isPresent()) {
+                pushedBy = locked.get().closeCause();
             }
             target = schedule.nextCutoffAfter(tier.name(), target);
         }
         log.warn("웨이브를 {}번 밀어도 열린 웨이브를 찾지 못했습니다. camp={} tier={} cutoffAt={}",
                 MAX_WAVE_PUSHES, camp.code(), tier, cutoffAt);
         return Optional.empty();
+    }
+
+    /**
+     * 편입할 웨이브와, 밀렸다면 누가 원래 웨이브를 닫았는가.
+     *
+     * @param wave     열린 웨이브
+     * @param pushedBy 원래 컷오프 웨이브의 {@code close_cause} — 밀리지 않았으면 {@code null}
+     */
+    private record Admission(Wave wave, @Nullable WaveCloseCause pushedBy) {
     }
 
     private Wave findOrCreate(Camp camp, ServiceTier tier, Instant cutoffAt) {

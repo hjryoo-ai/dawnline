@@ -1,5 +1,6 @@
 package com.dawnline.fulfillment.adapter.out.persistence;
 
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -43,7 +44,7 @@ class WaveEntityTest {
         Wave wave = open();
         wave.beginClosing();
         Instant closedAt = CUTOFF.plusSeconds(120);
-        wave.close(closedAt, 2);
+        wave.close(closedAt, 2, WaveCloseCause.SCHEDULED);
 
         Wave restored = WaveEntity.from(wave).toDomain();
 

@@ -16,6 +16,7 @@ import com.dawnline.fulfillment.domain.FulfillmentOrderStatus;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.UnserviceableReason;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.Zone;
 import java.time.Clock;
 import java.time.Duration;
@@ -154,15 +155,51 @@ class PlanOrderServiceTest {
     void 개정과_대체는_메트릭으로_센다() {
         // §9.1 — 개정이 실제로 일어났는지를 보는 유일한 값이다(ADR-020 결정 3). 이것이 없으면
         // §8.1 의 정시율 두 기준을 나중에 맞출 수 없다.
-        Wave closed = Wave.open(ids().newUuid(), CAMP_ID, ServiceTier.SAME_DAY, CUTOFF_10);
-        closed.beginClosing();
-        repositories.waveRepository().insertIfAbsent(closed);
-        repositories.waveRepository().update(closed);
+        closedWave(CUTOFF_10, WaveCloseCause.SCHEDULED);
 
         service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
 
         assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED)
-                .tag("camp", "CAMP-A").tag("tier", "SAME_DAY").counter().count()).isEqualTo(1);
+                .tag("camp", "CAMP-A").tag("tier", "SAME_DAY").tag("cause", "scheduled").counter().count())
+                .isEqualTo(1);
+    }
+
+    @Test
+    void 운영자가_닫은_웨이브에_밀린_개정은_manual_로_센다() {
+        // ADR-054 결정 4 — 원인은 주문의 원래 컷오프 웨이브의 close_cause 에서 온다. 시각으로 되짚지 않는다:
+        // 이 웨이브는 컷오프 뒤에 닫혔어도(아래 close 시각) 운영자가 닫았으면 manual 이다.
+        closedWave(CUTOFF_10, WaveCloseCause.MANUAL);
+
+        PlanOrderUseCase.PlanOutcome outcome = service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
+
+        assertThat(outcome.revised()).isTrue();
+        assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED)
+                .tag("camp", "CAMP-A").tag("tier", "SAME_DAY").tag("cause", "manual").counter().count())
+                .isEqualTo(1);
+        assertThat(registry.find(FulfillmentMetrics.PROMISE_REVISED).tag("cause", "scheduled").counter())
+                .as("한 개정은 한 원인이다").isNull();
+    }
+
+    @Test
+    void 두_번_밀려도_원인은_원래_컷오프_웨이브의_것이다() {
+        // 원래 웨이브는 운영자가, 다음 웨이브는 스케줄러가 닫았다. 약속을 깬 것은 첫 웨이브가 닫혀 있었다는
+        // 사실이고 그 뒤의 밀림은 같은 사건의 연장이다.
+        closedWave(CUTOFF_10, WaveCloseCause.MANUAL);
+        closedWave(CUTOFF_14, WaveCloseCause.SCHEDULED);
+
+        service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
+
+        assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED).tag("cause", "manual").counter().count())
+                .isEqualTo(1);
+    }
+
+    /** 닫힌 웨이브를 만든다 — 커밋된 행처럼 {@code closedAt} 과 원인을 함께 든다(V3 CHECK). */
+    private void closedWave(Instant cutoffAt, WaveCloseCause cause) {
+        Wave closed = Wave.open(ids().newUuid(), CAMP_ID, ServiceTier.SAME_DAY, cutoffAt);
+        closed.beginClosing();
+        closed.close(cutoffAt.plusSeconds(120), 0, cause);
+        repositories.waveRepository().insertIfAbsent(closed);
+        repositories.waveRepository().update(closed);
     }
 
     @Test
@@ -176,10 +213,7 @@ class PlanOrderServiceTest {
     @Test
     void 마감된_웨이브의_컷오프를_가진_주문은_다음_웨이브로_밀리고_개정된다() {
         // grace 를 넘겨 도착했다. 조용히 밀지 않는 것이 이 경로의 요점이다.
-        Wave closed = Wave.open(ids().newUuid(), CAMP_ID, ServiceTier.SAME_DAY, CUTOFF_10);
-        closed.beginClosing();
-        repositories.waveRepository().insertIfAbsent(closed);
-        repositories.waveRepository().update(closed);
+        closedWave(CUTOFF_10, WaveCloseCause.SCHEDULED);
 
         PlacedOrderSnapshot snapshot = snapshot(CUTOFF_10);
         PlanOrderUseCase.PlanOutcome outcome = service.plan(snapshot, UUID.randomUUID());
@@ -193,10 +227,7 @@ class PlanOrderServiceTest {
     @Test
     void 개정된_약속창은_공유_표에서_나온다() {
         // §2.2 표를 이 서비스에 다시 적지 않는다 (ADR-020 후속 정정 2).
-        Wave closed = Wave.open(ids().newUuid(), CAMP_ID, ServiceTier.SAME_DAY, CUTOFF_10);
-        closed.beginClosing();
-        repositories.waveRepository().insertIfAbsent(closed);
-        repositories.waveRepository().update(closed);
+        closedWave(CUTOFF_10, WaveCloseCause.SCHEDULED);
 
         service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
 

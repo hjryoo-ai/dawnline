@@ -1,12 +1,9 @@
 package com.dawnline.fulfillment.application;
 
-import com.dawnline.fulfillment.application.port.out.FulfillmentEvents;
-import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
-import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import com.dawnline.fulfillment.application.port.out.WaveLock;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
-import com.dawnline.fulfillment.domain.Camp;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -41,42 +38,40 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 를 알리는 자리였는데, 이제 그 일은 배타 락이 한다 — 편입은 공유 락에서 기다렸다가
  * {@code CLOSED} 를 본다. 상태를 남겨 둔 이유는 도메인 전이 표가 그 순서를 강제하기 때문이고
  * (건너뛰기가 예외가 된다), 없앨 이유도 딱히 없다.
+ *
+ * <h2>마감 본문은 운영자 경로와 하나다 (ADR-054 결정 5)</h2>
+ * 세 번째 방어부터 outbox 까지는 {@link WaveClosing} 에 있고, 운영자 조기 마감({@link CloseWaveService})도 같은
+ * 것을 부른다. 이 클래스에 남은 것은 <em>언제·무엇을</em> 닫는가(조회 조건과 Redis 락)다.
  */
 public class CloseDueWavesService {
 
     private static final Logger log = LoggerFactory.getLogger(CloseDueWavesService.class);
 
     private final WaveRepository waves;
-    private final FulfillmentOrderRepository orders;
-    private final FulfillmentEvents events;
+    private final WaveClosing closing;
     private final WaveLock lock;
     private final TransactionTemplate transactions;
     private final Clock clock;
     private final Duration grace;
     private final int batchSize;
     private final FulfillmentMetrics metrics;
-    private final ReferenceData referenceData;
 
     /**
-     * @param waves              웨이브 저장소
-     * @param orders             주문 저장소 (마감 시 집계, ADR-025)
-     * @param events             outbox 발행
+     * @param waves              웨이브 저장소 (마감 대상 조회)
+     * @param closing            마감 본문 (운영자 경로와 공유, ADR-054)
      * @param lock               분산 락
      * @param transactionManager 웨이브마다 새 트랜잭션을 여는 데 쓴다
      * @param clock              시각 출처 (불변규칙 12)
      * @param grace              마감 여유 (ADR-020 기본 90초)
      * @param batchSize          한 번의 실행에서 닫을 최대 웨이브 수
      * @param metrics            §9.1 의 웨이브 편입량 게이지
-     * @param referenceData      게이지 라벨용 캠프 코드 조회
      */
-    public CloseDueWavesService(WaveRepository waves, FulfillmentOrderRepository orders,
-            FulfillmentEvents events, WaveLock lock, PlatformTransactionManager transactionManager,
-            Clock clock, Duration grace, int batchSize, FulfillmentMetrics metrics,
-            ReferenceData referenceData) {
+    public CloseDueWavesService(WaveRepository waves, WaveClosing closing, WaveLock lock,
+            PlatformTransactionManager transactionManager, Clock clock, Duration grace, int batchSize,
+            FulfillmentMetrics metrics) {
 
         this.waves = Objects.requireNonNull(waves, "waves");
-        this.orders = Objects.requireNonNull(orders, "orders");
-        this.events = Objects.requireNonNull(events, "events");
+        this.closing = Objects.requireNonNull(closing, "closing");
         this.lock = Objects.requireNonNull(lock, "lock");
         this.transactions = new TransactionTemplate(Objects.requireNonNull(transactionManager, "tx"));
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -89,7 +84,6 @@ public class CloseDueWavesService {
         }
         this.batchSize = batchSize;
         this.metrics = Objects.requireNonNull(metrics, "metrics");
-        this.referenceData = Objects.requireNonNull(referenceData, "referenceData");
     }
 
     /**
@@ -148,8 +142,18 @@ public class CloseDueWavesService {
         }
         WaveLock.Guard held = guard.get();
         try {
-            Boolean done = transactions.execute(status -> close(candidate));
-            return Boolean.TRUE.equals(done);
+            WaveClosing.Outcome outcome = transactions.execute(
+                    status -> closing.closeIfOpen(candidate.id(), WaveCloseCause.SCHEDULED));
+            if (outcome instanceof WaveClosing.Outcome.Closed closed) {
+                // 커밋 뒤다. waves.order_count 는 마감 전에 0 이므로(ADR-025) 이 게이지가 편입량의 유일한
+                // 관측 경로이고, 마감 시점에 이미 센 값을 그대로 쓴다 — 스크레이프마다 집계하면 관측이
+                // §8.2 피크에 부하가 된다.
+                metrics.waveClosed(closed.campCode(), closed.wave().serviceTier(), closed.wave().orderCount());
+                return true;
+            }
+            // NotOpen·NotFound: 다른 인스턴스(또는 운영자)가 먼저 닫았다. 세 번째 방어이고, 여기까지 왔다는
+            // 것은 락이 새고 있거나 사람이 먼저 눌렀다는 뜻이지만 결과는 안전하다.
+            return false;
         } catch (RuntimeException e) {
             log.warn("웨이브 마감 실패. 다음 주기에 다시 시도합니다. waveId={}", candidate.id(), e);
             return false;
@@ -158,43 +162,5 @@ public class CloseDueWavesService {
             // "쓰이지 않는 자원" 경고를 낸다. 해제 시점은 같다.
             held.close();
         }
-    }
-
-    /**
-     * 게이지 라벨용 캠프 코드.
-     *
-     * <p>id 가 아니라 코드다. 같은 {@code camp} 라벨을 쓰는 다른 메트릭
-     * ({@code promise_revised}·{@code fc_fallback})이 코드를 쓰므로 여기만 UUID 면 대시보드에서
-     * 두 값을 나란히 볼 수 없다 — <strong>라벨은 메트릭마다가 아니라 라벨마다 일관해야 한다.</strong>
-     *
-     * <p>조회가 하나 붙지만 <em>웨이브 마감마다</em>이고 그것은 하루 40번이다(ADR-023 의 행 수).
-     * 찾지 못하면 id 로 떨어진다 — 게이지 하나 때문에 마감을 실패시키지 않는다.
-     */
-
-    private boolean close(Wave candidate) {
-        // 진행 중인 편입(공유 락)이 전부 커밋될 때까지 기다린 뒤 배타로 잡는다 (ADR-025).
-        Optional<Wave> locked = waves.findByIdForUpdate(candidate.id());
-        if (locked.isEmpty() || !locked.get().status().acceptsOrders()) {
-            // 이미 다른 인스턴스가 닫았다. 세 번째 방어이고, 여기까지 왔다는 것은 락이 새고
-            // 있다는 뜻이지만 결과는 안전하다.
-            return false;
-        }
-        Wave wave = locked.get();
-        wave.beginClosing();
-        // 카운트는 여기서 한 번 센다 (ADR-025). 배타 락을 들고 있으므로 새 편입이 없다.
-        int orderCount = orders.countPlannedInWave(wave.id());
-        wave.close(clock.instant(), orderCount);
-        waves.update(wave);
-        // 캠프 좌표를 이벤트에 싣는다 — dispatch 의 라우트 출발·복귀 지점이고, 되묻는 동기
-        // 호출은 불변규칙 4 가 금지한다. 캠프를 못 찾으면 이 웨이브만 실패시킨다(웨이브마다
-        // 트랜잭션이다) — 좌표 없는 wave.closed 는 dispatch 가 계획할 수 없는 이벤트다.
-        Camp camp = referenceData.findCamp(wave.campId()).orElseThrow(() -> new IllegalStateException(
-                "캠프를 찾지 못해 wave.closed 를 낼 수 없습니다: campId=" + wave.campId()));
-        events.waveClosed(wave, camp.location());
-        // waves.order_count 는 마감 전에 0 이므로(ADR-025) 이 게이지가 편입량의 유일한 관측
-        // 경로다. 마감 시점에 이미 센 값을 그대로 쓴다 — 스크레이프마다 집계하면 관측이
-        // §8.2 피크에 부하가 된다.
-        metrics.waveClosed(camp.code(), wave.serviceTier(), orderCount);
-        return true;
     }
 }

@@ -11,6 +11,7 @@ import com.dawnline.fulfillment.domain.FulfillmentOrder;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.UnserviceableReason;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.WaveStatus;
 import java.time.Clock;
 import java.time.Duration;
@@ -62,9 +63,11 @@ class CloseDueWavesServiceTest {
     private final FulfillmentMetrics metrics = new FulfillmentMetrics(registry);
 
     private CloseDueWavesService service(Instant now) {
-        return new CloseDueWavesService(repositories.waveRepository(), repositories.orderRepository(),
-                events, lock, new NoOpTransactionManager(), Clock.fixed(now, ZoneOffset.UTC),
-                GRACE, 200, metrics, repositories.referenceData());
+        Clock clock = Clock.fixed(now, ZoneOffset.UTC);
+        WaveClosing closing = new WaveClosing(repositories.waveRepository(), repositories.orderRepository(),
+                events, repositories.referenceData(), clock);
+        return new CloseDueWavesService(repositories.waveRepository(), closing, lock,
+                new NoOpTransactionManager(), clock, GRACE, 200, metrics);
     }
 
     private Wave openWave(Instant cutoffAt) {
@@ -99,6 +102,8 @@ class CloseDueWavesServiceTest {
                 .satisfies(closed -> {
                     assertThat(closed.status()).isEqualTo(WaveStatus.CLOSED);
                     assertThat(closed.closedAt()).isEqualTo(CUTOFF.plus(GRACE));
+                    assertThat(closed.closeCause()).as("스케줄러가 닫았다 (ADR-054)")
+                            .isEqualTo(WaveCloseCause.SCHEDULED);
                 });
         assertThat(events.closed).containsExactly(wave.id());
     }
@@ -185,6 +190,36 @@ class CloseDueWavesServiceTest {
 
         assertThat(events.closed).isEmpty();
         assertThat(lock.released).as("실패해도 락은 놓는다").isEqualTo(1);
+        assertThat(registry.find(FulfillmentMetrics.WAVE_ORDERS).gauge())
+                .as("커밋되지 않은 마감의 편입량을 게이지에 남기지 않는다 — 카운터는 커밋 뒤에 센다").isNull();
+    }
+
+    @Test
+    void 마감이_커밋되면_게이지에_그_집계를_남긴다() {
+        Wave wave = openWave(CUTOFF);
+        admit(wave);
+
+        service(CUTOFF.plus(GRACE)).closeDue();
+
+        assertThat(registry.get(FulfillmentMetrics.WAVE_ORDERS)
+                .tag("camp", "CAMP-TEST").tag("tier", "SAME_DAY").gauge().value()).isEqualTo(1);
+    }
+
+    @Test
+    void 운영자가_먼저_닫은_웨이브는_건너뛴다() {
+        // 컷오프 전에 사람이 닫았다. 조회 조건(status='OPEN')이 거르고, 원인은 운영자의 것으로 남는다 —
+        // 스케줄러가 나중에 덮어쓰면 개정 카운터의 cause 가 거짓이 된다. 조회와 FOR UPDATE 사이에 끼어든
+        // 경우(세 번째 방어)는 WaveClosingTest 가 본다.
+        Wave wave = openWave(CUTOFF);
+        Wave byOperator = repositories.waveRepository().findById(wave.id()).orElseThrow();
+        byOperator.beginClosing();
+        byOperator.close(CUTOFF.minusSeconds(600), 0, WaveCloseCause.MANUAL);
+        repositories.waveRepository().update(byOperator);
+
+        assertThat(service(CUTOFF.plus(GRACE)).closeDue()).isZero();
+        assertThat(repositories.waves()).singleElement()
+                .extracting(Wave::closeCause).isEqualTo(WaveCloseCause.MANUAL);
+        assertThat(events.closed).as("wave.closed 는 운영자의 마감에서 한 번 나갔다").isEmpty();
     }
 
     /** 락 호출을 센다. */

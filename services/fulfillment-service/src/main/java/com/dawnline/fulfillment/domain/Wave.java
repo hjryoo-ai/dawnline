@@ -24,7 +24,7 @@ import org.jspecify.annotations.Nullable;
  * 올리던 이전 설계는 배타 락을 요구했고, §8.2 피크에서 <em>웨이브 행 하나가 처리량 상한</em>이
  * 되었다.
  *
- * <p>{@code orderCount} 는 마감 시 한 번 세어 {@link #close(Instant, int)} 로 들어온다. 그래서
+ * <p>{@code orderCount} 는 마감 시 한 번 세어 {@link #close(Instant, int, WaveCloseCause)} 로 들어온다. 그래서
  * 취소가 카운트를 건드리는 분기가 없고, 카운터 드리프트도 구조적으로 불가능하다.
  */
 public final class Wave {
@@ -37,17 +37,24 @@ public final class Wave {
     private WaveStatus status;
     private int orderCount;
     private @Nullable Instant closedAt;
+    private @Nullable WaveCloseCause closeCause;
     private long version;
 
-    private Wave(UUID id, UUID campId, ServiceTier serviceTier, Instant cutoffAt,
-            WaveStatus status, int orderCount, @Nullable Instant closedAt, long version) {
+    private Wave(UUID id, UUID campId, ServiceTier serviceTier, Instant cutoffAt, WaveStatus status,
+            int orderCount, @Nullable Instant closedAt, @Nullable WaveCloseCause closeCause, long version) {
         this.id = Objects.requireNonNull(id, "id");
         this.campId = Objects.requireNonNull(campId, "campId");
         this.serviceTier = Objects.requireNonNull(serviceTier, "serviceTier");
         this.cutoffAt = Objects.requireNonNull(cutoffAt, "cutoffAt");
         this.status = Objects.requireNonNull(status, "status");
         this.closedAt = closedAt;
+        this.closeCause = closeCause;
         this.version = version;
+        if ((closedAt == null) != (closeCause == null)) {
+            // DB 의 CHECK 와 같은 문장이다 (V3). 한쪽만 있으면 「언제 닫혔나」와 「누가 닫았나」가 어긋난다.
+            throw new IllegalArgumentException("closedAt 과 closeCause 는 함께 있거나 함께 없어야 합니다: "
+                    + closedAt + " / " + closeCause);
+        }
         if (orderCount < 0) {
             throw new IllegalArgumentException("orderCount 는 0 이상이어야 합니다: " + orderCount);
         }
@@ -63,7 +70,7 @@ public final class Wave {
      * @param cutoffAt    {@code order.placed} 가 싣고 온 컷오프
      */
     public static Wave open(UUID id, UUID campId, ServiceTier serviceTier, Instant cutoffAt) {
-        return new Wave(id, campId, serviceTier, cutoffAt, WaveStatus.OPEN, 0, null, 0);
+        return new Wave(id, campId, serviceTier, cutoffAt, WaveStatus.OPEN, 0, null, null, 0);
     }
 
     /**
@@ -76,11 +83,13 @@ public final class Wave {
      * @param status      상태
      * @param orderCount  편입 주문 수
      * @param closedAt    마감 시각
+     * @param closeCause  마감 원인 — {@code closedAt} 과 함께 있거나 함께 없다
      * @param version     낙관적 락 버전
      */
     public static Wave rehydrate(UUID id, UUID campId, ServiceTier serviceTier, Instant cutoffAt,
-            WaveStatus status, int orderCount, @Nullable Instant closedAt, long version) {
-        return new Wave(id, campId, serviceTier, cutoffAt, status, orderCount, closedAt, version);
+            WaveStatus status, int orderCount, @Nullable Instant closedAt, @Nullable WaveCloseCause closeCause,
+            long version) {
+        return new Wave(id, campId, serviceTier, cutoffAt, status, orderCount, closedAt, closeCause, version);
     }
 
     /**
@@ -120,16 +129,22 @@ public final class Wave {
      * {@code fulfillment_orders} 를 세어 넘긴 값이고(ADR-025), 그 시점에는 배타 락을 들고 있어
      * 새 편입이 없다. 이 값이 그대로 {@code wave.closed} 로 나간다(§4.3).
      *
+     * <p>{@code cause} 도 여기서 받는다 — 누가 닫았는지는 닫는 순간의 사실이고, 나중에 시각으로 되짚으면
+     * grace 설정값에 기대게 된다 (ADR-054 결정 3).
+     *
      * @param at         {@code wave.closed} 를 outbox 에 넣고 커밋하는 시각
      * @param orderCount 마감 시점에 이 웨이브에 편입되어 있던 주문 수
+     * @param cause      누가 닫았는가
      */
-    public void close(Instant at, int orderCount) {
+    public void close(Instant at, int orderCount, WaveCloseCause cause) {
         Objects.requireNonNull(at, "at");
+        Objects.requireNonNull(cause, "cause");
         if (orderCount < 0) {
             throw new IllegalArgumentException("orderCount 는 0 이상이어야 합니다: " + orderCount);
         }
         transitionTo(WaveStatus.CLOSED);
         this.closedAt = at;
+        this.closeCause = cause;
         this.orderCount = orderCount;
     }
 
@@ -199,6 +214,11 @@ public final class Wave {
     /** 마감 시각. 마감 전이면 비어 있다. */
     public @Nullable Instant closedAt() {
         return closedAt;
+    }
+
+    /** 마감 원인. 마감 전이면 비어 있다 (ADR-054). */
+    public @Nullable WaveCloseCause closeCause() {
+        return closeCause;
     }
 
     /** 낙관적 락 버전. */

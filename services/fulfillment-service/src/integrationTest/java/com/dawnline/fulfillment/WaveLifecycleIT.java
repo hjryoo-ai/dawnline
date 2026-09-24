@@ -7,14 +7,15 @@ import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.fulfillment.application.CloseDueWavesService;
 import com.dawnline.fulfillment.application.FulfillmentMetrics;
-import com.dawnline.fulfillment.application.port.out.FulfillmentEvents;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
-import com.dawnline.fulfillment.application.port.out.ReferenceData;
+import com.dawnline.fulfillment.application.WaveClosing;
+import com.dawnline.fulfillment.application.port.in.CloseWaveUseCase;
 import com.dawnline.fulfillment.application.port.out.WaveLock;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import com.dawnline.fulfillment.domain.FulfillmentOrder;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.WaveStatus;
 import com.dawnline.messaging.contract.EventContracts;
 import com.dawnline.messaging.outbox.RelayLeadership;
@@ -114,9 +115,6 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
     private PlatformTransactionManager transactionManager;
 
     @Autowired
-    private FulfillmentEvents events;
-
-    @Autowired
     private WaveLock lock;
 
     @Autowired
@@ -126,7 +124,10 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
     private FulfillmentMetrics metrics;
 
     @Autowired
-    private ReferenceData referenceData;
+    private WaveClosing closing;
+
+    @Autowired
+    private CloseWaveUseCase closeWave;
 
     @Autowired
     private RelayLeadership leadership;
@@ -199,6 +200,19 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
         return wave;
     }
 
+    /** 컷오프가 아직 오지 않은 웨이브 — 운영자 조기 마감의 대상이다. 시각은 주입된 시계에서 뽑는다. */
+    private Wave openWaveAhead(int orderCount) {
+        Instant cutoffAt = clock.instant().plus(Duration.ofHours(1)).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        Wave wave = Wave.open(Ids.newId(), SEEDED_CAMP, ServiceTier.SAME_DAY, cutoffAt);
+        tx().executeWithoutResult(status -> waves.insertIfAbsent(wave));
+        for (int i = 0; i < orderCount; i++) {
+            tx().executeWithoutResult(status -> orders.insertIfAbsent(FulfillmentOrder.planned(
+                    Ids.newId(), Ids.newId(), wave.id(), wave.campId(), Ids.newId(), Ids.newId(),
+                    cutoffAt, new TimeWindow(cutoffAt, cutoffAt.plusSeconds(3600)), false, null, cutoffAt)));
+        }
+        return wave;
+    }
+
     private WaveStatus statusOf(UUID waveId) {
         return tx().execute(status -> waves.findById(waveId).orElseThrow().status());
     }
@@ -223,6 +237,35 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
                 .as("마감 시점의 집계값이다 (ADR-025)").isEqualTo(3);
         // §4.5 — 키가 campId 라 같은 캠프의 웨이브 계획이 직렬화된다.
         assertThat(record.key()).isEqualTo(wave.campId().toString());
+    }
+
+    @Test
+    void 운영자_마감도_같은_wave_closed_를_브로커로_보낸다() {
+        // ADR-054 결정 5 — 본문이 하나라는 것을 브로커 쪽에서 본다. 스케줄러의 첫 열과 같은 어설션이다.
+        Wave wave = openWaveAhead(2);
+
+        closeWave.close(wave.id(), "컷오프 앞당김");
+
+        assertThat(statusOf(wave.id())).isEqualTo(WaveStatus.CLOSED);
+        ConsumerRecord<String, String> record = awaitClosed(wave.id());
+        CONTRACTS.validateRecord(record.value());
+        assertThat(CONTRACTS.json().readTree(record.value()).get("payload").get("orderCount").intValue())
+                .isEqualTo(2);
+        assertThat(record.key()).isEqualTo(wave.campId().toString());
+    }
+
+    @Test
+    void 운영자가_먼저_닫으면_스케줄러는_그_웨이브를_다시_닫지_않는다() {
+        // 마감 시각이 지난 웨이브를 사람이 먼저 닫았다. wave.closed 는 한 번이고 원인은 운영자의 것이다 —
+        // 스케줄러가 덮으면 개정 카운터의 cause 가 거짓이 된다(ADR-054 결정 3).
+        Wave wave = dueWave(1);
+
+        closeWave.close(wave.id(), "스케줄러보다 먼저");
+        assertThat(closeDueWaves.closeDue()).isZero();
+
+        assertThat(closedRecordsFor(wave.id())).hasSize(1);
+        WaveCloseCause cause = tx().execute(status -> waves.findById(wave.id()).orElseThrow().closeCause());
+        assertThat(cause).isEqualTo(WaveCloseCause.MANUAL);
     }
 
     @Test
@@ -278,10 +321,39 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
         assertThat(closedRecordsFor(wave.id())).hasSize(1);
     }
 
+    @Test
+    void 운영자와_스케줄러가_동시에_닫아도_wave_closed_는_한_번만_나간다() {
+        // 운영자 경로는 Redis 락을 잡지 않는다(ADR-054 결정 5) — 위 테스트의 「락이 열려 있다」가 이 경로에서는
+        // 늘 참이다. 정확성은 FOR UPDATE 와 상태 전이가 지키고, 진 쪽은 409(운영자) 또는 0(스케줄러)이다.
+        Wave wave = dueWave(2);
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            var byScheduler = CompletableFuture.supplyAsync(() -> closeAfter(start, closeDueWaves), pool);
+            var byOperator = CompletableFuture.supplyAsync(() -> {
+                try {
+                    start.await();
+                    closeWave.close(wave.id(), "동시에 누름");
+                    return 1;
+                } catch (com.dawnline.common.error.DomainException e) {
+                    assertThat(e.code()).isEqualTo("wave-not-open");
+                    return 0;
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }, pool);
+
+            assertThat(List.of(byScheduler.join(), byOperator.join()))
+                    .as("둘 중 하나만 닫는다").containsExactlyInAnyOrder(1, 0);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(closedRecordsFor(wave.id())).hasSize(1);
+    }
+
     /** 빈과 같은 협력자를 쓰되 락만 갈아 끼운 두 번째 인스턴스. */
     private CloseDueWavesService scheduler(WaveLock waveLock) {
-        return new CloseDueWavesService(waves, orders, events, waveLock, transactionManager, clock,
-                GRACE, 10, metrics, referenceData);
+        return new CloseDueWavesService(waves, closing, waveLock, transactionManager, clock, GRACE, 10, metrics);
     }
 
     /**
