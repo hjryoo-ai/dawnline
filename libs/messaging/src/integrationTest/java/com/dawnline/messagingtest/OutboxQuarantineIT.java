@@ -2,6 +2,10 @@ package com.dawnline.messagingtest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.Topics;
@@ -11,14 +15,17 @@ import com.dawnline.messaging.outbox.OutboxMessage;
 import com.dawnline.messaging.outbox.OutboxRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -45,6 +52,7 @@ import org.springframework.transaction.support.TransactionTemplate;
             "spring.kafka.producer.properties.request.timeout.ms=2000",
             "dawnline.messaging.outbox.send-timeout=10s",
         })
+@AutoConfigureMockMvc
 class OutboxQuarantineIT extends MessagingIntegrationTestBase {
 
     /**
@@ -92,6 +100,9 @@ class OutboxQuarantineIT extends MessagingIntegrationTestBase {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private MockMvc mvc;
 
     private TransactionTemplate transactions() {
         return new TransactionTemplate(transactionManager);
@@ -158,25 +169,103 @@ class OutboxQuarantineIT extends MessagingIntegrationTestBase {
     }
 
     @Test
-    void 격리를_해제하면_다시_발행된다() {
+    void 격리를_해제하면_다시_발행된다() throws Exception {
         clearOutbox();
         UUID poisonId = insertPoisonRow();
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
                 assertThat(find(poisonId).isQuarantined()).isTrue());
 
-        // RB-05 복구 절차. eventType 을 고치고 격리를 푼다.
-        // (운영에서는 원인을 고치는 방법이 행마다 다르다 — 여기서는 봉투가 만들어지도록 바로잡는다.)
+        // RB-05 복구 절차의 두 절반. (a) 원인 수정은 사람의 SQL 이다 — 운영에서는 고치는 방법이 행마다 다르고,
+        // 여기서는 봉투가 만들어지도록 eventType 을 바로잡는다. 격리는 아직 그대로다.
         transactions().executeWithoutResult(status -> entityManager.createNativeQuery("""
                 UPDATE outbox_events
-                   SET failed_at = NULL, publish_attempts = 0,
-                       event_type = 'fulfillment.planned',
+                   SET event_type = 'fulfillment.planned',
                        headers = '{"eventType":"fulfillment.planned","schemaVersion":"1"}'::jsonb
                  WHERE id = :id
                 """).setParameter("id", poisonId).executeUpdate());
+        assertThat(find(poisonId).isQuarantined()).as("전제 — 원인 수정만으로는 격리가 풀리지 않는다").isTrue();
+
+        // (b) 격리 해제는 엔드포인트다 (§4.6 「격리 조회·재큐 엔드포인트」).
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", poisonId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(poisonId.toString()))
+                .andExpect(jsonPath("$.eventType").value("fulfillment.planned"));
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
                 assertThat(isPublished(poisonId)).as("격리를 풀면 릴레이가 다시 집어야 한다").isTrue());
         assertThat(inTransaction(outboxRepository::countFailed)).isZero();
+
+        // 응답을 못 받은 운영자가 다시 누른다 — 409 가 앞의 요청이 적용됐고 행이 이미 나갔다고 말한다
+        // (ADR-015 후속 정정 결정 3, ops-api 감사 UNKNOWN 의 해소).
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", poisonId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("not-quarantined"))
+                .andExpect(jsonPath("$.currentState").value("PUBLISHED"))
+                .andExpect(jsonPath("$.publishedAt").isNotEmpty());
+    }
+
+    @Test
+    void 목록은_격리된_행만_격리_시각_순으로_싣고_payload_와_headers_를_싣지_않는다() throws Exception {
+        clearOutbox();
+        UUID first = insertPoisonRow();
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(find(first).isQuarantined()).isTrue());
+        UUID second = insertPoisonRow();
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(find(second).isQuarantined()).isTrue());
+        UUID healthy = append("fulfillment.planned");
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(isPublished(healthy)).isTrue());
+
+        // JPQL 생성자 식과 SMALLINT → int 변환이 실제 PostgreSQL 에서 도는지가 여기서 드러난다.
+        mvc.perform(get("/api/v1/admin/outbox/quarantined"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.events.length()").value(2))
+                .andExpect(jsonPath("$.events[0].id").value(first.toString()))
+                .andExpect(jsonPath("$.events[1].id").value(second.toString()))
+                .andExpect(jsonPath("$.events[0].eventType").value("FulfillmentPlanned"))
+                .andExpect(jsonPath("$.events[0].publishAttempts").value(1))
+                .andExpect(jsonPath("$.events[0].failedAt").isNotEmpty())
+                .andExpect(jsonPath("$.events[0].payload").doesNotExist())
+                .andExpect(jsonPath("$.events[0].headers").doesNotExist());
+
+        mvc.perform(get("/api/v1/admin/outbox/quarantined").param("limit", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.events.length()").value(1));
+    }
+
+    @Test
+    void 격리되지_않은_행의_재큐는_409_이고_그_행을_건드리지_않는다() throws Exception {
+        clearOutbox();
+        // 일시적 실패를 두 번 겪고 나간 행 — 시도 횟수는 진단 기록이다. 조건부 UPDATE 의 `failed_at IS NOT NULL` 이
+        // 빠지면 이 행이 풀리면서 published_at 은 그대로, publish_attempts 만 0 이 된다.
+        UUID id = Ids.newId();
+        Instant publishedAt = Instant.parse("2026-09-24T00:00:00Z");
+        transactions().executeWithoutResult(status -> {
+            OutboxEvent row = new OutboxEvent(id, "Order", UUID.randomUUID(), "fulfillment.planned", TOPIC,
+                    id.toString(), "{\"eventType\":\"fulfillment.planned\",\"schemaVersion\":\"1\"}",
+                    "{\"orderId\":\"" + id + "\"}", publishedAt.minusSeconds(60));
+            row.recordFailedAttempt();
+            row.recordFailedAttempt();
+            row.markPublished(publishedAt);
+            outboxRepository.append(row);
+        });
+
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("not-quarantined"))
+                .andExpect(jsonPath("$.currentState").value("PUBLISHED"))
+                .andExpect(jsonPath("$.publishedAt").value(publishedAt.toString()));
+
+        OutboxEvent after = find(id);
+        assertThat(after.isPublished()).isTrue();
+        assertThat(after.publishAttempts()).as("진단 기록을 지우지 않는다").isEqualTo((short) 2);
+    }
+
+    @Test
+    void 없는_행의_재큐는_404_다() throws Exception {
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", Ids.newId()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("not-found"));
     }
 
     /** 봉투 형식을 어기는 {@code event_type} 을 가진 행. 릴레이의 조립 단계에서 터진다. */
@@ -185,7 +274,7 @@ class OutboxQuarantineIT extends MessagingIntegrationTestBase {
         transactions().executeWithoutResult(status -> outboxRepository.append(new OutboxEvent(
                 id, "Order", UUID.randomUUID(), "FulfillmentPlanned", TOPIC, id.toString(),
                 "{\"eventType\":\"FulfillmentPlanned\",\"schemaVersion\":\"1\"}",
-                "{\"orderId\":\"" + id + "\"}", java.time.Instant.now())));
+                "{\"orderId\":\"" + id + "\"}", Instant.now())));
         return id;
     }
 

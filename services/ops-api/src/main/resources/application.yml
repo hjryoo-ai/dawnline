@@ -160,6 +160,13 @@ spring.http.serviceclient:
     read-timeout: 5s
 
 dawnline:
+  # outbox 격리 조회·재큐 엔드포인트를 끈다 (DESIGN.md §4.6, ADR-015 후속 정정 결정 4). libs/messaging 이 outbox 가
+  # 있는 서블릿 웹 앱에 조건으로 붙이는데 ops-api 도 그 조건을 만족한다. 그러나 ops-api 의 운영 표면은 전부 감사
+  # 행을 남기고 그 경로는 남기지 않는다 — 켜 두면 감사 없는 재큐가 여기 생긴다. ops-api 는 outbox 에 쓰지도 않는다.
+  # 이 줄이 사라지면 OpsCommandIT.감사_없는_outbox_재큐는_ops_api_에_없다 가 빨개진다.
+  messaging:
+    outbox:
+      admin-api: false
   # JWT 검증 (DESIGN.md §5.5 · §10, ADR-052 결정 2) — 시크릿은 저장소에 두지 않는다. `make env` 가
   # 무작위로 채우고 `make token ROLE=…` 가 같은 시크릿으로 찍는다(12시간). 없거나 32바이트보다 짧으면
   # 기동하지 않는다(OpsJwtProperties) — 기본값을 두지 않는 것이 그 규칙의 일부다.

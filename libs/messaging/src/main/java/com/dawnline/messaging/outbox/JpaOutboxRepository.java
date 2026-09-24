@@ -4,6 +4,8 @@ import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * {@link OutboxRepository} 의 JPA 구현.
@@ -58,6 +60,34 @@ public class JpaOutboxRepository implements OutboxRepository {
     private static final String DELETE_PUBLISHED_SQL =
             "DELETE FROM outbox_events WHERE published_at IS NOT NULL AND published_at < :threshold";
 
+    /**
+     * 격리 목록. <strong>여기만 JPQL 이다</strong> — 잠금 문장이 없고, 필요한 칸만 생성자 식으로 골라
+     * {@code payload}·{@code headers} 를 읽지 않는다. 네이티브로 적으면 {@code timestamptz} 두 칸을 자바로 꺼내야
+     * 하는데 그 매핑 타입이 흔들린다는 것이 {@link #LAG_SECONDS_SQL} 의 이유다.
+     *
+     * <p>술어 {@code failedAt IS NOT NULL} 과 정렬 키 {@code failedAt} 은 부분 인덱스
+     * {@code ix_outbox_failed (failed_at) WHERE failed_at IS NOT NULL}(V000_4)과 같다. 새 인덱스는 없다
+     * (§4.6 — 격리 행은 평상시 0 이다). {@code publishAttempts} 는 {@code SMALLINT} 라 생성자의 {@code int} 로 넓힌다.
+     */
+    private static final String QUARANTINED_JPQL = """
+            SELECT new com.dawnline.messaging.outbox.QuarantinedOutboxEvent(
+                       e.id, e.aggregateType, e.aggregateId, e.eventType, e.topic,
+                       e.createdAt, e.failedAt, CAST(e.publishAttempts AS Integer))
+              FROM OutboxEvent e
+             WHERE e.failedAt IS NOT NULL
+             ORDER BY e.failedAt, e.id
+            """;
+
+    /**
+     * RB-05 의 (b) 와 같은 문장이다. {@code failed_at IS NOT NULL} 이 조건에 있어서 격리되지 않은 행(발행 대기·
+     * 발행 완료)은 건드리지 않는다 — 발행 완료 행의 {@code publish_attempts} 를 지우면 진단 기록이 사라진다.
+     */
+    private static final String RELEASE_QUARANTINE_SQL = """
+            UPDATE outbox_events
+               SET failed_at = NULL, publish_attempts = 0
+             WHERE id = :id AND failed_at IS NOT NULL
+            """;
+
     private final EntityManager entityManager;
 
     public JpaOutboxRepository(EntityManager entityManager) {
@@ -102,5 +132,28 @@ public class JpaOutboxRepository implements OutboxRepository {
         return entityManager.createNativeQuery(DELETE_PUBLISHED_SQL)
                 .setParameter("threshold", publishedBefore)
                 .executeUpdate();
+    }
+
+    @Override
+    public List<QuarantinedOutboxEvent> findQuarantined(int limit) {
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit 은 1 이상이어야 합니다: " + limit);
+        }
+        return entityManager.createQuery(QUARANTINED_JPQL, QuarantinedOutboxEvent.class)
+                .setMaxResults(limit)
+                .getResultList();
+    }
+
+    @Override
+    public boolean releaseQuarantine(UUID id) {
+        Objects.requireNonNull(id, "id");
+        return entityManager.createNativeQuery(RELEASE_QUARANTINE_SQL)
+                .setParameter("id", id)
+                .executeUpdate() == 1;
+    }
+
+    @Override
+    public Optional<OutboxEvent> findById(UUID id) {
+        return Optional.ofNullable(entityManager.find(OutboxEvent.class, Objects.requireNonNull(id, "id")));
     }
 }
