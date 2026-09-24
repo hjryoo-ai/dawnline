@@ -98,6 +98,25 @@ order-service 는 웨이브가 닫혔다는 것을 모르므로 컷오프까지 
 아니다 — 두 번째 요청은 적용되지 않고 **말한다.** 그래서 RB-07 의 「코어 상태를 보고 닫는다」가 응답
 하나로 끝난다.
 
+## 관측 (2026-09-24, `WaveEarlyCloseIT` · `WaveLifecycleIT` — 실제 PostgreSQL 18 · Kafka 4.3.1)
+
+- **대가가 재현된다.** 계획된 주문 하나로 웨이브를 만들고 HTTP 로 컷오프 전에 닫은 뒤, 같은 `cutoffAt` 의
+  주문을 넣으면 다음 컷오프(`TierSchedule.nextCutoffAfter`)의 웨이브로 가고 `promise_revised=true`,
+  `promise_revised_total{cause="manual"}` 이 1 오르고 `cause="scheduled"` 는 그대로다.
+- **표면**: 200(`close_cause='MANUAL'`, `closed_at < cutoff_at`, outbox 의 `wave.closed` 한 행) · 409
+  `wave-not-open`(`closeCause=MANUAL`, `wave.closed` 는 여전히 한 행) · 400(웨이브는 `OPEN` 그대로) · 404 ·
+  V3 CHECK 가 한쪽만 채운 행을 거절한다.
+- **본문이 하나다**: 운영자 마감의 `wave.closed` 가 브로커까지 가서 봉투까지 계약을 지키고, 운영자가 먼저 닫은
+  웨이브를 스케줄러가 다시 닫지 않으며(원인은 `MANUAL` 으로 남는다), **둘이 동시에 닫아도** `wave.closed` 는
+  한 번이다 — 운영자 경로에는 Redis 락이 없으므로 이것이 `FOR UPDATE` 의 몫이다.
+
+음성 표본 둘(둘 다 되돌렸다):
+
+| 무엇을 부쉈나 | 무엇이 빨개졌나 |
+|---|---|
+| 개정 원인을 `close_cause` 대신 늘 `SCHEDULED` 로(라벨이 없던 때의 의미) | `WaveEarlyCloseIT` 대가 테스트 — `expected: 1.0 but was: 0.0` (`cause="manual"`) |
+| 운영자 경로의 게이지를 트랜잭션 **안에서** 올림 | `CloseWaveServiceTest.커밋에_실패하면_게이지를_올리지_않는다` |
+
 ## 고려한 대안과 기각 이유
 
 | 대안 | 기각 이유 |
