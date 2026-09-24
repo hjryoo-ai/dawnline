@@ -1,5 +1,5 @@
 {
-  "eventId": "01a04e08-ee04-70ab-8398-3727f51db2f7",
+  "eventId": "01a04e08-ee04-70ab-8398-3727f51db2f8",
   "eventType": "wave.closed",
   "schemaVersion": 1,
   "occurredAt": "2026-08-29T15:00:03.204Z",
@@ -16,7 +16,6 @@
     "depot": {
       "lat": 37.64,
       "lng": 127.03
-    },
-    "campCode": "CAMP-SEO-N"
+    }
   }
 }
