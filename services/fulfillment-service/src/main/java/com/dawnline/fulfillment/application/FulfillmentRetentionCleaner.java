@@ -2,6 +2,7 @@ package com.dawnline.fulfillment.application;
 
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
+import com.dawnline.messaging.retention.RetentionAges;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -38,6 +39,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 같은 페이지를 두고 경쟁한다. (2) <strong>커밋해야 인덱스가 값을 한다</strong> — 한 트랜잭션 안에서
  * 배치를 반복하면 지운 인덱스 항목을 죽은 것으로 표시할 수 없어 k번째 배치가 앞선 k×batchSize 개를
  * 다시 훑는다(ADR-019 의 측정: 0.47초 vs 11.29초).
+ *
+ * <h2>실패는 삼키되 보이게</h2>
+ * 표마다 끝까지 돈 정리만 {@code dawnline_retention_last_success_age_seconds{table}} 을 0 으로 되돌린다
+ * (ADR-058 결정 6). 주문 쪽이 실패하면 웨이브 쪽은 돌지 않으므로 두 표의 나이가 함께 자란다 — 순서가 그렇다.
  */
 public class FulfillmentRetentionCleaner {
 
@@ -51,6 +56,8 @@ public class FulfillmentRetentionCleaner {
     private final Duration waveRetention;
     private final int batchSize;
     private final int maxBatchesPerRun;
+    private final RetentionAges.Table orderAge;
+    private final RetentionAges.Table waveAge;
 
     /**
      * @param orders             {@code fulfillment_orders} 저장소
@@ -61,10 +68,12 @@ public class FulfillmentRetentionCleaner {
      * @param waveRetention      웨이브 보존 기간 (ADR-023 기본 90일)
      * @param batchSize          한 트랜잭션에서 지울 최대 행 수
      * @param maxBatchesPerRun   한 번의 실행에서 반복할 최대 배치 수 (표마다 각각)
+     * @param ages               성공 나이 게이지 — 생성하면서 두 표를 등록한다
      */
     public FulfillmentRetentionCleaner(FulfillmentOrderRepository orders, WaveRepository waves,
             PlatformTransactionManager transactionManager, Clock clock,
-            Duration orderRetention, Duration waveRetention, int batchSize, int maxBatchesPerRun) {
+            Duration orderRetention, Duration waveRetention, int batchSize, int maxBatchesPerRun,
+            RetentionAges ages) {
 
         this.orders = Objects.requireNonNull(orders, "orders");
         this.waves = Objects.requireNonNull(waves, "waves");
@@ -88,6 +97,9 @@ public class FulfillmentRetentionCleaner {
         this.batchSize = batchSize;
         this.maxBatchesPerRun = maxBatchesPerRun;
         this.transactions = new TransactionTemplate(transactionManager);
+        Objects.requireNonNull(ages, "ages");
+        this.orderAge = ages.table("fulfillment_orders");
+        this.waveAge = ages.table("waves");
     }
 
     /**
@@ -118,9 +130,11 @@ public class FulfillmentRetentionCleaner {
         Instant now = clock.instant();
         int deletedOrders = deleteInBatches("fulfillment_orders", now.minus(orderRetention),
                 orders::deleteSettledUpdatedBefore);
+        orderAge.succeeded();
         // 순서가 중요하다. 웨이브를 먼저 지우면 그것을 참조하는 주문 행이 남아 FK 위반이다.
         int deletedWaves = deleteInBatches("waves", now.minus(waveRetention),
                 waves::deleteSettledClosedBefore);
+        waveAge.succeeded();
         return new Deleted(deletedOrders, deletedWaves);
     }
 

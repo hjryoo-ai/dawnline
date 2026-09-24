@@ -234,7 +234,10 @@ class IdempotencyRecordsIT extends OrderIntegrationTestBase {
             transactions().execute(status -> records.complete(expired, 201, accepted(Ids.newId())));
         }
         IdempotencyKeyCleaner cleaner = new IdempotencyKeyCleaner(records, transactionManager,
-                java.time.Clock.fixed(now, java.time.ZoneOffset.UTC), 2, 10);
+                java.time.Clock.fixed(now, java.time.ZoneOffset.UTC), 2, 10,
+                new com.dawnline.messaging.retention.RetentionAges(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                        java.time.Clock.fixed(now, java.time.ZoneOffset.UTC)));
 
         assertThat(cleaner.deleteExpired()).isEqualTo(5);
         assertThat(remaining()).isZero();

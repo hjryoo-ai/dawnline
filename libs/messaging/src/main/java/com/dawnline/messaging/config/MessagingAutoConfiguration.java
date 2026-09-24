@@ -3,6 +3,9 @@ package com.dawnline.messaging.config;
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.outbox.TraceparentSupplier;
+import com.dawnline.messaging.retention.RetentionAges;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.random.RandomGenerator;
@@ -93,6 +96,23 @@ public class MessagingAutoConfiguration {
     @ConditionalOnMissingBean
     public TraceparentSupplier dawnlineTraceparentSupplier() {
         return TraceparentSupplier.NONE;
+    }
+
+    /**
+     * 보존 정리의 성공 나이 게이지 (§9.1 {@code dawnline_retention_last_success_age_seconds}, ADR-058 결정 6).
+     *
+     * <p>여기 두는 이유: 정리는 이 라이브러리({@code processed_events})와 서비스들(각자의 표)에 흩어져 있지만
+     * 게이지는 하나여야 한다 — 이름과 라벨이 한 곳에서 나와야 알림 식 하나가 모든 표를 본다. 표는 정리기가
+     * 생성자에서 등록한다(기동 때).
+     *
+     * @param meters 미터 레지스트리 (없으면 버리는 레지스트리)
+     * @param clock  시각 출처 (없으면 저장 정밀도의 시스템 UTC)
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public RetentionAges dawnlineRetentionAges(ObjectProvider<MeterRegistry> meters, ObjectProvider<Clock> clock) {
+        return new RetentionAges(meters.getIfAvailable(SimpleMeterRegistry::new),
+                clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock));
     }
 
     /**

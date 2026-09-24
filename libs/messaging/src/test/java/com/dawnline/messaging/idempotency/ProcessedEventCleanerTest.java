@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.common.Ids;
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.messaging.support.InMemoryProcessedEventRepository;
 import com.dawnline.messaging.support.MutableClock;
 import com.dawnline.messaging.support.TestTransactionManager;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -24,16 +26,18 @@ class ProcessedEventCleanerTest {
     private InMemoryProcessedEventRepository repository;
     private TestTransactionManager transactions;
     private MutableClock clock;
+    private RetentionAges ages;
 
     @BeforeEach
     void setUp() {
         repository = new InMemoryProcessedEventRepository();
         transactions = new TestTransactionManager();
         clock = MutableClock.at(NOW);
+        ages = new RetentionAges(new SimpleMeterRegistry(), clock);
     }
 
     private ProcessedEventCleaner cleaner(int batchSize, int maxBatchesPerRun) {
-        return new ProcessedEventCleaner(repository, transactions, clock, RETENTION, batchSize, maxBatchesPerRun);
+        return new ProcessedEventCleaner(repository, transactions, clock, RETENTION, batchSize, maxBatchesPerRun, ages);
     }
 
     /** 지정한 시각에 처리된 기록 하나를 남기고 그 키를 돌려준다. */
@@ -137,6 +141,22 @@ class ProcessedEventCleanerTest {
     }
 
     @Test
+    void 끝까지_돈_실행은_성공_나이를_0_으로_되돌린다_상한에_걸려도() {
+        for (int i = 0; i < 25; i++) {
+            record(NOW.minus(Duration.ofDays(20)).plusSeconds(i));
+        }
+        ProcessedEventCleaner cleaner = cleaner(10, 2);
+        clock.advance(Duration.ofHours(5));
+        assertThat(ages.table("processed_events").ageSeconds()).isEqualTo(5 * 3600.0);
+
+        cleaner.deleteExpired();
+
+        // 상한(2배치)에 걸려 5행이 남았지만 앞으로 나아갔다 — 실패가 아니다.
+        assertThat(repository.size()).isEqualTo(5);
+        assertThat(ages.table("processed_events").ageSeconds()).isZero();
+    }
+
+    @Test
     void 스케줄_진입점은_예외를_삼킨다() {
         ProcessedEventRepository exploding = new ProcessedEventRepository() {
             @Override
@@ -155,10 +175,14 @@ class ProcessedEventCleanerTest {
             }
         };
         ProcessedEventCleaner cleaner =
-                new ProcessedEventCleaner(exploding, transactions, clock, RETENTION, 10, 5);
+                new ProcessedEventCleaner(exploding, transactions, clock, RETENTION, 10, 5, ages);
+        clock.advance(Duration.ofDays(2));
 
         // 정리 실패는 용량 문제지 정확성 문제가 아니다. 다음 실행이 이어받는다.
         cleaner.cleanupExpired();
+
+        // 삼키되 보이게 — 성공 나이가 되돌아가지 않고 기동부터 센다(ADR-058 결정 6).
+        assertThat(ages.table("processed_events").ageSeconds()).isEqualTo(2 * 86400.0);
 
         // 직접 호출하면 예외가 그대로 올라온다 — 삼키는 것은 스케줄 진입점뿐이다.
         assertThatThrownBy(cleaner::deleteExpired)
@@ -175,7 +199,7 @@ class ProcessedEventCleanerTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("maxBatchesPerRun");
         assertThatThrownBy(() ->
-                new ProcessedEventCleaner(repository, transactions, clock, Duration.ZERO, 10, 5))
+                new ProcessedEventCleaner(repository, transactions, clock, Duration.ZERO, 10, 5, ages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("retention");
     }

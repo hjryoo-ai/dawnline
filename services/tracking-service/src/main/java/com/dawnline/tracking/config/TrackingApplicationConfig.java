@@ -10,6 +10,7 @@ import com.dawnline.tracking.adapter.out.persistence.JdbcShipmentEvents;
 import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
 import com.dawnline.tracking.application.ApplyRouteAssignmentService;
 import com.dawnline.messaging.outbox.OutboxAppender;
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.tracking.adapter.out.messaging.OutboxDeliveryEvents;
 import com.dawnline.tracking.adapter.out.redis.RedisAtRiskCooldown;
 import com.dawnline.tracking.application.AtRiskDetector;
@@ -215,14 +216,15 @@ public class TrackingApplicationConfig {
      * @param partitions 파티션 포트
      * @param clock      오늘을 읽는 시계 (불변규칙 12)
      * @param properties {@code dawnline.tracking.partitions.*}
+     * @param ages       정리의 성공 나이 게이지 (ADR-058 결정 6)
      */
     @Bean
     @ConditionalOnProperty(prefix = "dawnline.tracking.partitions", name = "enabled",
             havingValue = "true", matchIfMissing = true)
     public ShipmentEventPartitions shipmentEventPartitions(EventPartitions partitions, Clock clock,
-            TrackingProperties properties) {
+            TrackingProperties properties, RetentionAges ages) {
         return new ShipmentEventPartitions(partitions, clock,
-                properties.partitions().aheadDays(), properties.partitions().retentionDays());
+                properties.partitions().aheadDays(), properties.partitions().retentionDays(), ages);
     }
 
     /**

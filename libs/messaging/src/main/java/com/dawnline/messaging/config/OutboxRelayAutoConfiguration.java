@@ -9,6 +9,7 @@ import com.dawnline.messaging.outbox.OutboxRelay;
 import com.dawnline.messaging.outbox.OutboxRepository;
 import com.dawnline.messaging.outbox.RecordPublisher;
 import com.dawnline.messaging.outbox.RelayLeadership;
+import com.dawnline.messaging.retention.RetentionAges;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
@@ -110,14 +111,16 @@ public class OutboxRelayAutoConfiguration {
      * @param transactionManager 유지보수 트랜잭션
      * @param clock              시각 출처
      * @param properties         {@code dawnline.messaging.*}
+     * @param ages               정리의 성공 나이 게이지 (ADR-058 결정 6)
      */
     @Bean
     @ConditionalOnMissingBean
     public OutboxRelay dawnlineOutboxRelay(OutboxBatchPublisher publisher, OutboxRepository repository,
             OutboxMetrics metrics, RelayLeadership leadership, PlatformTransactionManager transactionManager,
-            ObjectProvider<Clock> clock, DawnlineMessagingProperties properties) {
+            ObjectProvider<Clock> clock, DawnlineMessagingProperties properties, RetentionAges ages) {
         return new OutboxRelay(publisher, repository, metrics, leadership, transactionManager,
-                clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock), properties.outbox().retention());
+                clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock), properties.outbox().retention(),
+                ages);
     }
 
     /**

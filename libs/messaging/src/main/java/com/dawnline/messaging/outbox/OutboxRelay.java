@@ -1,6 +1,7 @@
 package com.dawnline.messaging.outbox;
 
 import com.dawnline.messaging.outbox.RelayLeadership.State;
+import com.dawnline.messaging.retention.RetentionAges;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
@@ -49,6 +50,7 @@ public class OutboxRelay implements AutoCloseable {
     private final TransactionTemplate writeTransactions;
     private final Clock clock;
     private final Duration retention;
+    private final RetentionAges.Table cleanupAge;
 
     /**
      * 직전 폴링의 리더십. 로그를 <strong>변화할 때만</strong> 내기 위한 것이다 — 100ms 마다
@@ -70,10 +72,11 @@ public class OutboxRelay implements AutoCloseable {
      * @param transactionManager 유지보수 작업용 트랜잭션 관리자
      * @param clock              정리 기준 시각 (불변규칙 12)
      * @param retention          발행 완료 행 보관 기간 (§7.1 기본 7일)
+     * @param ages               정리의 성공 나이 게이지 — 생성하면서 {@code outbox_events} 를 등록한다 (ADR-058)
      */
     public OutboxRelay(OutboxBatchPublisher publisher, OutboxRepository repository, OutboxMetrics metrics,
             RelayLeadership leadership, PlatformTransactionManager transactionManager, Clock clock,
-            Duration retention) {
+            Duration retention, RetentionAges ages) {
         this.publisher = Objects.requireNonNull(publisher, "publisher");
         this.repository = Objects.requireNonNull(repository, "repository");
         this.metrics = Objects.requireNonNull(metrics, "metrics");
@@ -84,6 +87,9 @@ public class OutboxRelay implements AutoCloseable {
         if (retention.isNegative() || retention.isZero()) {
             throw new IllegalArgumentException("retention 은 양수여야 합니다: " + retention);
         }
+        // 정리는 리더가 아니어도 돈다 — 발행과 달리 여러 인스턴스가 겹쳐도 해가 없다. 그래서 게이지도
+        // 인스턴스마다 있고, 알림은 min by (table) 로 「어느 인스턴스든 성공했는가」를 본다(§9.4).
+        this.cleanupAge = Objects.requireNonNull(ages, "ages").table("outbox_events");
 
         // 읽기 전용 트랜잭션 — Hibernate 플러시를 막고 커넥션을 read-only 로 둔다.
         // 주의: 이것이 세 값의 *일관된 스냅샷*을 주지는 않는다. PostgreSQL 기본 격리 수준인
@@ -154,7 +160,9 @@ public class OutboxRelay implements AutoCloseable {
             if (deleted != null && deleted > 0) {
                 log.info("발행 완료 outbox 행 {}건 삭제 (보관기간 {})", deleted, retention);
             }
+            cleanupAge.succeeded();
         } catch (RuntimeException e) {
+            // 삼키되 보이게 — dawnline_retention_last_success_age_seconds{table="outbox_events"} 가 자란다.
             log.warn("outbox 정리 실패", e);
         }
     }

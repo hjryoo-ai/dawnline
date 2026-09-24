@@ -1,5 +1,6 @@
 package com.dawnline.tracking.application;
 
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.tracking.application.port.out.EventPartitions;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -31,6 +32,10 @@ import org.springframework.scheduling.annotation.Scheduled;
  * 나가고(§9.1), 값은 <em>마지막 파티션 날짜 − 오늘</em>이라 스케줄러가 멈추면 날마다 줄어든다.
  * 멈춘 게이지는 건강해 보이기 때문에 「마지막으로 만든 수」가 아니라 「앞으로 남은 날」을 잰다.
  * 알림은 2 에서 걸린다(§9.4).
+ *
+ * <p>그 게이지는 <em>생성</em>을 본다. 지우기가 멈추면 앞은 멀쩡한 채 뒤가 자란다 — 그래서 회전이 끝까지 돈
+ * 실행이 {@code dawnline_retention_last_success_age_seconds{table="shipment_events"}} 도 0 으로 되돌린다
+ * (ADR-058 결정 6). 둘은 같은 실행의 두 얼굴이고, 하나만 보면 다른 쪽의 멈춤이 보이지 않는다.
  */
 public class ShipmentEventPartitions {
 
@@ -43,6 +48,7 @@ public class ShipmentEventPartitions {
     private final Clock clock;
     private final int aheadDays;
     private final int retentionDays;
+    private final RetentionAges.Table age;
 
     /**
      * 마지막으로 확인한 최대 파티션 날짜. 게이지가 매 스크레이프마다 카탈로그를 읽지 않게 한다.
@@ -55,8 +61,10 @@ public class ShipmentEventPartitions {
      * @param clock         오늘을 읽는 시계 (불변규칙 12)
      * @param aheadDays     오늘로부터 앞으로 덮어 둘 일수. 기본 7
      * @param retentionDays 보존 일수 (§5.4 기본 30). 이 값보다 오래된 파티션을 지운다
+     * @param ages          정리의 성공 나이 게이지 — 생성하면서 {@code shipment_events} 를 등록한다
      */
-    public ShipmentEventPartitions(EventPartitions partitions, Clock clock, int aheadDays, int retentionDays) {
+    public ShipmentEventPartitions(EventPartitions partitions, Clock clock, int aheadDays, int retentionDays,
+            RetentionAges ages) {
         this.partitions = Objects.requireNonNull(partitions, "partitions");
         this.clock = Objects.requireNonNull(clock, "clock");
         if (aheadDays < 1) {
@@ -73,6 +81,7 @@ public class ShipmentEventPartitions {
         }
         this.aheadDays = aheadDays;
         this.retentionDays = retentionDays;
+        this.age = Objects.requireNonNull(ages, "ages").table("shipment_events");
     }
 
     /**
@@ -104,6 +113,7 @@ public class ShipmentEventPartitions {
         int dropped = partitions.dropBefore(today.minusDays(retentionDays));
         LocalDate covered = partitions.lastPartitionDay();
         coveredThrough.set(covered);
+        age.succeeded();
         if (created > 0 || dropped > 0) {
             log.info("shipment_events 파티션 {}개 생성 · {}개 삭제 (덮인 마지막 날 {}, 보존 {}일)",
                     created, dropped, covered, retentionDays);
