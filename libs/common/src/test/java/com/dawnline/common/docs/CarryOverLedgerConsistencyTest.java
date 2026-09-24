@@ -44,9 +44,13 @@ import org.junit.jupiter.api.Test;
  *   <li><strong>원천 ② — ADR 의 재검토 지점.</strong> 본문에 「재검토」가 있는 ADR 은 7-0 절 어딘가에
  *       {@code ADR-NNN} 으로 나와야 한다 — A·B·D 로 가져갔든 C 에서 이유와 함께 뺐든. 새 ADR 이
  *       재검토 지점을 가지면 아무것도 고치지 않아도 검사 대상이 된다(빼는 방식, §13 규칙 2).</li>
- *   <li>원천 목록의 「행」 칸이 가리키는 행(A·B·D 번호)이 표에 실제로 있다.</li>
+ *   <li><strong>원천 ③ — Phase 대조표의 열린 표기.</strong> 머리에 「상태」 칸이 있는 표에서 그 칸이
+ *       ⚠️ · ◐ · ⏸ 를 들고 있으면, 닫힘(✅ · ⛔ · ❌)으로 시작하거나 {@code → 7-0 A9} 처럼 7-0 의 행을
+ *       가리켜야 한다. 다른 Phase 에서 닫히면서 원래 칸이 갱신되지 않은 행이 이렇게 잡힌다 — 처음 판의
+ *       D6(Phase 3 의 계약 결손)이 그 모양이었고, 이 검사를 처음 돌리자 둘이 더 나왔다. ⬜(미구현)를 빼는
+ *       이유는 계획서의 7-0 절에 있다.</li>
+ *   <li>원천 목록의 「행」 칸과 대조표의 {@code → 7-0} 이 가리키는 행(A·B·D 번호)이 표에 실제로 있다.</li>
  * </ol>
- * 원천 ③(계획서의 ⚠️ ◐ ⬜ ⏸)은 대조하지 않는다. 그 이유는 계획서의 7-0 절에 적혀 있다.
  *
  * <h2>빼는 것 셋 — 그리고 각각을 검사가 말한다</h2>
  * 계획서의 「Phase 7」 절(표가 사는 자리), 이 소스 자신(규칙을 설명하느라 그 말을 쓴다), 빌드 산출물 ·
@@ -77,6 +81,15 @@ class CarryOverLedgerConsistencyTest {
     /** 「행」 칸의 토큰 — 행 번호 또는 표 C. */
     private static final Pattern ITEM_REF = Pattern.compile("[ABD]\\d+|C");
 
+    /** 대조표의 열린 표기. ⚠️ 는 변형 선택자가 붙기도 해서 앞 글자만 본다. */
+    private static final List<String> OPEN_MARKS = List.of("⚠", "◐", "⏸");
+
+    /** 상태 칸이 이것으로 시작하면 닫힌 행이다 — 뒤에 「이 표를 쓴 시점에는 ⚠️ …」가 남아 있어도. */
+    private static final List<String> CLOSED_MARKS = List.of("✅", "⛔", "❌");
+
+    /** 열린 칸이 7-0 의 행을 가리키는 모양. */
+    private static final Pattern POINTER = Pattern.compile("→ 7-0 ([ABD]\\d+|C)");
+
     private static final Pattern ADR_FILE = Pattern.compile("^ADR-(\\d{3})-.*\\.md$");
 
     /** 이름이 이것이면 들어가지 않는다 — 산출물과 의존성이다. */
@@ -90,6 +103,8 @@ class CarryOverLedgerConsistencyTest {
 
     private static final Path REPO_ROOT = locateRepoRoot();
     private static final Path PLAN = REPO_ROOT.resolve("docs/IMPLEMENTATION_PLAN.md");
+    /** 원천 ③ 의 두 자리 — 계획서(표의 절 밖)와 Phase 4 의 DoD 대조가 사는 리포트 §8. */
+    private static final Path PHASE4_REPORT = REPO_ROOT.resolve("docs/benchmarks/phase4-strategies.md");
     private static final Path SELF = REPO_ROOT.resolve(
             "libs/common/src/test/java/com/dawnline/common/docs/CarryOverLedgerConsistencyTest.java");
 
@@ -148,15 +163,7 @@ class CarryOverLedgerConsistencyTest {
 
     @Test
     void 원천_목록의_행_칸은_있는_행을_가리킨다() {
-        Set<String> items = new TreeSet<>();
-        for (String line : CARRY_OVER.split("\n", -1)) {
-            Matcher matcher = ITEM_ROW.matcher(line);
-            if (matcher.find() && !items.add(matcher.group(1))) {
-                throw new AssertionError("7-0 표에 같은 번호가 두 번 있다: " + matcher.group(1));
-            }
-        }
-        assertThat(items).as("7-0 의 A·B·D 표를 읽지 못했다").isNotEmpty();
-        items.add("C");
+        Set<String> items = itemIds();
 
         Map<String, List<String>> dangling = new TreeMap<>();
         referencesBySource().forEach((file, references) -> {
@@ -170,7 +177,82 @@ class CarryOverLedgerConsistencyTest {
         assertThat(dangling).as("원천 목록이 가리키는데 표에 없는 행 번호").isEmpty();
     }
 
+    @Test
+    void 대조표의_열린_표기는_닫히거나_7_0_의_행을_가리킨다() {
+        Set<String> items = itemIds();
+        Map<String, List<String>> sources = Map.of(
+                "docs/IMPLEMENTATION_PLAN.md", statusCells(withoutPhaseSection(PLAN_TEXT)),
+                "docs/benchmarks/phase4-strategies.md", statusCells(read(PHASE4_REPORT)));
+        sources.forEach((file, cells) -> assertThat(cells)
+                .as("`%s` 에서 「상태」 칸이 있는 표를 하나도 읽지 못했다 — 표 모양이 바뀌었다", file)
+                .isNotEmpty());
+
+        List<String> unexplained = new ArrayList<>();
+        sources.forEach((file, cells) -> {
+            for (String cell : cells) {
+                if (OPEN_MARKS.stream().noneMatch(cell::contains)
+                        || CLOSED_MARKS.stream().anyMatch(cell::startsWith)) {
+                    continue;
+                }
+                Matcher pointer = POINTER.matcher(cell);
+                if (!pointer.find()) {
+                    unexplained.add(file + " — 가리키는 곳 없음: " + cell);
+                } else if (!items.contains(pointer.group(1))) {
+                    unexplained.add(file + " — 없는 행 " + pointer.group(1) + ": " + cell);
+                }
+            }
+        });
+        assertThat(unexplained)
+                .as("열린 표기(⚠️ ◐ ⏸)인데 닫힘으로 바뀌지도, 7-0 의 행을 가리키지도 않는 상태 칸. "
+                        + "다른 Phase 에서 닫혔으면 `✅ 닫힘 — 어디서(이 표를 쓴 시점에는 …)` 로, 아직 열려 있으면 "
+                        + "7-0 표에 행을 두고 `→ 7-0 A9` 처럼 가리킨다")
+                .isEmpty();
+    }
+
     // --- 표 읽기 ---------------------------------------------------------------
+
+    /** 7-0 의 A·B·D 행 번호와 표 C. 같은 번호가 두 번이면 던진다. */
+    private static Set<String> itemIds() {
+        Set<String> items = new TreeSet<>();
+        for (String line : CARRY_OVER.split("\n", -1)) {
+            Matcher matcher = ITEM_ROW.matcher(line);
+            if (matcher.find() && !items.add(matcher.group(1))) {
+                throw new AssertionError("7-0 표에 같은 번호가 두 번 있다: " + matcher.group(1));
+            }
+        }
+        assertThat(items).as("7-0 의 A·B·D 표를 읽지 못했다").isNotEmpty();
+        items.add("C");
+        return items;
+    }
+
+    /** 머리에 「상태」 칸이 있는 표들의 그 칸 — 구분 행은 뺀다. */
+    private static List<String> statusCells(String markdown) {
+        List<String> cells = new ArrayList<>();
+        int column = -1;
+        boolean inTable = false;
+        for (String line : markdown.split("\n", -1)) {
+            if (!line.startsWith("|")) {
+                inTable = false;
+                continue;
+            }
+            String[] row = line.strip().replaceAll("^\\||\\|$", "").split("\\|", -1);
+            if (!inTable) {
+                inTable = true;
+                column = -1;
+                for (int i = 0; i < row.length; i++) {
+                    if (row[i].strip().equals("상태")) {
+                        column = i;
+                    }
+                }
+                continue;
+            }
+            if (column < 0 || column >= row.length || row[column].strip().matches("[-: ]+")) {
+                continue;
+            }
+            cells.add(row[column].strip());
+        }
+        return cells;
+    }
 
     private static Map<String, Integer> listedSources() {
         Map<String, Integer> listed = new TreeMap<>();
