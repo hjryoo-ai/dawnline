@@ -37,7 +37,7 @@ SERVICE       ?=
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls \
         topics psql redis-cli config demo peak chaos-kafka clean-volumes \
-        k6-orders k6-rate-limit smoke
+        k6-orders k6-rate-limit smoke token
 
 # -----------------------------------------------------------------------------
 help:
@@ -58,7 +58,8 @@ help:
 	@printf '    make topics         Kafka 토픽 목록\n'
 	@printf '    make logs [SERVICE=dispatch-service]\n'
 	@printf '    make config         compose 파일 문법·변수 치환 검증\n'
-	@printf '    make psql / make redis-cli\n\n'
+	@printf '    make psql / make redis-cli\n'
+	@printf '    make token ROLE=OPS_OPERATOR [ACTOR=…]  ops-api 토큰 (12시간)  [Phase 6]\n\n'
 	@printf '  \033[1m부하·계약 스크립트\033[0m (tools/k6/README.md)\n'
 	@printf '    make k6-orders      500 rps 60초 부하 → summary.md         [Phase 1]\n'
 	@printf '    make k6-rate-limit  레이트 리밋 계약 검증 (통과/실패)      [Phase 1]\n\n'
@@ -71,13 +72,32 @@ help:
 
 # -----------------------------------------------------------------------------
 # .env 준비 — 이미 있으면 절대 덮어쓰지 않는다.
+#
+# ops-api 의 JWT 시크릿(DESIGN.md §5.5)만은 예시 값을 그대로 쓰지 않는다 — 저장소에 있는 값으로
+# 서명한 토큰은 누구나 찍을 수 있다. 새 .env 를 만들 때 무작위로 채우고, 예전에 만든 .env 에 그
+# 키가 없으면 무작위 값을 **덧붙인다**(기존 줄은 건드리지 않는다).
 env:
 	@if [ ! -f $(ENV_FILE) ]; then \
 	cp $(ENV_EXAMPLE) $(ENV_FILE); \
-	echo "생성: $(ENV_FILE) (원본 $(ENV_EXAMPLE)). 필요하면 포트·비밀번호를 고쳐라."; \
-	else \
-	: ; \
+	sed -i.bak "s/^DAWNLINE_OPS_JWT_SECRET=.*/DAWNLINE_OPS_JWT_SECRET=$$(openssl rand -hex 32)/" $(ENV_FILE); \
+	rm -f $(ENV_FILE).bak; \
+	echo "생성: $(ENV_FILE) (원본 $(ENV_EXAMPLE), JWT 시크릿은 무작위). 필요하면 포트·비밀번호를 고쳐라."; \
+	elif ! grep -q '^DAWNLINE_OPS_JWT_SECRET=' $(ENV_FILE); then \
+	printf '\n# ops-api JWT 시크릿 (make env 가 덧붙였다, DESIGN.md §5.5)\nDAWNLINE_OPS_JWT_SECRET=%s\n' "$$(openssl rand -hex 32)" >> $(ENV_FILE); \
+	echo "덧붙임: $(ENV_FILE) 에 DAWNLINE_OPS_JWT_SECRET (무작위)"; \
 	fi
+
+# -----------------------------------------------------------------------------
+# ops-api 운영자 토큰 (DESIGN.md §5.5, ADR-052 결정 2). 로직은 tools/ops-token/ops-token.sh 에 있다.
+# ops-api 는 검증만 한다 — 로그인 엔드포인트가 없고, 발급은 이 타깃이 .env 의 시크릿으로 한다.
+#
+#   make token ROLE=OPS_OPERATOR [ACTOR=demo-operator]
+#   curl -H "Authorization: Bearer $$(make -s token ROLE=OPS_VIEWER)" …
+ROLE  ?= OPS_VIEWER
+ACTOR ?= demo-operator
+
+token: env
+	@set -a; . $(ENV_FILE); set +a; bash tools/ops-token/ops-token.sh "$(ROLE)" "$(ACTOR)"
 
 # -----------------------------------------------------------------------------
 # 서비스 이미지 (Buildpacks, ADR-013). Docker 데몬이 떠 있어야 한다.

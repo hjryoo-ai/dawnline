@@ -98,8 +98,12 @@ tasks.named<JavaCompile>("compileCoreClientsJava") {
 //   - contracts/events: 순서 검사의 사실 집합과 구독 토픽 대조가 계약 디렉터리에서 시작한다
 //   - docs/DESIGN.md: 네 축의 선언 순서를 §5.5 「DDL 정정」 표와 대조한다
 //   - contracts/openapi: 생성 클라이언트의 왕복 검사가 계약 스키마에서 표본을 만든다 (ADR-052 기준 4)
+//   - tools/ops-token: 토큰 스크립트를 실행해 검증기와 맞춰 본다 (OpsTokenScriptTest)
 // -----------------------------------------------------------------------------
 tasks.named<Test>("test") {
+    inputs.dir(rootProject.layout.projectDirectory.dir("tools/ops-token"))
+            .withPropertyName("opsTokenScript")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/openapi"))
             .withPropertyName("openApiContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
