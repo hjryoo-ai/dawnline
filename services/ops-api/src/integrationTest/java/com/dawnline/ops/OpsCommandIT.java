@@ -65,6 +65,11 @@ class OpsCommandIT extends OpsIntegrationTestBase {
     private static final UUID ROUTE = UUID.fromString("0199a000-0000-7000-8000-0000000000b1");
     private static final UUID TARGET = UUID.fromString("0199a000-0000-7000-8000-0000000000b2");
     private static final UUID ORDER = UUID.fromString("0199a000-0000-7000-8000-0000000000c1");
+    private static final UUID CLOSED_WAVE = UUID.fromString("0199a000-0000-7000-8000-0000000000a2");
+    private static final UUID EVENT = UUID.fromString("0199a000-0000-7000-8000-0000000000e1");
+
+    /** 가짜 코어가 요청을 받는 순간 감사 행을 읽는다 — 「위임 전에 PENDING 이 커밋됐다」의 관측 지점. */
+    private static volatile @Nullable JdbcTemplate coreSideDb;
 
     private static final HttpServer CORE = startCore();
     private static final List<Map<String, String>> RECEIVED = new CopyOnWriteArrayList<>();
@@ -88,11 +93,17 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         registry.add("dawnline.ops.kpi.on-time-initial-delay-ms", () -> "3600000");
         registry.add("spring.http.serviceclient.dispatch.base-url", () -> "http://127.0.0.1:" + CORE.getAddress().getPort());
         registry.add("spring.http.serviceclient.order.base-url", () -> CLOSED_PORT_URL);
+        // 같은 가짜 코어를 접두어로 나눈다 — outbox 경로는 코어 넷이 같아서 어느 그룹으로 갔는지를 접두어가 말한다.
+        registry.add("spring.http.serviceclient.fulfillment.base-url",
+                () -> "http://127.0.0.1:" + CORE.getAddress().getPort() + "/fulfillment");
+        registry.add("spring.http.serviceclient.tracking.base-url",
+                () -> "http://127.0.0.1:" + CORE.getAddress().getPort() + "/tracking");
     }
 
     @BeforeEach
     void clearReceived() {
         RECEIVED.clear();
+        coreSideDb = jdbc;
     }
 
     @AfterEach
@@ -235,10 +246,104 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         assertThat(RECEIVED).isEmpty();
     }
 
+    // --- 작업 2: 조기 마감 · outbox 재큐 · 격리 목록 --------------------------------------------
+
+    @Test
+    void 조기_마감은_fulfillment_로_위임되고_감사_행은_CLOSE_WAVE_이며_코어가_받을_때_이미_PENDING_이었다() throws Exception {
+        HttpResponse<String> response = post("/api/v1/waves/" + WAVE + "/close", token("OPS_OPERATOR", "kim"),
+                "{\"reason\":\"피크 대비 선마감\"}");
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).contains("\"closeCause\":\"MANUAL\"");
+        Map<String, Object> row = rowOf(response);
+        assertThat(row).containsEntry("action", "CLOSE_WAVE").containsEntry("target_type", "WAVE")
+                .containsEntry("target_id", WAVE).containsEntry("result", "SUCCEEDED");
+        assertThat((String) row.get("request")).contains("\"reason\": \"피크 대비 선마감\"");
+        assertThat(RECEIVED).singleElement().satisfies(request -> {
+            assertThat(request.get("path")).isEqualTo("/fulfillment/api/v1/waves/" + WAVE + "/close");
+            assertThat(request.get("resultAtReceipt")).as("감사 행은 위임 전에 커밋된다(§5.5)").isEqualTo("PENDING");
+        });
+    }
+
+    @Test
+    void 이미_닫힌_웨이브는_코어의_409_가_마감_원인과_함께_그대로_오고_REJECTED_다() throws Exception {
+        HttpResponse<String> response = post("/api/v1/waves/" + CLOSED_WAVE + "/close", token("OPS_OPERATOR", "kim"),
+                "{\"reason\":\"다시 누름\"}");
+
+        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(response.body()).as("RB-07 — 다시 누른 사람은 closeCause 로 앞의 요청이 적용됐는지 읽는다")
+                .isEqualTo(WAVE_NOT_OPEN);
+        assertThat(resultOf(response)).isEqualTo("REJECTED");
+    }
+
+    @Test
+    void 조기_마감의_이유가_없거나_공백이면_코어에_가기_전에_400_이고_감사_행이_없다() throws Exception {
+        for (String body : List.of("{}", "{\"reason\":\"  \"}", "{\"reason\":\"" + "가".repeat(201) + "\"}")) {
+            assertThat(post("/api/v1/waves/" + WAVE + "/close", token("OPS_OPERATOR", "kim"), body).statusCode())
+                    .as(body).isEqualTo(400);
+        }
+        assertThat(ownRows()).isEmpty();
+        assertThat(RECEIVED).isEmpty();
+    }
+
+    @Test
+    void 재큐는_service_가_말한_코어로_위임되고_감사_행은_REQUEUE_OUTBOX_다() throws Exception {
+        HttpResponse<String> response = post("/api/v1/admin/outbox/tracking/" + EVENT + "/requeue",
+                token("OPS_OPERATOR", "kim"), "");
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).contains("\"id\":\"" + EVENT + "\"", "\"eventType\":\"route.progress\"");
+        Map<String, Object> row = rowOf(response);
+        assertThat(row).containsEntry("action", "REQUEUE_OUTBOX").containsEntry("target_type", "OUTBOX_EVENT")
+                .containsEntry("target_id", EVENT).containsEntry("result", "SUCCEEDED");
+        assertThat((String) row.get("request")).contains("\"service\": \"tracking\"");
+        assertThat(RECEIVED).singleElement().satisfies(request -> {
+            assertThat(request.get("path")).isEqualTo("/tracking/api/v1/admin/outbox/" + EVENT + "/requeue");
+            assertThat(request.get("resultAtReceipt")).isEqualTo("PENDING");
+        });
+    }
+
+    @Test
+    void 모르는_service_는_404_이고_감사_행도_코어_호출도_없다() throws Exception {
+        String operator = token("OPS_OPERATOR", "kim");
+
+        assertThat(post("/api/v1/admin/outbox/ops-api/" + EVENT + "/requeue", operator, "").statusCode())
+                .as("ops-api 의 outbox 관리 경로는 꺼져 있다 — 넷에 들지 않는다").isEqualTo(404);
+        assertThat(post("/api/v1/admin/outbox/Tracking/" + EVENT + "/requeue", operator, "").statusCode())
+                .isEqualTo(404);
+        HttpResponse<String> list = get("/api/v1/admin/outbox/nowhere/quarantined", operator);
+        assertThat(list.statusCode()).isEqualTo(404);
+        assertThat(list.body()).contains("\"code\":\"not-found\"", "\"service\":\"nowhere\"");
+        assertThat(ownRows()).isEmpty();
+        assertThat(RECEIVED).isEmpty();
+    }
+
+    @Test
+    void 뷰어는_목록을_읽고_감사_행이_없으며_마감과_재큐는_403_이다() throws Exception {
+        String viewer = token("OPS_VIEWER", "viewer");
+
+        HttpResponse<String> list = get("/api/v1/admin/outbox/tracking/quarantined?limit=1", viewer);
+        assertThat(list.statusCode()).as(list.body()).isEqualTo(200);
+        assertThat(list.body()).contains("\"total\":2", "\"publishAttempts\":1");
+        assertThat(list.headers().firstValue(MdcKeys.AUDIT_ID_HEADER)).as("조회는 감사하지 않는다").isEmpty();
+        assertThat(RECEIVED).singleElement().satisfies(request -> {
+            assertThat(request.get("path")).isEqualTo("/tracking/api/v1/admin/outbox/quarantined");
+            assertThat(request.get("query")).isEqualTo("limit=1");
+        });
+
+        assertThat(post("/api/v1/waves/" + WAVE + "/close", viewer, "{\"reason\":\"x\"}").statusCode()).isEqualTo(403);
+        assertThat(post("/api/v1/admin/outbox/tracking/" + EVENT + "/requeue", viewer, "").statusCode()).isEqualTo(403);
+        assertThat(ownRows()).isEmpty();
+        assertThat(RECEIVED).as("403 은 코어에 가지 않는다").hasSize(1);
+    }
+
     // --- 가짜 코어 ----------------------------------------------------------------------------
 
     private static final String REJECTION =
             "{\"type\":\"https://dawnline.internal/problems/hard-rule-violated\",\"status\":409,\"code\":\"hard-rule-violated\"}";
+
+    private static final String WAVE_NOT_OPEN = "{\"type\":\"https://dawnline.internal/problems/wave-not-open\","
+            + "\"status\":409,\"code\":\"wave-not-open\",\"currentState\":\"CLOSED\",\"closeCause\":\"SCHEDULED\"}";
 
     private static final String UNAUTHORIZED =
             "{\"type\":\"https://dawnline.internal/problems/internal-token-required\",\"status\":401,"
@@ -250,18 +355,49 @@ class OpsCommandIT extends OpsIntegrationTestBase {
             server.createContext("/", exchange -> {
                 String path = exchange.getRequestURI().getPath();
                 String internalToken = String.valueOf(exchange.getRequestHeaders().getFirst(InternalToken.HEADER));
+                String auditId = String.valueOf(exchange.getRequestHeaders().getFirst(MdcKeys.AUDIT_ID_HEADER));
                 RECEIVED.add(Map.of("path", path,
-                        "auditId", String.valueOf(exchange.getRequestHeaders().getFirst(MdcKeys.AUDIT_ID_HEADER)),
+                        "query", String.valueOf(exchange.getRequestURI().getQuery()),
+                        "auditId", auditId,
+                        "resultAtReceipt", resultAtReceipt(auditId),
                         "internalToken", internalToken,
                         "body", new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
                 // 진짜 코어처럼 토큰 없는 운영자 쓰기는 401 이다(ADR-055) — 위임이 헤더를 잃으면 여기서 드러난다.
-                boolean authorized = InternalTokens.TEST_TOKEN.equals(internalToken);
-                boolean run = authorized && path.endsWith("/run");
-                String body = !authorized ? UNAUTHORIZED
-                        : run ? "{\"waveId\":\"" + WAVE + "\",\"outcome\":\"PLANNED\"}" : REJECTION;
+                // 조회(GET)는 토큰 대상이 아니다.
+                boolean authorized = "GET".equals(exchange.getRequestMethod())
+                        || InternalTokens.TEST_TOKEN.equals(internalToken);
+                int status;
+                String body;
+                if (!authorized) {
+                    status = 401;
+                    body = UNAUTHORIZED;
+                } else if (path.endsWith("/run")) {
+                    status = 200;
+                    body = "{\"waveId\":\"" + WAVE + "\",\"outcome\":\"PLANNED\"}";
+                } else if (path.equals("/fulfillment/api/v1/waves/" + WAVE + "/close")) {
+                    status = 200;
+                    body = "{\"waveId\":\"" + WAVE + "\",\"status\":\"CLOSED\",\"closeCause\":\"MANUAL\","
+                            + "\"closedAt\":\"2026-09-24T01:02:03Z\"}";
+                } else if (path.equals("/fulfillment/api/v1/waves/" + CLOSED_WAVE + "/close")) {
+                    status = 409;
+                    body = WAVE_NOT_OPEN;
+                } else if (path.equals("/tracking/api/v1/admin/outbox/" + EVENT + "/requeue")) {
+                    status = 200;
+                    body = "{\"id\":\"" + EVENT + "\",\"aggregateType\":\"Route\",\"aggregateId\":\"" + ROUTE
+                            + "\",\"eventType\":\"route.progress\",\"topic\":\"dawnline.delivery.route-progress.v1\"}";
+                } else if (path.equals("/tracking/api/v1/admin/outbox/quarantined")) {
+                    status = 200;
+                    body = "{\"total\":2,\"events\":[{\"id\":\"" + EVENT + "\",\"aggregateType\":\"Route\","
+                            + "\"aggregateId\":\"" + ROUTE + "\",\"eventType\":\"route.progress\","
+                            + "\"topic\":\"dawnline.delivery.route-progress.v1\",\"createdAt\":\"2026-09-24T00:00:00Z\","
+                            + "\"failedAt\":\"2026-09-24T00:10:00Z\",\"publishAttempts\":1}]}";
+                } else {
+                    status = 409;
+                    body = REJECTION;
+                }
                 byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().set("Content-Type", run ? "application/json" : "application/problem+json");
-                exchange.sendResponseHeaders(!authorized ? 401 : run ? 200 : 409, bytes.length);
+                exchange.getResponseHeaders().set("Content-Type", status == 200 ? "application/json" : "application/problem+json");
+                exchange.sendResponseHeaders(status, bytes.length);
                 exchange.getResponseBody().write(bytes);
                 exchange.close();
             });
@@ -270,6 +406,16 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** 요청이 코어에 닿은 순간의 감사 행 결과. 감사 id 가 없으면(조회) {@code "-"}. */
+    private static String resultAtReceipt(String auditId) {
+        JdbcTemplate db = coreSideDb;
+        if (db == null || "null".equals(auditId)) {
+            return "-";
+        }
+        List<String> results = db.queryForList("SELECT result FROM audit_logs WHERE id = ?::uuid", String.class, auditId);
+        return results.isEmpty() ? "(없음)" : results.getFirst();
     }
 
     private static String closedPortUrl() {
@@ -285,6 +431,12 @@ class OpsCommandIT extends OpsIntegrationTestBase {
     private String resultOf(HttpResponse<String> response) {
         String auditId = response.headers().firstValue(MdcKeys.AUDIT_ID_HEADER).orElseThrow();
         return jdbc.queryForObject("SELECT result FROM audit_logs WHERE id = ?::uuid", String.class, auditId);
+    }
+
+    private Map<String, Object> rowOf(HttpResponse<String> response) {
+        String auditId = response.headers().firstValue(MdcKeys.AUDIT_ID_HEADER).orElseThrow();
+        return jdbc.queryForMap("SELECT action, target_type, target_id, request::text AS request, result "
+                + "FROM audit_logs WHERE id = ?::uuid", auditId);
     }
 
     private List<Map<String, Object>> ownRows() {

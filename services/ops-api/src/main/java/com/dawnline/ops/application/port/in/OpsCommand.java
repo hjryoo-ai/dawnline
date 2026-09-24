@@ -1,5 +1,6 @@
 package com.dawnline.ops.application.port.in;
 
+import com.dawnline.ops.domain.CoreService;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -127,6 +128,74 @@ public sealed interface OpsCommand {
         @Override
         public Map<String, Object> arguments() {
             return present("orderId", orderId, "reason", reason);
+        }
+    }
+
+    /**
+     * 웨이브 조기 마감 — fulfillment {@code POST /waves/{waveId}/close} (ADR-054).
+     *
+     * @param waveId 웨이브
+     * @param reason 왜 컷오프를 앞당기는가 — 필수다(ADR-054 결정 2). 남은 시간 동안의 접수가 전부 약속을 받자마자
+     *               개정되는 결정이라 감사 행에 「왜」가 있어야 한다
+     */
+    record CloseWave(UUID waveId, String reason) implements OpsCommand {
+        public CloseWave {
+            Objects.requireNonNull(waveId, "waveId");
+            Objects.requireNonNull(reason, "reason");
+        }
+
+        @Override
+        public String action() {
+            return "CLOSE_WAVE";
+        }
+
+        @Override
+        public String targetType() {
+            return "WAVE";
+        }
+
+        @Override
+        public UUID targetId() {
+            return waveId;
+        }
+
+        @Override
+        public Map<String, Object> arguments() {
+            return present("waveId", waveId, "reason", reason);
+        }
+    }
+
+    /**
+     * outbox 격리 행 재큐 — {@code {service}} 코어의 {@code POST /admin/outbox/{id}/requeue} (§4.6).
+     *
+     * @param service 어느 코어의 행인가
+     * @param id      행 id({@code eventId})
+     */
+    record RequeueOutbox(CoreService service, UUID id) implements OpsCommand {
+        public RequeueOutbox {
+            Objects.requireNonNull(service, "service");
+            Objects.requireNonNull(id, "id");
+        }
+
+        @Override
+        public String action() {
+            return "REQUEUE_OUTBOX";
+        }
+
+        @Override
+        public String targetType() {
+            return "OUTBOX_EVENT";
+        }
+
+        @Override
+        public UUID targetId() {
+            return id;
+        }
+
+        /** {@code service} 가 먼저다 — 같은 id 가 다른 코어에 있을 수는 없지만, 사람이 볼 곳은 그 코어다. */
+        @Override
+        public Map<String, Object> arguments() {
+            return present("service", service.path(), "id", id);
         }
     }
 

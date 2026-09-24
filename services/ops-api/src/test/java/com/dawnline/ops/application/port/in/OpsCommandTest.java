@@ -2,6 +2,7 @@ package com.dawnline.ops.application.port.in;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.ops.domain.CoreService;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -42,5 +43,36 @@ class OpsCommandTest {
         assertThat(cancel.targetType()).isEqualTo("ORDER");
         assertThat(cancel.targetId()).isEqualTo(C);
         assertThat(cancel.arguments()).containsOnlyKeys("orderId");
+    }
+
+    @Test
+    void 조기_마감은_웨이브를_가리키고_이유를_싣는다() {
+        OpsCommand close = new OpsCommand.CloseWave(A, "피크 대비 선마감");
+
+        assertThat(close.action()).isEqualTo("CLOSE_WAVE");
+        assertThat(close.targetType()).isEqualTo("WAVE");
+        assertThat(close.targetId()).isEqualTo(A);
+        assertThat(close.arguments()).containsExactly(
+                java.util.Map.entry("waveId", A), java.util.Map.entry("reason", "피크 대비 선마감"));
+    }
+
+    @Test
+    void 재큐는_outbox_행을_가리키고_어느_코어인지를_먼저_싣는다() {
+        OpsCommand requeue = new OpsCommand.RequeueOutbox(CoreService.TRACKING, B);
+
+        assertThat(requeue.action()).isEqualTo("REQUEUE_OUTBOX");
+        assertThat(requeue.targetType()).isEqualTo("OUTBOX_EVENT");
+        assertThat(requeue.targetId()).isEqualTo(B);
+        assertThat(requeue.arguments()).containsExactly(
+                java.util.Map.entry("service", "tracking"), java.util.Map.entry("id", B));
+    }
+
+    @Test
+    void 경로의_service_는_넷_중_하나이고_그_밖은_없다() {
+        assertThat(CoreService.fromPath("fulfillment")).contains(CoreService.FULFILLMENT);
+        assertThat(CoreService.fromPath("ops-api")).as("ops-api 의 outbox 관리 경로는 꺼져 있다").isEmpty();
+        assertThat(CoreService.fromPath("Order")).as("경로는 한 가지 모양만 있다").isEmpty();
+        assertThat(java.util.Arrays.stream(CoreService.values()).map(CoreService::path))
+                .containsExactly("order", "fulfillment", "dispatch", "tracking");
     }
 }

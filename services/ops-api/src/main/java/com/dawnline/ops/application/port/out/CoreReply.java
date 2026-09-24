@@ -1,6 +1,8 @@
 package com.dawnline.ops.application.port.out;
 
 import com.dawnline.ops.domain.AuditResult;
+import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -32,7 +34,8 @@ public sealed interface CoreReply {
         }
 
         /** 코어의 성공 본문. 주소 같은 개인정보는 옮기지 않는다(§10). */
-        public sealed interface Body permits PlanRun, StopReassigned, OrderCancelled {
+        public sealed interface Body permits PlanRun, StopReassigned, OrderCancelled, WaveClosed, OutboxRequeued,
+                QuarantinedOutbox {
         }
     }
 
@@ -110,5 +113,58 @@ public sealed interface CoreReply {
      * @param status  취소 뒤 상태
      */
     record OrderCancelled(UUID orderId, String status) implements Applied.Body {
+    }
+
+    /**
+     * fulfillment 의 조기 마감 결과 (ADR-054).
+     *
+     * @param waveId     웨이브
+     * @param status     마감 뒤 상태
+     * @param closeCause 마감 원인 — 이 경로로 닫혔으면 {@code MANUAL}
+     * @param closedAt   닫힌 시각
+     */
+    record WaveClosed(UUID waveId, String status, @Nullable String closeCause, @Nullable Instant closedAt)
+            implements Applied.Body {
+    }
+
+    /**
+     * 격리를 풀었다 (§4.6). 릴레이가 다음 폴링에 집는다.
+     *
+     * @param id            행 id
+     * @param aggregateType 애그리거트 종류
+     * @param aggregateId   애그리거트 id
+     * @param eventType     이벤트 타입
+     * @param topic         토픽
+     */
+    record OutboxRequeued(UUID id, String aggregateType, UUID aggregateId, String eventType, String topic)
+            implements Applied.Body {
+    }
+
+    /**
+     * 한 코어의 격리 목록 (§4.6) — 조회라 감사 행이 없다. {@code payload}·{@code headers} 는 코어가 싣지 않는다.
+     *
+     * @param total  격리된 행의 전체 수. {@code events} 보다 크면 {@code limit} 에 잘렸다
+     * @param events 격리 시각 순
+     */
+    record QuarantinedOutbox(long total, List<QuarantinedEvent> events) implements Applied.Body {
+        public QuarantinedOutbox {
+            events = List.copyOf(events);
+        }
+    }
+
+    /**
+     * 격리된 행 하나.
+     *
+     * @param id              행 id
+     * @param aggregateType   애그리거트 종류
+     * @param aggregateId     애그리거트 id
+     * @param eventType       이벤트 타입
+     * @param topic           토픽
+     * @param createdAt       만들어진 시각
+     * @param failedAt        격리된 시각
+     * @param publishAttempts 격리되기까지의 시도 수
+     */
+    record QuarantinedEvent(UUID id, String aggregateType, UUID aggregateId, String eventType, String topic,
+            Instant createdAt, Instant failedAt, int publishAttempts) {
     }
 }

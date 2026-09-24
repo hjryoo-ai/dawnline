@@ -47,6 +47,9 @@ dependencies {
 val coreContracts = mapOf(
     "dispatch" to "dispatch-service.yaml",
     "order" to "order-service.yaml",
+    // 작업 2 (2026-09-24): 조기 마감(ADR-054)과 outbox 격리 조회·재큐(§4.6) — tracking 은 outbox 경로만 쓴다
+    "fulfillment" to "fulfillment-service.yaml",
+    "tracking" to "tracking-service.yaml",
 )
 
 val generateCoreClients = coreContracts.map { (core, file) ->

@@ -146,8 +146,8 @@ logging:
 #   - 연결 1초: 맺어지지 않으면 FAILED(닿지 않았다는 것을 아는 유일한 경우)
 #   - dispatch 읽기 60초: 재계획은 동기로 계획을 푼다. 계획 시간 p95 경보가 45초라(§9.4) 그보다 짧으면
 #     정상적인 재계획이 UNKNOWN 이 된다
-#   - order 읽기 5초: 취소는 상태 전이 하나다
-# fulfillment(웨이브 조기 마감)는 그 엔드포인트와 계약 문서가 생기는 작업 2 에서 그룹으로 더한다.
+#   - order·fulfillment·tracking 읽기 5초: 취소·조기 마감·outbox 재큐는 행 하나의 전이다
+# tracking 그룹은 outbox 격리 조회·재큐만 쓴다 — 스캔은 현장 표면이라 위임하지 않는다(§10 둘째 층).
 # =============================================================================
 spring.http.serviceclient:
   dispatch:
@@ -156,6 +156,14 @@ spring.http.serviceclient:
     read-timeout: 60s
   order:
     base-url: ${DAWNLINE_CORE_ORDER_URL:http://localhost:8081}
+    connect-timeout: 1s
+    read-timeout: 5s
+  fulfillment:
+    base-url: ${DAWNLINE_CORE_FULFILLMENT_URL:http://localhost:8082}
+    connect-timeout: 1s
+    read-timeout: 5s
+  tracking:
+    base-url: ${DAWNLINE_CORE_TRACKING_URL:http://localhost:8084}
     connect-timeout: 1s
     read-timeout: 5s
 
