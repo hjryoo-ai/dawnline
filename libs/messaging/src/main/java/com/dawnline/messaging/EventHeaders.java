@@ -9,8 +9,12 @@ import java.util.regex.Pattern;
  *
  * <p>§4.2 는 {@code traceparent}(W3C) · {@code eventType} · {@code schemaVersion} 세 개만
  * 헤더에 중복 기록하라고 정한다. 목적은 <strong>페이로드를 열지 않고 라우팅·필터링</strong>이다.
- * 그래서 여기에 헤더를 더 추가하지 않는다 — 헤더가 늘면 봉투와 헤더 두 곳에 같은 사실이 생기고,
+ * 그래서 봉투의 사실을 헤더에 더 옮기지 않는다 — 헤더가 늘면 봉투와 헤더 두 곳에 같은 사실이 생기고,
  * 반드시 어긋난다.
+ *
+ * <p>{@link #REPLAY_FOR} 는 그 규칙의 예외가 아니다 — 봉투의 중복이 아니라 <strong>배달의 사실</strong>이라
+ * 봉투에 둘 곳이 없다(ADR-053). 재처리는 value 를 한 바이트도 바꾸지 않아야 {@code eventId} 가 유지되므로,
+ * 「이 레코드는 재처리다」는 value 밖에만 적을 수 있다.
  *
  * <p>헤더 값은 모두 UTF-8 문자열이다. 숫자({@code schemaVersion})도 문자열로 쓴다.
  * 바이트 순서 해석이 컨슈머 언어마다 다르기 때문이다.
@@ -25,6 +29,13 @@ public final class EventHeaders {
 
     /** 봉투의 {@code schemaVersion} 중복 기록(문자열). */
     public static final String SCHEMA_VERSION = "schemaVersion";
+
+    /**
+     * DLQ 재처리가 지목한 소비자 그룹 (DESIGN.md §4.2·§4.6, ADR-053). 원래 발행에는 없고 ops-api 의 재처리만
+     * 싣는다. 값이 자기 그룹이 아닌 소비자는 리스너를 부르지 않고 건너뛴다
+     * ({@link com.dawnline.messaging.kafka.ReplayTargetFilter}).
+     */
+    public static final String REPLAY_FOR = "dawnline-replay-for";
 
     /** {@code 00-} + trace-id(32) + {@code -} + span-id(16) + {@code -} + flags(2) */
     private static final Pattern TRACEPARENT_FORMAT =
