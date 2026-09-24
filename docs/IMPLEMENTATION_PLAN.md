@@ -2074,7 +2074,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 이유 | 항목 |
 |---|---|
 | **이미 닫혔다** | **Phase 3 대조표의 `PRIORITY_BOOST` 계약 결손**(⚠️ — 처음 판에는 D6 으로 적었다. Phase 4-11 이 계약 변경 없이 닫았다: 우선도는 받은 사실에서 파생한다, ADR-028 · `LoadCandidateService`. Phase 3 행만 갱신되지 않았다 — 지금 고쳤다) · ADR-015 ①(ADR-055) · ADR-049 ②(규칙 9 가 조건이라는 증명 — #45 의 음성 표본 `OwnShapeAdvice` 가 했다. ops-api 로 한 번 더 하지는 않았다) · ADR-023 의 DLQ 경로 조건(ADR-053 이 §4.4 의 의존 경고로 답했다) · ADR-028 ①②(ADR-033 의 통합 키와 80% 기준) · **ADR-033 「`peak` 은 아직 재지 않았다」**(`DatasetFeasibilityTest` 가 2026-09-12 부터 빼는 방식으로 `peak` 을 포함한다 — ADR 의 문장만 남았다) · ADR-043 ① · ADR-047 ①⑤ · ADR-048 ④ · ADR-050 ③ · ADR-051 ①②③ · ADR-052 ② · **FAST 클러스터 여유 그림자**(`phase4-strategies.md` §7.3 「판정: 닫는다」 — 이득이 비단조. 커밋되지 않은 probe 의 수라는 ⚠️ 가 그 절에 있다) |
-| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · 013 · 015 ② · 028 ④ · 030 ①(로스터 모델) · 031 · 032 · 034(대안 표의 재검토 조건 둘) · 035 ② · 036 · 037 · 038 · 039 · 040 · 041 ②③ · 042 · 043 ③⑤ · 044 ②④ · 045 ②(분할 배송) · 047 ② · 049 ① · 052 ①③ · 053 · 054 ② · 055 · 056(생성기 버전) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 |
+| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 |
 | **조건이 켜지지 않았다** | `phase1-orders-k6.md` 판정표의 「`outbox_lag` 상승 → Phase 7 로 넘길지」 행 — Phase 1 의 미달은 콜드 스타트 하나였다 |
 | **범위 밖으로 닫았다**(D 의 결정) | 재배송 +3(D7 — DESIGN §6.3 우선도 표 · ADR-028 · Phase 5 대조표에 행을 더했다) |
 
@@ -2091,13 +2091,52 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | D7 | 재배송(+3) | ADR-028 · §6.3 | **범위 밖, 미구현으로 기록.** 세 서비스를 가로지르는 새 흐름이고 가중치의 사실 출처는 그 흐름이 생겨야 나온다 |
 | D8 | 시나리오 `normal-day` · `cold-heavy` | 부록 A | **`normal-day` 는 필수**(피크의 수치는 평일 열 옆에서 읽힌다). `cold-heavy` 는 `cold-ratio` 변형이라 포함 — 코드가 필요해지면 뺀다. 7-4a |
 
+**원천 목록 — 「Phase 7」 표기가 있는 파일과 그 줄 수** (`CarryOverLedgerConsistencyTest` 가 저장소와 대조한다)
+
+세는 규칙: 정규식 `Phase ?7` 에 맞는 **줄**의 수. 저장소 루트부터 전부 읽되 셋을 뺀다 — ① 이 계획서의 「Phase 7」 절
+(이 표가 사는 자리다) ② 검사 자신의 소스(규칙을 설명하느라 그 말을 쓴다) ③ 빌드 산출물 · 숨은 디렉터리(`.github` 는
+읽는다) · 로컬 전용 `.env`. 원천 ②(ADR 의 재검토 지점)는 파일 단위로 대조한다 — 본문에 「재검토」가 있는 ADR 은
+이 절 어딘가에 `ADR-NNN` 으로 나와야 한다. 원천 ③(계획서의 ⚠️ ◐ ⬜ ⏸)은 대조하지 않는다 — 그 표기는 각 Phase 마감
+대조표의 기록이고 이 표도 같은 기호를 쓰므로 세는 값이 뜻을 갖지 않는다. 대신 그 대조표들의 「Phase 7」 표기가 ①로
+잡힌다.
+
+| 파일 | 줄 | 행 |
+|---|---|---|
+| `.github/workflows/ci.yml` | 4 | A25 |
+| `Makefile` | 5 | A15 · A27 |
+| `README.md` | 8 | A4 · A22 · A23 · A24 · A27 |
+| `deploy/compose/README.md` | 3 | A6 · A21 |
+| `deploy/compose/docker-compose.yml` | 1 | A6 |
+| `deploy/compose/grafana/provisioning/dashboards/dashboards.yml` | 1 | A6 |
+| `deploy/compose/grafana/provisioning/datasources/datasources.yml` | 1 | A21 |
+| `deploy/compose/prometheus/prometheus.yml` | 2 | A6 |
+| `deploy/compose/tempo/tempo.yml` | 1 | A21 |
+| `docs/DESIGN.md` | 12 | A1 · A2 · A5 · A7 · A8 · A13 · A14 · A26 · D2 · D7 |
+| `docs/IMPLEMENTATION_PLAN.md` | 20 | A1 · A2 · A3 · A4 · A5 · A9 · A10 · A11 · A12 · A13 · C · D5 · D7 |
+| `docs/adr/ADR-004-compare-against-the-boundary-not-another-solver.md` | 5 | A4 · A13 · C |
+| `docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md` | 3 | A3 |
+| `docs/adr/ADR-025-wave-admission-share-lock.md` | 1 | A17 |
+| `docs/adr/ADR-026-dispatch-cancellation-window.md` | 2 | A18 |
+| `docs/adr/ADR-027-outbox-relay-leader-lock.md` | 4 | A15 · A16 |
+| `docs/adr/ADR-028-unassigned-policy.md` | 1 | D7 |
+| `docs/adr/ADR-033-constraint-classes.md` | 2 | C |
+| `docs/adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md` | 1 | A19 |
+| `docs/adr/ADR-057-map-draws-without-tiles-ops-web-is-an-nginx-image.md` | 1 | A25 |
+| `docs/adr/README.md` | 3 | A13 · A14 |
+| `docs/benchmarks/phase1-orders-k6.md` | 6 | A1 · A2 · C |
+| `docs/benchmarks/phase4-strategies.md` | 2 | A4 |
+| `services/dispatch-service/src/main/java/com/dawnline/dispatch/adapter/out/redis/package-info.java` | 1 | A11 |
+| `tools/demo/phase2-demo.sh` | 1 | A2 |
+| `tools/sim-runner/build.gradle.kts` | 1 | A27 |
+
+
 **작업** (순서 2026-09-25 확정 — 7-0 → 7-0b → 7-1 → 7-2 → 7-3 → 7-4a → 7-4 → 7-5 → 7-6 → 7-7)
 
 **대시보드가 peak-day 앞에 오는 이유**는 그 실행이 패널을 검증하는 첫 실행이어야 하기 때문이고, **카오스가 앞에
 오는 이유**는 검증 SQL 을 peak-day 가 다시 쓰기 때문이다.
 
 0. **이월 대조표**(위) — 그리고 마지막 커밋으로 **대조 검사**: 표의 「원천 목록」과 저장소의 「Phase 7」 표기, 표와
-   재검토 지점이 있는 ADR 을 서로 비춘다(`Phase7CarryOverConsistencyTest`). 항목을 닫는 PR 은 표를 같이 고쳐야 초록이
+   재검토 지점이 있는 ADR 을 서로 비춘다(`CarryOverLedgerConsistencyTest`). 항목을 닫는 PR 은 표를 같이 고쳐야 초록이
    된다 — ADR 인덱스 검사가 하는 일과 같다.
 0b. **보존 정책**(D5) — `shipments` 30일 · `route_revisions` 90일 · `rm_*` 90일, ADR-023 의 두 축과 기존 정리 배치 패턴.
    설계(§7.1 보존 표)와 ADR 이 먼저, 인덱스는 EXPLAIN.

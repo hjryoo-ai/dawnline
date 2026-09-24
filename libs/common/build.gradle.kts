@@ -36,3 +36,22 @@ tasks.named<Test>("test") {
         .withPropertyName("adrDirectory")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+// -----------------------------------------------------------------------------
+// CarryOverLedgerConsistencyTest 는 저장소 전체에서 이월 표기를 센다(계획서 7-0 의 원천 목록 — 그 정규식).
+// 같은 이유로 그 전부를 입력으로 선언한다 — 어느 파일에 표기가 하나 늘어도 test 가 다시 돈다.
+// 빼는 것은 테스트와 같다: 빌드 산출물 · 의존성 · 숨은 디렉터리(.github 는 읽는다) · 로컬 전용 .env.
+// 산출물을 빼지 않으면 다른 태스크의 출력이 이 태스크의 입력이 되어 Gradle 이 암묵적 의존으로 거부한다.
+// -----------------------------------------------------------------------------
+tasks.named<Test>("test") {
+    inputs.files(
+        rootProject.fileTree(rootProject.layout.projectDirectory) {
+            exclude("**/build/**", "**/node_modules/**", "**/dist/**", "**/.*/**", "**/.env")
+        },
+    )
+        .withPropertyName("phase7CarryOverSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.layout.projectDirectory.dir(".github"))
+        .withPropertyName("ciConfiguration")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
