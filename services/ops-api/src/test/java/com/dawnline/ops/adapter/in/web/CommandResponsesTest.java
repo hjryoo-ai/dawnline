@@ -65,6 +65,30 @@ class CommandResponsesTest {
         assertProblem(respond(new CoreReply.Unknown(false, null, "reset")), 502, CommandResponses.CORE_ERROR);
     }
 
+    @Test
+    void 조회의_답은_같은_갈래이고_감사_id_가_없다() {
+        CoreReply.QuarantinedOutbox body = new CoreReply.QuarantinedOutbox(0, java.util.List.of());
+        String problem = "{\"code\":\"validation-failed\",\"status\":400}";
+
+        ResponseEntity<?> listed = CommandResponses.ofQuery(new CoreReply.Applied(body), PATH);
+        ResponseEntity<?> rejected = CommandResponses.ofQuery(new CoreReply.Rejected(400, problem, null), PATH);
+        ResponseEntity<?> unreachable = CommandResponses.ofQuery(new CoreReply.Unreachable("refused"), PATH);
+        ResponseEntity<?> timedOut = CommandResponses.ofQuery(new CoreReply.Unknown(true, null, "timeout"), PATH);
+
+        assertThat(listed.getStatusCode().value()).isEqualTo(200);
+        assertThat(listed.getBody()).isEqualTo(body);
+        assertThat(rejected.getStatusCode().value()).isEqualTo(400);
+        assertThat(rejected.getBody()).isEqualTo(problem);
+        assertThat(unreachable.getStatusCode().value()).isEqualTo(502);
+        assertThat(timedOut.getStatusCode().value()).isEqualTo(504);
+        for (ResponseEntity<?> response : java.util.List.of(listed, rejected, unreachable, timedOut)) {
+            assertThat(response.getHeaders().getFirst(MdcKeys.AUDIT_ID_HEADER)).as("조회는 감사 행이 없다").isNull();
+        }
+        assertThat(timedOut.getBody()).isInstanceOfSatisfying(ProblemDetail.class, detail -> assertThat(
+                detail.getProperties()).containsEntry("code", CommandResponses.CORE_TIMEOUT)
+                .doesNotContainKey(MdcKeys.AUDIT_ID));
+    }
+
     private static ResponseEntity<?> respond(CoreReply reply) {
         return CommandResponses.of(new Outcome(AUDIT, reply), PATH);
     }

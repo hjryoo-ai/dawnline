@@ -5,6 +5,7 @@ import com.dawnline.ops.application.port.in.RunOpsCommandUseCase.Outcome;
 import com.dawnline.ops.application.port.out.CoreReply;
 import com.dawnline.web.ProblemDetailsAdviceSupport;
 import java.net.URI;
+import org.jspecify.annotations.Nullable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -56,13 +57,37 @@ final class CommandResponses {
         };
     }
 
+    /**
+     * 조회의 답 — 감사 행이 없으므로 감사 id 헤더도 없고, 「적용됐는지 모른다」도 없다(읽기는 아무것도 바꾸지 않는다).
+     * 갈래와 상태 코드는 커맨드와 같다.
+     */
+    static ResponseEntity<?> ofQuery(CoreReply reply, String path) {
+        HttpHeaders headers = new HttpHeaders();
+        return switch (reply) {
+            case CoreReply.Applied applied -> new ResponseEntity<>(applied.body(), headers, HttpStatus.OK);
+            case CoreReply.Rejected rejected -> {
+                headers.setContentType(rejected.contentType() == null
+                        ? MediaType.APPLICATION_PROBLEM_JSON : MediaType.parseMediaType(rejected.contentType()));
+                yield new ResponseEntity<>(rejected.problem(), headers, HttpStatusCode.valueOf(rejected.status()));
+            }
+            case CoreReply.Unreachable unreachable -> problem(headers, HttpStatus.BAD_GATEWAY, CORE_UNREACHABLE,
+                    "코어에 연결하지 못했다", null, path);
+            case CoreReply.Unknown unknown when unknown.timedOut() -> problem(headers, HttpStatus.GATEWAY_TIMEOUT,
+                    CORE_TIMEOUT, "코어가 제시간에 답하지 않았다", null, path);
+            case CoreReply.Unknown unknown -> problem(headers, HttpStatus.BAD_GATEWAY, CORE_ERROR,
+                    "코어가 오류로 답했거나 응답이 끊겼다", null, path);
+        };
+    }
+
     private static ResponseEntity<ProblemDetail> problem(HttpHeaders headers, HttpStatus status, String code,
-            String detail, Outcome outcome, String path) {
+            String detail, @Nullable Outcome outcome, String path) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
         problem.setType(URI.create(ProblemDetailsAdviceSupport.PROBLEM_TYPE_PREFIX + code));
         problem.setInstance(URI.create(path));
         problem.setProperty("code", code);
-        problem.setProperty(MdcKeys.AUDIT_ID, outcome.auditId().toString());
+        if (outcome != null) {
+            problem.setProperty(MdcKeys.AUDIT_ID, outcome.auditId().toString());
+        }
         headers.setContentType(MediaType.APPLICATION_PROBLEM_JSON);
         return new ResponseEntity<>(problem, headers, status);
     }

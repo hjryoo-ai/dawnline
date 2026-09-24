@@ -1127,9 +1127,9 @@ KST 경계로 바꾸면 서머타임이 없는 지금은 괜찮아 보이지만,
 - 모든 토픽을 구독해 **읽기 모델**을 갱신 (CQRS 프로젝션). 코어 서비스 DB는 절대 직접 읽지 않는다.
 - 커맨드는 코어 서비스 REST로 위임: 웨이브 조기 마감, 계획 재실행, stop 재배정, 주문 홀드/취소, DLQ 재처리, **outbox 격리 행 조회·재큐**(§4.6 발행 측 실패).
   (2026-09-24, 묶음 B) 들어온 것은 코어에 엔드포인트와 계약 문서가 **이미 있는** 셋이다 — 아래 「커맨드 위임」.
-  **웨이브 조기 마감**·**outbox 격리 조회·재큐**는 작업 2(fulfillment 의 첫 운영 엔드포인트와 그 OpenAPI 문서)
-  뒤에 같은 경로로 붙는다 — 코어 쪽은 둘 다 들어왔다(조기 마감 ADR-054, 격리 조회·재큐는 코어 넷의 공유 코드
-  §4.6 「격리 조회·재큐 엔드포인트」). **DLQ 재처리**는 ops-api 가 직접 하는 일이라 위임과 모양이 달라 따로 붙었다 — §4.6 「DLQ 재처리」
+  **웨이브 조기 마감**·**outbox 격리 조회·재큐**는 작업 2 의 마지막 PR 에서 같은 경로로 붙었다(2026-09-24) —
+  `fulfillment`·`tracking` 그룹이 늘었고 코어 쪽은 조기 마감 ADR-054, 격리 조회·재큐는 코어 넷의 공유 코드
+  §4.6 「격리 조회·재큐 엔드포인트」. **DLQ 재처리**는 ops-api 가 직접 하는 일이라 위임과 모양이 달라 따로 붙었다 — §4.6 「DLQ 재처리」
   ([ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md), 감사 `action=DLQ_REPLAY`·`target_type=EVENT`).
   **주문 홀드는 미구현 — 전이 없음**: order-service 의 상태 머신(§5.1)에 홀드 전이가 없다. 목록에서 지우지
   않고 이 표시로 남긴다 — 지우면 「검토했는데 없는 것」과 「잊은 것」을 구별할 수 없다.
@@ -1152,6 +1152,20 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 | `POST /api/v1/plans/{waveId}/run` (`campId`·`strategy`·`mode`) | dispatch 같은 경로 | `RUN_PLAN` · `WAVE` |
 | `POST /api/v1/routes/{routeId}/stops/{orderId}/reassign` | dispatch 같은 경로 | `REASSIGN_STOP` · `ORDER` |
 | `POST /api/v1/orders/{orderId}/cancel` | order 같은 경로 | `CANCEL_ORDER` · `ORDER` |
+| `POST /api/v1/waves/{waveId}/close` (`reason` **필수**) | fulfillment 같은 경로 | `CLOSE_WAVE` · `WAVE` |
+| `POST /api/v1/admin/outbox/{service}/{id}/requeue` | `{service}` 코어의 `/api/v1/admin/outbox/{id}/requeue` | `REQUEUE_OUTBOX` · `OUTBOX_EVENT` |
+| `GET /api/v1/admin/outbox/{service}/quarantined?limit=` | `{service}` 코어의 `/api/v1/admin/outbox/quarantined` | **없음** — 조회다 |
+
+- **outbox 경로에만 `{service}` 한 칸이 있다** (2026-09-24). 같은 공유 코드가 코어 넷에 같은 경로를 만들었으므로
+  (§4.6) ops-api 에서는 어느 코어의 것인지를 경로가 말해야 한다. 값은 `order`·`fulfillment`·`dispatch`·`tracking`
+  넷이고 **그 밖의 값은 404 이며 감사 행을 남기지 않는다** — 커맨드가 아니라 없는 경로다. 감사 행의 `request` 에
+  `service` 가 들어간다(`target_id` 는 행 id 이고, 같은 id 가 다른 코어에 있을 수 없지만 사람이 볼 곳은 그 코어다).
+- **조회는 감사하지 않는다.** 목록은 `OPS_VIEWER` 에게 열리고(§5.5 「역할」 — `GET` 은 뷰어) 코어의 본문을 옮겨
+  돌려준다. 코어에 닿지 못하면 502 `core-unreachable`, 시간이 다 되면 504 `core-timeout` — 조회라 「적용됐는지
+  모른다」가 없고 감사 id 헤더도 없다.
+- **조기 마감의 `reason` 은 ops-api 에서도 필수다** — 코어 계약이 필수(ADR-054 결정 2)이고 생성 클라이언트가 그것을
+  받는다. ops-api 는 코어가 거절할 것(공백·200자 초과)을 미리 400 으로 막고 **감사 행을 남기지 않는다**(재배정의
+  빈 본문과 같은 규칙).
 
 - **감사 행은 위임 _전에_ 쓴다.** 별도 트랜잭션으로 `PENDING` 을 커밋한 뒤에 코어를 부른다 — 순서가 반대면
   위임과 기록 사이에 죽었을 때 기록이 사라진다. 기록을 쓰지 못하면 **위임하지 않는다**(503).
@@ -1176,7 +1190,7 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 - **`request` JSONB 에는 커맨드의 인자만** 넣는다(경로 변수·쿼리·본문). 코어의 응답 본문은 넣지 않는다 —
   취소 응답의 `OrderView` 는 주소 전체를 싣는다(§10 「읽기 모델에는 주소 전체를 저장하지 않음」).
 - **타임아웃**: 연결 1초. 읽기는 dispatch 60초(계획 시간 p95 경보가 45초다, §9.4 — 그보다 짧으면 정상적인
-  재계획이 `UNKNOWN` 이 된다), order 5초.
+  재계획이 `UNKNOWN` 이 된다), order·fulfillment·tracking 5초(취소·마감·재큐는 행 하나의 전이다).
 
 ```sql
 CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR(16),
@@ -2601,6 +2615,7 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다. 창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개**(`kpi_delivery_hourly` 의 24행 합 — 현재 버킷은 늘 부분이라 23시간 남짓~24시간)이고 1분마다 다시 센다. 분모는 완료 + **실패**, 취소·배차 불가는 뺀다(§5.5 「KPI — 두 축, 뷰」). 결과가 없는 캠프와 갱신 실패 중에는 `NaN` — 0 도 마지막 값도 아니다. 약속을 모르는 결과도 빠지고, 그 수는 아래 `dawnline_kpi_excluded` 가 낸다 |
 | `dawnline_kpi_excluded` | gauge | **ops-api** | reason(promise_unknown) — 정시율의 창에서 **모집단 밖으로 빠진** 결과: 완료·실패했는데 약속(또는 캠프)을 아직 모른다(`kpi_delivery_hourly.outcome_without_promise` 의 합, 캠프가 없는 행 포함). 분모에서 조용히 빠지는 것은 실패를 빼서 정시율을 올리는 것과 같은 부류다 — **부재는 값이 아니지만 부재의 수는 값이다.** 정상에서는 프로젝션 랙만큼의 일시값이고 계속 0 이 아니면 `fulfillment.planned` 가 오지 않고 있다. 갱신 실패 중에는 `NaN` — 0 은 「빠진 것이 없다」는 주장이다 |
 | `dawnline_ops_commands_total` | counter | **ops-api** | action(`RUN_PLAN`·`REASSIGN_STOP`·`CANCEL_ORDER`·`DLQ_REPLAY` — 재처리는 레코드마다 하나), result(`SUCCEEDED`·`REJECTED`·`FAILED`·`UNKNOWN`) — 감사 행의 결과를 **커밋한 뒤에** 센다(CLAUDE.md 「카운터는 커밋 뒤에 센다」). `PENDING` 은 세지 않는다 — 끝나지 않은 커맨드의 수는 카운터가 아니라 `audit_logs` 가 안다 |
+| `dawnline_internal_token_rejected_total` | counter | 코어 넷(`libs/web`) | reason(`missing`·`mismatch`) — 운영자 쓰기가 내부 토큰 없이·틀린 토큰으로 들어와 401 을 받았다(§10 셋째 층, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)). 정상 운영에서 **0** 이다 — ops-api 는 모든 호출에 싣고 고객·현장 표면은 면제다. 레이트 리밋의 `bypassed` 와 같은 부류: 보상 통제가 뚫리는 것을 센다 |
 | `dawnline_kpi_refresh_age_seconds` | gauge | **ops-api** | 라벨 없음 — 마지막으로 **성공한** KPI 갱신 뒤로 흐른 초. 스크레이프마다 계산하므로 갱신이 멈추면 값이 멈추지 않고 커진다(성공한 적이 없으면 기동부터). 위 둘은 갱신이 죽으면 `NaN` 이고 **`NaN` 에는 어떤 비교 알림도 울리지 않는다** — 그래서 알림은 이 값에 건다(§9.4). `dawnline_shipment_partitions_ahead` 와 같은 모양이다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
@@ -2641,11 +2656,11 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%(창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다), **`dawnline_kpi_refresh_age_seconds` > 300**(**초기값 — Phase 7 peak-day 에서 재검토**. KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 바로 앞의 정시율 알림은 **울리지 않는다**. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다, §5.5), **`dawnline_kpi_excluded{reason="promise_unknown"}` > 0 이 30분 지속**(**초기값 — Phase 7 peak-day 에서 재검토**. 결과는 났는데 약속을 모르는 주문이 정시율에서 빠지고 있다 — 프로젝션 랙으로 설명되는 길이를 넘었으면 `fulfillment.planned` 가 오지 않고 있다), **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06), **`dawnline_ops_commands_total{result="UNKNOWN"}` 증가**(운영자 커맨드가 코어에 적용됐는지 모른다 — 사람이 `auditId` 로 코어 로그를 보고 닫는다, RB-07. **`action="DLQ_REPLAY"` 는 예외다** — 재처리는 멱등이라 그대로 다시 누르는 것이 해소다, RB-05)
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%(창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다), **`dawnline_kpi_refresh_age_seconds` > 300**(**초기값 — Phase 7 peak-day 에서 재검토**. KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 바로 앞의 정시율 알림은 **울리지 않는다**. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다, §5.5), **`dawnline_kpi_excluded{reason="promise_unknown"}` > 0 이 30분 지속**(**초기값 — Phase 7 peak-day 에서 재검토**. 결과는 났는데 약속을 모르는 주문이 정시율에서 빠지고 있다 — 프로젝션 랙으로 설명되는 길이를 넘었으면 `fulfillment.planned` 가 오지 않고 있다), **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06), **`dawnline_internal_token_rejected_total` > 0**(ops-api 를 거치지 않는 누군가가 코어의 운영자 쓰기를 두드렸다 — 그 커맨드는 거부됐지만, 누가 왜 코어 포트를 직접 부르는지는 사람이 본다. `reason=mismatch` 가 계속되면 서비스 사이의 토큰이 어긋난 것일 수 있다 — ops-api 의 위임이 전부 401 로 실패하고 있다, ADR-055), **`dawnline_ops_commands_total{result="UNKNOWN"}` 증가**(운영자 커맨드가 코어에 적용됐는지 모른다 — 사람이 `auditId` 로 코어 로그를 보고 닫는다, RB-07. **`action="DLQ_REPLAY"` 는 예외다** — 재처리는 멱등이라 그대로 다시 누르는 것이 해소다, RB-05)
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
-RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6 — 재처리의 `UNKNOWN`·오래된 `PENDING` 은 다시 누른다, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md)) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검) · RB-07 감사 `UNKNOWN`·오래된 `PENDING` 해소(§5.5 — 코어 로그·트레이스에서 그 행의 `auditId` 를 찾아 적용 흔적이 있으면 `SUCCEEDED`, 요청이 닿은 흔적이 없으면 `FAILED` 로 사람이 닫는다. 흔적으로도 못 가리면 코어의 현재 상태(웨이브·라우트·주문)를 보고 닫고, 무엇을 근거로 닫았는지 남긴다. 이 일을 코드로 옮기는 것 — ops-api 가 코어 상태를 다시 읽어 닫기 — 은 `UNKNOWN` 이 실제로 쌓이면 연다, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 재검토 지점 4).
+RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6 — 재처리의 `UNKNOWN`·오래된 `PENDING` 은 다시 누른다, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md)) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검) · RB-07 감사 `UNKNOWN`·오래된 `PENDING` 해소(§5.5 — 코어 로그·트레이스에서 그 행의 `auditId` 를 찾아 적용 흔적이 있으면 `SUCCEEDED`, 요청이 닿은 흔적이 없으면 `FAILED` 로 사람이 닫는다. **조기 마감과 재큐는 다시 누르기가 먼저다**(2026-09-24): 두 코어 커맨드는 이미 적용된 상태에서 409 로 **지금 위치**를 말한다 — 마감은 `wave-not-open` 의 `closeCause`(`MANUAL` 이면 앞의 요청이 적용됐다 — 같은 웨이브의 다른 `CLOSE_WAVE` 행이 없는지 `audit_logs` 로 확인한다, `SCHEDULED` 면 스케줄러가 먼저 닫았고 앞의 요청은 적용되지 않았다)와 `closedAt`, 재큐는 `not-quarantined` 의 `currentState`(`PENDING`·`PUBLISHED` 면 풀려 있다). 다시 누른 요청은 새 감사 행(`REJECTED`)으로 남고, 앞의 `UNKNOWN` 행은 그 본문을 근거로 사람이 닫는다. 흔적으로도 못 가리면 코어의 현재 상태(웨이브·라우트·주문)를 보고 닫고, 무엇을 근거로 닫았는지 남긴다. 이 일을 코드로 옮기는 것 — ops-api 가 코어 상태를 다시 읽어 닫기 — 은 `UNKNOWN` 이 실제로 쌓이면 연다, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 재검토 지점 4).
 
 ---
 
@@ -2790,7 +2805,7 @@ dawnline/
 | 1 | Outbox 필수 | 규칙 6(직접 발행 차단), 규칙 5(트랜잭션 경계 위치) | `OutboxAppender` 가 유일한 발행 API — `libs/messaging` 은 다른 발행 경로를 제공하지 않는다. 어노테이션이 <em>사라지는</em> 것은 ArchUnit이 못 잡으므로 `PlaceOrderTransactionTest` 가 그 존재를 직접 확인한다. **예외 하나**: ops-api 의 DLQ 재처리는 `adapter.out.messaging` 이 `KafkaTemplate<byte[], byte[]>` 로 직접 보낸다(2026-09-24, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md) 결정 3). **이 발행의 상태는 감사 행이다** — 예외가 성립하는 이유는 「상태가 없어서」가 아니라 「상태가 다른 곳(`audit_logs`)에 있어서」다: `PENDING` 이 먼저 커밋되고 ack 가 그것을 닫는다. 도메인 상태를 바꾸는 발행은 이 예외를 쓸 수 없다 | 규칙 6 ✅ / 규칙 5 ✅ |
 | 2 | 멱등 소비자 필수 | 규칙 4 — 리스너의 *위치*만 제한. 멱등 체크를 했는지는 보지 못한다 | `IdempotentConsumer` API, PR 체크리스트, 리스너 IT 가 같은 이벤트를 두 번 보내 상태가 한 번만 바뀌는지 확인. **예외 하나**: `tools/sim-runner` 의 기사 시뮬레이터는 `route.assigned` 를 구독하지만 DB 도 `processed_events` 도 없고, 대신 `DriverFleet` 이 라우트별 개정 최댓값으로 거른다(tracking 의 `route_revisions` 와 같은 모양, `DriverFleetTest`). **예외가 성립하는 이유는 「도구라서」가 아니라 「하류가 멱등이라서」다** — 중복 소비가 만드는 것은 tracking 으로 가는 중복 스캔이고 그것은 §8.5 의 「`(orderIds, type)` + 상태 머신」이 `STALE` 로 흡수한다. **하류가 멱등이 아닌 소비자는 이 예외를 쓸 수 없다**. 그 리스너는 ArchUnit 규칙 4 의 대상도 아니다 — `tools/sim-runner` 는 `dawnline.spring-service` 규약을 쓰지 않아 ArchUnit 이 돌지 않고, 도구에는 `adapter.in.messaging` 이라는 자리 자체가 없다 (2026-09-19, Phase 5-2). **게이트 앞의 건너뛰기 하나**: 다른 그룹을 지목한 DLQ 재처리(`dawnline-replay-for`)는 컨테이너의 레코드 필터가 리스너를 부르지 않고 넘긴다 — `processed_events` 를 거치지 않는 것이 **의도**다(적으면 같은 이벤트를 이 그룹 대상으로 재처리할 때 `dup` 으로 막힌다, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md) 결정 2) | 규칙 4 ✅ / 멱등 체크 자체는 ✗ |
 | 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✅(양방향) / DB 권한 ✅(컨테이너에서 거부 확인) |
-| 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성 | 규칙 3 ✅ / HTTP 경로는 ✗ |
+| 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성. **코어의 운영자 쓰기는 ops-api 만 부른다**(§10 셋째 층, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)) — 내부 토큰, 강제 수단은 코어 넷의 `OpenApiContractIT` 가 **생성된 문서에서 뽑은** 쓰기를 전부 토큰 없이 부르는 검사. 음성 표본(인터셉터 등록을 뺐다)에서 네 코어가 열린 쓰기 **열 개**를 나열했고 **그 목록은 ADR-055 의 표와 같았다** — 검사가 문서에서 뽑히는 이유가 그것이다. 목록을 테스트에 적었다면 그것은 ADR 의 표와 대조할 둘째 목록이 되고, 새 쓰기 엔드포인트는 두 목록 모두에서 빠진 채 열린다. 토큰은 코어도 알므로 코어→코어 호출은 여전히 이 행의 리뷰가 막는다 | 규칙 3 ✅ / HTTP 경로는 ✗ — **운영자 쓰기만 ✅**(ADR-055 음성 표본) |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다. **규칙 10** 이 같은 근거를 `libs/common` 의 main 으로 넓힌다([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) 결정 2) — 그 모듈의 build 파일이 「순수 Java 다」라고 적고 있었지만 그것은 문장이지 강제가 아니었다 | — | ✅ (규칙 1 · 규칙 10 둘 다) |
 | 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트**. **애그리거트가 없는 자리 하나**: dispatch 의 `route_stops.status`(2026-09-22, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 기각 (5)). 라우트는 120 stop 까지 가고 `RouteMutations` 는 「애그리거트를 되살리지 않는다」를 명시한 포트라, 전이 규칙은 도메인의 **순수 함수**(`RouteStopTransition`)에 두고 어댑터가 판정만 받아 한 행을 쓴다. 규칙이 한 곳에 있다는 목적은 지켜지지만 **세터를 막는 장치가 없다** — 지키는 것은 `RouteStopTransitionTest` 와 리뷰다. **둘째가 묶음 B 에 온다**: ops-api 의 상태 칸 넷(`rm_orders.order_status`·`delivery_outcome`·`rm_waves.status`·`rm_routes.status`, §5.5)은 애그리거트가 아니라 **프로젝션**이라 역시 세터를 막을 자리가 없고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓰므로** 「이 전이를 받는가」 앞에 「그 행이 아직 있기는 한가」가 하나 더 있다([ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) — 축 규칙의 다섯 번째 자리). 지키는 것은 「순서를 뒤섞는 IT」다 — **들어왔다**(2026-09-24): 판정은 `ops.domain.Progress` 의 순수 함수(최댓값)이고 `ProgressTest` 가 네 축의 모든 쌍에서 교환법칙을 본다. `ProjectionShuffleIT`(실제 PostgreSQL, 씨 25회)·`ProjectionShuffleTest`(메모리, 씨 300회)가 같은 시나리오를 뒤섞고, 토픽·표·칸을 전부 **빼는 방식**으로 정한다. 「부재는 값이 아니다」는 타입이 지킨다 — `Patch` 가 `null` 을 받지 않는다 | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다. `RouteStopTransitionTest` 가 위 예외의 표 전체(도착 상태 × 현재 상태)를 **빼는 방식**으로 돈다 |
 | 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표(**예외 없음** — 2026-09-05 에 하루 있었고 [ADR-027 후속 정정](adr/ADR-027-outbox-relay-leader-lock.md)이 그 행을 없앴다), 카오스 시나리오(현재 `make chaos-kafka`), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |

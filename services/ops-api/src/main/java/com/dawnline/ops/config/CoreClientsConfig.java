@@ -5,8 +5,8 @@ import com.dawnline.ops.adapter.out.core.CoreCommandsClient;
 import com.dawnline.ops.adapter.out.core.InternalTokenPropagation;
 import com.dawnline.ops.adapter.out.core.dispatch.api.PlanControllerApi;
 import com.dawnline.ops.adapter.out.core.dispatch.api.RouteControllerApi;
+import com.dawnline.ops.adapter.out.core.fulfillment.api.WaveControllerApi;
 import com.dawnline.ops.adapter.out.core.order.api.OrderControllerApi;
-import com.dawnline.ops.application.port.out.CoreCommands;
 import com.dawnline.web.internal.InternalTokenProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,11 +20,17 @@ import org.springframework.web.service.registry.ImportHttpServices;
  * 등록만 한다 — 그룹 이름이 {@code spring.http.serviceclient.<그룹>} 의 base-url·타임아웃과 이어진다
  * (application.yml). 그룹의 {@code RestClient} 는 Boot 가 관측을 붙여 만들므로 트레이스가 코어로 이어진다.
  *
- * <p>그룹은 코어 서비스 단위다. 웨이브 조기 마감이 붙으면(작업 2) {@code fulfillment} 그룹이 는다.
+ * <p>그룹은 코어 서비스 단위다 — 넷. {@code tracking} 은 outbox 관리 경로만 쓴다(스캔은 현장 표면이라 위임하지 않는다).
+ * outbox 관리 인터페이스는 코어마다 자기 패키지에 생성되므로(같은 이름, 다른 타입) 여기서만 정규화된 이름으로 적는다.
  */
 @Configuration(proxyBeanMethods = false)
-@ImportHttpServices(group = "dispatch", types = {PlanControllerApi.class, RouteControllerApi.class})
-@ImportHttpServices(group = "order", types = OrderControllerApi.class)
+@ImportHttpServices(group = "dispatch", types = {PlanControllerApi.class, RouteControllerApi.class,
+        com.dawnline.ops.adapter.out.core.dispatch.api.OutboxAdminControllerApi.class})
+@ImportHttpServices(group = "order", types = {OrderControllerApi.class,
+        com.dawnline.ops.adapter.out.core.order.api.OutboxAdminControllerApi.class})
+@ImportHttpServices(group = "fulfillment", types = {WaveControllerApi.class,
+        com.dawnline.ops.adapter.out.core.fulfillment.api.OutboxAdminControllerApi.class})
+@ImportHttpServices(group = "tracking", types = com.dawnline.ops.adapter.out.core.tracking.api.OutboxAdminControllerApi.class)
 public class CoreClientsConfig {
 
     /**
@@ -44,13 +50,16 @@ public class CoreClientsConfig {
     }
 
     /**
-     * @param plans  dispatch 계획
-     * @param routes dispatch 라우트
-     * @param orders order 주문
-     * @return 코어 위임
+     * @return 코어 위임과 조회 — 한 어댑터가 둘을 구현한다
      */
     @Bean
-    public CoreCommands coreCommands(PlanControllerApi plans, RouteControllerApi routes, OrderControllerApi orders) {
-        return new CoreCommandsClient(plans, routes, orders);
+    public CoreCommandsClient coreCommands(PlanControllerApi plans, RouteControllerApi routes, OrderControllerApi orders,
+            WaveControllerApi waves,
+            com.dawnline.ops.adapter.out.core.order.api.OutboxAdminControllerApi orderOutbox,
+            com.dawnline.ops.adapter.out.core.fulfillment.api.OutboxAdminControllerApi fulfillmentOutbox,
+            com.dawnline.ops.adapter.out.core.dispatch.api.OutboxAdminControllerApi dispatchOutbox,
+            com.dawnline.ops.adapter.out.core.tracking.api.OutboxAdminControllerApi trackingOutbox) {
+        return CoreCommandsClient.of(plans, routes, orders, waves, orderOutbox, fulfillmentOutbox, dispatchOutbox,
+                trackingOutbox);
     }
 }

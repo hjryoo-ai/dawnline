@@ -10,11 +10,14 @@ import com.dawnline.ops.adapter.out.persistence.JdbcRouteRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcWaveRows;
 import com.dawnline.ops.application.OnTimeRatioGauges;
 import com.dawnline.ops.application.OpsCommandService;
+import com.dawnline.ops.application.QuarantineQueryService;
 import com.dawnline.ops.application.ReadModelProjector;
+import com.dawnline.ops.application.port.in.ListQuarantinedOutboxUseCase;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
 import com.dawnline.ops.application.port.in.RunOpsCommandUseCase;
 import com.dawnline.ops.application.port.out.AuditLog;
 import com.dawnline.ops.application.port.out.CoreCommands;
+import com.dawnline.ops.application.port.out.CoreQueries;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.OrderRows;
 import com.dawnline.ops.application.port.out.RouteRows;
@@ -141,5 +144,14 @@ public class OpsApplicationConfig {
     @Bean
     public RunOpsCommandUseCase runOpsCommand(AuditLog audit, CoreCommands core, Clock clock, MeterRegistry registry) {
         return new OpsCommandService(audit, core, clock, registry);
+    }
+
+    /**
+     * @param core 코어 조회({@link CoreClientsConfig})
+     * @return 격리 목록 유스케이스 — 감사 없음(§5.5)
+     */
+    @Bean
+    public ListQuarantinedOutboxUseCase listQuarantinedOutbox(CoreQueries core) {
+        return new QuarantineQueryService(core);
     }
 }

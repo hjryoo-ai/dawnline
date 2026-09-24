@@ -1,5 +1,7 @@
 package com.dawnline.web.internal;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -30,6 +32,10 @@ import org.springframework.web.servlet.resource.ResourceHttpRequestHandler;
  *
  * <p>거부는 응답을 쓰지 않고 {@link InternalTokenRejectedException} 을 던진다 — 서비스의 어드바이스가 Problem
  * Details 로 만든다. 비교는 상수 시간({@link MessageDigest#isEqual})이다.
+ *
+ * <p>거부는 {@value InternalToken#REJECTED_METRIC} 로 센다(ADR-055 「추가」). 0 이 아니면 「ops-api 를 거치지 않는
+ * 누군가」다 — 레이트 리밋의 {@code bypassed} 와 같은 부류로, 보상 통제가 뚫리는 것을 센다. 로그는 찾을 때 읽히고
+ * 카운터는 찾지 않아도 울린다. 트랜잭션이 없는 자리라 「커밋 뒤에 센다」가 걸릴 것이 없다.
  */
 public final class InternalTokenInterceptor implements HandlerInterceptor {
 
@@ -39,12 +45,25 @@ public final class InternalTokenInterceptor implements HandlerInterceptor {
     static final Set<String> WRITE_METHODS = Set.of("POST", "PUT", "PATCH", "DELETE");
 
     private final byte[] expected;
+    private final Counter missing;
+    private final Counter mismatch;
 
     /**
      * @param properties 검증된 토큰 설정
+     * @param registry   거부 카운터를 올릴 레지스트리
      */
-    public InternalTokenInterceptor(InternalTokenProperties properties) {
+    public InternalTokenInterceptor(InternalTokenProperties properties, MeterRegistry registry) {
         this.expected = properties.secretBytes();
+        this.missing = rejected(registry, "missing");
+        this.mismatch = rejected(registry, "mismatch");
+    }
+
+    private static Counter rejected(MeterRegistry registry, String reason) {
+        // 두 값을 미리 등록한다 — 한 번도 거부가 없으면 시계열이 아예 없어 `> 0` 알림이 「0」과 「없음」을 구별하지 못한다.
+        return Counter.builder(InternalToken.REJECTED_METRIC)
+                .description("내부 토큰 없이·틀린 토큰으로 들어와 401 을 받은 운영자 쓰기 (DESIGN.md §9.1, ADR-055)")
+                .tag(InternalToken.REASON_TAG, reason)
+                .register(registry);
     }
 
     @Override
@@ -59,6 +78,7 @@ public final class InternalTokenInterceptor implements HandlerInterceptor {
         if (presented != null && MessageDigest.isEqual(expected, presented.getBytes(StandardCharsets.UTF_8))) {
             return true;
         }
+        (presented == null ? missing : mismatch).increment();
         // 값은 적지 않는다 — 틀린 토큰도 누군가의 진짜 토큰일 수 있다. 경로의 id 는 주소가 아니다(§9.3).
         log.warn("내부 토큰 없이 들어온 운영자 쓰기를 거부했습니다. method={} path={} reason={}",
                 request.getMethod(), request.getRequestURI(), presented == null ? "missing" : "mismatch");

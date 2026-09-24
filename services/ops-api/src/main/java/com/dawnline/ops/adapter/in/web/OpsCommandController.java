@@ -4,6 +4,7 @@ import com.dawnline.ops.application.port.in.OpsCommand;
 import com.dawnline.ops.application.port.in.RunOpsCommandUseCase;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.Objects;
@@ -78,6 +79,19 @@ public class OpsCommandController {
         return run(operator, new OpsCommand.CancelOrder(orderId, body == null ? null : body.reason()), request);
     }
 
+    /**
+     * 웨이브 조기 마감 — fulfillment 로 위임 (ADR-054). {@code reason} 은 필수이고, 공백·200자 초과는 코어에 가기 전에
+     * 400 이며 감사 행을 남기지 않는다(재배정의 빈 본문과 같은 규칙).
+     *
+     * @return 마감된 웨이브, 또는 {@link CommandResponses} 의 표. 이미 닫힌 웨이브는 코어의 409 {@code wave-not-open}
+     *         이 그대로 온다 — {@code closeCause} 가 감사 {@code UNKNOWN} 을 닫는 근거다(RB-07)
+     */
+    @PostMapping("/waves/{waveId}/close")
+    public ResponseEntity<?> closeWave(@PathVariable UUID waveId, @Valid @RequestBody CloseBody body,
+            @AuthenticationPrincipal Jwt operator, HttpServletRequest request) {
+        return run(operator, new OpsCommand.CloseWave(waveId, Objects.requireNonNull(body.reason())), request);
+    }
+
     private ResponseEntity<?> run(Jwt operator, OpsCommand command, HttpServletRequest request) {
         return CommandResponses.of(commands.run(operator.getSubject(), command), request.getRequestURI());
     }
@@ -92,5 +106,11 @@ public class OpsCommandController {
      * @param reason 사유 — order 의 계약과 같은 상한(200자)
      */
     public record CancelBody(@Size(max = 200) @Nullable String reason) {
+    }
+
+    /**
+     * @param reason 왜 컷오프를 앞당기는가 — fulfillment 의 계약({@code CloseWaveRequest})과 같다: 필수, 공백 불가, 200자
+     */
+    public record CloseBody(@NotBlank @Size(max = 200) @Nullable String reason) {
     }
 }

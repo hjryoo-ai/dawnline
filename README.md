@@ -332,9 +332,16 @@ git clone <repo> && cd dawnline
 ./gradlew build          # 컴파일 + 단위 + ArchUnit + 계약 테스트 + 커버리지 게이트
 ./gradlew integrationTest # Testcontainers 통합 테스트 (Docker 필요)
 
+make env                 # deploy/compose/.env — 없으면 만들고, 있으면 빠진 시크릿만 덧붙인다
 make up                  # 로컬 전체 스택 기동 (PostgreSQL · Kafka · Redis · 관측성 · 서비스 5개)
 make down                # 종료
 ```
+
+**`make env` 가 `make up` 보다 먼저다.** `.env` 의 두 시크릿 — ops-api JWT(`DAWNLINE_OPS_JWT_SECRET`)와 코어
+내부 토큰(`DAWNLINE_INTERNAL_TOKEN`, [ADR-055](docs/adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md))
+— 은 저장소에 없고, 없거나 32바이트보다 짧으면 서비스가 **기동하지 않는다.** `make up` 도 먼저 `make env` 를
+부르지만, 예전에 만든 `.env` 를 손으로 옮겨 쓰는 경우를 위해 순서를 적어 둔다. `make env` 는 기존 줄을
+건드리지 않고 빠진 키만 무작위 값으로 덧붙인다.
 
 **Phase 0 완료 시 확인할 수 있는 것** (= Phase 0의 DoD)
 
