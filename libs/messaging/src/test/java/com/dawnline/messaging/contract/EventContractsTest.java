@@ -13,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -52,6 +53,22 @@ class EventContractsTest {
     @Test
     void 예시가_하나도_없으면_계약_테스트가_무의미하다() {
         assertThat(CONTRACTS.examples()).isNotEmpty();
+    }
+
+    /**
+     * 예시는 리스너 테스트가 Kafka 에 그대로 발행한다. eventId 가 같은 두 예시를 한 소비자가 받으면
+     * 멱등 소비자(불변규칙 2)가 둘째를 이미 처리한 것으로 보고 <em>버린다</em> — 둘째 예시의 분기는
+     * 검사되지 않은 채 테스트가 통과한다(README §1, 2026-09-24 {@code wave.closed.v1.before-camp-code}).
+     */
+    @Test
+    void 예시의_eventId는_서로_다르다() {
+        Map<String, List<String>> byEventId = new TreeMap<>();
+        for (Path example : CONTRACTS.examples()) {
+            byEventId.computeIfAbsent(CONTRACTS.readTree(example).get("eventId").asString(), k -> new ArrayList<>())
+                    .add(example.getFileName().toString());
+        }
+
+        assertThat(byEventId.values()).as("같은 eventId 를 쓰는 예시").allSatisfy(files -> assertThat(files).hasSize(1));
     }
 
     @ParameterizedTest(name = "{0}")
