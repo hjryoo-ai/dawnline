@@ -11,7 +11,6 @@ import com.dawnline.ops.application.port.out.DeadLetters;
 import com.dawnline.ops.application.port.out.DeadLetters.DeadLetter;
 import com.dawnline.ops.application.port.out.DeadLetters.Delivery;
 import com.dawnline.ops.domain.AuditResult;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.LinkedHashMap;
@@ -85,6 +84,7 @@ public class DlqReplayService implements ReplayDeadLettersUseCase {
         this.topics = Set.copyOf(topics);
         this.clock = Objects.requireNonNull(clock, "clock");
         this.registry = Objects.requireNonNull(registry, "registry");
+        OpsCommandService.registerCommandCounters(registry, ACTION);
     }
 
     @Override
@@ -201,12 +201,7 @@ public class DlqReplayService implements ReplayDeadLettersUseCase {
                     outcome.result(), e);
             return;
         }
-        Counter.builder(OpsCommandService.COMMANDS)
-                .description("운영자 커맨드 — 감사 행의 결과를 커밋한 뒤에 센다 (DESIGN.md §9.1)")
-                .tag("action", ACTION)
-                .tag("result", outcome.result().name())
-                .register(registry)
-                .increment();
+        OpsCommandService.commandCounter(registry, ACTION, outcome.result()).increment();
         if (outcome.result() == AuditResult.UNKNOWN) {
             log.warn("재처리를 보냈는지 모른다 — 그대로 다시 누르면 된다(RB-05) detail={}", outcome.detail());
         }

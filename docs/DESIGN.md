@@ -2582,9 +2582,12 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 올린다). 그래서 **알림이 걸린 카운터는 라벨 값이 유한하면
 기동 때 0 으로 미리 등록한다** — `dawnline_internal_token_rejected_total{reason}` 가 첫 자리다(ADR-055 「추가」).
 라벨 값이 열린 집합이면(캠프) 미리 등록할 수 없고, 그때는 알림 식이 부재를 다룬다.
-**지금 이 원칙을 지키지 않는 알림 셋**(§9.4): `dawnline_rate_limit_decisions_total{outcome="bypassed"}` ·
-`dawnline_ops_commands_total{result="UNKNOWN"}`(둘 다 유한 — 미리 등록할 수 있다) ·
-`dawnline_cancel_too_late_total{camp}`(열린 집합 — Phase 7-1 의 규칙 파일에서 식으로 푼다).
+**이 원칙이 적힌 날 지키지 않던 알림 셋**(§9.4, 2026-09-24): 둘은 같은 날 닫았다 —
+`dawnline_rate_limit_decisions_total{outcome}` 은 판정 셋을(`RedisRateLimiter`), `dawnline_ops_commands_total{action,result}` 은
+커맨드 전부 × 결과 넷을(`PENDING` 제외) 기동 때 0 으로 등록한다. 커맨드 목록 `OpsCommand.ACTIONS` 는 sealed 의 허용 하위
+타입과 `OpsCommandTest` 가 대조한다 — 새 커맨드가 목록에서 빠지면 그 커맨드의 첫 `UNKNOWN` 이 알림 밖에 남기 때문이다.
+**남은 하나** `dawnline_cancel_too_late_total{camp}` 는 라벨이 열린 집합이라(캠프 목록을 코드가 모른다) 미리 등록할 수
+없고, Phase 7-1 의 규칙 파일에서 부재를 다루는 식으로 푼다.
 
 같은 계열의 설계 원칙 하나 — **실패는 원인 옆에서 나야 한다.** 관측은 그 실패를 옆으로
 옮기는 데 쓰는 것이 아니라 옆에 붙어 있을 때 그 사실을 미리 말하는 데 쓴다. `shipment_events` 에

@@ -47,6 +47,20 @@ class OpsCommandServiceTest {
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @Test
+    void 만들면_모든_커맨드의_결과_넷이_0_으로_이미_있다() {
+        // §9.1 「없는 시계열은 0 으로 보인다」 — 첫 UNKNOWN 이 1 로 태어나면 increase() 가 그것을 못 읽는다.
+        service(id -> applied());
+
+        for (String action : OpsCommand.ACTIONS) {
+            for (String result : List.of("SUCCEEDED", "REJECTED", "FAILED", "UNKNOWN")) {
+                assertThat(counted(action, result)).as("%s %s", action, result).isZero();
+            }
+            assertThat(registry.find(OpsCommandService.COMMANDS).tag("action", action).tag("result", "PENDING")
+                    .counter()).as("PENDING 은 세지 않는 값이다").isNull();
+        }
+    }
+
+    @Test
     void 기록을_커밋한_뒤에_위임하고_결과로_닫은_뒤에_센다() {
         Outcome outcome = service(id -> applied()).run("kim", RUN);
 
@@ -83,7 +97,9 @@ class OpsCommandServiceTest {
                 .isInstanceOf(DomainException.class)
                 .extracting(e -> ((DomainException) e).code()).isEqualTo("unavailable");
         assertThat(journal).as("기록 없는 커맨드는 없다").doesNotContain("delegate");
-        assertThat(registry.getMeters()).isEmpty();
+        // 시계열은 미리 등록돼 있다(§9.1) — 「세지 않았다」는 전부 0 이라는 뜻이다.
+        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).isNotEmpty()
+                .allSatisfy(counter -> assertThat(counter.count()).isZero());
     }
 
     @Test
@@ -93,7 +109,8 @@ class OpsCommandServiceTest {
         Outcome outcome = service(id -> applied()).run("kim", RUN);
 
         assertThat(journal).containsExactly("open PENDING", "delegate");
-        assertThat(registry.getMeters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다").isEmpty();
+        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다")
+                .isNotEmpty().allSatisfy(counter -> assertThat(counter.count()).isZero());
         assertThat(outcome.reply()).as("코어는 적용했다 — 운영자에게는 그대로 알린다").isInstanceOf(CoreReply.Applied.class);
     }
 

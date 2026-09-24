@@ -3,6 +3,7 @@ package com.dawnline.ops.application.port.in;
 import com.dawnline.ops.domain.CoreService;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -16,6 +17,13 @@ import org.jspecify.annotations.Nullable;
  * 싣는다 — 주지 않은 {@code mode} 를 {@code null} 로 적으면 「기본값을 골랐다」와 「보내지 않았다」가 같아진다.
  */
 public sealed interface OpsCommand {
+
+    /**
+     * 커맨드의 {@code action} 전부 — 기동 때 {@code dawnline_ops_commands_total} 을 0 으로 미리 등록하는 목록이다
+     * (DESIGN.md §9.1 「없는 시계열은 0 으로 보인다」). 허용된 하위 타입과 같은지는 {@code OpsCommandTest} 가 본다.
+     */
+    List<String> ACTIONS = List.of(RunPlan.ACTION, ReassignStop.ACTION, CancelOrder.ACTION, CloseWave.ACTION,
+            RequeueOutbox.ACTION);
 
     /** @return {@code audit_logs.action} */
     String action();
@@ -43,9 +51,12 @@ public sealed interface OpsCommand {
             Objects.requireNonNull(waveId, "waveId");
         }
 
+        /** {@code audit_logs.action} — {@link OpsCommand#ACTIONS} 가 이 값을 든다. */
+        public static final String ACTION = "RUN_PLAN";
+
         @Override
         public String action() {
-            return "RUN_PLAN";
+            return ACTION;
         }
 
         @Override
@@ -78,9 +89,12 @@ public sealed interface OpsCommand {
             Objects.requireNonNull(targetRouteId, "targetRouteId");
         }
 
+        /** {@code audit_logs.action} — {@link OpsCommand#ACTIONS} 가 이 값을 든다. */
+        public static final String ACTION = "REASSIGN_STOP";
+
         @Override
         public String action() {
-            return "REASSIGN_STOP";
+            return ACTION;
         }
 
         @Override
@@ -110,9 +124,12 @@ public sealed interface OpsCommand {
             Objects.requireNonNull(orderId, "orderId");
         }
 
+        /** {@code audit_logs.action} — {@link OpsCommand#ACTIONS} 가 이 값을 든다. */
+        public static final String ACTION = "CANCEL_ORDER";
+
         @Override
         public String action() {
-            return "CANCEL_ORDER";
+            return ACTION;
         }
 
         @Override
@@ -144,9 +161,12 @@ public sealed interface OpsCommand {
             Objects.requireNonNull(reason, "reason");
         }
 
+        /** {@code audit_logs.action} — {@link OpsCommand#ACTIONS} 가 이 값을 든다. */
+        public static final String ACTION = "CLOSE_WAVE";
+
         @Override
         public String action() {
-            return "CLOSE_WAVE";
+            return ACTION;
         }
 
         @Override
@@ -177,9 +197,12 @@ public sealed interface OpsCommand {
             Objects.requireNonNull(id, "id");
         }
 
+        /** {@code audit_logs.action} — {@link OpsCommand#ACTIONS} 가 이 값을 든다. */
+        public static final String ACTION = "REQUEUE_OUTBOX";
+
         @Override
         public String action() {
-            return "REQUEUE_OUTBOX";
+            return ACTION;
         }
 
         @Override

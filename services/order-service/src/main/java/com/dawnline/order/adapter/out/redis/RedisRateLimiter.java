@@ -79,6 +79,11 @@ public class RedisRateLimiter implements RateLimiter {
         this.ttlSeconds = ttlSeconds;
 
         this.script = loadScript();
+        // 판정 셋을 0 으로 미리 등록한다 (DESIGN.md §9.1 「없는 시계열은 0 으로 보인다」). 처음 셀 때 만들면 첫 우회에서
+        // bypassed 가 1 로 태어나고, increase() 는 그 첫 증가를 읽지 못한다 — §9.4 의 알림이 첫 Redis 장애를 놓친다.
+        for (Outcome outcome : Outcome.values()) {
+            decisionCounter(outcome);
+        }
     }
 
     /**
@@ -132,11 +137,14 @@ public class RedisRateLimiter implements RateLimiter {
     }
 
     private Decision record(Decision decision) {
-        Counter.builder(OrderMetrics.RATE_LIMIT_DECISIONS)
-                .description("고객별 레이트 리밋 판정 (§7.2)")
-                .tag(OrderMetrics.TAG_OUTCOME, decision.outcome().name().toLowerCase(java.util.Locale.ROOT))
-                .register(meters)
-                .increment();
+        decisionCounter(decision.outcome()).increment();
         return decision;
+    }
+
+    private Counter decisionCounter(Outcome outcome) {
+        return Counter.builder(OrderMetrics.RATE_LIMIT_DECISIONS)
+                .description("고객별 레이트 리밋 판정 (§7.2)")
+                .tag(OrderMetrics.TAG_OUTCOME, outcome.name().toLowerCase(java.util.Locale.ROOT))
+                .register(meters);
     }
 }

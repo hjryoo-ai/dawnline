@@ -52,6 +52,14 @@ class DlqReplayServiceTest {
             Clock.fixed(NOW, ZoneOffset.UTC), registry);
 
     @Test
+    void 만들면_재처리의_결과_넷이_0_으로_이미_있다() {
+        // §9.1 「없는 시계열은 0 으로 보인다」 — 서비스 필드가 만들어진 것만으로 등록돼 있어야 한다.
+        for (String result : List.of("SUCCEEDED", "REJECTED", "FAILED", "UNKNOWN")) {
+            assertThat(counted(result)).as(result).isZero();
+        }
+    }
+
+    @Test
     void 읽고_기록을_커밋한_뒤에_보내고_결과로_닫은_뒤에_센다() {
         letters.put(REF, letter("fulfillment-service"));
 
@@ -172,7 +180,9 @@ class DlqReplayServiceTest {
                 .isInstanceOf(DomainException.class)
                 .extracting(e -> ((DomainException) e).code()).isEqualTo("unavailable");
         assertThat(letters.republished).as("기록 없는 재처리는 없다").isEmpty();
-        assertThat(registry.getMeters()).isEmpty();
+        // 시계열은 미리 등록돼 있다(§9.1) — 「세지 않았다」는 전부 0 이라는 뜻이다.
+        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).isNotEmpty()
+                .allSatisfy(counter -> assertThat(counter.count()).isZero());
     }
 
     @Test
@@ -182,7 +192,8 @@ class DlqReplayServiceTest {
 
         Replayed replayed = service.replay("kim", TOPIC, List.of(REF)).getFirst();
 
-        assertThat(registry.getMeters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다").isEmpty();
+        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다")
+                .isNotEmpty().allSatisfy(counter -> assertThat(counter.count()).isZero());
         assertThat(replayed.result()).as("브로커는 받았다 — 운영자에게는 그대로 알린다").isEqualTo(AuditResult.SUCCEEDED);
     }
 
