@@ -1280,6 +1280,10 @@ components:
         campId:
           type: string
           format: uuid
+        campCode:
+          type:
+          - string
+          - "null"
         waves:
           type: integer
           format: int64

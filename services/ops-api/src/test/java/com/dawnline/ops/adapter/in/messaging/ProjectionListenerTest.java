@@ -57,6 +57,22 @@ class ProjectionListenerTest {
     }
 
     @Test
+    void wave_closed_의_캠프_코드는_실렸으면_옮기고_없으면_null_이다() {
+        // 계약에서 선택이다(2026-09-24 추가). 그 전의 발행자가 낸 모양(before-camp-code 예시)도 열려야 하고, 그때 코드는
+        // 지어내지 않는다 — 부재는 값이 아니다(ADR-051).
+        ProjectionListener listener = listener(StubTransactions.committing(), fact -> Projection.CLEAN);
+
+        for (String name : List.of("wave.closed.v1.example.json", "wave.closed.v1.before-camp-code.example.json")) {
+            Path example = CONTRACTS.contractsDirectory().resolve("examples/" + name);
+            ListenerTopics.deliver(listener,
+                    record(ProjectionListener.WAVE_CLOSED_TOPIC, CONTRACTS.readTree(example).toString()));
+        }
+
+        assertThat(projected).extracting(fact -> ((Fact.WaveClosed) fact).campCode())
+                .containsExactly("CAMP-SEO-N", null);
+    }
+
+    @Test
     void stale_은_커밋_뒤에_센다() {
         ProjectionListener listener = listener(StubTransactions.committing(), fact -> new Projection(2));
 

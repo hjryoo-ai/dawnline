@@ -44,6 +44,12 @@
         "lat": { "type": "number", "minimum": -90, "maximum": 90, "description": "위도. 불변규칙 9 대로 좌표는 double 이다." },
         "lng": { "type": "number", "minimum": -180, "maximum": 180, "description": "경도." }
       }
+    },
+    "campCode": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16,
+      "description": "캠프 코드(예: CAMP-SEO-N) — fulfillment 의 camps.code 스냅샷. 운영자는 캠프를 UUID 가 아니라 이 코드로 부르고, 게이지 라벨도 이 코드다(DESIGN.md §9.1). 첫 소비자는 ops-api 의 읽기 모델(rm_waves.camp_code)이다. depot 과 같은 논리로 싣는다 — 캠프는 fulfillment 의 참조 데이터이고 불변규칙 4 가 되묻는 동기 호출을 금지한다. **선택이다**: 2026-09-24 에 추가됐고 이 스키마는 그 전부터 발행되고 있었다(contracts/events/README.md §5 — 같은 major 안의 추가는 required 에 넣지 않는다). 없는 이벤트를 받은 소비자는 코드를 모르는 것으로 둔다 — 지어내지 않는다."
     }
   },
   "$defs": {

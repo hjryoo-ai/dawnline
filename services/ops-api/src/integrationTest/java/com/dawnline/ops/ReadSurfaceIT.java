@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -187,14 +188,49 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
         UUID waveId = UUID.randomUUID();
         Instant cutoff = clock.instant();
         transactions.executeWithoutResult(status -> projector.project(
-                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 37.5, 127.0)));
+                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-SEO-N")));
         transactions.executeWithoutResult(status -> projector.project(
-                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 35.1, 129.0)));
+                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 35.1, 129.0, "CAMP-SEO-N")));
 
         mockMvc.perform(viewer(get("/api/v1/waves/{waveId}/routes", waveId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.depot.lat").value(37.5))
                 .andExpect(jsonPath("$.depot.lng").value(127.0));
+    }
+
+    @Test
+    void 캠프_코드는_wave_closed_가_실었을_때만_채우고_없으면_null_이다() throws Exception {
+        // 계약에서 선택이다(2026-09-24 추가) — 그 전의 이벤트는 코드를 싣지 않는다. 비어 있던 칸은 코드를 실은 사실이
+        // 채우고(키 계열의 「먼저 온 값」은 null 이 아니라 첫 값이다), 채워진 뒤에는 덮이지 않는다.
+        UUID waveId = UUID.randomUUID();
+        Instant cutoff = clock.instant();
+        transactions.executeWithoutResult(status -> projector.project(
+                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, null)));
+
+        mockMvc.perform(viewer(get("/api/v1/camps")))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(campCodeOf(result.getResponse().getContentAsString(), OTHER_CAMP))
+                        .as("옛 이벤트만 있으면 코드는 있고 null — 지어내지 않는다").isNull());
+
+        transactions.executeWithoutResult(status -> projector.project(
+                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-SEO-N")));
+        transactions.executeWithoutResult(status -> projector.project(
+                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-XXX")));
+
+        mockMvc.perform(viewer(get("/api/v1/camps")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.camps[?(@.campId == '" + OTHER_CAMP + "')].campCode").value("CAMP-SEO-N"));
+    }
+
+    /** 그 캠프의 {@code campCode} — 칸이 빠졌으면 실패한다(「없다」와 「null」을 가른다). */
+    private static @Nullable String campCodeOf(String body, UUID campId) {
+        for (JsonNode camp : JsonMapper.builder().build().readTree(body).get("camps")) {
+            if (camp.get("campId").asString().equals(campId.toString())) {
+                assertThat(camp.has("campCode")).as("campCode 칸이 있다").isTrue();
+                return camp.get("campCode").isNull() ? null : camp.get("campCode").asString();
+            }
+        }
+        throw new AssertionError("캠프가 목록에 없다: " + campId);
     }
 
     private MockHttpServletRequestBuilder viewer(MockHttpServletRequestBuilder request) {

@@ -1,9 +1,9 @@
 package com.dawnline.fulfillment.application;
 
-import com.dawnline.common.GeoPoint;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.fulfillment.application.port.in.PlacedOrderSnapshot;
 import com.dawnline.fulfillment.application.port.out.FulfillmentEvents;
+import com.dawnline.fulfillment.domain.Camp;
 import com.dawnline.fulfillment.domain.UnserviceableReason;
 import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.observability.MdcKeys;
@@ -33,7 +33,7 @@ final class RecordingWaveEvents implements FulfillmentEvents {
     }
 
     @Override
-    public void waveClosed(Wave wave, GeoPoint depot) {
+    public void waveClosed(Wave wave, Camp camp) {
         if (fail) {
             throw new IllegalStateException("발행 실패");
         }

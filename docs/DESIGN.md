@@ -330,7 +330,9 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 
 **wave.closed.v1**
 ```json
-{ "waveId": "…", "campId": "…", "serviceTier": "DAWN", "cutoffAt": "…", "orderCount": 4820, "closedAt": "…" }
+{ "waveId": "…", "campId": "…", "serviceTier": "DAWN", "cutoffAt": "…", "orderCount": 4820, "closedAt": "…",
+  "depot": { "lat": 37.64, "lng": 127.03 },
+  "campCode": "CAMP-SEO-N" }   // campCode 는 선택 — 2026-09-24 추가, 그 전의 이벤트에는 없다 (§5.3 「캠프 코드」)
 ```
 
 **route.assigned.v1**
@@ -899,6 +901,12 @@ REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assign
   10행짜리 데이터를 위해 초기 적재·갱신·순서라는 수명주기를 통째로 들여오게 되기 때문이다.
   좌표는 `route_plans.depot_lat/lng` 에 저장한다 — 정체 회수·운영자 재실행·§6.8 부분 재계획은
   `wave.closed` 를 다시 받지 않는다.
+- **캠프 코드도 같은 스냅샷으로 들어온다**(2026-09-24, Phase 6 묶음 C). 첫 소비자는 ops-web 의 대시보드다 — 운영자는
+  캠프를 UUID 가 아니라 `CAMP-SEO-C` 로 부른다. 좌표와 같은 논리다: 캠프는 fulfillment 의 참조 데이터이고
+  ops 는 그 사본을 두지 않는다(§5.5 「조회」). 다른 점은 **선택**이라는 것이다 — `wave.closed` 는 이미 발행되고
+  있으므로 같은 major 안의 추가는 선택만 된다(`contracts/events/README.md` §5). 그 전의 이벤트로 만든 읽기 모델 행은
+  코드가 `null` 이고, 화면은 그때 id 를 줄여 보인다. 이름(`camps.name`)은 싣지 않는다 — 화면이 부르는 것은
+  코드이고, 게이지 라벨도 코드다(§9.1).
 - `PUBLISHED` 도달 시 라우트별 `route.assigned`·주문별 `order.dispatched` 와 함께 웨이브 단위
   `plan.completed` 를 **같은 outbox 트랜잭션**에 넣는다([ADR-024](adr/ADR-024-plan-completed-event.md)).
   나눠 넣으면 "완료라는데 라우트가 없다" 가 생긴다. 재실행이 성공하면 `plan.completed` 가 다시
@@ -1199,7 +1207,7 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 
 | ops-api | 출처 |
 |---|---|
-| `GET /api/v1/camps` | `rm_waves` 에 웨이브가 있는 캠프 — 캠프 목록은 fulfillment 의 참조 데이터이고 ops 는 그 사본을 두지 않는다 |
+| `GET /api/v1/camps` | `rm_waves` 에 웨이브가 있는 캠프 — 캠프 목록은 fulfillment 의 참조 데이터이고 ops 는 그 사본을 두지 않는다. 코드는 `wave.closed` 의 `campCode`(V5) — 그 전의 이벤트로 만든 행만 있으면 `null` |
 | `GET /api/v1/camps/{campId}/waves?from=&to=` | `rm_waves` — 컷오프 창(기본 지금 ± 24시간, 최대 7일, 넘으면 400) |
 | `GET /api/v1/kpi/delivery` | `kpi_delivery_hourly` — **게이지와 같은 뷰·같은 창·같은 식**(아래) |
 | `GET /api/v1/camps/{campId}/exceptions` | `rm_orders` 의 **취소됐는데 배송된** 주문(§6.10 넷째 분기) — **창 없이 전부**, 앞 200 행과 전체 수 |
@@ -1254,7 +1262,8 @@ CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR
 CREATE TABLE rm_waves (wave_id UUID PK, camp_id UUID, service_tier VARCHAR(16), cutoff_at TIMESTAMPTZ, status VARCHAR(16),
   order_count INTEGER, plan_id UUID, plan_duration_ms INTEGER, total_cost_krw BIGINT, unassigned_count INTEGER,
   route_count INTEGER,    -- plan.completed 의 routeCount = 기다려야 하는 route.assigned 수 (ADR-024 · ADR-051)
-  depot_lat NUMERIC(9,6), depot_lng NUMERIC(9,6));   -- wave.closed 의 depot — 지도의 원점 (V3, 2026-09-24 묶음 C)
+  depot_lat NUMERIC(9,6), depot_lng NUMERIC(9,6),    -- wave.closed 의 depot — 지도의 원점 (V3, 2026-09-24 묶음 C)
+  camp_code VARCHAR(16));                             -- wave.closed 의 campCode — 선택이라 옛 이벤트의 행은 NULL (V5)
 CREATE TABLE rm_routes (route_id UUID PK, plan_id UUID, camp_id UUID, vehicle_id UUID, driver_id UUID,
   revision INTEGER, status VARCHAR(16), planned_departure TIMESTAMPTZ, departed_at TIMESTAMPTZ,   -- 2026-09-24
   stop_count INTEGER, completed_count INTEGER, failed_count INTEGER, at_risk BOOLEAN, distance_m INTEGER, cost_krw INTEGER);

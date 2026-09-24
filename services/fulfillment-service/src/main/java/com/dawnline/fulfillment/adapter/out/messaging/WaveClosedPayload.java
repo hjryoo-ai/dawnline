@@ -1,6 +1,6 @@
 package com.dawnline.fulfillment.adapter.out.messaging;
 
-import com.dawnline.common.GeoPoint;
+import com.dawnline.fulfillment.domain.Camp;
 import com.dawnline.fulfillment.domain.Wave;
 import java.time.Instant;
 import java.util.Objects;
@@ -18,6 +18,8 @@ import java.util.UUID;
  * @param closedAt    {@code CLOSING → CLOSED} 전이가 커밋된 시각
  * @param depot       캠프 좌표 스냅샷. dispatch 의 라우트 출발·복귀 지점이다 (§6.2) — 캠프를
  *                    되묻는 동기 호출을 막기 위해 여기 싣는다 (불변규칙 4)
+ * @param campCode    캠프 코드 스냅샷 — ops 의 화면이 캠프를 코드로 부른다. 스키마에서는 선택이지만
+ *                    (2026-09-24 추가, 같은 major) 이 발행자는 언제나 싣는다
  */
 public record WaveClosedPayload(
         UUID waveId,
@@ -26,7 +28,8 @@ public record WaveClosedPayload(
         Instant cutoffAt,
         int orderCount,
         Instant closedAt,
-        Depot depot) {
+        Depot depot,
+        String campCode) {
 
     /**
      * 캠프 좌표.
@@ -49,16 +52,16 @@ public record WaveClosedPayload(
     /**
      * 마감된 웨이브에서 만든다.
      *
-     * @param wave  마감된 웨이브
-     * @param depot 캠프 좌표
+     * @param wave 마감된 웨이브
+     * @param camp 웨이브의 캠프 — 좌표와 코드
      */
-    public static WaveClosedPayload of(Wave wave, GeoPoint depot) {
+    public static WaveClosedPayload of(Wave wave, Camp camp) {
         Objects.requireNonNull(wave, "wave");
-        Objects.requireNonNull(depot, "depot");
+        Objects.requireNonNull(camp, "camp");
         Instant closedAt = Objects.requireNonNull(wave.closedAt(),
                 "마감되지 않은 웨이브로는 wave.closed 를 만들 수 없습니다");
         return new WaveClosedPayload(wave.id(), wave.campId(), wave.serviceTier().name(),
                 wave.cutoffAt(), wave.orderCount(), closedAt,
-                new Depot(depot.lat(), depot.lng()));
+                new Depot(camp.location().lat(), camp.location().lng()), camp.code());
     }
 }
