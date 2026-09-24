@@ -1031,6 +1031,7 @@ CREATE TABLE shipments (order_id UUID PK, route_id UUID NOT NULL, stop_seq SMALL
   delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0,
   updated_at TIMESTAMPTZ NOT NULL);   -- 보존의 나이 (V3, 2026-09-25, ADR-058) — 어댑터가 주입된 시계로, 값이 바뀐 쓰기만
 CREATE INDEX ix_ship_route ON shipments (route_id, stop_seq);
+CREATE INDEX ix_ship_updated ON shipments (updated_at);   -- 보존 정리 (V4) — 없으면 하루치 정리가 26초, 있으면 0.18초
 -- 개정 비교의 자리 (§8.5 의 「routeId + revision」). 라우트당 한 행.
 CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), camp_id UUID NOT NULL, planned_departure TIMESTAMPTZ NOT NULL, applied_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHAR(20), occurred_at TIMESTAMPTZ NOT NULL,
@@ -1044,7 +1045,10 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
 **90일**(참조하는 `shipments` 가 없을 때만) — 재처리된 개정은 그 행의 번호 비교에 막힌다. 비종결 배송은 **365일
 상한**까지 남는다(정리이지 정책이 아니다 — 수는 같은 주문의 `rm_orders` 가 센다, §5.5). `updated_at` 은 새
 칸이다(V3): 쓰기 경로가 JPA 엔티티 하나라 어댑터가 주입된 시계로 적고, **값이 바뀐 쓰기만** 적는다. 기존 행은
-마이그레이션이 `now()` 로 채운다 — 모르는 나이는 늦게 지우는 쪽으로 고른다.
+마이그레이션이 `now()` 로 채운다 — 모르는 나이는 늦게 지우는 쪽으로 고른다. **인덱스는 `(updated_at)` 하나를
+넣었다**(V4, [측정](benchmarks/phase7-retention-indexes.md) §1): 30일치 465만 행에서 하루치 정리가 순차 스캔으로
+26.4초, 인덱스로 0.18초다. `route_revisions (applied_at)` 는 **넣지 않았다** — 11만 행에서 배치가 3.6–8.8 ms 이고
+하루 두 배치다(재검토: 100만 행).
 
 **세 칸이 `NOT NULL` 인 것은 계약이 정했다.** `planned_arrival`·`eta_at`·`promised_end` 의 출처는
 `route.assigned.v1` 의 `plannedArrival` 과 `promisedWindow` 둘뿐이고 둘 다 **required** 다(Phase 5-1a
@@ -1287,6 +1291,7 @@ CREATE TABLE rm_routes (route_id UUID PK, plan_id UUID, camp_id UUID, vehicle_id
   updated_at TIMESTAMPTZ NOT NULL);                   -- 보존의 나이 (V6, 2026-09-25, ADR-058)
 CREATE INDEX ix_rmo_route ON rm_orders (route_id);   -- 라우트 개수 재집계 (ADR-051 결정 4)
 CREATE INDEX ix_rmo_wave  ON rm_orders (wave_id);    -- 웨이브 개수 재집계
+CREATE INDEX ix_rmo_updated ON rm_orders (updated_at);   -- 보존 정리 · 걸린 행 셈 (V7, ADR-058) — 없으면 하루 약 76초
 -- KPI 는 표가 아니라 rm_orders 위의 뷰 둘이다 (2026-09-24, 아래 「KPI — 두 축, 뷰」). V1 의 rm_kpi_hourly 는 V2 가 지웠다.
 CREATE VIEW kpi_intake_hourly   AS …  -- (camp_id, bucket_hour = date_trunc('hour', placed_at, 'UTC')) → orders, unserviceable
 CREATE VIEW kpi_delivery_hourly AS …  -- (camp_id, bucket_hour = date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC'))
@@ -1551,7 +1556,9 @@ peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 212.2 → 6.
 결정(ADR-051 결정 1) 때문에 패치가 빈 채로 끝나는 행이 있었고, 그 행은 나이가 없었다. 정리는 종결 행을
 90일에(NULL 은 종결이 아니다), 비종결 행을 365일에(정리이지 정책이 아니다) 지우고, 라우트·웨이브는 참조하는
 주문이 없을 때만 지운다. 90일을 넘긴 비종결 행의 수는 `dawnline_rm_orders_stuck` 이 낸다 — **부재는 값이
-아니지만 부재의 수는 값이다.** 순서를 뒤섞는 IT 가 비교에서 빼는 칸은 이것 하나이고, 그 IT 는 칸도 토픽처럼
+아니지만 부재의 수는 값이다.** 인덱스는 `rm_orders (updated_at)` 하나다(V7, [측정](benchmarks/phase7-retention-indexes.md)
+§2): 90일치 1,365만 행에서 하루치 정리가 순차 스캔으로 약 76초, 인덱스로 정리 전체가 0.2초다. `rm_routes` ·
+`rm_waves` 에는 넣지 않았다 — 가드의 반대쪽을 재집계의 두 인덱스가 이미 받고 배치가 10 ms 안쪽이다. 순서를 뒤섞는 IT 가 비교에서 빼는 칸은 이것 하나이고, 그 IT 는 칸도 토픽처럼
 **빼는 방식**으로 돈다(칸 목록을 `information_schema` 에서 읽는다).
 
 **ops-web (React, 최소 범위)** — 처음 판은 화면 넷(대시보드 · 웨이브/계획 상세 · 라우트 지도 · 룰 편집)이었고 **축소안으로 간다**(2026-09-24, [ADR-057](adr/ADR-057-map-draws-without-tiles-ops-web-is-an-nginx-image.md) 결정 3): ① 캠프 대시보드(웨이브 · 계획 · 정시율 두 기준 · 개정 수 · 예외 목록) ② 라우트 지도(stop 순서 폴리라인 · 상태 색 · at-risk 강조 · 재배정 · 조기 마감). 룰 편집은 Swagger, 설정은 토큰 붙여 넣기 하나. 호출은 계약에서 타입을 받는 얇은 함수다([ADR-056](adr/ADR-056-ops-web-client-is-typed-from-the-committed-contract.md)) — 화면의 입력은 계약에 있는 칸만.

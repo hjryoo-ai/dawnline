@@ -2067,6 +2067,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | B8 | 1단계 라우트 수가 2단계 경계(`peak` 410)에 가까운가 | ADR-044 ① | 계획당 1단계 라우트 수 | 벤치마크 `peak` 에서 216 |
 | B9 | 후보가 10,000 건을 넘는가 — 넘으면 프로젝션 읽기를 다시 잰다 | ADR-029 ③ | 웨이브당 후보 수 | |
 | B10 | FAST 첫 단의 대가 — 재삽입 한 번을 더할지 | ADR-041 ① · ADR-043 ④ | FAST 전환 횟수(7-4 가 이미 잰다) × 그 계획의 비용 | 여유(slack) 그림자는 **닫혔다**(표 C) — 이 행은 그것과 다른 물음이다 |
+| B11 | 보존 인덱스 둘의 쓰기 대가 — `updated_at` 이 인덱스 키라 HOT 갱신을 잃는다 | ADR-058 · 7-0b [측정](benchmarks/phase7-retention-indexes.md) §1.4 · §2.4 | peak-day 동안 `shipments` · `rm_orders` 의 `n_tup_hot_upd / n_tup_upd`(`pg_stat_user_tables`) | 7-0b 측정은 채운 직후라 인덱스 없이도 HOT 0 이었다 — 운영 모양의 몫은 **근거: 추정**. 크면 BRIN 을 다시 잰다(PostgreSQL 16 릴리스 노트: BRIN 칸만 바뀌는 갱신은 HOT 을 허용한다 — 이 저장소에서 재지 않았다) |
 
 **C. 뺀 것 — Phase 7 에서 판정하지 않는 재검토 지점**
 

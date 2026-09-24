@@ -13,14 +13,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 순으로 정렬하므로 반복할 때마다 앞으로 나아간다. 상태 값은 <strong>리터럴</strong>이다 — 바인드로 넣을 이유가
  * 없고, 인덱스 판단을 할 때 질의가 한 모양이어야 한다(CLAUDE.md 부분 인덱스 규칙과 같은 습관).
  *
- * <p>질의 문자열이 {@code static final} 인 이유: 운영 크기 EXPLAIN({@code docs/benchmarks/phase7-retention-indexes.md})과
- * 계획을 지키는 IT 가 <em>이 문자열 그대로</em>를 잰다. 측정한 질의와 도는 질의가 갈라지면 측정은 아무것도 말하지
- * 않는다.
+ * <p>질의 문자열이 공개 상수인 이유: 운영 크기 EXPLAIN({@code docs/benchmarks/phase7-retention-indexes.md})과
+ * 계획을 지키는 IT({@code TrackingRetentionIndexIT})가 <em>이 문자열 그대로</em>를 잰다. 측정한 질의와 도는 질의가
+ * 갈라지면 측정은 아무것도 말하지 않는다.
  */
 public class JdbcTrackingRetention implements TrackingRetention {
 
     /** 종결 배송 — §5.4 상태 머신의 끝 셋. */
-    static final String DELETE_SETTLED_SHIPMENTS_SQL = """
+    public static final String DELETE_SETTLED_SHIPMENTS_SQL = """
             DELETE FROM shipments
              WHERE ctid IN (
                    SELECT s.ctid FROM shipments s
@@ -31,7 +31,7 @@ public class JdbcTrackingRetention implements TrackingRetention {
             """;
 
     /** 상한 — 상태를 보지 않는다. */
-    static final String DELETE_SHIPMENTS_CAP_SQL = """
+    public static final String DELETE_SHIPMENTS_CAP_SQL = """
             DELETE FROM shipments
              WHERE ctid IN (
                    SELECT s.ctid FROM shipments s
@@ -45,7 +45,7 @@ public class JdbcTrackingRetention implements TrackingRetention {
      * 기간이 가드를 대신하지 않는다 — 비종결 배송은 365일까지 남고, 그동안 그 라우트의 개정도 남아야
      * 뒤늦은 {@code route.assigned} 가 번호 비교에 막힌다.
      */
-    static final String DELETE_REVISIONS_SQL = """
+    public static final String DELETE_REVISIONS_SQL = """
             DELETE FROM route_revisions
              WHERE ctid IN (
                    SELECT r.ctid FROM route_revisions r

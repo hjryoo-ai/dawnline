@@ -10,8 +10,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 읽기 모델 보존의 삭제와 셈 — {@code ctid} 를 경유한 {@code LIMIT} 배치 (ADR-058 결정 5, ADR-023 과 같은 모양).
  *
  * <p>상태 값은 <strong>리터럴</strong>이다(CLAUDE.md 부분 인덱스 규칙과 같은 습관 — 질의가 한 모양이어야 인덱스를
- * 판단할 수 있다). 질의 문자열이 {@code static final} 인 이유는 운영 크기 EXPLAIN 과 계획을 지키는 IT 가 <em>이
- * 문자열 그대로</em>를 재기 때문이다.
+ * 판단할 수 있다). 질의 문자열이 공개 상수인 이유는 운영 크기 EXPLAIN 과 계획을 지키는 IT({@code ReadModelRetentionIndexIT})가
+ * <em>이 문자열 그대로</em>를 재기 때문이다.
  *
  * <h2>종결 술어는 NULL 에서 보수적으로 떨어진다</h2>
  * {@code order_status IN (…) OR delivery_outcome IS NOT NULL} — {@code order_status} 가 NULL 이면 앞쪽이 NULL 이고,
@@ -20,7 +20,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  */
 public class JdbcReadModelRetention implements ReadModelRetention {
 
-    static final String DELETE_SETTLED_ORDERS_SQL = """
+    public static final String DELETE_SETTLED_ORDERS_SQL = """
             DELETE FROM rm_orders
              WHERE ctid IN (
                    SELECT o.ctid FROM rm_orders o
@@ -30,7 +30,7 @@ public class JdbcReadModelRetention implements ReadModelRetention {
                     LIMIT ?)
             """;
 
-    static final String DELETE_ORDERS_CAP_SQL = """
+    public static final String DELETE_ORDERS_CAP_SQL = """
             DELETE FROM rm_orders
              WHERE ctid IN (
                    SELECT o.ctid FROM rm_orders o
@@ -40,7 +40,7 @@ public class JdbcReadModelRetention implements ReadModelRetention {
             """;
 
     /** 가드의 반대쪽은 {@code ix_rmo_route} 다(§5.5 — 재집계가 쓰는 인덱스). */
-    static final String DELETE_ROUTES_SQL = """
+    public static final String DELETE_ROUTES_SQL = """
             DELETE FROM rm_routes
              WHERE ctid IN (
                    SELECT r.ctid FROM rm_routes r
@@ -51,7 +51,7 @@ public class JdbcReadModelRetention implements ReadModelRetention {
             """;
 
     /** 가드의 반대쪽은 {@code ix_rmo_wave} 다. */
-    static final String DELETE_WAVES_SQL = """
+    public static final String DELETE_WAVES_SQL = """
             DELETE FROM rm_waves
              WHERE ctid IN (
                    SELECT w.ctid FROM rm_waves w
@@ -62,7 +62,7 @@ public class JdbcReadModelRetention implements ReadModelRetention {
             """;
 
     /** 종결 술어의 여집합 — NULL 을 비종결로 센다. */
-    static final String COUNT_STUCK_SQL = """
+    public static final String COUNT_STUCK_SQL = """
             SELECT count(*) FROM rm_orders o
              WHERE o.updated_at < ?
                AND (o.order_status IS NULL OR o.order_status NOT IN ('CANCELLED', 'UNSERVICEABLE'))

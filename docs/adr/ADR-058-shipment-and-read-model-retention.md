@@ -201,8 +201,11 @@ dispatch 의 여섯 표도 같은 두 축이다. 구현은 FK 사슬 순서와 E
 
 **비용**
 
-- `updated_at` 이 인덱스 키가 되면 그 칸을 바꾸는 모든 쓰기가 HOT 갱신을 잃는다 — 인덱스는 EXPLAIN 뒤에
-  정하고 그 판단을 행 수와 함께 적는다(불변규칙 11, [측정](../benchmarks/phase7-retention-indexes.md)).
+- **인덱스 둘** — `shipments (updated_at)` 99 MB · `rm_orders (updated_at)` 292 MB([측정](../benchmarks/phase7-retention-indexes.md),
+  운영 크기 · `ANALYZE` 뒤). 없으면 하루치 정리가 26.4초 · 약 76초이고 있으면 0.18초 · 0.2초다. `updated_at` 이
+  인덱스 키라 그 칸을 바꾸는 쓰기가 HOT 갱신을 잃는다 — 측정에서 잰 몫은 없고(채운 직후라 인덱스 없이도 HOT 0),
+  운영 모양의 몫은 **근거: 추정**이라 7-0 표 B11 로 peak-day 에 넘겼다. 넣지 않은 셋(`route_revisions` ·
+  `rm_routes` · `rm_waves`)은 행 수와 재검토 지점을 측정 문서에 적었다.
 - **30일 · 90일이 DLQ 보존에 매여 있고, 그 연결은 문서에만 있다.** ADR-023 과 같은 성격이다.
 - 읽기 모델의 포트(`lock` · `write`)가 시각을 하나 더 받는다.
 
