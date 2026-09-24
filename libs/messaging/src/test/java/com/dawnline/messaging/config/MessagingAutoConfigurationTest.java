@@ -6,6 +6,7 @@ import com.dawnline.common.Ids;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.kafka.DlqRecordRecoverer;
 import com.dawnline.messaging.kafka.NonRetryableEventException;
+import com.dawnline.messaging.kafka.ReplayTargetFilter;
 import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.messaging.outbox.TraceparentSupplier;
 import java.util.HashMap;
@@ -26,6 +27,7 @@ import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.adapter.RecordFilterStrategy;
 
 /**
  * 자동설정 배선 — 무엇이 켜지고 무엇이 꺼지는가.
@@ -90,6 +92,21 @@ class MessagingAutoConfigurationTest {
                     assertThat(context).doesNotHaveBean(DlqRecordRecoverer.class);
                     assertThat(context).doesNotHaveBean(CommonErrorHandler.class);
                 });
+    }
+
+    @Test
+    void 재처리_대상_필터를_등록한다() {
+        // Boot 의 기본 리스너 컨테이너 팩토리가 이 빈을 집어 간다 — 실제로 꽂히는지는 ops-api 의 DlqReplayIT 가 본다.
+        runner.run(context -> assertThat(context.getBean(RecordFilterStrategy.class))
+                .isInstanceOf(ReplayTargetFilter.class));
+    }
+
+    @Test
+    void 서비스가_자기_필터를_두면_물러난다() {
+        RecordFilterStrategy<Object, Object> own = record -> false;
+
+        runner.withBean(RecordFilterStrategy.class, () -> own)
+                .run(context -> assertThat(context.getBean(RecordFilterStrategy.class)).isSameAs(own));
     }
 
     @Test

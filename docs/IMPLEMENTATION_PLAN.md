@@ -306,7 +306,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | `make demo` — 200건 편입 → 컷오프 → 캠프별 `wave.closed` 1회 | ✅ | 2026-09-05 실행. 주문 200건(편입 199 · 재고결손 1) → 웨이브 29개 마감 → `wave.closed` 29건 **중복 0**, `order_count` 불일치 0. 컷오프는 표가 아니라 `cutoff_at` 을 과거로 밀어 만든다 |
 | 이중 마감 없음 테스트 | ✅ | `WaveLifecycleIT` 둘(`af08791`). 세 번째 방어를 일부러 부수면 **fail-open 쪽만 빨개진다** — 실물 락 쪽은 락이 두 번째 인스턴스를 DB 앞에서 돌려보내 통과한다. 그래서 둘 다 둔다 |
 | 순서 역전 두 방향 + ADR-022 표 전체 | ✅ | 취소 선착 `FulfillmentPersistenceIT.취소_선착_뒤에_온_order_placed_는_행을_덮지_않는다`, 취소 후착 `취소가_웨이브_소속과_판정_결과를_지우지_않는다` · `WaveLifecycleIT.취소된_주문은_마감_카운트에서_빠진다`. **표의 행이 셋에서 둘로 줄었다** — ADR-025 이후 웨이브 상태별 분기가 사라졌고, 그 사실 자체가 ADR-022 에 정정으로 남아 있다 |
-| 24시간 넘은 `order.placed` → `STALE_PLACED` | ⚠️ **단위만** | `FcSelectionTest` 5건(경계 양쪽 1초, 상한이 설정값인 것, FC 선택보다 먼저 판정) · `PlanOrderServiceTest.하루_넘은_컷오프는_STALE_PLACED_다`. 브로커를 지나는 IT 는 없다 — 판정이 순수 함수 안에 있고 시각은 주입된 `Clock` 이라 IT 가 더 볼 것이 없다고 봤다. **DLQ replay 경로가 생기는 Phase 7 에서 다시 본다** |
+| 24시간 넘은 `order.placed` → `STALE_PLACED` | ⚠️ **단위만** | `FcSelectionTest` 5건(경계 양쪽 1초, 상한이 설정값인 것, FC 선택보다 먼저 판정) · `PlanOrderServiceTest.하루_넘은_컷오프는_STALE_PLACED_다`. 브로커를 지나는 IT 는 없다 — 판정이 순수 함수 안에 있고 시각은 주입된 `Clock` 이라 IT 가 더 볼 것이 없다고 봤다. **DLQ replay 경로가 생기는 Phase 7 에서 다시 본다** — 경로는 Phase 6 묶음 B 에 생겼다(ADR-053, 2026-09-24). 재검토는 예정대로 Phase 7 |
 | 정리 배치가 종결 상태만 지운다 | ✅ | `FulfillmentRetentionIT` 8건 |
 | `plan.completed`/`plan.failed` 세 전이 + 늦은 실패 무시 | ✅ | `WaveLifecycleIT` 3건 (위 표) |
 | **게이트 — §8.3 Bulkhead 판정 기록** | ✅ **Phase 7 유지** | DESIGN §8.3 「Bulkhead 판정 기록」. 원자료 `docs/benchmarks/phase1-orders-k6.md`. 조건(`hikaricp_connections_pending` > 0)은 콜드에서 켜졌으나(191) 원인이 풀 분리로 완화되는 종류가 아니었다 |
@@ -1869,6 +1869,11 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      감사 id 는 코어 호출의 상관 헤더와 코어 MDC `auditId` 로. 이번에 붙는 것은 엔드포인트가 이미 있는
      셋(재계획·재배정·취소)이고, 웨이브 조기 마감·outbox 격리는 작업 2 뒤, DLQ 재처리는 따로, **주문 홀드는
      「미구현 — 전이 없음」**(§5.5).
+   - **DLQ 재처리**(2026-09-24, §4.6 「DLQ 재처리」, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md)).
+     원래 바이트 그대로(`eventId` 유지 = value 불변) 원래 그룹에게만(`dawnline-replay-for`) — 다른 그룹은
+     `libs/messaging` 의 레코드 필터가 **기록 없이** 건너뛴다(`replay_not_target`). 그래서 §4.4 의 「DLQ 30일은
+     `processed_events` 14일과 무관하다」가 참이 된다. 감사는 레코드마다 한 행, 재처리는 멱등이라 `UNKNOWN` 은
+     다시 누른다(RB-05).
 2. 코어 서비스에 필요한 운영 엔드포인트 추가(fulfillment: 웨이브 조기 마감; dispatch: 재계획·재배정은 Phase 3/5에서 존재).
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.
 4. 테스트: 프로젝션 멱등(같은 이벤트 2회), **프로젝션 순서 무관(같은 사실을 씨 고정 셔플로 다시 넣어 최종 행이 같은가)**, 권한(viewer가 커맨드 403), 커맨드 감사 기록.

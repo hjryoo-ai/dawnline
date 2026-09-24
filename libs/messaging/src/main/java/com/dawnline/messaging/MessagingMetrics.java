@@ -75,7 +75,10 @@ public final class MessagingMetrics {
     /** 태그: 이벤트 타입. */
     public static final String TAG_EVENT_TYPE = "eventType";
 
-    /** 태그: 소비 결과. {@link #OUTCOME_OK} / {@link #OUTCOME_DUP} / {@link #OUTCOME_REJECTED} / {@link #OUTCOME_DLQ} */
+    /**
+     * 태그: 소비 결과. {@link #OUTCOME_OK} / {@link #OUTCOME_DUP} / {@link #OUTCOME_REJECTED} / {@link #OUTCOME_DLQ} /
+     * {@link #OUTCOME_REPLAY_NOT_TARGET}
+     */
     public static final String TAG_OUTCOME = "outcome";
 
     /** 태그: 거부 사유. */
@@ -92,6 +95,15 @@ public final class MessagingMetrics {
 
     /** outcome — 재시도 소진 또는 즉시 실패로 DLQ 로 보냈다 (§4.6). */
     public static final String OUTCOME_DLQ = "dlq";
+
+    /**
+     * outcome — 다른 그룹을 지목한 DLQ 재처리라 리스너를 부르지 않고 건너뛰었다 (§4.6, ADR-053).
+     *
+     * <p>{@link #OUTCOME_DUP} 과 합치지 않는다. {@code dup} 은 「이미 처리했다」이고 이것은 「내 일이 아니다」다 —
+     * 합치면 {@code dup} 이 는 것이 재전달인지 재처리인지 가릴 수 없다. 그리고 이 결과만 {@code processed_events}
+     * 에 흔적이 없다. 이 카운터가 유일한 흔적이다.
+     */
+    public static final String OUTCOME_REPLAY_NOT_TARGET = "replay_not_target";
 
     /** 태그·메트릭 값이 비었을 때 쓰는 자리표시자. 라벨 카디널리티 폭발을 막는다. */
     public static final String UNKNOWN = "unknown";

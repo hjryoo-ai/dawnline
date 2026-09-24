@@ -3,6 +3,7 @@ package com.dawnline.messaging.config;
 import com.dawnline.messaging.Topics;
 import com.dawnline.messaging.kafka.DawnlineErrorHandlers;
 import com.dawnline.messaging.kafka.DlqRecordRecoverer;
+import com.dawnline.messaging.kafka.ReplayTargetFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Map;
@@ -22,6 +23,7 @@ import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.adapter.RecordFilterStrategy;
 
 /**
  * Kafka 소비 쪽 공통 배선 (DESIGN.md §4.6 재시도/DLQ, §8.3 백프레셔).
@@ -74,6 +76,22 @@ public class MessagingKafkaAutoConfiguration {
     public CommonErrorHandler dawnlineKafkaErrorHandler(DlqRecordRecoverer recoverer,
             DawnlineMessagingProperties properties) {
         return DawnlineErrorHandlers.retryThenDlq(recoverer, properties.retry());
+    }
+
+    /**
+     * 다른 그룹을 지목한 DLQ 재처리를 리스너 앞에서 건너뛴다 (§4.6, ADR-053). Boot 의 기본 리스너 컨테이너
+     * 팩토리가 이 빈을 집어 간다 — 에러 핸들러와 같은 방식이다.
+     *
+     * <p><strong>서비스가 자기 필터를 두려면 이것과 합성해야 한다.</strong> 이 빈은 그런 빈이 있으면 물러나고,
+     * 둘이 나란히 있으면 Boot 는 어느 쪽도 꽂지 않는다({@code getIfUnique}). 어느 쪽이든 조용히 모든 그룹이
+     * 재처리를 받는 상태가 된다.
+     *
+     * @param meters Micrometer 레지스트리
+     */
+    @Bean
+    @ConditionalOnMissingBean(RecordFilterStrategy.class)
+    public RecordFilterStrategy<Object, Object> dawnlineReplayTargetFilter(ObjectProvider<MeterRegistry> meters) {
+        return new ReplayTargetFilter(meters.getIfAvailable(SimpleMeterRegistry::new));
     }
 
     /**

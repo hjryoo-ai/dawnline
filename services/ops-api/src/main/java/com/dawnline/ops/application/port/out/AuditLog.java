@@ -5,9 +5,10 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 
 /**
- * {@code audit_logs} — 모든 운영자 커맨드의 기록 (DESIGN.md §5.5).
+ * {@code audit_logs} — 모든 운영자 커맨드의 기록 (DESIGN.md §5.5 · §4.6 「DLQ 재처리」).
  *
  * <p>두 번 쓴다. 위임 <em>전에</em> {@link #open} 으로 {@link AuditResult#PENDING} 을 <strong>커밋하고</strong>,
  * 위임이 끝나면 {@link #close} 로 결과를 적는다. 각 호출은 자기 트랜잭션이다 — 위임을 감싸는 트랜잭션이
@@ -35,20 +36,19 @@ public interface AuditLog {
      *
      * @param id         UUIDv7 — 코어 호출의 상관 헤더가 된다
      * @param actor      JWT 의 {@code sub}
-     * @param action     {@code RUN_PLAN} 등
-     * @param targetType {@code WAVE}·{@code ORDER}
-     * @param targetId   대상
-     * @param request    커맨드의 인자 — 코어의 응답 본문은 넣지 않는다
+     * @param action     {@code RUN_PLAN}·{@code DLQ_REPLAY} 등
+     * @param targetType {@code WAVE}·{@code ORDER}·{@code EVENT}
+     * @param targetId   대상 — 재처리할 DLQ 레코드를 읽지 못했으면 비어 있다(V1 이 허용한다)
+     * @param request    커맨드의 인자 — 코어의 응답 본문도 이벤트의 value 도 넣지 않는다
      * @param createdAt  기록 시각
      */
-    record Entry(UUID id, String actor, String action, String targetType, UUID targetId,
+    record Entry(UUID id, String actor, String action, String targetType, @Nullable UUID targetId,
             Map<String, Object> request, Instant createdAt) {
         public Entry {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(action, "action");
             Objects.requireNonNull(targetType, "targetType");
-            Objects.requireNonNull(targetId, "targetId");
             request = Map.copyOf(request);
             Objects.requireNonNull(createdAt, "createdAt");
         }
