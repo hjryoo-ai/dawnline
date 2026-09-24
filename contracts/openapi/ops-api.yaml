@@ -1,0 +1,1447 @@
+openapi: 3.1.0
+info:
+  title: Dawnline ops-api
+  description: |-
+    운영 콘솔 API (DESIGN.md §5.5). 읽기 모델 조회와 운영자 커맨드다.
+
+    **인증은 JWT 다.** `make token ROLE=…` 가 찍은 토큰을 `Authorization: Bearer` 로 싣는다 (만료 12시간). `GET` 은 `OPS_VIEWER`, 나머지는 `OPS_OPERATOR` 이상이다. 토큰이 없거나 유효하지 않으면 401 `unauthenticated`, 역할이 모자라면 403 `forbidden` 이다.
+
+    **커맨드는 코어로 위임하고 감사한다.** 응답 헤더 `X-Dawnline-Audit-Id` 에 감사 행 id 가 온다. 코어가 거절하면(4xx) 코어의 상태와 Problem Details 본문을 그대로 돌려준다. 코어에 닿지 못하면 502 `core-unreachable`, 적용됐는지 모르면 504 `core-timeout` 또는 502 `core-error` 다 — 그때는 다시 누르기가 먼저다(RB-07).
+
+    **조회는 감사하지 않는다.** 읽기 모델(`rm_*`)에서 읽고, 라우트의 stop 은 dispatch 에 조회를 위임한다 — 좌표와 순서의 진실은 dispatch 이고 읽기 모델은 집계다.
+
+    오류 응답은 RFC 9457 Problem Details 이고 `type` 과 `code` 가 항상 채워진다.
+  version: 1.0.0
+servers:
+- url: http://localhost:8085
+  description: 로컬 개발
+paths:
+  /api/v1/waves/{waveId}/close:
+    post:
+      tags:
+      - ops-command-controller
+      operationId: closeWave
+      parameters:
+      - name: waveId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloseBody"
+        required: true
+      responses:
+        "200":
+          description: 닫힌 웨이브 — `closeCause=MANUAL`
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 감사 행 id — 모든 결과에 온다
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/WaveClosed"
+        "400":
+          description: "`reason` 이 비었거나 200자를 넘는다(감사 행 없음), 또는 코어의 거절 그대로"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 코어의 거절 그대로 — 없는 웨이브
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: 코어의 거절 그대로 — `wave-not-open`. `closeCause` 가 `MANUAL` 이면 앞의
+            요청이 적용됐다(RB-07)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의
+            5xx — 감사 `UNKNOWN`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "503":
+          description: 감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 다시 누르기가 먼저다(RB-07)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/routes/{routeId}/stops/{orderId}/reassign:
+    post:
+      tags:
+      - ops-command-controller
+      operationId: reassign
+      parameters:
+      - name: routeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReassignBody"
+        required: true
+      responses:
+        "200":
+          description: 두 라우트의 새 revision
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 감사 행 id — 모든 결과에 온다
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/StopReassigned"
+        "400":
+          description: "`targetRouteId` 가 없다(감사 행 없음), 또는 코어의 거절 그대로"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 코어의 거절 그대로 — 없는 라우트·주문
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: "코어의 거절 그대로 — 옮길 수 없는 상태(출발한 라우트, 끝난 stop 등)"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의
+            5xx — 감사 `UNKNOWN`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "503":
+          description: 감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 다시 누르기가 먼저다(RB-07)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/plans/{waveId}/run:
+    post:
+      tags:
+      - ops-command-controller
+      operationId: runPlan
+      parameters:
+      - name: waveId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: campId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: strategy
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: mode
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 재계획 결과
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 감사 행 id — 모든 결과에 온다
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/PlanRun"
+        "400":
+          description: 코어의 거절 그대로 — 인자가 틀렸다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 코어의 거절 그대로 — 없는 웨이브
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: 코어의 거절 그대로 — 지금 계획할 수 없는 상태
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의
+            5xx — 감사 `UNKNOWN`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "503":
+          description: 감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 다시 누르기가 먼저다(RB-07)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/orders/{orderId}/cancel:
+    post:
+      tags:
+      - ops-command-controller
+      operationId: cancel
+      parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelBody"
+      responses:
+        "200":
+          description: 취소된 주문 — 주소는 싣지 않는다
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 감사 행 id — 모든 결과에 온다
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OrderCancelled"
+        "400":
+          description: "`reason` 이 200자를 넘는다(감사 행 없음), 또는 코어의 거절 그대로"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 코어의 거절 그대로 — 없는 주문
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: 코어의 거절 그대로 — 취소할 수 없는 상태
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의
+            5xx — 감사 `UNKNOWN`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "503":
+          description: 감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 다시 누르기가 먼저다(RB-07)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/admin/outbox/{service}/{id}/requeue:
+    post:
+      tags:
+      - core-outbox-controller
+      operationId: requeue
+      parameters:
+      - name: service
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 격리를 풀었다 — 릴레이가 다음 폴링에 집는다
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 감사 행 id — 모든 결과에 온다
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/OutboxRequeued"
+        "404":
+          description: "`{service}` 가 넷 중 하나가 아니다(감사 행 없음), 또는 코어에 없는 행"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: 코어의 거절 그대로 — `not-quarantined`. `currentState` 가 지금 위치다(RB-07)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable` 또는 `core-error`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "503":
+          description: 감사 행을 쓰지 못해 위임하지 않았다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout` — 다시 누르기가 먼저다(RB-07)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/admin/dlq/{topic}/replay:
+    post:
+      tags:
+      - dlq-controller
+      operationId: replay
+      parameters:
+      - name: topic
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayBody"
+        required: true
+      responses:
+        "200":
+          description: "레코드마다 감사 id 와 결과 — 한 요청 안에서 결과가 갈릴 수 있다. `UNKNOWN` 은 그대로 다\
+            시 누른다(재처리는 멱등, RB-05)"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ReplayResponse"
+        "400":
+          description: 빈 목록·100개 초과·위치 누락 — 아무것도 기록하지 않는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 계약에 없는 토픽
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/waves/{waveId}/routes:
+    get:
+      tags:
+      - read-model-controller
+      operationId: waveRoutes
+      parameters:
+      - name: waveId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: "계획의 라우트들과 창고 좌표. 계획이 아직 없으면 라우트가 비어 있고, `depot` 이 `null` 이\
+            면 지도는 stop 들의 중심으로 물러난다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/WaveRoutes"
+        "404":
+          description: 읽기 모델에 없는 웨이브
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/routes/{routeId}:
+    get:
+      tags:
+      - read-model-controller
+      operationId: route
+      parameters:
+      - name: routeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: stop 순서·좌표·상태 — dispatch 에 조회를 위임한다(감사 없음)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RouteDetail"
+        "404":
+          description: dispatch 에 없는 라우트 — 코어의 본문 그대로
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable` 또는 `core-error`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/kpi/delivery:
+    get:
+      tags:
+      - read-model-controller
+      operationId: deliveryKpi
+      responses:
+        "200":
+          description: 현재 버킷 포함 UTC 정시 버킷 24개. 게이지 `dawnline_delivery_on_time_ratio`
+            와 같은 뷰·창·식이다. 정시율이 `null` 이면 창 안에 결과가 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DeliveryKpi"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/camps:
+    get:
+      tags:
+      - read-model-controller
+      operationId: camps
+      responses:
+        "200":
+          description: 캠프 id 순 — 읽기 모델에 웨이브가 있는 캠프만
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CampList"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/camps/{campId}/waves:
+    get:
+      tags:
+      - read-model-controller
+      operationId: waves
+      parameters:
+      - name: campId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      responses:
+        "200":
+          description: "컷오프 순, 최대 500. 칸이 `null` 이면 그 사실이 아직 오지 않았다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/WaveList"
+        "400":
+          description: "창이 뒤집혔거나 7일을 넘는다, 또는 형식이 틀렸다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/camps/{campId}/exceptions:
+    get:
+      tags:
+      - read-model-controller
+      operationId: exceptions
+      parameters:
+      - name: campId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: "취소됐는데 배송된 주문(§6.10 넷째 분기) — KPI 와 같은 버킷 창, 배송 시각 역순, 최대 200.\
+            \ 자동 보상은 없고 사람이 처리한다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ExceptionList"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/admin/outbox/{service}/quarantined:
+    get:
+      tags:
+      - core-outbox-controller
+      operationId: listQuarantined
+      parameters:
+      - name: service
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: 격리 시각 순. `total` 이 목록보다 크면 `limit` 에 잘렸다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/QuarantinedOutbox"
+        "400":
+          description: 코어의 거절 그대로 — `limit` 이 1–500 밖이다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: "`{service}` 가 order·fulfillment·dispatch·tracking 이 아니다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable` 또는 `core-error`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/admin/dlq/{topic}:
+    get:
+      tags:
+      - dlq-controller
+      operationId: list
+      parameters:
+      - name: topic
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 50
+      responses:
+        "200":
+          description: 위치와 이름뿐 — value 는 싣지 않는다(주소를 담을 수 있다)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DeadLetterList"
+        "400":
+          description: '`limit` 이 1–500 밖이다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 계약에 없는 토픽
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+components:
+  schemas:
+    CloseBody:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 200
+          minLength: 0
+      required:
+      - reason
+    WaveClosed:
+      type: object
+      properties:
+        waveId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        closeCause:
+          type: string
+        closedAt:
+          type: string
+          format: date-time
+      required:
+      - status
+      - waveId
+    ProblemDetail:
+      type: object
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+        code:
+          type: string
+          description: "오류 코드 — `type` 의 마지막 세그먼트와 같다. 모든 오류에 실린다. 그 밖의 확장 멤버(`retryAfterSeconds`,\
+            \ 검증 오류, 도메인 예외의 상세)도 이 칸처럼 최상위에 온다"
+    ReassignBody:
+      type: object
+      properties:
+        targetRouteId:
+          type: string
+          format: uuid
+      required:
+      - targetRouteId
+    StopReassigned:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        fromRouteId:
+          type: string
+          format: uuid
+        fromRevision:
+          type: integer
+          format: int32
+        toRouteId:
+          type: string
+          format: uuid
+        toRevision:
+          type: integer
+          format: int32
+      required:
+      - fromRevision
+      - fromRouteId
+      - orderId
+      - toRevision
+      - toRouteId
+    PlanRun:
+      type: object
+      properties:
+        waveId:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+      required:
+      - outcome
+      - waveId
+    CancelBody:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 200
+          minLength: 0
+    OrderCancelled:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        status:
+          type: string
+      required:
+      - orderId
+      - status
+    OutboxRequeued:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+        topic:
+          type: string
+      required:
+      - aggregateId
+      - aggregateType
+      - eventType
+      - id
+      - topic
+    Pick:
+      type: object
+      properties:
+        partition:
+          type: integer
+          format: int32
+          minimum: 0
+        offset:
+          type: integer
+          format: int64
+          minimum: 0
+      required:
+      - offset
+      - partition
+    ReplayBody:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/Pick"
+          maxItems: 100
+          minItems: 0
+      required:
+      - records
+    ReplayResponse:
+      type: object
+      properties:
+        topic:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayResult"
+      required:
+      - results
+      - topic
+    ReplayResult:
+      type: object
+      properties:
+        partition:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int64
+        auditId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+        result:
+          type: string
+          enum:
+          - PENDING
+          - SUCCEEDED
+          - REJECTED
+          - FAILED
+          - UNKNOWN
+        detail:
+          type: string
+      required:
+      - auditId
+      - offset
+      - partition
+      - result
+    Depot:
+      type: object
+      properties:
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+      required:
+      - lat
+      - lng
+    RouteSummary:
+      type: object
+      properties:
+        routeId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: int32
+        status:
+          type: string
+          enum:
+          - ASSIGNED
+          - DEPARTED
+        plannedDeparture:
+          type: string
+          format: date-time
+        departedAt:
+          type: string
+          format: date-time
+        stopCount:
+          type: integer
+          format: int32
+        completedCount:
+          type: integer
+          format: int32
+        failedCount:
+          type: integer
+          format: int32
+        atRisk:
+          type: boolean
+        distanceM:
+          type: integer
+          format: int32
+        costKrw:
+          type: integer
+          format: int32
+      required:
+      - routeId
+    WaveRoutes:
+      type: object
+      properties:
+        waveId:
+          type: string
+          format: uuid
+        planId:
+          type: string
+          format: uuid
+        depot:
+          $ref: "#/components/schemas/Depot"
+        routes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteSummary"
+      required:
+      - routes
+      - waveId
+    RouteDetail:
+      type: object
+      properties:
+        routeId:
+          type: string
+          format: uuid
+        planId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        revision:
+          type: integer
+          format: int32
+        distanceM:
+          type: integer
+          format: int32
+        durationS:
+          type: integer
+          format: int32
+        costKrw:
+          type: integer
+          format: int64
+        stops:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteStop"
+      required:
+      - costKrw
+      - distanceM
+      - durationS
+      - planId
+      - revision
+      - routeId
+      - status
+      - stops
+      - vehicleId
+    RouteStop:
+      type: object
+      properties:
+        seq:
+          type: integer
+          format: int32
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        plannedArrival:
+          type: string
+          format: date-time
+        status:
+          type: string
+        orderIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+      required:
+      - lat
+      - lng
+      - orderIds
+      - plannedArrival
+      - seq
+      - status
+    CampKpi:
+      type: object
+      properties:
+        campId:
+          type: string
+          format: uuid
+        delivered:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+        onTimePromised:
+          type: integer
+          format: int64
+        onTimeRevised:
+          type: integer
+          format: int64
+        revised:
+          type: integer
+          format: int64
+        onTimeRatioPromised:
+          type: number
+          format: double
+        onTimeRatioRevised:
+          type: number
+          format: double
+      required:
+      - campId
+      - delivered
+      - failed
+      - onTimePromised
+      - onTimeRevised
+      - revised
+    DeliveryKpi:
+      type: object
+      properties:
+        firstBucket:
+          type: string
+          format: date-time
+        lastBucket:
+          type: string
+          format: date-time
+        camps:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampKpi"
+        outcomeWithoutPromise:
+          type: integer
+          format: int64
+      required:
+      - camps
+      - firstBucket
+      - lastBucket
+      - outcomeWithoutPromise
+    CampList:
+      type: object
+      properties:
+        camps:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampSummary"
+      required:
+      - camps
+    CampSummary:
+      type: object
+      properties:
+        campId:
+          type: string
+          format: uuid
+        waves:
+          type: integer
+          format: int64
+        latestCutoffAt:
+          type: string
+          format: date-time
+      required:
+      - campId
+      - waves
+    WaveList:
+      type: object
+      properties:
+        campId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        waves:
+          type: array
+          items:
+            $ref: "#/components/schemas/WaveSummary"
+      required:
+      - campId
+      - from
+      - to
+      - waves
+    WaveSummary:
+      type: object
+      properties:
+        waveId:
+          type: string
+          format: uuid
+        serviceTier:
+          type: string
+        cutoffAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - OPEN
+          - CLOSED
+          - PLAN_FAILED
+          - PLANNED
+        orderCount:
+          type: integer
+          format: int32
+        planId:
+          type: string
+          format: uuid
+        planDurationMs:
+          type: integer
+          format: int32
+        totalCostKrw:
+          type: integer
+          format: int64
+        unassignedCount:
+          type: integer
+          format: int32
+        routeCount:
+          type: integer
+          format: int32
+      required:
+      - waveId
+    CancelledButDelivered:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        waveId:
+          type: string
+          format: uuid
+        routeId:
+          type: string
+          format: uuid
+        deliveredAt:
+          type: string
+          format: date-time
+      required:
+      - deliveredAt
+      - orderId
+    ExceptionList:
+      type: object
+      properties:
+        campId:
+          type: string
+          format: uuid
+        firstBucket:
+          type: string
+          format: date-time
+        lastBucket:
+          type: string
+          format: date-time
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/CancelledButDelivered"
+        truncated:
+          type: boolean
+      required:
+      - campId
+      - firstBucket
+      - lastBucket
+      - orders
+      - truncated
+    QuarantinedEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+        topic:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        failedAt:
+          type: string
+          format: date-time
+        publishAttempts:
+          type: integer
+          format: int32
+      required:
+      - aggregateId
+      - aggregateType
+      - createdAt
+      - eventType
+      - failedAt
+      - id
+      - publishAttempts
+      - topic
+    QuarantinedOutbox:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int64
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuarantinedEvent"
+      required:
+      - events
+      - total
+    DeadLetterList:
+      type: object
+      properties:
+        topic:
+          type: string
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeadLetterView"
+      required:
+      - records
+      - topic
+    DeadLetterView:
+      type: object
+      properties:
+        partition:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        eventType:
+          type: string
+        eventId:
+          type: string
+          format: uuid
+        originalGroup:
+          type: string
+        originalPartition:
+          type: integer
+          format: int32
+        originalOffset:
+          type: integer
+          format: int64
+        exceptionClass:
+          type: string
+      required:
+      - offset
+      - partition
+      - timestamp
+  securitySchemes:
+    opsJwt:
+      type: http
+      description: '`make token ROLE=OPS_VIEWER|OPS_OPERATOR|ADMIN` 가 찍는 HS256 토큰
+        (DESIGN.md §5.5)'
+      scheme: bearer
+      bearerFormat: JWT

@@ -1,15 +1,23 @@
 package com.dawnline.ops.adapter.in.web;
 
 import com.dawnline.common.error.NotFoundException;
+import com.dawnline.observability.MdcKeys;
 import com.dawnline.ops.application.port.in.ListQuarantinedOutboxUseCase;
 import com.dawnline.ops.application.port.in.OpsCommand;
 import com.dawnline.ops.application.port.in.RunOpsCommandUseCase;
+import com.dawnline.ops.application.port.out.CoreReply;
 import com.dawnline.ops.domain.CoreService;
+import io.swagger.v3.oas.annotations.headers.Header;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -48,6 +56,17 @@ public class CoreOutboxController {
      * @return 목록, 또는 코어의 거절 그대로, 또는 502·504
      */
     @GetMapping("/quarantined")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "격리 시각 순. `total` 이 목록보다 크면 `limit` 에 잘렸다",
+                    content = @Content(schema = @Schema(implementation = CoreReply.QuarantinedOutbox.class))),
+            @ApiResponse(responseCode = "400", description = "코어의 거절 그대로 — `limit` 이 1–500 밖이다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "`{service}` 가 order·fulfillment·dispatch·tracking 이 아니다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "502", description = "`core-unreachable` 또는 `core-error`",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "504", description = "`core-timeout`",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public ResponseEntity<?> listQuarantined(@PathVariable String service,
             @RequestParam(required = false) @Nullable Integer limit, HttpServletRequest request) {
         return CommandResponses.ofQuery(quarantined.list(core(service), limit), request.getRequestURI());
@@ -60,6 +79,20 @@ public class CoreOutboxController {
      *         온다 — {@code currentState} 가 감사 {@code UNKNOWN} 을 닫는 근거다(RB-07)
      */
     @PostMapping("/{id}/requeue")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "격리를 풀었다 — 릴레이가 다음 폴링에 집는다",
+                    headers = @Header(name = MdcKeys.AUDIT_ID_HEADER, description = "감사 행 id — 모든 결과에 온다"),
+                    content = @Content(schema = @Schema(implementation = CoreReply.OutboxRequeued.class))),
+            @ApiResponse(responseCode = "404", description = "`{service}` 가 넷 중 하나가 아니다(감사 행 없음), 또는 코어에 없는 행",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409", description = "코어의 거절 그대로 — `not-quarantined`. `currentState` 가 지금 위치다(RB-07)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "502", description = "`core-unreachable` 또는 `core-error`",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "503", description = "감사 행을 쓰지 못해 위임하지 않았다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "504", description = "`core-timeout` — 다시 누르기가 먼저다(RB-07)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public ResponseEntity<?> requeue(@PathVariable String service, @PathVariable UUID id,
             @AuthenticationPrincipal Jwt operator, HttpServletRequest request) {
         OpsCommand command = new OpsCommand.RequeueOutbox(core(service), id);
