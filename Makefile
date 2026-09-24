@@ -30,6 +30,8 @@ COMPOSE_OBS   := $(COMPOSE) --profile obs
 COMPOSE_LEANP := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_LEAN_FILE) --env-file $(ENV_FILE) --profile app
 
 SERVICES      := order-service fulfillment-service dispatch-service tracking-service ops-api
+# ops-web 은 Buildpacks 가 아니라 Dockerfile 이미지다(ADR-057). 기존 .env 에 없으면 make env 가 예시에서 덧붙이는 키들.
+OPS_WEB_ENV_KEYS := NODE_IMAGE NGINX_IMAGE OPS_WEB_PORT
 
 # `make logs SERVICE=dispatch-service` 처럼 좁힐 수 있다.
 SERVICE       ?=
@@ -50,7 +52,7 @@ help:
 	@printf '    make restart        down 후 up\n'
 	@printf '    make clean-volumes  볼륨까지 삭제 (확인을 묻는다 — 데이터가 사라진다)\n\n'
 	@printf '  \033[1m빌드\033[0m\n'
-	@printf '    make images         ./gradlew bootBuildImage — 서비스 이미지 5개 생성\n\n'
+	@printf '    make images         ./gradlew bootBuildImage — 서비스 이미지 5개 + ops-web(Dockerfile) 생성\n\n'
 	@printf '  \033[1m확인\033[0m\n'
 	@printf '    make ps             컨테이너 상태\n'
 	@printf '    make wait           5개 서비스 /actuator/health/readiness 200 대기\n'
@@ -92,6 +94,12 @@ env:
 	printf '\n# 코어 내부 토큰 (make env 가 덧붙였다, DESIGN.md §10, ADR-055)\nDAWNLINE_INTERNAL_TOKEN=%s\n' "$$(openssl rand -hex 32)" >> $(ENV_FILE); \
 	echo "덧붙임: $(ENV_FILE) 에 DAWNLINE_INTERNAL_TOKEN (무작위)"; \
 	fi; \
+	for key in $(OPS_WEB_ENV_KEYS); do \
+	if ! grep -q "^$$key=" $(ENV_FILE); then \
+	printf '\n# ops-web (make env 가 .env.example 에서 덧붙였다, ADR-057)\n%s\n' "$$(grep "^$$key=" $(ENV_EXAMPLE))" >> $(ENV_FILE); \
+	echo "덧붙임: $(ENV_FILE) 에 $$key (.env.example 의 값)"; \
+	fi; \
+	done; \
 	fi
 
 # -----------------------------------------------------------------------------
@@ -108,14 +116,16 @@ token: env
 
 # -----------------------------------------------------------------------------
 # 서비스 이미지 (Buildpacks, ADR-013). Docker 데몬이 떠 있어야 한다.
-images:
+images: env
 	@echo "==> ./gradlew bootBuildImage (서비스 5개, 첫 실행은 빌더 이미지 내려받느라 오래 걸린다)"
 	./gradlew bootBuildImage
+	@echo "==> ops-web (Dockerfile — Buildpacks 가 아닌 유일한 이미지, ADR-057)"
+	$(COMPOSE_ALL) build ops-web
 
 check-images: env
 	@set -a; . $(ENV_FILE); set +a; \
 	missing=""; \
-	for s in $(SERVICES); do \
+	for s in $(SERVICES) ops-web; do \
 	img="dawnline/$$s:$$DAWNLINE_VERSION"; \
 	docker image inspect "$$img" >/dev/null 2>&1 || missing="$$missing $$img"; \
 	done; \
@@ -194,6 +204,7 @@ wait: env
 urls: env
 	@set -a; . $(ENV_FILE); set +a; \
 	echo ""; \
+	echo "  ops-web (운영 화면) http://localhost:$$OPS_WEB_PORT  (토큰: make token ROLE=OPS_OPERATOR)"; \
 	echo "  ops-api             http://localhost:$$OPS_API_PORT"; \
 	echo "  order-service       http://localhost:$$ORDER_SERVICE_PORT"; \
 	echo "  fulfillment-service http://localhost:$$FULFILLMENT_SERVICE_PORT"; \

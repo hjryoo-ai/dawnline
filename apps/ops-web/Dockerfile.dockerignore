@@ -1,0 +1,7 @@
+# 빌드 문맥은 저장소 루트다 — 필요한 것만 들인다(나머지는 수백 MB 의 build/ · .gradle/ 이다).
+*
+!contracts/openapi/ops-api.yaml
+!apps/ops-web/
+apps/ops-web/node_modules
+apps/ops-web/dist
+apps/ops-web/src/api/schema.ts
