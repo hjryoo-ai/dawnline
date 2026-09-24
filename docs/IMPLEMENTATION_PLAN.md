@@ -1932,6 +1932,63 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 - **REST 표면이 있는 서비스마다 OpenAPI 생성물과 계약 IT 가 있다**(§11) — 이 Phase 가 끝나면
   dispatch 와 ops-api 둘 다 대상이다. **(2026-09-24) 다섯 다 있다** — dispatch 는 6-0, ops-api 는 묶음 C1.
 
+### Phase 6 마감 대조표
+
+기준일 2026-09-25, `main` = PR #60 머지 시점. 빠진 항목은 **표에 남긴다**.
+
+| # | 작업 | 상태 | 근거 |
+|---|---|---|---|
+| 0-a | `ProblemDetailsAdvice` → `libs/web` | ✅ | #45 `588ed6a` — [ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md). 넷째(ops-api)는 기반 위에서 시작했다 |
+| 0-b | `delivery.route-departed` | ✅ | 계약·토픽 #46 `f2002f3`, 발행 #47 `6b66b5d` — [ADR-050](adr/ADR-050-route-departure-is-an-event.md). `stopCount` 는 뺐다(`18e3906`, 재검토 지점 3) |
+| 0-c | `route:{id}:progress` 삭제 | ✅ | `38296b4`(#45) — 소비자가 나타나지 않았다(ADR-048 재검토 지점 4) |
+| 0 | dispatch OpenAPI 생성물 + 계약 IT | ✅ | #45 |
+| 1 | 프로젝션 규칙 + 전 토픽 프로젝션 | ✅ | #46 — [ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md), 근거 표기 `관측(재현됨)` |
+| 1 | KPI 시간 버킷(뷰 둘) · 정시율 게이지 | ✅ | #48 `7283caa` — Phase 5 DoD 의 「정시율 집계」 빈칸이 여기서 닫혔다 |
+| 1 | JWT·역할 · 커맨드 위임 · `audit_logs` | ✅ | #49 `e0b7516` — [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) |
+| 1 | DLQ 재처리 | ✅ | #50 `1d70fe8` — [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md) |
+| 1 | 주문 홀드 | ⬜ **미구현** | 주문 상태 머신에 전이가 없다(§5.5). 전이를 만드는 것은 order-service 의 설계 변경이다 |
+| 2 | 웨이브 조기 마감 | ✅ | #51 `4a39957` — [ADR-054](adr/ADR-054-early-wave-close-is-an-operator-cutoff.md) |
+| 2 | outbox 격리 조회·재큐 | ✅ | #52 `94c8ab2` — [ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md) |
+| 2 | 코어 운영자 쓰기의 내부 토큰 | ✅ | #53 `75338d4` — [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md) |
+| 2 | ops-api 의 fulfillment·tracking 위임 | ✅ | #54 `468113f` |
+| — | (이월 정리) 없는 시계열 §9.1 · 알림 카운터 사전 등록 | ✅ | #55 `83c6fcb` · #56 `a47de5a`. 남은 하나(`cancel_too_late{camp}`)는 7-1 |
+| 3 | C1 조회 표면 + `ops-api.yaml` | ✅ | #57 `7679c3b` |
+| 3 | 캠프 코드 | ✅ | #58 `6fe3a2f` — 변경은 반영되지 않는다(§5.5, #61) |
+| 3 | C2 ops-web | ✅ | #59 `90f5e32` — [ADR-056](adr/ADR-056-ops-web-client-is-typed-from-the-committed-contract.md) · [ADR-057](adr/ADR-057-map-draws-without-tiles-ops-web-is-an-nginx-image.md). `shortId` 결함은 #60 에서 고쳤다(§13 축 11) |
+| 3 | C3 DoD 를 Compose 스모크에서 | ✅ | #60 `673449d` — 첫 판(600건)은 라우트 하나였다: 둘째 라우트를 강제하는 것은 `max-stops` 이고 전제는 마감 전에 본다 |
+| 3 | 웨이브/계획 상세(설명 조회) | ⛔ **축소안으로 제외** | 설명은 dispatch `GET /plans/{id}` 가 낸다 |
+| 3 | 룰 편집 화면 | ⛔ **축소안으로 제외** | Swagger |
+| 4 | 프로젝션 멱등 | ✅ | #46 `ProjectionListenerIT` |
+| 4 | 프로젝션 순서 무관 | ✅ | #46 `ProjectionShuffleIT`. 비교 칸이 채워졌는지 먼저 묻는 것은 #58(§13 축 10) |
+| 4 | 권한(뷰어 403) · 감사 기록 | ✅ | #49 `OpsCommandIT` |
+| — | 후속 문서 · IT 경합 | ✅ | #61 `d41c6a0`(§13 축 10 · §5.5 캠프 코드 · 예시 `eventId`) · #62 `75ebaa5`(`OutboxLeaderLockIT` — 근거 `재현 시도했으나 실패`, CI 1회) |
+
+| DoD | 상태 | 근거 |
+|---|---|---|
+| UI 경로로 조기 마감 → 계획·지도 → stop 재배정 | ✅ | `make demo` 의 `tools/demo/phase6-demo.sh`, CI Compose 스모크. ops-web 의 nginx 를 지나 화면과 같은 경로를 부른다 |
+| REST 표면이 있는 서비스마다 OpenAPI 생성물 + 계약 IT | ✅ | 다섯 다 — dispatch #45, ops-api #57 |
+
+**대조표가 잡은 것 셋**
+
+1. **[ADR-012](adr/README.md)(CQRS 읽기 모델을 ops-api 에 집중)는 여전히 「⏳ Phase 6 예정」이다** — 결정은 이 Phase
+   에서 구현됐고(ADR-051 이 그 규칙이다) 문서는 쓰이지 않았다. 7-6 「ADR 전체 확정(001–012)」이 그 자리이고,
+   거기서 005·010(각각 Phase 2·3 예정으로 남아 있다)과 함께 쓴다.
+2. **보존 정책이 이 Phase 에서 정해지지 않았다.** [ADR-045](adr/ADR-045-revision-comparison-is-per-route.md) 는
+   `route_revisions`·`shipments` 의 보존을 「배송 이력의 보존을 정하는 Phase 6」에 맡겼는데, 이 Phase 는 `rm_*` 에도
+   보존을 두지 않았다(§5.5 — 인덱스 판단들이 「보존 정책이 없으므로」를 전제로 적었다). 알고 둔 것과 맡겨진 것이
+   섞여 있어, 주인은 Phase 7-0 표가 정한다.
+3. **테스트가 결함을 기대값으로 들고 있었다.** C2 의 대시보드 테스트는 `shortId` 의 결함 있는 출력을 고정했고,
+   드러낸 것은 컴포넌트 테스트가 아니라 C3 의 스모크 출력이었다 — §13 축 11.
+
+**재검토 지점으로 남은 것**
+
+| 지점 | 다시 여는 조건 | 기록 |
+|---|---|---|
+| 예외 목록의 해소 표시 | 해소 사실(환불·회수)이 이벤트로 생길 때 | §5.5 |
+| `cancel_too_late_total{camp}` 알림식 | 7-1 의 규칙 파일 | §9.1, Phase 7-1 (a) |
+| `UNKNOWN` 자동 해소 | `UNKNOWN` 이 사람이 따라가기 어려운 빈도로 나타날 때 | ADR-052 재검토 지점 4 |
+| 캠프 코드 변경 미반영 | 캠프 참조 데이터가 변경 이벤트를 가질 때 | §5.5 |
+
 ---
 
 ## Phase 7 — 신뢰성·관측성·문서 마감 (Staff 차별화)
