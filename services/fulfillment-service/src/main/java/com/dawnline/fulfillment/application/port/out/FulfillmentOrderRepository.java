@@ -76,4 +76,13 @@ public interface FulfillmentOrderRepository {
      * @return 삭제된 행 수
      */
     int deleteSettledUpdatedBefore(Instant updatedBefore, int limit);
+
+    /**
+     * 보존 기간을 넘겼는데 <strong>종결이 아닌</strong> 주문 수 — {@link #deleteSettledUpdatedBefore} 가 남기는
+     * 행의 정확한 여집합이다(ADR-058 결정 8, {@code dawnline_fulfillment_orders_stuck}).
+     *
+     * @param updatedBefore 이 시각 이전에 마지막으로 변경된 행
+     * @return 그 행 수
+     */
+    long countUnsettledUpdatedBefore(Instant updatedBefore);
 }

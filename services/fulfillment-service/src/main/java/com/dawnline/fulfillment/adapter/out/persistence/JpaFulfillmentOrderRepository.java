@@ -60,6 +60,21 @@ public class JpaFulfillmentOrderRepository implements FulfillmentOrderRepository
                     LIMIT :limit)
             """;
 
+    /**
+     * 위 삭제가 남기는 행 — 종결 술어의 부정이다. {@code status} 는 {@code NOT NULL} 이고 {@code NOT EXISTS} 는
+     * 참·거짓만 내므로 NULL 이 빠지는 틈이 없다: 두 문장의 합이 {@code updated_at < :threshold} 인 행 전부다.
+     * 삭제 뒤에 세므로 범위에 남는 것은 걸린 행뿐이고 {@code ix_fulfillment_orders_cleanup} 이 그 범위를 집는다.
+     * 공개인 이유: 계획 가드({@code FulfillmentRetentionIT})가 복사본이 아니라 이 문장을 잰다.
+     */
+    public static final String COUNT_UNSETTLED_SQL = """
+            SELECT count(*) FROM fulfillment_orders fo
+             WHERE fo.updated_at < :threshold
+               AND fo.status NOT IN ('CANCELLED', 'UNSERVICEABLE')
+               AND NOT EXISTS (SELECT 1 FROM waves w
+                                WHERE w.id = fo.wave_id
+                                  AND w.status IN ('PLANNED', 'PLAN_FAILED'))
+            """;
+
     private final EntityManager entityManager;
 
     /**
@@ -148,5 +163,14 @@ public class JpaFulfillmentOrderRepository implements FulfillmentOrderRepository
                 .setParameter("threshold", updatedBefore)
                 .setParameter("limit", limit)
                 .executeUpdate();
+    }
+
+    @Override
+    public long countUnsettledUpdatedBefore(Instant updatedBefore) {
+        Objects.requireNonNull(updatedBefore, "updatedBefore");
+        Number count = (Number) entityManager.createNativeQuery(COUNT_UNSETTLED_SQL)
+                .setParameter("threshold", updatedBefore)
+                .getSingleResult();
+        return count.longValue();
     }
 }

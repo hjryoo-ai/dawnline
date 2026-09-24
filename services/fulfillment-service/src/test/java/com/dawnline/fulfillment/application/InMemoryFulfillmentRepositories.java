@@ -158,6 +158,11 @@ final class InMemoryFulfillmentRepositories {
             public int deleteSettledUpdatedBefore(Instant updatedBefore, int limit) {
                 throw new UnsupportedOperationException();
             }
+
+            @Override
+            public long countUnsettledUpdatedBefore(Instant updatedBefore) {
+                throw new UnsupportedOperationException();
+            }
         };
     }
 
