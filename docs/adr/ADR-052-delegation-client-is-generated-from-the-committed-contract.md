@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 상태 | Proposed — 시도 전에 채택 기준을 적는다(아래 결정 1). 시도 결과가 이 표를 바꾼다 |
+| 상태 | Accepted (2026-09-24) — 결정 1 은 **채택**. 기준은 첫 생성보다 먼저 커밋했다(`5a5346a`), 시도 결과는 아래 |
 | 결정일 | 2026-09-24 |
 | 관련 문서 | `docs/DESIGN.md` §5.5 · §10 · §11 · §13 · `docs/IMPLEMENTATION_PLAN.md` Phase 6 작업 0·1 · `CLAUDE.md` 불변 규칙 4 · 「서로를 비추는 목록에는 대조 검사를 둔다」 |
 | 관련 ADR | [ADR-009](ADR-009-url-path-api-versioning.md) (경로의 `v1`) · [ADR-049](ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) (오류 본문이 한 벌이 된 이유) |
@@ -86,9 +86,34 @@ Boot 4 의 Jackson 3 과 둘째 직렬화기가 생긴다 — 후보로 삼지 �
 - 감사 행의 id 를 코어 호출에 상관 헤더(`X-Dawnline-Audit-Id`)로 싣고, 코어는 그것을 로그 MDC 의
   `auditId` 로 남긴다. 사람이 `UNKNOWN` 행을 해소할 때 **어디를 볼지가 그 id 로 정해진다**.
 
-## 시도 결과
+## 시도 결과 — 채택 (2026-09-24)
 
-(첫 생성 뒤에 적는다.)
+openapi-generator **7.25.0**(Gradle 플러그인, 카탈로그 고정). 기준마다 무엇을 보았는지:
+
+| 기준 | 결과 | 근거 |
+|---|---|---|
+| 1. 표준 템플릿 | ✅ | `templateDir` 없음, 후처리 없음 |
+| 2. 문서화된 옵션만 | ✅ | `useSpringBoot4`·`useJackson3`·`useJspecify`·`openApiNullable=false`·`useBeanValidation=false`·`annotationLibrary=none`·`documentationProvider=none` 등 전부 [생성기 문서](https://openapi-generator.tech/docs/generators/spring)의 공개 키. `typeMappings`·`importMappings` 없음 |
+| 3. 그대로 컴파일 | ✅ | 자기 소스셋(`coreClients`)에서 `-Xlint:all` 로 **오류 0 · 경고 0**(dispatch 모델 19 · API 3, order 모델 12 · API 1) |
+| 4. Jackson 3 왕복 | ✅ | `CoreClientsRoundTripTest` 32개 — 두 계약의 스키마 **전부**를 스키마대로 채워 읽고 다시 써서 같은 트리, 그리고 위임하는 세 연산을 `RestClient` + 프록시로 거쳐 요청 키 = 계약 속성 이름 · 응답 무손실 |
+| 5. 새 런타임 의존 없음 | ✅ | 생성물의 import 는 `spring-web`·`jakarta.validation`·`jakarta.annotation`·`org.jspecify`·`com.fasterxml.jackson.annotation` 뿐 — 전부 ops-api 에 이미 있다. 마지막 것은 Jackson 3 도 그대로 쓰는 어노테이션 패키지이고, Jackson 2 의 `databind` 는 import 하지 않는다 |
+
+**첫 시도는 실패했고, 그것은 기준 2 안에서 풀렸다.** 기본값(`useSpringBoot3`)으로 생성하자 51개 오류와
+100개 경고가 났다 — `jakarta.validation` 이 생성물 소스셋에 없었고(ops-api 에는 있다), 경고는 전부 Spring 7
+에서 폐기된 `org.springframework.lang.Nullable` 이었다. 생성기 문서에 `useSpringBoot4`·`useJackson3`·
+`useJspecify` 가 있었고, 그 셋과 소스셋에 main 이 이미 가진 validation 을 거는 것으로 오류와 경고가 함께
+0 이 됐다. 템플릿이나 심은 쓰지 않았다.
+
+**왕복 검사의 음성 표본**: 생성 옵션에 `dateLibrary=legacy`(`java.util.Date`)를 넣자 32개 중 **8개가 빨갛다**
+— 날짜 칸이 있는 모델 7개와 그것을 응답으로 받는 취소 연산이다. 날짜 칸이 없는 모델은 그대로 초록이다.
+검사가 「Jackson 3 가 이 타입을 계약대로 쓰는가」를 실제로 본다.
+
+**드러난 계약 문서의 거짓 하나** (고치지 않았다 — 이 ADR 의 범위 밖이다). 두 문서의 `ProblemDetail` 스키마는
+확장 멤버를 `properties` 라는 **중첩 객체**로 적는데, 실제 본문은 Spring 의 `ProblemDetail` 믹스인이 그것을
+**최상위**로 펼친다(`"code": "…"` 가 `type` 옆에 온다 — **근거: 관측(재현됨)**, tracking 의 `ScanApiIT` 가 `jsonPath("$.code")` 로 본다). 생성 모델은 문서대로 만들어졌으므로 실제 오류 본문을
+읽으면 `code` 를 잃는다. 그래서 **ops-api 는 코어의 오류 본문을 생성 모델로 읽지 않고 바이트 그대로
+전달한다**(결정 3 아래). 문서의 교정은 springdoc 의 스키마 생성 쪽 일이고, 6-0 의 `OpenApiResponses` 가
+「오류 본문은 `ProblemDetail`」까지만 보는 이유와 같은 자리다 — 재검토 지점 2.
 
 ## 고려한 대안과 기각 이유
 
@@ -103,4 +128,25 @@ Boot 4 의 Jackson 3 과 둘째 직렬화기가 생긴다 — 후보로 삼지 �
 
 ## 결과
 
-(시도 결과와 함께 적는다.)
+**장점**
+- 계약이 바뀌면 **컴파일이 깨진다.** 어댑터가 쓰는 연산·칸의 이름이 문서에서 바뀌면 `compileJava` 가
+  실패한다 — 테스트가 보는 것만 지키는 대조 검사보다 센 가드다.
+- 생성 태스크가 `contracts/openapi/*.yaml` 을 입력으로 가지므로 문서만 바꾼 빌드에서도 생성·컴파일이 다시 돈다.
+- HTTP 계층은 Boot 4 의 HTTP Service Client(`@ImportHttpServices`, `spring.http.serviceclient.<그룹>`)가
+  맡는다 — 관측(트레이스 전파)이 붙은 `RestClient` 를 쓰고, 프록시를 손으로 만들지 않는다.
+
+**비용**
+- 빌드 플러그인 하나(openapi-generator)와 소스셋 하나가 는다. 생성기를 올리면 생성물이 바뀔 수 있다 —
+  그때 지키는 것이 왕복 검사와 위의 기준 표다. **기준 표를 다시 채우지 못하면 올리지 않는다.**
+- 생성물은 `build/` 에만 있으므로 IDE 에서 처음 열면 빨갛다 — `./gradlew :services:ops-api:compileCoreClientsJava` 한 번.
+
+**되돌리는 방법**: 결정 1 의 기각 분기다 — 쓰고 있는 세 연산의 인터페이스를 손으로 옮기고, YAML 에서 경로·
+메서드·파라미터·스키마 속성을 전부 읽어 대조하는 테스트를 둔다. 어댑터는 인터페이스만 보므로 바뀌지 않는다.
+
+## 재검토 지점
+
+1. **생성기 버전을 올릴 때** — 기준 표(위)를 다시 채운다. 하나라도 거짓이면 올리지 않는다.
+2. **`ProblemDetail` 스키마가 실제 본문과 맞춰지면** — 오류 본문을 생성 모델로 읽을 수 있다. 그 전에는 바이트
+   그대로 전달한다.
+3. **위임 커맨드가 는다면**(웨이브 조기 마감 — fulfillment 의 첫 운영 엔드포인트와 그 OpenAPI 문서) — 같은
+   경로로 붙인다. 문서가 먼저이고, 생성 태스크의 `coreContracts` 에 한 줄이 는다.

@@ -21,6 +21,7 @@ json-schema-validator = "3.0.7"   # 계약 테스트 (contracts/events/*.schema.
 springdoc = "3.1.1"               # Spring Boot 4 라인 (parent: spring-boot-starter-parent 4.1.0)
 resilience4j = "2.4.0"            # Boot 4 전용 모듈: resilience4j-spring-boot4
 jacoco = "0.8.15"
+openapi-generator = "7.25.0"   # ops-api 위임 클라이언트 — 커밋된 contracts/openapi/*.yaml 에서 생성 (ADR-052)
 
 [libraries]
 # --- 플랫폼 (BOM) ---
@@ -37,6 +38,12 @@ spring-boot-starter-data-jpa        = { module = "org.springframework.boot:sprin
 spring-boot-starter-data-redis      = { module = "org.springframework.boot:spring-boot-starter-data-redis" }
 spring-boot-starter-actuator        = { module = "org.springframework.boot:spring-boot-starter-actuator" }
 spring-boot-starter-security        = { module = "org.springframework.boot:spring-boot-starter-security" }
+# ops-api 의 JWT 검증 (DESIGN.md §5.5 · §10, ADR-052 결정 2). Boot 4 의 이름이다 — 접두어 없는
+# spring-boot-starter-oauth2-resource-server 도 4.1.1 에 있고 내용이 같지만, 모듈 이름을 따르는 쪽을 쓴다.
+spring-boot-starter-security-oauth2-resource-server = { module = "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server" }
+# ops-api → 코어 위임의 RestClient.Builder 자동 구성 (Boot 4 모듈화: starter-web 에 없다).
+# 관측(트레이스 전파)이 붙은 빌더가 여기서 온다 — 손으로 RestClient.create() 하면 전파가 끊긴다.
+spring-boot-starter-restclient      = { module = "org.springframework.boot:spring-boot-starter-restclient" }
 spring-boot-starter-test            = { module = "org.springframework.boot:spring-boot-starter-test" }
 # Boot 4 모듈화: MockMvc 자동설정(@AutoConfigureMockMvc)은 spring-boot-starter-test 에 없다.
 # 웹 계층 통합 테스트가 상태 코드·헤더·Problem Details 를 검증하려면 이 모듈이 필요하다.
@@ -94,3 +101,4 @@ testcontainers-redis         = { module = "com.redis:testcontainers-redis" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+openapi-generator = { id = "org.openapi.generator", version.ref = "openapi-generator" }
