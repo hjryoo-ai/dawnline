@@ -242,10 +242,11 @@ public class FulfillmentApplicationConfig {
             havingValue = "true", matchIfMissing = true)
     public FulfillmentRetentionCleaner fulfillmentRetentionCleaner(FulfillmentOrderRepository orders,
             WaveRepository waves, PlatformTransactionManager transactionManager, Clock clock,
-            FulfillmentProperties properties, RetentionAges ages) {
+            FulfillmentProperties properties, RetentionAges ages, MeterRegistry meters) {
 
         FulfillmentProperties.Retention retention = properties.retention();
         return new FulfillmentRetentionCleaner(orders, waves, transactionManager, clock,
-                retention.orders(), retention.waves(), retention.batchSize(), retention.maxBatchesPerRun(), ages);
+                retention.orders(), retention.waves(), retention.batchSize(), retention.maxBatchesPerRun(), ages,
+                meters);
     }
 }

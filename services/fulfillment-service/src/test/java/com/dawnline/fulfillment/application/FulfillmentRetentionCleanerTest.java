@@ -37,11 +37,16 @@ class FulfillmentRetentionCleanerTest {
     private final RecordingRepositories repositories = new RecordingRepositories();
     private final ManualClock ageClock = new ManualClock(NOW);
     private final RetentionAges ages = new RetentionAges(new SimpleMeterRegistry(), ageClock);
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
     private FulfillmentRetentionCleaner cleaner(int batchSize, int maxBatches) {
         return new FulfillmentRetentionCleaner(repositories.orders(), repositories.waves(),
                 new NoOpTransactionManager(), CLOCK, Duration.ofDays(30), Duration.ofDays(90),
-                batchSize, maxBatches, ages);
+                batchSize, maxBatches, ages, meters);
+    }
+
+    private double stuckGauge() {
+        return meters.get(FulfillmentRetentionCleaner.STUCK).gauge().value();
     }
 
     @Test
@@ -60,7 +65,7 @@ class FulfillmentRetentionCleanerTest {
         // fulfillment_orders.wave_id 가 waves 를 참조한다. 반대로 하면 FK 위반이다.
         cleaner(1000, 10).deleteExpired();
 
-        assertThat(repositories.callOrder).containsExactly("orders", "waves");
+        assertThat(repositories.callOrder).containsExactly("orders", "waves", "count");
     }
 
     @Test
@@ -119,12 +124,49 @@ class FulfillmentRetentionCleanerTest {
         assertThat(ages.table("waves").ageSeconds()).isZero();
     }
 
+    // --- 걸린 행 (ADR-058 결정 8) ------------------------------------------------
+
+    @Test
+    void 걸린_행_게이지는_세기_전에_NaN_이다() {
+        cleaner(1000, 10);
+
+        // 0 은 「걸린 것이 없다」는 주장이다. 아직 세지 않았으면 모른다.
+        assertThat(stuckGauge()).isNaN();
+    }
+
+    @Test
+    void 걸린_행을_주문_보존_임계로_센다() {
+        repositories.stuckRows = 7;
+
+        FulfillmentRetentionCleaner.Deleted result = cleaner(1000, 10).deleteExpired();
+
+        assertThat(result.stuckOrders()).isEqualTo(7);
+        assertThat(stuckGauge()).isEqualTo(7.0);
+        assertThat(repositories.countThresholds)
+                .as("삭제와 같은 임계여야 여집합이다")
+                .containsExactly(NOW.minus(Duration.ofDays(30)));
+    }
+
+    @Test
+    void 실패하면_걸린_행_게이지가_NaN_으로_돌아간다() {
+        FulfillmentRetentionCleaner cleaner = cleaner(1000, 10);
+        repositories.stuckRows = 7;
+        cleaner.deleteExpired();
+        repositories.failOrders = true;
+
+        cleaner.cleanupExpired();
+
+        // 멈춘 값은 건강해 보인다 — 어제의 7 을 오늘의 값처럼 남기지 않는다.
+        assertThat(stuckGauge()).isNaN();
+    }
+
     @Test
     void 주문_보존이_웨이브_보존보다_길면_기동에서_막는다() {
         // 이 설정이면 웨이브 삭제가 매번 NOT EXISTS 에 막혀 아무것도 못 지운다. 조용히 도는 것보다
         // 기동 실패가 낫다.
         assertThatThrownBy(() -> new FulfillmentRetentionCleaner(repositories.orders(), repositories.waves(),
-                new NoOpTransactionManager(), CLOCK, Duration.ofDays(120), Duration.ofDays(90), 1000, 10, ages))
+                new NoOpTransactionManager(), CLOCK, Duration.ofDays(120), Duration.ofDays(90), 1000, 10, ages,
+                meters))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("FK 방향");
     }
@@ -141,7 +183,7 @@ class FulfillmentRetentionCleanerTest {
 
     private FulfillmentRetentionCleaner cleanerWith(Duration orders, Duration waves, int batch, int max) {
         return new FulfillmentRetentionCleaner(repositories.orders(), repositories.waves(),
-                new NoOpTransactionManager(), CLOCK, orders, waves, batch, max, ages);
+                new NoOpTransactionManager(), CLOCK, orders, waves, batch, max, ages, meters);
     }
 
     /** 삭제 호출만 기록하는 가짜. 나머지 메서드는 이 테스트의 관심이 아니다. */
@@ -149,7 +191,9 @@ class FulfillmentRetentionCleanerTest {
 
         private final List<Instant> orderThresholds = new ArrayList<>();
         private final List<Instant> waveThresholds = new ArrayList<>();
+        private final List<Instant> countThresholds = new ArrayList<>();
         private final List<String> callOrder = new ArrayList<>();
+        private long stuckRows;
         private int orderRowsToDelete;
         private int waveRowsToDelete;
         private boolean failOrders;
@@ -193,6 +237,13 @@ class FulfillmentRetentionCleanerTest {
                     int deleted = Math.min(limit, orderRowsToDelete);
                     orderRowsToDelete -= deleted;
                     return deleted;
+                }
+
+                @Override
+                public long countUnsettledUpdatedBefore(Instant updatedBefore) {
+                    callOrder.add("count");
+                    countThresholds.add(updatedBefore);
+                    return stuckRows;
                 }
             };
         }

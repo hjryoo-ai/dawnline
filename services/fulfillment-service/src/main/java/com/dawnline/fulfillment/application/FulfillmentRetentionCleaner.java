@@ -3,10 +3,13 @@ package com.dawnline.fulfillment.application;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import com.dawnline.messaging.retention.RetentionAges;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -40,11 +43,21 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 배치를 반복하면 지운 인덱스 항목을 죽은 것으로 표시할 수 없어 k번째 배치가 앞선 k×batchSize 개를
  * 다시 훑는다(ADR-019 의 측정: 0.47초 vs 11.29초).
  *
+ * <h2>진행 중 행은 남기되 센다</h2>
+ * 웨이브가 아직 계획되지 않은 주문은 나이와 무관하게 남는다 — 상한이 없는 행 단위 예외이고, 나이가 아니라 해소로
+ * 닫힌다(ADR-058 결정 8). 예외는 셈이 있어야 예외다: 보존 기간을 넘긴 그 행의 수를 매 실행이
+ * <strong>센다</strong>({@code dawnline_fulfillment_orders_stuck}). 부재의 수는 값이다 — {@code rm_orders} 의
+ * 걸린 행 셈과 같은 모양이다. 세기 전과 실행이 실패한 동안 게이지는 {@code NaN} 이다 — 0 은 「걸린 것이 없다」는
+ * 주장이고, 멈춘 값은 건강해 보인다.
+ *
  * <h2>실패는 삼키되 보이게</h2>
  * 표마다 끝까지 돈 정리만 {@code dawnline_retention_last_success_age_seconds{table}} 을 0 으로 되돌린다
  * (ADR-058 결정 6). 주문 쪽이 실패하면 웨이브 쪽은 돌지 않으므로 두 표의 나이가 함께 자란다 — 순서가 그렇다.
  */
 public class FulfillmentRetentionCleaner {
+
+    /** §9.1 — Prometheus 에서 {@code dawnline_fulfillment_orders_stuck}. */
+    public static final String STUCK = "dawnline.fulfillment.orders.stuck";
 
     private static final Logger log = LoggerFactory.getLogger(FulfillmentRetentionCleaner.class);
 
@@ -59,6 +72,9 @@ public class FulfillmentRetentionCleaner {
     private final RetentionAges.Table orderAge;
     private final RetentionAges.Table waveAge;
 
+    /** 마지막으로 센 걸린 행 수. 모르면 {@code NaN} 의 비트 — {@link Double#doubleToLongBits} 로 담는다. */
+    private final AtomicLong stuck = new AtomicLong(Double.doubleToLongBits(Double.NaN));
+
     /**
      * @param orders             {@code fulfillment_orders} 저장소
      * @param waves              {@code waves} 저장소
@@ -69,11 +85,13 @@ public class FulfillmentRetentionCleaner {
      * @param batchSize          한 트랜잭션에서 지울 최대 행 수
      * @param maxBatchesPerRun   한 번의 실행에서 반복할 최대 배치 수 (표마다 각각)
      * @param ages               성공 나이 게이지 — 생성하면서 두 표를 등록한다
+     * @param meters             {@code dawnline_fulfillment_orders_stuck} 을 등록할 레지스트리 — 기동 때 {@code NaN}
+     *                           으로
      */
     public FulfillmentRetentionCleaner(FulfillmentOrderRepository orders, WaveRepository waves,
             PlatformTransactionManager transactionManager, Clock clock,
             Duration orderRetention, Duration waveRetention, int batchSize, int maxBatchesPerRun,
-            RetentionAges ages) {
+            RetentionAges ages, MeterRegistry meters) {
 
         this.orders = Objects.requireNonNull(orders, "orders");
         this.waves = Objects.requireNonNull(waves, "waves");
@@ -100,6 +118,9 @@ public class FulfillmentRetentionCleaner {
         Objects.requireNonNull(ages, "ages");
         this.orderAge = ages.table("fulfillment_orders");
         this.waveAge = ages.table("waves");
+        Gauge.builder(STUCK, this, FulfillmentRetentionCleaner::stuckOrders)
+                .description("보존 기간을 넘겼는데 웨이브가 아직 계획되지 않은 fulfillment_orders 행 수. 모르면 NaN (ADR-058).")
+                .register(Objects.requireNonNull(meters, "meters"));
     }
 
     /**
@@ -108,7 +129,8 @@ public class FulfillmentRetentionCleaner {
      * <p>초기 지연 기본값 10분은 {@code ProcessedEventCleaner}(5분)와 <strong>어긋나게</strong> 둔
      * 것이다. 둘 다 배치를 반복하느라 초 단위로 길어질 수 있고 같은 스케줄러 풀을 쓴다.
      *
-     * <p>예외를 삼킨다. 정리 실패는 용량 문제지 정확성 문제가 아니므로 다음 실행이 이어받으면 된다.
+     * <p>예외를 삼킨다. 정리 실패는 용량 문제지 정확성 문제가 아니므로 다음 실행이 이어받으면 된다. 삼킨 실패는
+     * 성공 나이 게이지와 걸린 행 게이지({@code NaN})가 말한다.
      */
     @Scheduled(
             fixedDelayString = "${dawnline.fulfillment.retention.cleanup-interval-ms:86400000}",
@@ -122,20 +144,49 @@ public class FulfillmentRetentionCleaner {
     }
 
     /**
-     * 만료 행을 배치로 지운다. 스케줄과 무관하게 직접 호출할 수 있다(테스트·운영 수동 실행).
+     * 만료 행을 배치로 지우고 걸린 행을 센다. 스케줄과 무관하게 직접 호출할 수 있다(테스트·운영 수동 실행).
      *
-     * @return 이번 실행에서 삭제된 행 수 (주문, 웨이브)
+     * <p>실패하면 걸린 행 게이지를 {@code NaN} 으로 되돌리고 예외를 그대로 올린다 — 모르는 값을 마지막 값으로
+     * 남겨 두지 않는다.
+     *
+     * @return 이번 실행에서 삭제된 행 수 (주문, 웨이브)와 걸린 행 수
      */
     public Deleted deleteExpired() {
+        try {
+            return run();
+        } catch (RuntimeException e) {
+            stuck.set(Double.doubleToLongBits(Double.NaN));
+            throw e;
+        }
+    }
+
+    private Deleted run() {
         Instant now = clock.instant();
-        int deletedOrders = deleteInBatches("fulfillment_orders", now.minus(orderRetention),
+        Instant orderThreshold = now.minus(orderRetention);
+        int deletedOrders = deleteInBatches("fulfillment_orders", orderThreshold,
                 orders::deleteSettledUpdatedBefore);
         orderAge.succeeded();
         // 순서가 중요하다. 웨이브를 먼저 지우면 그것을 참조하는 주문 행이 남아 FK 위반이다.
         int deletedWaves = deleteInBatches("waves", now.minus(waveRetention),
                 waves::deleteSettledClosedBefore);
         waveAge.succeeded();
-        return new Deleted(deletedOrders, deletedWaves);
+        long stuckOrders = Objects.requireNonNull(
+                transactions.execute(status -> orders.countUnsettledUpdatedBefore(orderThreshold)), "stuck");
+        stuck.set(Double.doubleToLongBits(stuckOrders));
+        if (stuckOrders > 0) {
+            log.info("보존 기간({})을 넘겼는데 웨이브가 계획되지 않은 fulfillment_orders {}건 — 웨이브 정체다(RB-04).",
+                    orderRetention, stuckOrders);
+        }
+        return new Deleted(deletedOrders, deletedWaves, stuckOrders);
+    }
+
+    /**
+     * {@code dawnline_fulfillment_orders_stuck} 게이지 값.
+     *
+     * @return 마지막으로 센 걸린 행 수. 세기 전이거나 마지막 실행이 실패했으면 {@code NaN}
+     */
+    public double stuckOrders() {
+        return Double.longBitsToDouble(stuck.get());
     }
 
     /**
@@ -175,12 +226,13 @@ public class FulfillmentRetentionCleaner {
     }
 
     /**
-     * 한 실행의 삭제 결과.
+     * 한 실행의 결과.
      *
-     * @param orders 삭제된 {@code fulfillment_orders} 행 수
-     * @param waves  삭제된 {@code waves} 행 수
+     * @param orders      삭제된 {@code fulfillment_orders} 행 수
+     * @param waves       삭제된 {@code waves} 행 수
+     * @param stuckOrders 보존 기간을 넘겼는데 진행 중인 주문 행 — 게이지의 값
      */
-    public record Deleted(int orders, int waves) {
+    public record Deleted(int orders, int waves, long stuckOrders) {
     }
 
     private static Duration requirePositive(Duration value, String name) {

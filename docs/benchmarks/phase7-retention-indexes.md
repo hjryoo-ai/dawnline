@@ -192,5 +192,11 @@ DELETE FROM rm_orders WHERE ctid IN (SELECT o.ctid FROM rm_orders o
     - 운영 크기에서는 generic도 인덱스를 탔습니다(§2.2). 그 규모의 사실을 이 규모에서 요구하면 검사는 운영이 아니라
       픽스처를 잽니다.
     - 픽스처도 운영 분포로 고쳤습니다. 오늘치에는 결과가 없습니다.
+- `FulfillmentRetentionIT`의 걸린 행 셈(`dawnline_fulfillment_orders_stuck`, 2026-09-25)
+  - 같은 판단으로 custom 계획만 봅니다. 쓰는 인덱스는 기존의 `ix_fulfillment_orders_cleanup`이고, 새 인덱스는 없습니다.
+  - 삭제 뒤에 세므로 임계보다 오래된 범위에 남는 것은 걸린 행뿐입니다. 픽스처는 10만 행이 보존 기간 안에 있고,
+    그 밖에는 걸린 행 셋이 있습니다.
+  - 운영 크기(30일치 약 465만 행)에서는 재지 않았습니다(근거: 추정). 범위가 걸린 행뿐이라 인덱스 범위 스캔이 맞다는
+    판단이고, 삭제 쪽의 운영 크기 측정은 `phase2-fulfillment-orders-indexes.md` §1에 있습니다.
 - 음성 표본: 두 마이그레이션에서 인덱스를 빼면 두 IT가 빨갛습니다(custom 계획의 `Seq Scan`).
 - 넣지 않은 셋은 이 문서와 두 마이그레이션의 머리말(`V4`, `V7`)에 행 수와 재검토 지점을 적었습니다.

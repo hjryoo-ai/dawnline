@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
+import com.dawnline.fulfillment.adapter.out.persistence.JpaFulfillmentOrderRepository;
 import com.dawnline.fulfillment.application.FulfillmentRetentionCleaner;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
@@ -43,6 +44,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       취소가 어제면 조사 대상은 어제 사건이다.</li>
  *   <li>웨이브 삭제가 참조 행을 남겨 두지 않는다. FK 가 깨지면 정리가 매일 죽는다.</li>
  *   <li>삭제가 인덱스를 탄다. 배치마다 전수 스캔이면 하루치 정리가 0.24초 대신 68초다.</li>
+ *   <li>걸린 행 셈이 삭제의 정확한 여집합이다 — 보존 기간을 넘긴 행은 지워지거나 세어진다(ADR-058 결정 8).</li>
  * </ol>
  */
 @SpringBootTest(classes = FulfillmentApplication.class)
@@ -75,7 +77,8 @@ class FulfillmentRetentionIT extends FulfillmentIntegrationTestBase {
     private FulfillmentRetentionCleaner cleaner(int batchSize, int maxBatches) {
         return new FulfillmentRetentionCleaner(orders, waves, transactionManager,
                 Clock.fixed(NOW, ZoneOffset.UTC), ORDER_RETENTION, WAVE_RETENTION, batchSize, maxBatches,
-                new RetentionAges(new SimpleMeterRegistry(), Clock.fixed(NOW, ZoneOffset.UTC)));
+                new RetentionAges(new SimpleMeterRegistry(), Clock.fixed(NOW, ZoneOffset.UTC)),
+                new SimpleMeterRegistry());
     }
 
     @BeforeEach
@@ -182,6 +185,59 @@ class FulfillmentRetentionIT extends FulfillmentIntegrationTestBase {
         assertThat(exists(orderId)).isTrue();
     }
 
+    @Test
+    void 보존_기간을_넘긴_행은_지워지거나_세어진다() {
+        // 걸린 행 셈은 삭제 술어의 부정이다(ADR-058 결정 8). 두 문장이 따로 적혀 있으므로 한쪽 술어만 바뀌면
+        // 어떤 행은 지워지지도 세어지지도 않는다 — 그 행이 조용히 영원히 남는다. 커밋되는 웨이브 상태 넷을 전부
+        // 돈다(CLOSING 은 커밋되지 않는다 — FulfillmentMetrics.CAUSE_UNKNOWN).
+        Instant old = NOW.minus(Duration.ofDays(31));
+        Instant recent = NOW.minus(Duration.ofDays(1));
+        Wave open = wave(old, w -> { });
+        Wave closed = wave(old, w -> {
+            w.beginClosing();
+            w.close(old.plusSeconds(120), 0, WaveCloseCause.SCHEDULED);
+        });
+        Wave planned = plannedWave(old);
+        Wave failed = wave(old, w -> {
+            w.beginClosing();
+            w.close(old.plusSeconds(120), 0, WaveCloseCause.SCHEDULED);
+            w.markPlanFailed();
+        });
+        UUID cancelled = plannedOrder(open, old);
+        tx().executeWithoutResult(status -> {
+            FulfillmentOrder loaded = orders.findById(cancelled).orElseThrow();
+            loaded.cancel(old);
+            orders.update(loaded);
+        });
+        unserviceableOrder(old);
+        UUID stuckOpen = plannedOrder(open, old);
+        UUID stuckClosed = plannedOrder(closed, old);
+        plannedOrder(planned, old);
+        plannedOrder(failed, old);
+        UUID young = plannedOrder(open, recent);
+
+        // 지우기 전에 같은 행들을 센다. 정리기는 지운 뒤에 세므로 셈을 넓히는 결함(종결 행을 걸린 행으로 셈)은
+        // 거기서는 보이지 않는다 — 그 행이 이미 지워져 있다. 그 결함이 드러나는 날은 배치 상한에 걸려 종결 행이
+        // 남은 날이고, 그날 게이지가 부푼다. 그래서 여집합은 같은 스냅숏에서 본다: 지울 수 + 셀 수 = 넘긴 행 전부.
+        Instant threshold = NOW.minus(ORDER_RETENTION);
+        long countedBefore = tx().execute(status -> orders.countUnsettledUpdatedBefore(threshold));
+
+        FulfillmentRetentionCleaner cleaner = cleaner(100, 10);
+        FulfillmentRetentionCleaner.Deleted result = cleaner.deleteExpired();
+
+        assertThat(result.orders()).as("취소·배차 불가·계획됨·계획 실패").isEqualTo(4);
+        assertThat(countedBefore).as("열린 웨이브·마감만 된 웨이브 — 지우기 전에도 같은 둘").isEqualTo(2);
+        assertThat(result.orders() + countedBefore).as("넘긴 행 여섯은 지워지거나 세어진다 — 둘 다는 없다").isEqualTo(6);
+        assertThat(result.stuckOrders()).as("열린 웨이브·마감만 된 웨이브").isEqualTo(2);
+        assertThat(cleaner.stuckOrders()).isEqualTo(2.0);
+        assertThat(exists(stuckOpen)).isTrue();
+        assertThat(exists(stuckClosed)).isTrue();
+        assertThat(exists(young)).as("보존 기간 안 — 세지도 지우지도 않는다").isTrue();
+        assertThat(countOrders())
+                .as("남은 행 = 걸린 행 + 보존 기간 안의 행 — 틈이 없다")
+                .isEqualTo(result.stuckOrders() + 1);
+    }
+
     // --- 웨이브와 FK ----------------------------------------------------------
 
     @Test
@@ -283,6 +339,62 @@ class FulfillmentRetentionIT extends FulfillmentIntegrationTestBase {
 
         assertThat(plan).as("계획: %s", plan).contains("ix_fulfillment_orders_cleanup");
         assertThat(plan).as("정렬이 사라져야 한다. 계획: %s", plan).doesNotContain("Sort Key");
+    }
+
+    @Test
+    void 걸린_행_셈이_updated_at_인덱스를_탄다() {
+        // 삭제 뒤에 세므로 임계보다 오래된 범위에 남는 것은 걸린 행뿐이다 — 운영에서는 거의 비어 있다. 그 범위를
+        // 인덱스로 집지 않으면 하루 한 번의 셈이 30일치(약 465만 행)를 전부 훑는다. 하루 한 번 도는 문장이라
+        // custom 계획이 도는 것이고 그것만 본다(docs/benchmarks/phase7-retention-indexes.md §3, rm_orders 셈과 같은
+        // 판단). 픽스처는 운영 분포다: 대부분이 보존 기간 안이고 그 밖은 걸린 행 몇 개다.
+        Wave open = wave(NOW.minus(Duration.ofDays(31)), w -> { });
+        for (int i = 0; i < 3; i++) {
+            plannedOrder(open, NOW.minus(Duration.ofDays(31)));
+        }
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery("""
+                INSERT INTO fulfillment_orders (order_id, status, wave_id, camp_id, promise_revised,
+                                                version, created_at, updated_at)
+                SELECT gen_random_uuid(), 'PLANNED', :waveId, gen_random_uuid(), false, 0,
+                       timestamptz '2026-08-10 00:00:00Z',
+                       timestamptz '2026-08-10 00:00:00Z' + (n * 20 || ' seconds')::interval
+                  FROM generate_series(1, 100000) n""")
+                .setParameter("waveId", open.id())
+                .executeUpdate());
+        tx().executeWithoutResult(status ->
+                entityManager.createNativeQuery("ANALYZE fulfillment_orders").executeUpdate());
+        assertThat(reltuples())
+                .as("통계가 있다 — 없으면 플래너가 짐작으로 고른다(불변규칙 11)")
+                .isGreaterThan(50_000);
+
+        // 어댑터의 문장 그대로 — 복사본을 재면 문장이 바뀌어도 이 검사는 초록이다. 하루 한 번이라 custom 만 본다.
+        String plan = customPlan(JpaFulfillmentOrderRepository.COUNT_UNSETTLED_SQL,
+                "timestamptz '2026-08-06 00:00:00Z'");
+
+        assertThat(plan).as("계획: %s", plan).contains("ix_fulfillment_orders_cleanup");
+        assertThat(plan).as("계획: %s", plan).doesNotContain("Seq Scan on fulfillment_orders");
+    }
+
+    /** 어댑터의 문장을 준비하고({@code :threshold} → {@code $1}) custom 계획만 본다 — 실행하지 않는다. */
+    private String customPlan(String sql, String threshold) {
+        String prepared = sql.replace(":threshold", "$1");
+        return tx().execute(status -> {
+            entityManager.createNativeQuery("SET LOCAL plan_cache_mode = force_custom_plan").executeUpdate();
+            entityManager.createNativeQuery("PREPARE retention_probe(timestamptz) AS " + prepared).executeUpdate();
+            try {
+                List<?> rows = entityManager.createNativeQuery(
+                        "EXPLAIN EXECUTE retention_probe(" + threshold + ")").getResultList();
+                return String.join("\n", rows.stream().map(String::valueOf).toList());
+            } finally {
+                entityManager.createNativeQuery("DEALLOCATE retention_probe").executeUpdate();
+                status.setRollbackOnly();
+            }
+        });
+    }
+
+    private float reltuples() {
+        Number value = tx().execute(status -> (Number) entityManager.createNativeQuery(
+                "SELECT reltuples FROM pg_class WHERE relname = 'fulfillment_orders'").getSingleResult());
+        return value.floatValue();
     }
 
     private long countOrders() {

@@ -8,6 +8,7 @@ import com.dawnline.ops.application.ReadModelRetentionCleaner;
 import com.dawnline.ops.application.port.out.OrderColumn;
 import com.dawnline.ops.application.port.out.OrderRows;
 import com.dawnline.ops.application.port.out.Patch;
+import com.dawnline.ops.application.port.out.ReadModelRetention;
 import com.dawnline.ops.application.port.out.RouteColumn;
 import com.dawnline.ops.application.port.out.RouteRows;
 import com.dawnline.ops.application.port.out.WaveRows;
@@ -22,6 +23,7 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -63,6 +65,9 @@ class ReadModelRetentionIT extends OpsIntegrationTestBase {
 
     @Autowired
     private ReadModelRetentionCleaner cleaner;
+
+    @Autowired
+    private ReadModelRetention retention;
 
     @Autowired
     private OrderRows orderRows;
@@ -133,6 +138,12 @@ class ReadModelRetentionIT extends OpsIntegrationTestBase {
                 rows.put(order(status, outcome, null, null, daysAgo(91)), status + "/" + outcome);
             }
         }
+        // 「둘 다인 행」은 지우기 전에 세어야 보인다. 정리기는 지운 뒤에 세므로, 셈이 종결 행까지 넓어져도 그 행은
+        // 이미 없다 — 드러나는 날은 배치 상한에 걸려 종결 행이 남은 날이고 그날 게이지가 부푼다. 이 테스트의 옛
+        // 형태는 셈에서 `delivery_outcome IS NULL` 을 지워도 초록이었다(2026-09-25, 음성 표본으로 확인 — fulfillment
+        // 의 같은 셈을 만들다 알았다). 그래서 같은 스냅숏에서 센다.
+        long countedBefore = Objects.requireNonNull(transactions.execute(
+                status -> retention.countStuckOrdersUpdatedBefore(now.minus(Duration.ofDays(90)))));
 
         ReadModelRetentionCleaner.Result result = cleaner.deleteExpired();
 
@@ -144,6 +155,7 @@ class ReadModelRetentionIT extends OpsIntegrationTestBase {
         });
         assertThat(kept).as("남는 것은 비종결 넷 — 결과가 없고 주문 쪽도 끝나지 않았다(NULL 은 종결이 아니다)")
                 .containsExactlyInAnyOrder("null/null", "PLACED/null", "PLANNED/null", "DISPATCHED/null");
+        assertThat(countedBefore).as("지우기 전에도 셈은 같은 넷이다 — 종결 행을 세지 않는다").isEqualTo(kept.size());
         assertThat(result.stuckOrders()).as("남은 행이 곧 센 행이다").isEqualTo(kept.size());
         assertThat(meters.get(ReadModelRetentionCleaner.STUCK).gauge().value()).isEqualTo(kept.size());
     }
