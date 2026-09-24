@@ -545,7 +545,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 8 | 릴레이 리더 락 + ADR-027 | ✅ | #33 `6eadc2b`. **조정자는 Phase 4-0 에서 Redis → PostgreSQL advisory lock 으로 정정됐다**(같은 날 리뷰). 세 상태·게이지·「배치 전 매번 확인」은 그대로다 |
 | — | **`rules:camp:{id}:v{n}` 룰셋 캐시 (§7.2)** | ⬜ **미구현** | 넣지 않았다. 룰은 캠프당 10행 남짓이고 계획 한 번에 한 번 읽는다 — 데모 29계획에서 룰 조회가 29회다. 이 규모에서는 DB 조회가 맞다. 재검토 지점: **Phase 7 로 못박았다**(2026-09-05) — 측정 전에는 필요 없다. 부분 재계획(§6.8)이 라우트마다 룰을 다시 읽게 되는 Phase 5 이후, 룰 조회가 실제로 보이는지 재 보고 정한다 |
 | — | **`lock:plan:{waveId}` 이중 안전장치 (§5.3, §7.2)** | ❌ **설계에서 제거** (2026-09-05) | 미구현으로 적어 둔 판단이 그대로 결정이 됐다. 중복 계획을 막는 것은 `route_plans.wave_id UNIQUE` 이고(5b) 그것은 DB 제약이라 인스턴스 수와 무관하다. 두 번째 장치는 없는 문제를 막으면서 **폴백을 정해야 하는 Redis 키를 하나 늘린다** — 그 비용이 이득보다 크다. §5.3·§7.2 에서 지웠다 |
-| — | **`PRIORITY_BOOST` 가 운영 경로에서 발화하지 않는다 (§6.3)** | ⚠️ **계약 결손** | `fulfillment.planned` 에 `priority` 가 없어 후보가 전부 0 이다(5a 에 적어 둔 그대로). 벤치마크에서는 생성기가 값을 준다. `serviceTier` 로 유추하면 "DAWN 이 곧 VIP" 를 코드가 몰래 정하는 것이라 하지 않았다. 우선도의 출처를 정하는 것은 **계약 변경**이고, Phase 4-10(미배정 선택 규칙)이 이 값을 필요로 한다 |
+| — | **`PRIORITY_BOOST` 가 운영 경로에서 발화하지 않는다 (§6.3)** | ✅ **닫힘 — Phase 4-11** (이 표를 쓴 시점에는 ⚠️ 계약 결손) | `fulfillment.planned` 에 `priority` 가 없어 후보가 전부 0 이다(5a 에 적어 둔 그대로). 벤치마크에서는 생성기가 값을 준다. `serviceTier` 로 유추하면 "DAWN 이 곧 VIP" 를 코드가 몰래 정하는 것이라 하지 않았다. 우선도의 출처를 정하는 것은 **계약 변경**이고, Phase 4-10(미배정 선택 규칙)이 이 값을 필요로 한다 **(2026-09-25, Phase 7-0 대조표가 잡았다)** 계약을 바꾸지 않고 닫혔다 — 우선도는 이미 받은 사실(`promiseRevised` · `requiresCold`)에서 적재 시점에 파생한다([ADR-028](adr/ADR-028-unassigned-policy.md), `LoadCandidateService`). 이 행만 갱신되지 않은 채 남아 있었다 |
 | — | **§6.10 넷째 분기가 발화하지 않는다** | ⚠️ **Phase 5** | `route_stops.status` 를 옮기는 코드가 없다. §4.1 소비자 목록은 #32 에서 고쳤고(dispatch 가 `delivery.status` 소비자), 구현은 발행자가 생기는 Phase 5-5 |
 
 **테스트 항목** (Phase 3 「테스트」 목록)
@@ -1754,6 +1754,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | **3** | **dispatch 재계획(§6.8) — `delivery.at-risk` 리스너, 미완료 stop 부분 재계획, `revision` 증가 발행, 쿨다운** | ✅ | **PR #44** — [ADR-048](adr/ADR-048-replan-reads-its-own-db.md). 쿨다운은 **첫 커밋**에(`routes.last_replanned_at`, V10) · 편차는 `route_stops.actual_at` 에서(페이로드는 대조값) · `relocate` 세 조건 · `dawnline_replan_total{outcome}` 다섯 갈래 · `applied` 는 `plan_explanations`(`AT_RISK_RELOCATE`)에 설명을 남긴다 |
 | 4 | 테스트 — 역행 스캔 거부, at-risk 1회 발행(쿨다운), 재계획 후 tracking 이 새 revision 만 반영 | ◐ **부분** | 앞의 둘 ✅ (`ShipmentTest`·`AtRiskIT` — 1a·1b 안에서). 셋째는 **서비스 하나 안에서만** 닫혔다: dispatch 쪽은 PR #44 의 `ReplanIT`, tracking 쪽은 1a 의 revision 비교(`ADR-045`)다. **두 서비스를 잇는 한 시나리오는 없다** — 아래 DoD 첫 줄과 같은 빈칸이고, 그 자리는 §8.2 의 compose 시나리오다 |
 | 5 | dispatch 의 `delivery.status` 소비 — `route_stops.status` 전이 | ✅ | `17e31db`(#41) · `b5e9075`(#42 사실은 주문에 귀속된다). [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) · `route_stop_orders (order_id)` 인덱스(V9, [측정](benchmarks/phase5-route-stop-orders-order-lookup.md)) · §6.10 넷째 분기가 처음으로 발화 가능해졌다 |
+| — | 재배송(우선도 +3 의 사실 출처) — Phase 4 대조표 10·11 이 이 Phase 로 미뤘다 | ⬜ **미구현 → 범위 밖** | **(2026-09-25 추가, Phase 7-0 대조표가 잡았다)** 이 표에 행이 없었다 — 미룬 쪽의 표에만 있고 받은 쪽의 표에 없으면 빠진 것이 보이지 않는다. 재배송은 order·dispatch·tracking 을 가로지르는 새 흐름이라 범위 밖으로 닫았다(DESIGN §6.3 우선도 표 · ADR-028 재검토 지점) |
 
 **DoD 대조**
 
@@ -2017,14 +2018,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 ② ADR 52개의 재검토 지점 전부(제목에 없는 것은 본문의 「재검토」·「다시 연다」로) ③ 이 계획서의 열린 표기
 (⚠️ · ◐ · ⬜ · ⏸). 뽑은 행 가운데 Phase 7 에서 판정하지 않는 것은 **표 C 에 이유와 함께** 남긴다 —
 없으면 「검토했는데 뺀 것」과 「못 본 것」을 구별할 수 없다. 닫히는 곳의 번호는 아래 **작업** 목록의
-번호다(7-1 = 작업 1).
+번호다(7-1 = 작업 1). **D 의 결정은 2026-09-25 에 받았다** — 그 결정이 A·B 의 닫히는 곳을 바꾼 자리는 행에 반영했다.
 
 **A. Phase 7 로 적혀 있는 것**
 
 | # | 항목 | 출처 | 여는 조건 | 판정 데이터 | 닫히는 곳 |
 |---|---|---|---|---|---|
 | A1 | 전역 `Bulkhead`(+ Resilience4j 도입 판단) | Phase 1 이월 · §8.3 판정 기록 · §11 기술 스택 표 | **웜** 상태에서 `hikaricp_connections_pending` > 0 이고 원인이 풀 포화 | peak-day 의 `pending`·주문 API p99 | 7-4 |
-| A2 | 콜드 스타트(기동 80초 p99 2~4초, 재현됨) | 위 인용 · `phase1-orders-k6.md` 6절 | 이미 켜졌다 — 남은 것은 **대응 선택**(§8.6 · §8.2 와 함께) | 기동 직후 p99 · GC 로그 · `bypassed` | **작업 번호 없음** — 정해야 한다(표 D) |
+| A2 | 콜드 스타트(기동 80초 p99 2~4초, 재현됨) | 위 인용 · `phase1-orders-k6.md` 6절 | 이미 켜졌다 — 코드가 아니라 **측정 조건**이다(D1) | peak-day 를 콜드 스택에서 시작해 첫 계획·첫 소비 처리량을 정상 상태와 갈라 적는다 | 측정 7-4 · 예열 항목 7-5(RB-06) |
 | A3 | lag-aware grace | Phase 2 이월 · ADR-020 결정 5 | `dawnline_promise_revised_total` 이 컷오프 직후 **뭉친다** | 그 카운터의 시간축 | 7-4 |
 | A4 | 4-20 구성의 수락 기준 · ADR-043 「`small` 회복」 · ADR-004 조건 (a) | Phase 4 대조표 20 · ADR-043 ② · ADR-044 ③ · ADR-004 | `small` 에서 `savings-cw+ls` ≤ 기본 전략 — **다섯 데이터셋 전부** | peak-day 의 `peak` 규모 웨이브 + 벤치마크 다섯 | 7-4 |
 | A5 | `cancel_too_late_total{camp}` 알림식 | §9.1 「없는 시계열」 · Phase 6 이월 | 라벨이 열린 집합 — 식이 첫 표본을 증가로 읽는다 | 규칙 파일 + 컨테이너 | 7-1 |
@@ -2041,15 +2042,17 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A16 | 리더 합이 **항상 1** — 인스턴스 둘 이상 | ADR-027 | 인스턴스를 실제로 둘 이상 올릴 때 | `dawnline_outbox_leader` 의 인스턴스 합 | 7-4 |
 | A17 | `FOR SHARE` 의 multixact | ADR-025 | peak-day 버스트 | `pg_stat_slru` multixact · 락 대기 | 7-4 |
 | A18 | `cancel_too_late_total` ≠ 0 이면 창의 폭이 가정을 넘은 것 | ADR-026 | peak-day 에서 0 이 아니다 | 그 카운터 + order-service 의 `order.dispatched` 랙 | 7-4 |
-| A19 | `UNKNOWN` 자동 해소 | ADR-052 재검토 지점 4 | `UNKNOWN` 이 사람이 따라가기 어려운 빈도 | `dawnline_ops_commands_total{result="UNKNOWN"}` — **시뮬레이터에는 운영자가 없어 구조적으로 0** (표 D) | 7-4 (조건부) |
+| A19 | `UNKNOWN` 자동 해소 | ADR-052 재검토 지점 4 | `UNKNOWN` 이 사람이 따라가기 어려운 빈도 | `dawnline_ops_commands_total{result="UNKNOWN"}` — peak-day 에서는 구조적으로 0 이다. **카오스 중의 커맨드가 낸다**(D3, 인위 주입 없음) | 7-3 |
 | A20 | 출발 정시율 | ADR-050 재검토 지점 1 · §4.1 「peak-day 스토리의 첫 칸」 | `plannedDeparture − departedAt` 이 크고 at-risk 와 상관 | 그 차의 분포 | 7-4 |
 | A21 | 한 traceId 로 네 서비스 span · Tempo `metrics_generator`(서비스 그래프) | 7-2 · `deploy/compose/README.md` | — | 스크린샷 | 7-2 |
-| A22 | 런북 — **계획서의 「RB-01~06」은 낡았다**: RB-05 는 있고(Phase 6) RB-07 이 §9.5 에 있다 | 7-5 · §9.5 | — | — | 7-5 (RB-01~04 · 06 · 07) |
+| A22 | 런북 — **계획서의 「RB-01~06」은 낡았다**: RB-05 는 있고(Phase 6) RB-07 이 §9.5 에 있다 | 7-5 · §9.5 | — | — | 7-5 (RB-01~04 · 06 · 07 — 작업 5 를 고쳤다) |
 | A23 | 포스트모템(가상 장애, 실제 측정치 기반) | 7-5 | 7-4 의 수치 | 7-4 리포트 | 7-5 |
 | A24 | README — 그림 · 데모 GIF · Tempo 스크린샷 · 피크 SLO 표 · 카오스 결과 · 정시율 리포트 | README 「측정해서 채울 자리」 넷 | — | 7-2 · 7-3 · 7-4 | 7-6 |
 | A25 | release.yml(GHCR · SBOM) · CI 의 「컨테이너 이미지 빌드 (Phase 7)」 job · **ops-web 의 nginx 이미지는 따로**(ADR-057) | 7-7 · `ci.yml` · ADR-057 | — | — | 7-7 |
 | A26 | (선택) `deploy/k8s` + kind 스모크 · ADR-011 static membership | 7-7 · ADR-011 | — | — | 7-7 |
-| A27 | **peak-day 의 전제** — 시나리오가 없다(`scenarios.yml` 은 smoke · tiny · ops-demo · late-injection), sim-runner 이미지는 꺼져 있다(「Phase 7 피크에서 다시 켠다」), `make peak` 은 자리표시다 | `tools/sim-runner` · `Makefile` · 부록 A 시나리오 목록 | — | — | 7-4 의 첫 커밋 |
+| A27 | **peak-day 의 전제** — 시나리오가 없다(`scenarios.yml` 은 smoke · tiny · ops-demo · late-injection), sim-runner 이미지는 꺼져 있다(「Phase 7 피크에서 다시 켠다」), `make peak` 은 자리표시다. 그리고 **부록 A 의 목록과 `scenarios.yml` 이 어긋난다** — `tiny`·`ops-demo` 는 목록에 없고, `late-injection` 은 목록이 「지연 15% · 실패 3%」, 파일이 `delay-probability: 1.0` · `failure-probability: 0.05` 다 | `tools/sim-runner` · `Makefile` · 부록 A | — | — | 7-4a |
+| A28 | 사건은 지나갔고 재검토 기록이 없는 셋 — ADR-029 ①(4-1 이후 예산 배분) · ②(부분 저장의 배치 단위) · ADR-047 ④(relocate 가 돌기 시작한 뒤 「덮음」의 빈도) | 표 C 에 있던 행 | — (소급) | 판정이 다른 곳에 있는지부터 찾는다 | 7-6 |
+| A29 | `cause="manual"` 이 일상이 되는가 | ADR-054 재검토 지점 1 | 조기 마감이 드문 결정이라는 가정이 틀렸다 | `promise_revised_total{cause}` · 감사 행 — peak-day 가 정해진 시각에 커맨드를 섞으므로(D3) 0 이 아니다 | 7-4 |
 
 **B. Phase 7 표기는 없지만 peak-day 가 판정 데이터를 내는 것** — 적어 두지 않으면 7-4 가 그 수를 재고도 판정하지 않는다
 
@@ -2057,10 +2060,10 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 |---|---|---|---|---|
 | B1 | `no-anchor` 빈도 — 「메운 뒤 얼마나 줄었나」 | ADR-048 ① · ADR-050 ② | `dawnline_replan_total{outcome="no-anchor"}` | 잦으면 dispatch 가 `route-departed` 의 소비자가 된다 |
 | B2 | 편차 대조 허용 오차 60초 | ADR-048 ② | `dawnline_at_risk_deviation_mismatch_total` | 늘 0 이면 넓고, 늘 오르면 값이 뜻을 잃는다 |
-| B3 | 같은 지점으로는 옮기지 않는 규칙에 걸리는 빈도 | ADR-048 ③ | **셀 칸이 없다** | 표 D |
-| B4 | relocate 탐색 상한에 닿는가 | ADR-048 ⑤ | **셀 칸이 없다** — 「세는 것이 다음 칸」 | 표 D |
+| B3 | 같은 지점으로는 옮기지 않는 규칙에 걸리는 빈도 | ADR-048 ③ | **셀 칸이 없다** | 표 D — D4 |
+| B4 | relocate 탐색 상한에 닿는가 | ADR-048 ⑤ | **셀 칸이 없다** — 「세는 것이 다음 칸」 | 표 D — D4 |
 | B5 | `scan_after_cancel` 두 자리가 같은 비율로 오르는가 | ADR-047 ③ | `dawnline_scan_after_cancel_total` | 같으면 라벨이 아니라 이름을 가른다 |
-| B6 | 함대 규모 대 §8.1 물량 — 캠프당 20대면 차량당 187 stop | ADR-030 | peak-day 는 하루 15만 건 — **그 물량 자체다** | 표 D — 7-4 전에 정해야 한다 |
+| B6 | 함대 규모 대 §8.1 물량 — 캠프당 20대면 차량당 187 stop | ADR-030 | peak-day 는 하루 15만 건 — **그 물량 자체다** | **D2 로 정했다** — 둘로 돈다(peak-day 는 80% 기준의 함대, overload-day 는 함대 그대로). 부록 A |
 | B7 | 교대 공백(08–09 · 22–23)에 계획이 도는 빈도 | ADR-030 | 계획 시각 분포 | |
 | B8 | 1단계 라우트 수가 2단계 경계(`peak` 410)에 가까운가 | ADR-044 ① | 계획당 1단계 라우트 수 | 벤치마크 `peak` 에서 216 |
 | B9 | 후보가 10,000 건을 넘는가 — 넘으면 프로젝션 읽기를 다시 잰다 | ADR-029 ③ | 웨이브당 후보 수 | |
@@ -2070,26 +2073,34 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 | 이유 | 항목 |
 |---|---|
-| **이미 닫혔다** | ADR-015 ①(ADR-055) · ADR-049 ②(규칙 9 가 조건이라는 증명 — #45 의 음성 표본 `OwnShapeAdvice` 가 했다. ops-api 로 한 번 더 하지는 않았다) · ADR-023 의 DLQ 경로 조건(ADR-053 이 §4.4 의 의존 경고로 답했다) · ADR-028 ①②(ADR-033 의 통합 키와 80% 기준) · **ADR-033 「`peak` 은 아직 재지 않았다」**(`DatasetFeasibilityTest` 가 2026-09-12 부터 빼는 방식으로 `peak` 을 포함한다 — ADR 의 문장만 남았다) · ADR-043 ① · ADR-047 ①⑤ · ADR-048 ④ · ADR-050 ③ · ADR-051 ①②③ · ADR-052 ② · **FAST 클러스터 여유 그림자**(`phase4-strategies.md` §7.3 「판정: 닫는다」 — 이득이 비단조. 커밋되지 않은 probe 의 수라는 ⚠️ 가 그 절에 있다) |
+| **이미 닫혔다** | **Phase 3 대조표의 `PRIORITY_BOOST` 계약 결손**(⚠️ — 처음 판에는 D6 으로 적었다. Phase 4-11 이 계약 변경 없이 닫았다: 우선도는 받은 사실에서 파생한다, ADR-028 · `LoadCandidateService`. Phase 3 행만 갱신되지 않았다 — 지금 고쳤다) · ADR-015 ①(ADR-055) · ADR-049 ②(규칙 9 가 조건이라는 증명 — #45 의 음성 표본 `OwnShapeAdvice` 가 했다. ops-api 로 한 번 더 하지는 않았다) · ADR-023 의 DLQ 경로 조건(ADR-053 이 §4.4 의 의존 경고로 답했다) · ADR-028 ①②(ADR-033 의 통합 키와 80% 기준) · **ADR-033 「`peak` 은 아직 재지 않았다」**(`DatasetFeasibilityTest` 가 2026-09-12 부터 빼는 방식으로 `peak` 을 포함한다 — ADR 의 문장만 남았다) · ADR-043 ① · ADR-047 ①⑤ · ADR-048 ④ · ADR-050 ③ · ADR-051 ①②③ · ADR-052 ② · **FAST 클러스터 여유 그림자**(`phase4-strategies.md` §7.3 「판정: 닫는다」 — 이득이 비단조. 커밋되지 않은 probe 의 수라는 ⚠️ 가 그 절에 있다) |
 | **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · 013 · 015 ② · 028 ④ · 030 ①(로스터 모델) · 031 · 032 · 034(대안 표의 재검토 조건 둘) · 035 ② · 036 · 037 · 038 · 039 · 040 · 041 ②③ · 042 · 043 ③⑤ · 044 ②④ · 045 ②(분할 배송) · 047 ② · 049 ① · 052 ①③ · 053 · 054 ② · 055 · 056(생성기 버전) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 |
-| **사건은 지나갔고 재검토 기록을 찾지 못했다** | ADR-029 ①(4-1 이후 예산 배분) · ②(부분 저장의 배치 단위) · ADR-047 ④(5-3 이 relocate 를 돌리기 시작하면 「덮음」의 빈도를 보고 정한다 — 셀 칸이 없다) — 판정 없이 지나간 것인지 판정이 다른 곳에 있는지는 확인하지 않았다 |
 | **조건이 켜지지 않았다** | `phase1-orders-k6.md` 판정표의 「`outbox_lag` 상승 → Phase 7 로 넘길지」 행 — Phase 1 의 미달은 콜드 스타트 하나였다 |
-| **판정 데이터가 구조적으로 없다** | ADR-054 ① `cause="manual"` 이 일상이 되는가 — 시뮬레이터에는 운영자가 없다(A19 와 같은 모양, 표 D) |
+| **범위 밖으로 닫았다**(D 의 결정) | 재배송 +3(D7 — DESIGN §6.3 우선도 표 · ADR-028 · Phase 5 대조표에 행을 더했다) |
 
-**D. 주인 없는 열린 항목 — 결정 필요**
+**D. 주인 없는 열린 항목 — 결정** (2026-09-25)
 
-| # | 항목 | 출처 | 물음 |
+| # | 항목 | 출처 | 결정 |
 |---|---|---|---|
-| D1 | 콜드 스타트 | A2 | 어느 작업에 넣는가(7-4 의 시작 창 · 7-7 의 배포) — 아니면 기록만 하고 닫는가 |
-| D2 | 함대 규모 대 §8.1 물량 | ADR-030 · B6 | peak-day 전에 셋 중 하나(함대를 늘린다 · 물량을 낮춘다 · 웨이브를 잘게) |
-| D3 | 운영자 없는 시뮬레이션 | A19 · C 의 ADR-054 ① | peak-day 에 운영자 커맨드를 섞는가 — 섞지 않으면 두 판정은 「0 이라 조용하다」가 아니라 「재지 않았다」로 적는다 |
-| D4 | 셀 칸이 없는 둘 | B3 · B4 | 7-4 전에 카운터를 만드는가(재기 전에 세는 칸이 있어야 한다) |
-| D5 | 보존 정책 — tracking(`shipments` · `route_revisions`) · dispatch(라우트) · ops(`rm_*`) | ADR-045(「Phase 6 에서 정한다」) · ADR-047 · §5.5 | Phase 6 마감 대조표가 잡은 빈칸 — Phase 7 의 일인가, 범위 밖으로 닫는가 |
-| D6 | `PRIORITY_BOOST` 가 운영 경로에서 발화하지 않는다(⚠️ 계약 결손) | Phase 3 대조표 · 5a | 우선도의 출처를 정하는 계약 변경을 할 것인가, 범위 밖으로 닫는가 |
-| D7 | 재배송(+3) | Phase 4 대조표 10·11 → 「Phase 5」 · §5.5 「재검토 조건: 재배송」 | Phase 5 대조표에 행이 없다 — 미구현으로 남기는가 |
-| D8 | 시나리오 `normal-day` · `cold-heavy` | 부록 A 시나리오 목록 | 계획서 어디에도 작업이 없다 — 7-4 에 넣는가, 목록에서 빼는가 |
+| D1 | 콜드 스타트 | A2 | **코드가 아니라 측정 조건이다.** peak-day 는 콜드 스택에서 시작하고 첫 계획·첫 소비 처리량을 정상 상태와 갈라 적는다(7-4 의 측정 헤더 한 줄). RB-06 에 예열 항목(7-5) |
+| D2 | 함대 규모 대 §8.1 물량 | ADR-030 · B6 | **둘로 돈다** — Phase 4 의 `peak`/`overload` 분리를 시나리오로. `peak-day` 는 실현 가능성 기준(80%)이 정하는 함대(성수기 증차), `overload-day` 는 같은 물량을 함대 그대로. 대수는 고르지 않고 기준이 낸다(부록 A) |
+| D3 | 운영자 없는 시뮬레이션 | A19 · A29 | **넣되 최소로.** peak-day 중 정해진 시각에 조기 마감·재배정을 몇 번(스크립트). `UNKNOWN` 은 peak-day 가 아니라 **7-3 카오스가 낸다** — 인위 주입은 하지 않는다 |
+| D4 | 셀 칸이 없는 둘 | B3 · B4 | **결정 대기** — 원칙: 조용히 「아무것도 안 함」으로 끝나는 분기는 새 메트릭이 아니라 기존 outcome 라벨 하나. 두 항목의 모양은 보고에 적었다 |
+| D5 | 보존 정책 | ADR-045 · ADR-047 · §5.5 | **7-0b** 로 7-1 앞에 — ADR-023 의 두 축 그대로: `shipments` 30일(`updated_at`), `route_revisions` 90일(상위, 삭제 순서는 두 기간이 보장하되 `NOT EXISTS` 가드), `rm_*` 90일(조사 가능성 — 예외 목록의 상한). 정리 배치는 기존 패턴, 인덱스는 EXPLAIN |
+| D6 | ~~`PRIORITY_BOOST` 계약 결손~~ | Phase 3 대조표 | **잘못 뽑은 행이었다** — Phase 4-11 에서 이미 닫혔다(표 C) |
+| D7 | 재배송(+3) | ADR-028 · §6.3 | **범위 밖, 미구현으로 기록.** 세 서비스를 가로지르는 새 흐름이고 가중치의 사실 출처는 그 흐름이 생겨야 나온다 |
+| D8 | 시나리오 `normal-day` · `cold-heavy` | 부록 A | **`normal-day` 는 필수**(피크의 수치는 평일 열 옆에서 읽힌다). `cold-heavy` 는 `cold-ratio` 변형이라 포함 — 코드가 필요해지면 뺀다. 7-4a |
 
-**작업**
+**작업** (순서 2026-09-25 확정 — 7-0 → 7-0b → 7-1 → 7-2 → 7-3 → 7-4a → 7-4 → 7-5 → 7-6 → 7-7)
+
+**대시보드가 peak-day 앞에 오는 이유**는 그 실행이 패널을 검증하는 첫 실행이어야 하기 때문이고, **카오스가 앞에
+오는 이유**는 검증 SQL 을 peak-day 가 다시 쓰기 때문이다.
+
+0. **이월 대조표**(위) — 그리고 마지막 커밋으로 **대조 검사**: 표의 「원천 목록」과 저장소의 「Phase 7」 표기, 표와
+   재검토 지점이 있는 ADR 을 서로 비춘다(`Phase7CarryOverConsistencyTest`). 항목을 닫는 PR 은 표를 같이 고쳐야 초록이
+   된다 — ADR 인덱스 검사가 하는 일과 같다.
+0b. **보존 정책**(D5) — `shipments` 30일 · `route_revisions` 90일 · `rm_*` 90일, ADR-023 의 두 축과 기존 정리 배치 패턴.
+   설계(§7.1 보존 표)와 ADR 이 먼저, 인덱스는 EXPLAIN.
 1. Grafana 대시보드 4종 JSON, Prometheus 알림 규칙(§9.4) 커밋.
    **없는 시계열 둘을 여기서 닫는다**(2026-09-24 이월, §9.1 「없는 시계열은 0 으로 보인다」):
    (a) `dawnline_cancel_too_late_total{camp}` 의 알림은 라벨이 열린 집합이라 미리 등록할 수 없다 — 규칙 식이
@@ -2106,7 +2117,17 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    장애 중에 그 일은 일어나지 않는다.
 2. 트레이싱 검증: 주문 1건 traceId로 4개 서비스 span이 Tempo에서 연결됨(스크린샷 README).
 3. 카오스 스크립트: `make chaos-kafka`, `make chaos-redis`, `make chaos-kill dispatch`. 각 실행 후 검증 SQL(주문 수 = 후보 수 + 취소 수, 라우트 stop 주문 중복 0, processed_events 중복 0)을 자동 실행.
+   **감사 `UNKNOWN` 은 여기서 난다**(D3): Kafka·Redis 중단 중에 운영자 커맨드 하나를 보내면 코어의 5xx·타임아웃이
+   자연히 `UNKNOWN` 을 만든다 — 인위 주입은 하지 않는다. `chaos-redis` 의 기준은 ADR-027 후속 정정의 것이다(발행이
+   멈추지 않고 지연도 오르지 않는다). `STALE_PLACED` 의 재처리 경로 IT(A9)도 이 자리다.
+4a. **peak-day 의 전제**(A27) — 시나리오 넷(`normal-day` · `peak-day` · `overload-day` · `cold-heavy`, 부록 A), 함대 변형
+   (`peak-day` 는 80% 기준이 정하는 함대 — D2), sim-runner 이미지, `make peak`. 부록 A 의 목록과 `scenarios.yml` 의
+   어긋남도 여기서 맞춘다. D4 의 카운터가 정해지면 여기서 만든다 — **재기 전에 세는 칸이 있어야 한다.**
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
+   **같은 물량을 `overload-day` 로 한 번 더**(D2) — 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터. **`normal-day`
+   열을 옆에 둔다.** 측정 헤더에 한 줄: **콜드 스택에서 시작했다**, 첫 계획·첫 소비 처리량은 정상 상태와 갈라 적는다(D1).
+   정해진 시각의 운영자 커맨드(D3)로 `cause="manual"` 과 감사 행이 0 이 아니다. **7-0 표의 A·B 에서 닫히는 곳이 7-4 인
+   행을 전부 여기서 판정한다** — 판정하지 못한 행은 이유와 함께 남긴다.
    **이 항목이 Phase 4-20 을 다시 연다** (2026-09-18 이월 — 「구성이 거리만 보는 것」).
    peak-day 는 `peak` 규모의 웨이브를 **실제 파이프라인에서** 도는 첫 자리이고, 4-20 의 판정
    기준이 「다섯 데이터셋 전부」이므로 그때의 수치가 판정의 입력이다. 남은 전환 조건은
@@ -2116,8 +2137,8 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    **`dawnline_promise_revised_total` 을 시간축으로 함께 기록하고 lag-aware grace 판정을 내린다**
    (Phase 2 「Phase 7 로 이월 (조건부)」, [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 결정 5).
    컷오프 직후에 뭉쳐서 튀면 grace 를 컨슈머 랙에 연동하고, 흩어져 있으면 고정 90초를 유지한다.
-5. 런북 RB-01~06, `docs/postmortems/2026-xx-peak-simulation.md`(가상 장애: 컷오프 시 계획 지연 → FAST 전환 → 원인·재발 방지, 실제 측정치 기반).
-6. ADR 전체 확정(001–012), README 완성(아키텍처 그림, 데모 GIF, 벤치마크 표, 실행 방법, 면접 스토리 링크).
+5. 런북 RB-01~04 · 06 · 07(RB-05 는 Phase 6 에 있다 — A22). RB-06(피크 대비 체크리스트)에 **예열 항목**(D1), `docs/postmortems/2026-xx-peak-simulation.md`(가상 장애: 컷오프 시 계획 지연 → FAST 전환 → 원인·재발 방지, 실제 측정치 기반).
+6. ADR 전체 확정(001–012 — 쓰이지 않은 005 · 010 · 011 · 012 를 쓴다), 사건이 지나간 재검토 지점의 소급(A28 — ADR-029 ①② · ADR-047 ④), README 완성(아키텍처 그림, 데모 GIF, 벤치마크 표, 실행 방법, 면접 스토리 링크).
    - **004 는 여기서 재확인 대상이 아니라 입력이다** — [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md) 가 Phase 4 마감에
      확정됐다(2026-09-18). 남은 것은 **한정 실행**뿐이다: 여유가 있으면 `timefold` 를 **`medium`
      한 개만** 돌린다. 조건은 §6.6 의 공정성 셋 — 같은 목적함수(§6.1) · 같은 하드 룰(§6.3) · 같은
@@ -2130,6 +2151,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 **DoD**
 - 카오스 3종 검증 SQL 모두 0건 위반.
+- 7-0 대조표의 A·B 행이 전부 판정됐다 — 닫힘 · 유지 · 다시 여는 조건과 함께 이월, 셋 중 하나로. 대조 검사가 초록이다.
 - 피크 리포트에 §8.1 SLO 대비 실측 표가 있고, 미달 항목마다 원인·개선안이 적혀 있다.
 - README만 읽고 10분 안에 `make up && make demo`로 데모를 재현할 수 있다(사용자 직접 검증).
 
