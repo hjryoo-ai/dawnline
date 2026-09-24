@@ -89,7 +89,7 @@ class KpiViewsIT extends OpsIntegrationTestBase {
     }
 
     @Test
-    void 배송_축의_한_행은_한_모집단을_센다() {
+    void 배송_축의_한_행은_한_모집단을_세고_빠진_수를_함께_보인다() {
         Instant hour = clock.instant().truncatedTo(ChronoUnit.HOURS);
         Instant end = hour.plus(Duration.ofMinutes(50));
         Instant later = hour.plus(Duration.ofHours(3));
@@ -97,16 +97,27 @@ class KpiViewsIT extends OpsIntegrationTestBase {
         order("COMPLETED", "DISPATCHED", end, end, hour.plusSeconds(60), null);   // 정시 · 정시
         order("COMPLETED", "DISPATCHED", hour, later, hour.plusSeconds(120), null); // 원 약속 늦음 · 개정 정시 · 개정됨
         order("FAILED", "DISPATCHED", end, end, null, hour.plusSeconds(180));     // 분모에만
-        order("COMPLETED", "CANCELLED", end, end, hour.plusSeconds(240), null);   // 취소 — 빠진다
-        order("COMPLETED", "DISPATCHED", null, end, hour.plusSeconds(300), null); // 원 약속 모름 — 빠진다
+        order("COMPLETED", "CANCELLED", end, end, hour.plusSeconds(240), null);   // 취소 — 정의로 빠지고 세지도 않는다
+        order("COMPLETED", "DISPATCHED", null, end, hour.plusSeconds(300), null); // 원 약속 모름 — 빠지고 센다
+        order(null, "FAILED", "DISPATCHED", null, null, null, hour.plusSeconds(360)); // fulfillment.planned 가 아직 — 캠프도 모른다
 
         assertThat(jdbc.queryForMap("""
-                SELECT delivered, failed, on_time_promised, on_time_revised, revised
+                SELECT delivered, failed, on_time_promised, on_time_revised, revised, outcome_without_promise
                   FROM kpi_delivery_hourly WHERE camp_id = ? AND bucket_hour = ?
                 """, camp, utc(hour)))
                 .containsEntry("delivered", 2L).containsEntry("failed", 1L)
                 .containsEntry("on_time_promised", 1L).containsEntry("on_time_revised", 2L)
-                .as("revised — 두 정시율의 격차(1 → 2)가 몇 건의 개정에서 왔는가").containsEntry("revised", 1L);
+                .containsEntry("revised", 1L)
+                .as("모름은 분모에 없지만 그 수는 같은 행에 있다 — 취소는 모름이 아니라 세지 않는다")
+                .containsEntry("outcome_without_promise", 1L);
+        assertThat(jdbc.queryForMap("""
+                SELECT delivered, failed, on_time_promised, on_time_revised, revised, outcome_without_promise
+                  FROM kpi_delivery_hourly WHERE camp_id IS NULL AND bucket_hour = ?
+                """, utc(hour)))
+                .as("캠프를 모르는 결과는 캠프가 없는 행에 — 정시율의 칸은 0 이고 빠진 수만 있다")
+                .containsEntry("delivered", 0L).containsEntry("failed", 0L)
+                .containsEntry("on_time_promised", 0L).containsEntry("on_time_revised", 0L)
+                .containsEntry("outcome_without_promise", 1L);
     }
 
     @Test
@@ -118,12 +129,18 @@ class KpiViewsIT extends OpsIntegrationTestBase {
         order("FAILED", "DISPATCHED", end, end, null, hour.minus(Duration.ofHours(23)).plusSeconds(1));
         // 창 밖 — 24 버킷 앞. 세면 분모가 4 가 된다.
         order("FAILED", "DISPATCHED", end, end, null, hour.minus(Duration.ofHours(24)).plusSeconds(1));
+        // 빠진 수 — 캠프를 아는 행과 모르는 행 둘 다, 창 안에서만.
+        order("COMPLETED", "DISPATCHED", null, end, hour.plusSeconds(180), null);
+        order(null, "COMPLETED", "DISPATCHED", null, null, hour.plusSeconds(240), null);
+        order(null, "COMPLETED", "DISPATCHED", null, null, hour.minus(Duration.ofHours(24)).plusSeconds(1), null);
 
         gauges.refreshNow();
 
         assertThat(gauges.ratio(camp, Basis.PROMISED)).isEqualTo(1.0 / 3);
         assertThat(gauges.ratio(camp, Basis.REVISED)).isEqualTo(2.0 / 3);
         assertThat(gauges.ratio(Ids.newId(), Basis.PROMISED)).as("결과가 없는 캠프 — 0 이 아니다").isNaN();
+        assertThat(gauges.excludedPromiseUnknown()).as("캠프가 없는 행까지 — 빠진 것은 캠프를 가리지 않는다").isEqualTo(2.0);
+        assertThat(gauges.refreshAgeSeconds()).isLessThan(60.0);
     }
 
     @Test
@@ -179,11 +196,16 @@ class KpiViewsIT extends OpsIntegrationTestBase {
 
     private void order(String outcome, String status, @Nullable Instant promisedOriginal, Instant promisedRevised,
             @Nullable Instant deliveredAt, @Nullable Instant failedAt) {
+        order(camp, outcome, status, promisedOriginal, promisedRevised, deliveredAt, failedAt);
+    }
+
+    private void order(@Nullable UUID campId, String outcome, String status, @Nullable Instant promisedOriginal,
+            @Nullable Instant promisedRevised, @Nullable Instant deliveredAt, @Nullable Instant failedAt) {
         jdbc.update("""
                 INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, camp_id,
                                        promised_end_original, promised_end_revised, delivered_at, failed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, Ids.newId(), MARKER, status, outcome, camp, utc(promisedOriginal), utc(promisedRevised),
+                """, Ids.newId(), MARKER, status, outcome, campId, utc(promisedOriginal), utc(promisedRevised),
                 utc(deliveredAt), utc(failedAt));
     }
 

@@ -50,33 +50,46 @@ SELECT camp_id,
 
 -- --- 배송 축 -------------------------------------------------------------------
 --
--- 한 행의 열은 한 모집단을 센다: 결과·캠프·두 약속을 모두 아는, 취소되지 않은 주문. 약속을 아직
--- 모르는 완료는 분모에도 분자에도 없다 — 「모름」을 「늦음」으로 세지 않는다(ADR-051 결정 2).
--- 취소된 주문은 배송됐어도 빠진다(약속이 더는 서 있지 않다) — 그것은 예외 목록의 행이다.
+-- 한 행의 모집단: 결과·캠프·두 약속을 모두 아는, 취소되지 않은 주문. 약속을 아직 모르는 결과는
+-- 분모에도 분자에도 없다 — 「모름」을 「늦음」으로 세지 않는다(ADR-051 결정 2). 캠프는 개정 약속과
+-- 같은 사실(fulfillment.planned)로 오므로 캠프를 모르는 것은 약속을 모르는 것의 한 형태다.
+-- **그러나 빠진 수는 보인다** — outcome_without_promise. 분모에서 조용히 빠지는 것은 실패를 빼서
+-- 정시율을 올리는 것과 같은 부류다. 부재는 값이 아니지만 부재의 수는 값이다. 정상에서 이 수는
+-- 프로젝션 랙만큼의 일시값이고, 계속 0 이 아니면 fulfillment.planned(또는 order.placed)가 오지
+-- 않고 있다. 캠프를 모르는 결과는 camp_id 가 NULL 인 행에 있다(접수 축의 배차 불가와 같은 모양).
+-- 취소된 주문은 배송됐어도 빠지고 여기서 세지도 않는다 — 모름이 아니라 정의다(약속이 더는 서 있지
+-- 않다). 그것은 예외 목록의 행이다.
 -- FAILED 는 분모에 있고 분자에 없다: on_time_* 이 FAILED 에서 false 다(V1 의 생성 칸).
 -- late 는 두지 않는다 — delivered + failed − on_time_* 로 유도된다.
 -- revised 는 완료된 주문 중 약속의 끝이 개정된 수 — 두 정시율의 격차가 몇 건의 개정에서 왔는가.
+-- 안쪽 질의는 모집단 판정(known)을 한 번만 적으려는 것이고, 플래너가 끌어올려 bucket_hour 술어는
+-- 여전히 인덱스의 식 그대로 내려간다(KpiViewsIndexIT).
 
 CREATE VIEW kpi_delivery_hourly AS
 SELECT camp_id,
-       date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC') AS bucket_hour,
-       count(*) FILTER (WHERE delivery_outcome = 'COMPLETED') AS delivered,
-       count(*) FILTER (WHERE delivery_outcome = 'FAILED') AS failed,
-       count(*) FILTER (WHERE on_time_promised) AS on_time_promised,
-       count(*) FILTER (WHERE on_time_revised) AS on_time_revised,
-       count(*) FILTER (WHERE delivery_outcome = 'COMPLETED'
-                          AND promised_end_revised <> promised_end_original) AS revised
-  FROM rm_orders
- WHERE delivery_outcome IS NOT NULL
-   AND order_status <> 'CANCELLED'
-   AND camp_id IS NOT NULL
-   AND promised_end_original IS NOT NULL
-   AND promised_end_revised IS NOT NULL
- GROUP BY camp_id, date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC');
+       bucket_hour,
+       count(*) FILTER (WHERE known AND delivery_outcome = 'COMPLETED') AS delivered,
+       count(*) FILTER (WHERE known AND delivery_outcome = 'FAILED') AS failed,
+       count(*) FILTER (WHERE known AND on_time_promised) AS on_time_promised,
+       count(*) FILTER (WHERE known AND on_time_revised) AS on_time_revised,
+       count(*) FILTER (WHERE known AND delivery_outcome = 'COMPLETED'
+                          AND promised_end_revised <> promised_end_original) AS revised,
+       count(*) FILTER (WHERE NOT known) AS outcome_without_promise
+  FROM (SELECT camp_id,
+               date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC') AS bucket_hour,
+               delivery_outcome, on_time_promised, on_time_revised,
+               promised_end_original, promised_end_revised,
+               (camp_id IS NOT NULL
+                AND promised_end_original IS NOT NULL
+                AND promised_end_revised IS NOT NULL) AS known
+          FROM rm_orders
+         WHERE delivery_outcome IS NOT NULL
+           AND order_status <> 'CANCELLED') o
+ GROUP BY camp_id, bucket_hour;
 
 -- --- 인덱스 둘 — 두 뷰의 버킷 식 그대로 (§5.5 명시분) ----------------------------
 -- 측정: docs/benchmarks/phase6-kpi-hourly-views-index.md. peak 30일(450만 행)에서 캠프 하나 24 버킷:
--- 배송 축 219.1 → 6.18 ms, 접수 축 188.3 → 5.50 ms, 게이지(전 캠프 24 버킷) 491 → 37.8 ms.
+-- 배송 축 212.2 → 6.38 ms, 접수 축 187.4 → 4.98 ms, 게이지(전 캠프 24 버킷) 474 → 39.6 ms.
 
 CREATE INDEX ix_rmo_delivery_hour ON rm_orders (camp_id, date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC'));
 CREATE INDEX ix_rmo_intake_hour   ON rm_orders (camp_id, date_trunc('hour', placed_at, 'UTC'));

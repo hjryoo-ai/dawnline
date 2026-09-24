@@ -178,10 +178,11 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
                 .containsEntry("order_status", "UNSERVICEABLE");
 
         // KPI 두 축(§5.5 「KPI — 두 축, 뷰」) — 쓰는 사람 없이 위 행에서 나온다.
-        // 배송 축: O1(15시)·O3(16시) 완료, O2(17시) 실패. O4 는 배송됐지만 취소라 빠진다.
+        // 배송 축: O1(15시)·O3(16시) 완료, O2(17시) 실패. O4 는 배송됐지만 취소라 빠진다. 인과 순서를
+        // 다 받았으니 약속을 모르는 결과는 없다 — 빠진 수가 0 이다.
         assertThat(jdbc.queryForList("""
                 SELECT to_char(bucket_hour AT TIME ZONE 'UTC', 'HH24') AS h, delivered, failed,
-                       on_time_promised, on_time_revised, revised
+                       on_time_promised, on_time_revised, revised, outcome_without_promise
                   FROM kpi_delivery_hourly WHERE camp_id = ? ORDER BY bucket_hour
                 """, scenario.campId))
                 .containsExactly(
@@ -197,7 +198,7 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
     private static Map<String, Object> kpi(String hour, long delivered, long failed, long onTimePromised,
             long onTimeRevised, long revised) {
         return Map.of("h", hour, "delivered", delivered, "failed", failed, "on_time_promised", onTimePromised,
-                "on_time_revised", onTimeRevised, "revised", revised);
+                "on_time_revised", onTimeRevised, "revised", revised, "outcome_without_promise", 0L);
     }
 
     @Test
