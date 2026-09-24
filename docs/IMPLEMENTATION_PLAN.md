@@ -1901,7 +1901,8 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    PR 셋: C1 ops-api 조회 표면과 OpenAPI 생성물 → C2 ops-web → C3 DoD 를 Compose 스모크에서.
    - **C1 — ops-api 조회 표면**(2026-09-24, §5.5 「조회」). 조회 여섯(캠프·웨이브 창·KPI·예외 목록·웨이브의 라우트·
      라우트 — 마지막은 dispatch 에 조회 위임). stop 좌표는 `rm_routes` 에 두지 않는다(진실은 dispatch, 읽기 모델은
-     집계). KPI 조회는 게이지와 같은 창·뷰·식. 창고 좌표 V3(`wave.closed` 의 `depot`). 인덱스는 더하지 않았다
+     집계). KPI 조회는 게이지와 같은 창·뷰·식. 창고 좌표 V3(`wave.closed` 의 `depot`). 예외 목록은 창 없이 전부 —
+     해소 여부를 모르므로 — 이고 희소 행 부분 인덱스 V4 를 탄다. 나머지 셋에는 인덱스를 더하지 않았다
      ([측정](benchmarks/phase6-ops-read-surface.md)). `contracts/openapi/ops-api.yaml` 과 `OpenApiContractIT` —
      아래 DoD 둘째 줄. 401·403 도 Problem Details.
 4. 테스트: 프로젝션 멱등(같은 이벤트 2회), **프로젝션 순서 무관(같은 사실을 씨 고정 셔플로 다시 넣어 최종 행이 같은가)**, 권한(viewer가 커맨드 403), 커맨드 감사 기록.

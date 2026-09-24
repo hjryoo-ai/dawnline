@@ -1202,7 +1202,7 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 | `GET /api/v1/camps` | `rm_waves` 에 웨이브가 있는 캠프 — 캠프 목록은 fulfillment 의 참조 데이터이고 ops 는 그 사본을 두지 않는다 |
 | `GET /api/v1/camps/{campId}/waves?from=&to=` | `rm_waves` — 컷오프 창(기본 지금 ± 24시간, 최대 7일, 넘으면 400) |
 | `GET /api/v1/kpi/delivery` | `kpi_delivery_hourly` — **게이지와 같은 뷰·같은 창·같은 식**(아래) |
-| `GET /api/v1/camps/{campId}/exceptions` | `rm_orders` 의 **취소됐는데 배송된** 주문(§6.10 넷째 분기) — KPI 와 같은 버킷 창 |
+| `GET /api/v1/camps/{campId}/exceptions` | `rm_orders` 의 **취소됐는데 배송된** 주문(§6.10 넷째 분기) — **창 없이 전부**, 앞 200 행과 전체 수 |
 | `GET /api/v1/waves/{waveId}/routes` | `rm_waves`(계획·창고) + `rm_routes`(진행·`at_risk`·출발) |
 | `GET /api/v1/routes/{routeId}` | **dispatch 에 조회 위임** — stop 의 순서·좌표·상태. 격리 목록과 같은 조회 위임이라 감사 id 헤더가 없다 |
 
@@ -1213,10 +1213,18 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 - **KPI 조회는 게이지와 같은 식을 쓴다** — 「대시보드의 24행과 게이지가 다를 수 없다」를 API 까지 넓힌 것이다.
   창(`DeliveryKpis.currentBuckets`)·뷰(`window`)·식(`CampDeliveries.onTimeRatio`)이 한 곳에 있고 게이지와 조회가
   그것을 부른다. 게이지의 `NaN` 은 JSON 에서 `null` 이다 — `0` 은 「전부 늦었다」는 주장이다.
-- **예외 목록의 창은 KPI 와 같다**(현재 버킷 포함 UTC 정시 버킷 24개). 버킷 식을 `ix_rmo_delivery_hour` 의 식
-  그대로 적어 **인덱스를 더하지 않고** 그 인덱스를 탄다 — peak 30일(450만 행)에서 캠프 하나 **3.6 ms**
-  ([측정](benchmarks/phase6-ops-read-surface.md)). 창 밖으로 나간 건은 목록에서 사라지고, 알림은
-  `dawnline_cancel_too_late_total` 이 맡는다.
+- **예외 목록에는 창이 없다**(2026-09-24 정정 — 처음 판은 KPI 와 같은 24 버킷이었다). **해소 여부를 이 시스템이
+  모르기 때문이다**: 환불·회수를 기록하는 칸도 사건도 없다. 창으로 자르면 처리되지 않은 건이 시간이 지났다는
+  이유만으로 **조용히 사라지고**, 화면은 그것을 「해결됐다」와 구별하지 못한다. 그래서 한 번 들어온 주문은 나가지
+  않고, 목록에 있다는 것은 「처리되지 않았다」가 아니라 「이런 일이 있었다」이다 — 응답 문서와 화면이 그렇게 말한다.
+  한 번에 싣는 것은 배송 시각 역순 200 행이고 전체 수(`total`)를 같은 질의의 창 함수로 함께 읽는다 — 잘렸다는
+  사실은 `total` 이 말한다(격리 목록과 같은 모양, §4.6).
+  **부분 인덱스 `ix_rmo_cancelled_delivered`**(V4): 술어를 만족하는 행만 담는다(측정 분포 0.09%). 창 없이 캠프를
+  고르면 `ix_rmo_delivery_hour` 의 캠프 접두가 캠프의 전 기간을 거른다 — peak 30일(450만 행)에서 **98 ms**, 43만
+  행. 부분 인덱스로 **0.31 ms**(48 kB), 1년치 캠프 몫(5,339 행)으로 **5.3 ms**
+  ([측정](benchmarks/phase6-ops-read-surface.md)). 키는 캠프 하나다 — 전체 수를 함께 읽어 캠프의 행을 어차피
+  전부 읽으므로 정렬 칸은 값을 하지 않는다. 술어의 두 칸은 질의에 리터럴이고, `KpiViewsIndexIT` 가 운영 문장의
+  **일반 계획**(캠프는 바인드)에서 그 인덱스를 보는지 본다.
 - **칸이 `null` 이면 그 사실이 아직 오지 않았다**(ADR-051 — 부재는 값이 아니다). 조회가 그 자리를 `0`·`false` 로
   채우지 않는다. `at_risk` 의 `null` 은 「at-risk 가 온 적이 없다」이지 「위험하지 않다」가 아니다.
   본문은 그 칸을 **빼지 않고 `null` 을 싣는다**(`"planId":null` — Jackson 의 기본 포함 규칙, 근거: 관측).
@@ -1227,7 +1235,7 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 - **401 · 403 도 Problem Details 다** — `unauthenticated`·`forbidden`. 보안 필터의 오류는 디스패처 앞에서 나므로
   단일 어드바이스가 보지 못한다. 필터가 예외 해석기에 넘겨 같은 문을 지나게 한다. 화면이 두 코드를 가르는
   이유: 401 은 토큰을 다시 넣으라는 뜻이고 403 은 그 역할로는 안 된다는 뜻이다.
-- **인덱스를 더하지 않는다** — 행 수와 함께 판단을 적었다([측정](benchmarks/phase6-ops-read-surface.md)).
+- **나머지 셋에는 인덱스를 더하지 않는다** — 행 수와 함께 판단을 적었다([측정](benchmarks/phase6-ops-read-surface.md)).
   피크일 웨이브 50 · 라우트 1,250 에서 1년치(`rm_waves` 18,250 · `rm_routes` 456,250)도 순차 스캔
   **0.7 ms · 6.8 ms** 다. 재검토 지점: `rm_routes` 가 100만 행을 넘거나(보존 정책이 없으므로 약 2년) 지도가
   주기 폴링을 시작할 때.
@@ -1259,6 +1267,8 @@ CREATE VIEW kpi_delivery_hourly AS …  -- (camp_id, bucket_hour = date_trunc('h
                                       --     outcome_without_promise (모집단에서 빠진 수)
 CREATE INDEX ix_rmo_delivery_hour ON rm_orders (camp_id, date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC'));
 CREATE INDEX ix_rmo_intake_hour   ON rm_orders (camp_id, date_trunc('hour', placed_at, 'UTC'));
+CREATE INDEX ix_rmo_cancelled_delivered ON rm_orders (camp_id)   -- 예외 목록, 창 없이 (V4, 2026-09-24)
+  WHERE order_status = 'CANCELLED' AND delivery_outcome = 'COMPLETED';
 CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), target_type VARCHAR(24), target_id UUID,
   request JSONB, result VARCHAR(16), created_at TIMESTAMPTZ);
 ```
