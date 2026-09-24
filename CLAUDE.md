@@ -18,6 +18,7 @@
 - 테스트: JUnit(BOM), AssertJ, Testcontainers, ArchUnit, WireMock, k6
 - 관측성: Micrometer + OpenTelemetry → Prometheus / Grafana / Tempo
 - 프론트(ops-web): React 19 + Vite + TypeScript + Leaflet
+- 위임 클라이언트: openapi-generator(`spring`·`spring-http-interface`) — ops-api 가 **커밋된 `contracts/openapi/*.yaml`** 에서 빌드 때 생성한다(ADR-052). 생성물은 커밋하지 않는다
 - 새 라이브러리 추가는 최소화. 추가 시 이 파일과 `libs.versions.toml`을 함께 갱신하고 커밋 메시지에 이유를 쓴다.
 - Spring Boot 4 호환 여부가 불확실한 라이브러리(springdoc, Resilience4j 등)는 **먼저 빌드로 확인**하고, 안 되면 대체안을 제시한다. 호환된다고 가정하지 않는다.
 

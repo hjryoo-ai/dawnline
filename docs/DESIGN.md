@@ -1064,7 +1064,47 @@ KST 경계로 바꾸면 서머타임이 없는 지금은 괜찮아 보이지만,
 **ops-api**
 - 모든 토픽을 구독해 **읽기 모델**을 갱신 (CQRS 프로젝션). 코어 서비스 DB는 절대 직접 읽지 않는다.
 - 커맨드는 코어 서비스 REST로 위임: 웨이브 조기 마감, 계획 재실행, stop 재배정, 주문 홀드/취소, DLQ 재처리, **outbox 격리 행 조회·재큐**(§4.6 발행 측 실패).
+  (2026-09-24, 묶음 B) 들어온 것은 코어에 엔드포인트와 계약 문서가 **이미 있는** 셋이다 — 아래 「커맨드 위임」.
+  **웨이브 조기 마감**·**outbox 격리 조회·재큐**는 작업 2(fulfillment 의 첫 운영 엔드포인트와 그 OpenAPI 문서)
+  뒤에 같은 경로로 붙는다. **DLQ 재처리**는 ops-api 가 직접 하는 일이라 위임과 모양이 달라 따로 붙는다.
+  **주문 홀드는 미구현 — 전이 없음**: order-service 의 상태 머신(§5.1)에 홀드 전이가 없다. 목록에서 지우지
+  않고 이 표시로 남긴다 — 지우면 「검토했는데 없는 것」과 「잊은 것」을 구별할 수 없다.
 - 인증: JWT(HS256, 로컬 시크릿), 역할 `OPS_VIEWER`, `OPS_OPERATOR`, `ADMIN`. 커맨드는 `OPS_OPERATOR` 이상. 모든 커맨드는 `audit_logs`에 기록.
+  (2026-09-24, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 결정 2)
+  **발급은 스크립트, ops-api 는 검증만**: `make token ROLE=…` 가 로컬 시크릿(`DAWNLINE_OPS_JWT_SECRET`)으로
+  HS256 토큰을 찍고 **만료는 12시간**이다(데모 토큰이 저장소나 스크린샷에 남았을 때의 반경). 사용자 저장소가
+  설계에 없으므로 로그인 엔드포인트를 두지 않는다 — 개발 프로필 한정이어도 「프로필이 꺼져 있다」는 조용한
+  전제가 하나 는다. 역할은 클레임 `roles` 이고 계층이다(`ADMIN` ⊃ `OPS_OPERATOR` ⊃ `OPS_VIEWER`). `GET` 은
+  `OPS_VIEWER`, 나머지 메서드는 `OPS_OPERATOR`. 시크릿이 없거나 32바이트(256비트)보다 짧으면 **기동하지
+  않는다** — 열린 채로 뜨는 것보다 뜨지 않는 것이 낫다. ops-web 은 토큰을 붙여 넣는 설정 화면 하나다.
+
+**커맨드 위임** (2026-09-24, 묶음 B, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)).
+위임 클라이언트는 **커밋된 `contracts/openapi/*.yaml` 에서 빌드 때 생성한다** — 문서가 바뀌면 컴파일이 깨진다.
+ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코어의 것을 그대로 쓴다(ops-api 가 코어 앞에 선 유일한
+표면이라 이름을 바꿀 이유가 없다).
+
+| ops-api | 위임 대상 | `audit_logs.action` · `target_type` |
+|---|---|---|
+| `POST /api/v1/plans/{waveId}/run` (`campId`·`strategy`·`mode`) | dispatch 같은 경로 | `RUN_PLAN` · `WAVE` |
+| `POST /api/v1/routes/{routeId}/stops/{orderId}/reassign` | dispatch 같은 경로 | `REASSIGN_STOP` · `ORDER` |
+| `POST /api/v1/orders/{orderId}/cancel` | order 같은 경로 | `CANCEL_ORDER` · `ORDER` |
+
+- **감사 행은 위임 _전에_ 쓴다.** 별도 트랜잭션으로 `PENDING` 을 커밋한 뒤에 코어를 부른다 — 순서가 반대면
+  위임과 기록 사이에 죽었을 때 기록이 사라진다. 기록을 쓰지 못하면 **위임하지 않는다**(503).
+- **결과는 넷이고 모름을 값으로 접지 않는다.** `SUCCEEDED`(2xx) · `REJECTED`(코어의 4xx — 적용되지 않았다) ·
+  `FAILED`(**연결이 맺어지지 않았다** — 요청이 코어에 닿지 않은 것이 확실한 유일한 경우) · `UNKNOWN`(그 밖의
+  전부: 응답 전 타임아웃, 응답 도중 끊김, **코어의 5xx**). 5xx 를 `FAILED` 로 두지 않는 이유: 5xx 는 「무언가
+  깨졌다」이지 「아무 일도 없었다」가 아니다 — 커밋 뒤 직렬화에서 난 예외도 500 이다.
+- **응답**: `SUCCEEDED` 는 코어의 본문, `REJECTED` 는 **코어의 상태와 Problem Details 본문을 바이트 그대로**
+  (생성 모델로 읽지 않는다 — ADR-052 의 「문서의 거짓 하나」), `FAILED` 는 502 `core-unreachable`,
+  `UNKNOWN` 은 타임아웃이면 504 `core-timeout`, 코어의 5xx 면 502 `core-error`. 어느 경우든 응답 헤더
+  `X-Dawnline-Audit-Id` 에 감사 행 id 가 온다.
+- **상관 헤더**: 같은 id 를 코어 호출에 `X-Dawnline-Audit-Id` 로 싣고, 코어는 그것을 MDC `auditId` 로 남긴다
+  (§9.3). `UNKNOWN` 행을 사람이 해소할 때 어디를 볼지가 그 id 로 정해진다(RB-07).
+- **`request` JSONB 에는 커맨드의 인자만** 넣는다(경로 변수·쿼리·본문). 코어의 응답 본문은 넣지 않는다 —
+  취소 응답의 `OrderView` 는 주소 전체를 싣는다(§10 「읽기 모델에는 주소 전체를 저장하지 않음」).
+- **타임아웃**: 연결 1초. 읽기는 dispatch 60초(계획 시간 p95 경보가 45초다, §9.4 — 그보다 짧으면 정상적인
+  재계획이 `UNKNOWN` 이 된다), order 5초.
 
 ```sql
 CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR(16),
@@ -2488,6 +2528,7 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다. 창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개**(`kpi_delivery_hourly` 의 24행 합 — 현재 버킷은 늘 부분이라 23시간 남짓~24시간)이고 1분마다 다시 센다. 분모는 완료 + **실패**, 취소·배차 불가는 뺀다(§5.5 「KPI — 두 축, 뷰」). 결과가 없는 캠프와 갱신 실패 중에는 `NaN` — 0 도 마지막 값도 아니다. 약속을 모르는 결과도 빠지고, 그 수는 아래 `dawnline_kpi_excluded` 가 낸다 |
 | `dawnline_kpi_excluded` | gauge | **ops-api** | reason(promise_unknown) — 정시율의 창에서 **모집단 밖으로 빠진** 결과: 완료·실패했는데 약속(또는 캠프)을 아직 모른다(`kpi_delivery_hourly.outcome_without_promise` 의 합, 캠프가 없는 행 포함). 분모에서 조용히 빠지는 것은 실패를 빼서 정시율을 올리는 것과 같은 부류다 — **부재는 값이 아니지만 부재의 수는 값이다.** 정상에서는 프로젝션 랙만큼의 일시값이고 계속 0 이 아니면 `fulfillment.planned` 가 오지 않고 있다. 갱신 실패 중에는 `NaN` — 0 은 「빠진 것이 없다」는 주장이다 |
+| `dawnline_ops_commands_total` | counter | **ops-api** | action(`RUN_PLAN`·`REASSIGN_STOP`·`CANCEL_ORDER`), result(`SUCCEEDED`·`REJECTED`·`FAILED`·`UNKNOWN`) — 감사 행의 결과를 **커밋한 뒤에** 센다(CLAUDE.md 「카운터는 커밋 뒤에 센다」). `PENDING` 은 세지 않는다 — 끝나지 않은 커맨드의 수는 카운터가 아니라 `audit_logs` 가 안다 |
 | `dawnline_kpi_refresh_age_seconds` | gauge | **ops-api** | 라벨 없음 — 마지막으로 **성공한** KPI 갱신 뒤로 흐른 초. 스크레이프마다 계산하므로 갱신이 멈추면 값이 멈추지 않고 커진다(성공한 적이 없으면 기동부터). 위 둘은 갱신이 죽으면 `NaN` 이고 **`NaN` 에는 어떤 비교 알림도 울리지 않는다** — 그래서 알림은 이 값에 건다(§9.4). `dawnline_shipment_partitions_ahead` 와 같은 모양이다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
@@ -2517,6 +2558,10 @@ OpenTelemetry(Micrometer Tracing → OTLP → Tempo). Kafka 헤더로 `tracepare
 ### 9.3 로깅
 
 JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC). 개인정보(주소 전체)는 로그에 남기지 않는다(우편번호·geohash만).
+**`auditId`** (2026-09-24, §5.5 「커맨드 위임」): ops-api 가 코어를 부를 때 싣는 `X-Dawnline-Audit-Id` 헤더를 코어의
+`MdcFilter` 가 MDC 로 옮긴다. **요청 헤더를 MDC 에 넣는 유일한 자리**이고 값이 UUID 형식일 때만 받는다 — 헤더는
+누구나 보낼 수 있으므로 형식이 아니면 버린다(로그 줄에 임의 문자열이 실리지 않게). 값은 ops-api 가 만든 UUIDv7
+이라 개인을 식별하지 않는다.
 
 ### 9.4 대시보드·알림 (저장소에 JSON으로 커밋)
 
@@ -2524,11 +2569,11 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%(창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다), **`dawnline_kpi_refresh_age_seconds` > 300**(KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 바로 앞의 정시율 알림은 **울리지 않는다**. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다, §5.5), **`dawnline_kpi_excluded{reason="promise_unknown"}` > 0 이 30분 지속**(결과는 났는데 약속을 모르는 주문이 정시율에서 빠지고 있다 — 프로젝션 랙으로 설명되는 길이를 넘었으면 `fulfillment.planned` 가 오지 않고 있다), **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06)
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%(창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다), **`dawnline_kpi_refresh_age_seconds` > 300**(**초기값 — Phase 7 peak-day 에서 재검토**. KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 바로 앞의 정시율 알림은 **울리지 않는다**. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다, §5.5), **`dawnline_kpi_excluded{reason="promise_unknown"}` > 0 이 30분 지속**(**초기값 — Phase 7 peak-day 에서 재검토**. 결과는 났는데 약속을 모르는 주문이 정시율에서 빠지고 있다 — 프로젝션 랙으로 설명되는 길이를 넘었으면 `fulfillment.planned` 가 오지 않고 있다), **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06), **`dawnline_ops_commands_total{result="UNKNOWN"}` 증가**(운영자 커맨드가 코어에 적용됐는지 모른다 — 사람이 `auditId` 로 코어 로그를 보고 닫는다, RB-07)
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
-RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검).
+RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검) · RB-07 감사 `UNKNOWN`·오래된 `PENDING` 해소(§5.5 — 코어 로그·트레이스에서 그 행의 `auditId` 를 찾아 적용 흔적이 있으면 `SUCCEEDED`, 요청이 닿은 흔적이 없으면 `FAILED` 로 사람이 닫는다. 흔적으로도 못 가리면 코어의 현재 상태(웨이브·라우트·주문)를 보고 닫고, 무엇을 근거로 닫았는지 남긴다).
 
 ---
 
@@ -2545,6 +2590,8 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
   - 실서비스 전환 시 인증 도입과 함께 재검토한다. 그때 레이트 리밋 키는 주장값이 아니라 인증된
     주체에서 와야 한다.
 - ops-api: JWT + 역할. 시크릿은 환경변수. `.env` 커밋 금지.
+  (2026-09-24) 발급은 `make token ROLE=…`(만료 12시간), ops-api 는 서명·만료·역할만 본다. 사용자 관리는 범위
+  밖이다 — 로그인 엔드포인트가 없다(§5.5, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 결정 2).
 - 입력 검증: Bean Validation, 주소·SKU 길이 제한, 좌표 범위.
 - 의존성 취약점: GitHub Dependabot + `gradle dependencyCheck`(선택).
 - 개인정보: 로그 마스킹(§9.3), 읽기 모델에는 주소 전체를 저장하지 않음.
@@ -2562,6 +2609,7 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
 | 문서 | springdoc-openapi | **3.1.1** (Boot 4 라인) — Phase 1 에 3.1.0 으로 동작 확인, 2026-09-23 에 3.1.1 (보안 권고 8건) | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. **REST 표면이 있는 서비스마다 생성물과 계약 IT 를 둔다** — 목록이 아니라 조건이다(2026-09-19 정정). 열거였을 때 그 목록은 `order-service`(Phase 1)·`tracking-service`(Phase 5-1a) 둘이었고, springdoc 이 붙어 있는데 생성물이 없는 `dispatch-service` 는 그 문장 **밖**에 있었다 — 조건으로 적으면 새 REST 표면이 스스로 대상이 된다. tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다. 계약 IT 는 **오류 본문(`ProblemDetail`)과 성공 본문(이름 있는 타입)을 둘 다** 본다 — 한쪽만 보면 「오류를 파싱할 수 있는가」까지만 답한다. dispatch 의 생성물은 **Phase 6-0 에서 만들었다**(2026-09-23). 부재를 그때까지 둔 것은 *문서가 거짓을 말하는* 상태가 아니라 문서가 **없는** 상태였기 때문이고, 부재는 첫 소비자가 나타나는 시점에 채우는 것이 소비자 주도 원칙과 맞는다 — 그 소비자가 ops-api 다. **채우면서 결함 하나가 나왔다**: `PUT /rules/{ruleId}` 는 `Map<String, Integer>` 를, `POST /vehicles`·`POST /drivers` 는 `Map<String, UUID>` 를 돌려주어 문서가 성공 본문을 `type: object` 로 적고 있었다 — order-service 의 `ResponseEntity<Object>` 와 **같은 부류**이고, 그것을 잡은 것이 열거가 아닌 조건으로 적힌 `successBodiesWithoutNamedType()` 이다(되돌려 확인: `PUT /api/v1/rules/{ruleId} → 200 (이름 없는 object)`). 이름 있는 record 로 바꿨고 직렬화 결과는 같다 |
+| 위임 클라이언트 생성 | openapi-generator (`spring` · `spring-http-interface`) | **7.25.0** — 2026-09-24 채택([ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)) | ops-api 의 코어 위임 클라이언트를 **커밋된 `contracts/openapi/*.yaml` 에서 빌드 때** 만든다. 채택 기준(표준 템플릿·문서화된 옵션만·그대로 컴파일·Jackson 3 왕복·새 런타임 의존 없음)을 시도 전에 적었고 다섯 다 참이다. 생성물은 커밋하지 않는다. HTTP 계층은 Boot 4 의 HTTP Service Client(`@ImportHttpServices`) |
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
