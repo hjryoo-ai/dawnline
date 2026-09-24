@@ -8,7 +8,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -74,8 +73,8 @@ public class OnTimeRatioGauges {
     /** {@code reason} 라벨 — 결과는 났는데 약속(또는 캠프)을 아직 모른다. */
     static final String PROMISE_UNKNOWN = "promise_unknown";
 
-    /** 창의 버킷 수 — 지금 버킷을 포함한다. */
-    static final int BUCKETS = 24;
+    /** 창의 버킷 수 — 지금 버킷을 포함한다({@link DeliveryKpis#currentBuckets}). */
+    static final int BUCKETS = DeliveryKpis.BUCKETS;
 
     /** {@code basis} 라벨의 값 — 뷰의 칸 이름 {@code on_time_promised}·{@code on_time_revised} 와 맞춘다. */
     public enum Basis {
@@ -145,9 +144,8 @@ public class OnTimeRatioGauges {
      * 스케줄과 무관하게 지금 다시 센다(테스트·운영 수동 실행). 예외를 삼키지 않는다.
      */
     public void refreshNow() {
-        Instant last = clock.instant().truncatedTo(ChronoUnit.HOURS);
-        Instant first = last.minus(Duration.ofHours(BUCKETS - 1L));
-        DeliveryWindow window = kpis.window(first, last);
+        DeliveryKpis.Buckets buckets = DeliveryKpis.currentBuckets(clock.instant());
+        DeliveryWindow window = kpis.window(buckets.first(), buckets.last());
         Map<UUID, CampDeliveries> camps = new HashMap<>();
         for (CampDeliveries camp : window.camps()) {
             camps.put(camp.campId(), camp);
@@ -167,11 +165,7 @@ public class OnTimeRatioGauges {
     public double ratio(UUID campId, Basis basis) {
         Snapshot snapshot = latest;
         CampDeliveries camp = snapshot == null ? null : snapshot.camps().get(campId);
-        if (camp == null || camp.decided() == 0) {
-            return Double.NaN;
-        }
-        long onTime = basis == Basis.PROMISED ? camp.onTimePromised() : camp.onTimeRevised();
-        return (double) onTime / camp.decided();
+        return camp == null ? Double.NaN : camp.onTimeRatio(basis == Basis.PROMISED);
     }
 
     /**

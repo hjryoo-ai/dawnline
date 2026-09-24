@@ -345,7 +345,35 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         assertThat(RECEIVED).as("403 은 코어에 가지 않는다").hasSize(1);
     }
 
+    @Test
+    void 라우트_조회는_dispatch_에_위임하고_stop_의_좌표와_순서를_옮기며_감사하지_않는다() throws Exception {
+        String viewer = token("OPS_VIEWER", "viewer");
+
+        HttpResponse<String> route = get("/api/v1/routes/" + ROUTE, viewer);
+
+        assertThat(route.statusCode()).as(route.body()).isEqualTo(200);
+        assertThat(route.body()).contains("\"routeId\":\"" + ROUTE + "\"", "\"revision\":3", "\"seq\":1",
+                "\"lat\":37.501", "\"lng\":127.031", "\"orderIds\":[\"" + ORDER + "\"]");
+        assertThat(route.headers().firstValue(MdcKeys.AUDIT_ID_HEADER)).as("조회는 감사하지 않는다").isEmpty();
+        assertThat(ownRows()).isEmpty();
+        assertThat(RECEIVED).singleElement().satisfies(request -> {
+            assertThat(request.get("path")).isEqualTo("/api/v1/routes/" + ROUTE);
+            assertThat(request.get("auditId")).isEqualTo("null");
+        });
+    }
+
+    @Test
+    void 없는_라우트는_코어의_404_를_그대로_옮긴다() throws Exception {
+        HttpResponse<String> route = get("/api/v1/routes/" + TARGET, token("OPS_VIEWER", "viewer"));
+
+        assertThat(route.statusCode()).isEqualTo(404);
+        assertThat(route.body()).contains("\"code\":\"not-found\"");
+    }
+
     // --- 가짜 코어 ----------------------------------------------------------------------------
+
+    private static final String NOT_FOUND =
+            "{\"type\":\"https://dawnline.internal/problems/not-found\",\"status\":404,\"code\":\"not-found\"}";
 
     private static final String REJECTION =
             "{\"type\":\"https://dawnline.internal/problems/hard-rule-violated\",\"status\":409,\"code\":\"hard-rule-violated\"}";
@@ -379,6 +407,17 @@ class OpsCommandIT extends OpsIntegrationTestBase {
                 if (!authorized) {
                     status = 401;
                     body = UNAUTHORIZED;
+                } else if (path.equals("/api/v1/routes/" + ROUTE)) {
+                    status = 200;
+                    body = "{\"routeId\":\"" + ROUTE + "\",\"planId\":\"" + EVENT + "\",\"vehicleId\":\"" + TARGET
+                            + "\",\"driverId\":\"" + TARGET + "\",\"status\":\"ASSIGNED\",\"revision\":3,"
+                            + "\"distanceM\":12000,\"durationS\":3600,\"costKrw\":45000,\"stops\":[{\"stopId\":\""
+                            + EVENT + "\",\"seq\":1,\"lat\":37.501,\"lng\":127.031,"
+                            + "\"plannedArrival\":\"2026-09-24T01:00:00Z\",\"plannedDeparture\":\"2026-09-24T01:05:00Z\","
+                            + "\"serviceSeconds\":300,\"status\":\"PLANNED\",\"orderIds\":[\"" + ORDER + "\"]}]}";
+                } else if (path.equals("/api/v1/routes/" + TARGET)) {
+                    status = 404;
+                    body = NOT_FOUND;
                 } else if (path.endsWith("/run")) {
                     status = 200;
                     body = "{\"waveId\":\"" + WAVE + "\",\"outcome\":\"PLANNED\"}";

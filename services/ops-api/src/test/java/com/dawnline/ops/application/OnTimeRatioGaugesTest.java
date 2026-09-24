@@ -44,7 +44,7 @@ class OnTimeRatioGaugesTest {
     @Test
     void 분모는_완료와_실패다_실패를_빼면_정시율이_오른다() {
         // 완료 90 (원 약속 정시 81, 개정 약속 정시 88) · 실패 10.
-        kpis.rows.add(new CampDeliveries(CAMP, 90, 10, 81, 88));
+        kpis.rows.add(new CampDeliveries(CAMP, 90, 10, 81, 88, 0));
         gauges.refreshNow();
 
         assertThat(value(Basis.PROMISED)).isEqualTo(0.81);
@@ -55,7 +55,7 @@ class OnTimeRatioGaugesTest {
     void 캠프를_처음_볼_때_두_기준을_등록한다() {
         assertThat(registry.find(OnTimeRatioGauges.ON_TIME_RATIO).gauges()).as("아직 본 캠프가 없다").isEmpty();
 
-        kpis.rows.add(new CampDeliveries(CAMP, 1, 0, 1, 1));
+        kpis.rows.add(new CampDeliveries(CAMP, 1, 0, 1, 1, 0));
         gauges.refreshNow();
         gauges.refreshNow();
 
@@ -66,7 +66,7 @@ class OnTimeRatioGaugesTest {
 
     @Test
     void 창에서_사라진_캠프는_0_이_아니라_NaN_이다() {
-        kpis.rows.add(new CampDeliveries(CAMP, 10, 0, 10, 10));
+        kpis.rows.add(new CampDeliveries(CAMP, 10, 0, 10, 10, 0));
         gauges.refreshNow();
         assertThat(value(Basis.PROMISED)).isEqualTo(1.0);
 
@@ -80,7 +80,7 @@ class OnTimeRatioGaugesTest {
 
     @Test
     void 갱신이_실패하면_멈춘_값이_아니라_NaN_이다() {
-        kpis.rows.add(new CampDeliveries(CAMP, 10, 0, 9, 10));
+        kpis.rows.add(new CampDeliveries(CAMP, 10, 0, 9, 10, 0));
         gauges.refreshNow();
         assertThat(value(Basis.PROMISED)).isEqualTo(0.9);
 
@@ -93,7 +93,7 @@ class OnTimeRatioGaugesTest {
 
     @Test
     void 약속을_모르는_결과는_정시율에서_빠지고_그_수가_보인다() {
-        kpis.rows.add(new CampDeliveries(CAMP, 9, 1, 9, 9));
+        kpis.rows.add(new CampDeliveries(CAMP, 9, 1, 9, 9, 0));
         kpis.withoutPromise = 3; // 캠프를 아는 행과 모르는 행의 합 — 어댑터가 더한다
         gauges.refreshNow();
 

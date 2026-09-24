@@ -35,7 +35,7 @@ public sealed interface CoreReply {
 
         /** 코어의 성공 본문. 주소 같은 개인정보는 옮기지 않는다(§10). */
         public sealed interface Body permits PlanRun, StopReassigned, OrderCancelled, WaveClosed, OutboxRequeued,
-                QuarantinedOutbox {
+                QuarantinedOutbox, RouteDetail {
         }
     }
 
@@ -166,5 +166,42 @@ public sealed interface CoreReply {
      */
     record QuarantinedEvent(UUID id, String aggregateType, UUID aggregateId, String eventType, String topic,
             Instant createdAt, Instant failedAt, int publishAttempts) {
+    }
+
+    /**
+     * dispatch 의 라우트 — 지도가 그리는 것 (§5.5 「조회」). 좌표와 순서의 진실은 dispatch 이고 읽기 모델은 집계라서
+     * {@code rm_routes} 에 stop 을 두지 않고 조회를 위임한다.
+     *
+     * @param routeId   라우트
+     * @param planId    계획
+     * @param vehicleId 차량
+     * @param status    라우트 상태
+     * @param revision  지금 revision — 재배정이 올린다
+     * @param distanceM 거리
+     * @param durationS 소요 시간
+     * @param costKrw   비용 (불변규칙 9)
+     * @param stops     순서대로
+     */
+    record RouteDetail(UUID routeId, UUID planId, UUID vehicleId, String status, int revision, int distanceM,
+            int durationS, long costKrw, List<RouteStop> stops) implements Applied.Body {
+        public RouteDetail {
+            stops = List.copyOf(stops);
+        }
+    }
+
+    /**
+     * 라우트의 stop 하나 — 주소가 아니라 좌표다(§10 「읽기 모델에는 주소 전체를 저장하지 않음」).
+     *
+     * @param seq            순서 (1부터)
+     * @param lat            위도
+     * @param lng            경도
+     * @param plannedArrival 계획 도착
+     * @param status         stop 상태 — {@code delivery.status} 를 dispatch 가 반영한 값(ADR-047)
+     * @param orderIds       이 stop 의 주문 — 재배정의 대상
+     */
+    record RouteStop(int seq, double lat, double lng, Instant plannedArrival, String status, List<UUID> orderIds) {
+        public RouteStop {
+            orderIds = List.copyOf(orderIds);
+        }
     }
 }

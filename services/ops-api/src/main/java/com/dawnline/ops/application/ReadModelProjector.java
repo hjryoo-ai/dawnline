@@ -149,7 +149,10 @@ public class ReadModelProjector implements ProjectFactUseCase {
 
     private int waveClosed(Fact.WaveClosed f) {
         return waveFact(f.waveId(), f.campId(), f.serviceTier(), f.cutoffAt(), WaveStatus.CLOSED,
-                Patch.of(WaveColumn.class));
+                Patch.of(WaveColumn.class)
+                        // 키 계열 — 웨이브의 불변 속성이라 먼저 온 것이 남는다(V3).
+                        .setIfAbsent(WaveColumn.DEPOT_LAT, f.depotLat())
+                        .setIfAbsent(WaveColumn.DEPOT_LNG, f.depotLng()));
     }
 
     private int planCompleted(Fact.PlanCompleted f) {

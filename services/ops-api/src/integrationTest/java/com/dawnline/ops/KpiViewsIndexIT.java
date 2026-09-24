@@ -2,6 +2,7 @@ package com.dawnline.ops;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.ops.adapter.out.persistence.JdbcReadModelViews;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -67,7 +68,42 @@ class KpiViewsIndexIT extends OpsIntegrationTestBase {
 
     @Test
     void 두_뷰의_버킷_술어가_인덱스의_식으로_내려간다() {
-        // 측정 문서와 같은 분포: 캠프 10, 실패 5%, 배차 불가 3%(캠프·결과 없음), 개정 2%.
+        fill();
+
+        String delivery = explain("SELECT * FROM kpi_delivery_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
+        String intake = explain("SELECT * FROM kpi_intake_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
+
+        assertThat(indexCond(delivery, "ix_rmo_delivery_hour"))
+                .as("배송 축 — 캠프 접두만 타면 캠프의 전 기간을 거른다\n%s", delivery)
+                .contains("date_trunc('hour'::text, COALESCE(delivered_at, failed_at), 'UTC'::text)");
+        assertThat(indexCond(intake, "ix_rmo_intake_hour"))
+                .as("접수 축\n%s", intake)
+                .contains("date_trunc('hour'::text, placed_at, 'UTC'::text)");
+        assertThat(delivery + intake).doesNotContain("Seq Scan on rm_orders");
+    }
+
+    @Test
+    void 예외_목록이_배송_축_인덱스의_식으로_내려간다() {
+        // 대시보드의 「취소됐는데 배송됨」(JdbcReadModelViews) — 인덱스를 더하지 않고 KPI 창과 같은 버킷 식을 적어
+        // ix_rmo_delivery_hour 를 탄다. 식이 한 글자라도 다르면 캠프 접두만 타고 캠프의 전 기간을 거른다.
+        fill();
+
+        String exceptions = explain(JdbcReadModelViews.CANCELLED_BUT_DELIVERED_SQL
+                .replaceFirst("\\?", CAMP)
+                .replaceFirst("\\?", "timestamptz '2031-05-02T00:00:00Z'")
+                .replaceFirst("\\?", "timestamptz '2031-05-02T23:00:00Z'")
+                .replaceFirst("\\?", "201"));
+
+        // 두 경계가 **둘 다** 인덱스 조건이어야 한다 — 하나만 식이 어긋나도 나머지 하나가 인덱스를 태우므로 「식이 들어
+        // 있다」만 보면 통과한다(음성 표본으로 확인했다: 아래 경계의 식만 바꿔도 초록이었다).
+        String cond = indexCond(exceptions, "ix_rmo_delivery_hour");
+        String bucket = "date_trunc('hour'::text, COALESCE(delivered_at, failed_at), 'UTC'::text)";
+        assertThat(cond).as("예외 목록\n%s", exceptions).contains(bucket + " >=").contains(bucket + " <=");
+        assertThat(exceptions).doesNotContain("Seq Scan on rm_orders");
+    }
+
+    /** 측정 문서와 같은 분포: 캠프 10, 실패 5%, 배차 불가 3%(캠프·결과 없음), 개정 2%. 통계를 첫 어설션으로 말한다. */
+    private void fill() {
         jdbc.update("""
                 INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, camp_id,
                                        promised_end_original, promised_end_revised, delivered_at, failed_at, placed_at)
@@ -90,17 +126,6 @@ class KpiViewsIndexIT extends OpsIntegrationTestBase {
         assertThat(jdbc.queryForObject("SELECT reltuples FROM pg_class WHERE relname = 'rm_orders'", Double.class))
                 .as("통계가 있다 — 없으면 플래너는 짐작하고, 그 계획은 아무것도 증명하지 않는다")
                 .isGreaterThanOrEqualTo((double) ROWS);
-
-        String delivery = explain("SELECT * FROM kpi_delivery_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
-        String intake = explain("SELECT * FROM kpi_intake_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
-
-        assertThat(indexCond(delivery, "ix_rmo_delivery_hour"))
-                .as("배송 축 — 캠프 접두만 타면 캠프의 전 기간을 거른다\n%s", delivery)
-                .contains("date_trunc('hour'::text, COALESCE(delivered_at, failed_at), 'UTC'::text)");
-        assertThat(indexCond(intake, "ix_rmo_intake_hour"))
-                .as("접수 축\n%s", intake)
-                .contains("date_trunc('hour'::text, placed_at, 'UTC'::text)");
-        assertThat(delivery + intake).doesNotContain("Seq Scan on rm_orders");
     }
 
     private String explain(String query) {

@@ -26,6 +26,7 @@ public class JdbcDeliveryKpis implements DeliveryKpis {
     static final String SUM_BY_CAMP_SQL = """
             SELECT camp_id, sum(delivered) AS delivered, sum(failed) AS failed,
                    sum(on_time_promised) AS on_time_promised, sum(on_time_revised) AS on_time_revised,
+                   sum(revised) AS revised,
                    sum(outcome_without_promise) AS outcome_without_promise
               FROM kpi_delivery_hourly
              WHERE bucket_hour >= ? AND bucket_hour <= ?
@@ -51,7 +52,7 @@ public class JdbcDeliveryKpis implements DeliveryKpis {
             if (campId != null) {
                 camps.add(new CampDeliveries(campId,
                         rs.getLong("delivered"), rs.getLong("failed"),
-                        rs.getLong("on_time_promised"), rs.getLong("on_time_revised")));
+                        rs.getLong("on_time_promised"), rs.getLong("on_time_revised"), rs.getLong("revised")));
             }
         },
                 // TIMESTAMPTZ 에는 OffsetDateTime 으로 넘긴다 — 드라이버가 Instant 를 직접 받지 않는다.

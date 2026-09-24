@@ -30,6 +30,8 @@ dependencies {
 
     // 내부 토큰의 테스트 값(InternalTokens)과 코어의 쓰기 표면 검사(InternalTokenSurfaceContract) — ADR-055.
     integrationTestImplementation(testFixtures(project(":libs:web")))
+    // OpenApiContractIT 가 MockMvc 로 /v3/api-docs 를 읽는다 (Boot 4 모듈화 — starter-test 에 없다)
+    integrationTestImplementation(libs.spring.boot.webmvc.test)
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.awaitility)
