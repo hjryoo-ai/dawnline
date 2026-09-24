@@ -395,6 +395,24 @@ services:
     ports:
       - "${OPS_API_PORT}:8080"
 
+  # 운영 화면 (ADR-057) — nginx 가 정적 파일을 주고 /api/ 를 ops-api 로 넘긴다(같은 출처, CORS 없음).
+  # Buildpacks 가 아닌 유일한 이미지다. `make images` 가 서비스 이미지와 함께 만든다.
+  ops-web:
+    profiles: ["app"]
+    restart: unless-stopped
+    build:
+      context: ../..
+      dockerfile: apps/ops-web/Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE}
+        NGINX_IMAGE: ${NGINX_IMAGE}
+    image: dawnline/ops-web:${DAWNLINE_VERSION}
+    container_name: dawnline-ops-web
+    depends_on:
+      - ops-api
+    ports:
+      - "${OPS_WEB_PORT}:80"
+
 volumes:
   postgres-data:
   kafka-data:

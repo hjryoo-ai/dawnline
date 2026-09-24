@@ -10,14 +10,17 @@
 주문 접수 → FC/캠프/권역 결정 → 컷오프 웨이브 → **룰 엔진 + 비용 기반 경로 최적화** → 라우트 배정 → 배송 추적·재계획.
 이벤트 드리븐 MSA(Kafka + Outbox), 서비스별 PostgreSQL, Redis(GEO·락·멱등), 운영자 백오피스, 피크·장애 시뮬레이션.
 
-## 기술 스택 (버전은 `gradle/libs.versions.toml`, `deploy/compose/.env`에서만 고정)
+## 기술 스택 (버전은 `gradle/libs.versions.toml`, `deploy/compose/.env`, ops-web 은 `apps/ops-web/package.json`·`package-lock.json`·`.nvmrc` 에서만 고정)
 
 - Java 25 LTS (Temurin), Gradle 9.x Kotlin DSL, 멀티모듈 모노레포
 - Spring Boot 4.1.x (Spring Framework 7, Spring Kafka 4.1, Spring Security 7.1, Hibernate ORM 7 — BOM 관리)
 - Apache Kafka 4.3.x (KRaft), PostgreSQL 18, Redis 8.x, Flyway
 - 테스트: JUnit(BOM), AssertJ, Testcontainers, ArchUnit, WireMock, k6
 - 관측성: Micrometer + OpenTelemetry → Prometheus / Grafana / Tempo
-- 프론트(ops-web): React 19 + Vite + TypeScript + Leaflet
+- 프론트(ops-web): React 19 + Vite + TypeScript + Leaflet, 테스트는 Vitest + Testing Library(jsdom). Node 는 `.nvmrc`(24 LTS)
+- ops-web 클라이언트: 타입은 **커밋된 `contracts/openapi/ops-api.yaml`** 에서 `openapi-typescript` 로 빌드 때 생성하고(커밋하지 않는다),
+  호출 층은 연산마다 손으로 쓴 얇은 함수다 — 본문 파라미터를 정해진 타입으로 받아 계약 밖 칸이 컴파일 오류가 된다(ADR-056).
+  TypeScript 판은 생성기의 peer 범위가 정한다
 - 위임 클라이언트: openapi-generator(`spring`·`spring-http-interface`) — ops-api 가 **커밋된 `contracts/openapi/*.yaml`** 에서 빌드 때 생성한다(ADR-052). 생성물은 커밋하지 않는다
 - 새 라이브러리 추가는 최소화. 추가 시 이 파일과 `libs.versions.toml`을 함께 갱신하고 커밋 메시지에 이유를 쓴다.
 - Spring Boot 4 호환 여부가 불확실한 라이브러리(springdoc, Resilience4j 등)는 **먼저 빌드로 확인**하고, 안 되면 대체안을 제시한다. 호환된다고 가정하지 않는다.
@@ -48,6 +51,7 @@ make demo        # 시드 + smoke 시나리오 + Grafana/Swagger URL 출력
 make peak        # 피크 시나리오
 make chaos-kafka # Kafka 중단→복구 검증 스크립트
 make down
+cd apps/ops-web && npm ci && npm test   # ops-web 타입 검사 + 컴포넌트 테스트 (생성은 pre* 스크립트가 한다)
 ```
 
 작업을 "완료"라고 말하기 전에 반드시 `./gradlew build`가 통과해야 하고, 해당 Phase의 DoD 검증 명령을 실제로 실행해 결과를 보고한다.
