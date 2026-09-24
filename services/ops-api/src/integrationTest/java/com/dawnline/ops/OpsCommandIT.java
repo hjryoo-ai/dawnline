@@ -24,6 +24,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -121,9 +122,15 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         String wrongKey = token("OPS_OPERATOR", "a", "another-secret-0123456789abcdef-0123456789", Duration.ofHours(1));
         String expired = token("OPS_OPERATOR", "b", JWT_SECRET, Duration.ofMinutes(-5));
 
-        assertThat(post("/api/v1/plans/" + WAVE + "/run", null, "").statusCode()).isEqualTo(401);
-        assertThat(post("/api/v1/plans/" + WAVE + "/run", wrongKey, "").statusCode()).isEqualTo(401);
-        assertThat(post("/api/v1/plans/" + WAVE + "/run", expired, "").statusCode()).isEqualTo(401);
+        for (String bad : Arrays.asList(null, wrongKey, expired)) {
+            HttpResponse<String> response = post("/api/v1/plans/" + WAVE + "/run", bad, "");
+            assertThat(response.statusCode()).isEqualTo(401);
+            // 필터에서 난 오류도 어드바이스를 지나 Problem Details 다 — 화면은 code 로 「토큰을 다시 넣으라」를 안다.
+            assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(
+                    type -> assertThat(type).startsWith("application/problem+json"));
+            assertThat(response.body()).contains("\"code\":\"unauthenticated\"");
+            assertThat(response.headers().firstValue("WWW-Authenticate")).hasValue("Bearer");
+        }
 
         assertThat(ownRows()).isEmpty();
         assertThat(RECEIVED).isEmpty();
@@ -134,6 +141,7 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         HttpResponse<String> response = post("/api/v1/plans/" + WAVE + "/run", token("OPS_VIEWER", "viewer"), "");
 
         assertThat(response.statusCode()).isEqualTo(403);
+        assertThat(response.body()).contains("\"code\":\"forbidden\"");
         assertThat(ownRows()).isEmpty();
         assertThat(RECEIVED).isEmpty();
     }
@@ -337,7 +345,35 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         assertThat(RECEIVED).as("403 은 코어에 가지 않는다").hasSize(1);
     }
 
+    @Test
+    void 라우트_조회는_dispatch_에_위임하고_stop_의_좌표와_순서를_옮기며_감사하지_않는다() throws Exception {
+        String viewer = token("OPS_VIEWER", "viewer");
+
+        HttpResponse<String> route = get("/api/v1/routes/" + ROUTE, viewer);
+
+        assertThat(route.statusCode()).as(route.body()).isEqualTo(200);
+        assertThat(route.body()).contains("\"routeId\":\"" + ROUTE + "\"", "\"revision\":3", "\"seq\":1",
+                "\"lat\":37.501", "\"lng\":127.031", "\"orderIds\":[\"" + ORDER + "\"]");
+        assertThat(route.headers().firstValue(MdcKeys.AUDIT_ID_HEADER)).as("조회는 감사하지 않는다").isEmpty();
+        assertThat(ownRows()).isEmpty();
+        assertThat(RECEIVED).singleElement().satisfies(request -> {
+            assertThat(request.get("path")).isEqualTo("/api/v1/routes/" + ROUTE);
+            assertThat(request.get("auditId")).isEqualTo("null");
+        });
+    }
+
+    @Test
+    void 없는_라우트는_코어의_404_를_그대로_옮긴다() throws Exception {
+        HttpResponse<String> route = get("/api/v1/routes/" + TARGET, token("OPS_VIEWER", "viewer"));
+
+        assertThat(route.statusCode()).isEqualTo(404);
+        assertThat(route.body()).contains("\"code\":\"not-found\"");
+    }
+
     // --- 가짜 코어 ----------------------------------------------------------------------------
+
+    private static final String NOT_FOUND =
+            "{\"type\":\"https://dawnline.internal/problems/not-found\",\"status\":404,\"code\":\"not-found\"}";
 
     private static final String REJECTION =
             "{\"type\":\"https://dawnline.internal/problems/hard-rule-violated\",\"status\":409,\"code\":\"hard-rule-violated\"}";
@@ -371,6 +407,17 @@ class OpsCommandIT extends OpsIntegrationTestBase {
                 if (!authorized) {
                     status = 401;
                     body = UNAUTHORIZED;
+                } else if (path.equals("/api/v1/routes/" + ROUTE)) {
+                    status = 200;
+                    body = "{\"routeId\":\"" + ROUTE + "\",\"planId\":\"" + EVENT + "\",\"vehicleId\":\"" + TARGET
+                            + "\",\"driverId\":\"" + TARGET + "\",\"status\":\"ASSIGNED\",\"revision\":3,"
+                            + "\"distanceM\":12000,\"durationS\":3600,\"costKrw\":45000,\"stops\":[{\"stopId\":\""
+                            + EVENT + "\",\"seq\":1,\"lat\":37.501,\"lng\":127.031,"
+                            + "\"plannedArrival\":\"2026-09-24T01:00:00Z\",\"plannedDeparture\":\"2026-09-24T01:05:00Z\","
+                            + "\"serviceSeconds\":300,\"status\":\"PLANNED\",\"orderIds\":[\"" + ORDER + "\"]}]}";
+                } else if (path.equals("/api/v1/routes/" + TARGET)) {
+                    status = 404;
+                    body = NOT_FOUND;
                 } else if (path.endsWith("/run")) {
                     status = 200;
                     body = "{\"waveId\":\"" + WAVE + "\",\"outcome\":\"PLANNED\"}";
@@ -461,22 +508,12 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private static String token(String role, String actor) throws Exception {
+    private static String token(String role, String actor) {
         return token(role, actor, JWT_SECRET, Duration.ofHours(1));
     }
 
-    /** {@code make token} 과 같은 다섯 클레임. */
-    private static String token(String role, String actor, String secret, Duration ttl) throws Exception {
-        Instant now = Instant.now();
-        JWTClaimsSet claims = new JWTClaimsSet.Builder()
-                .issuer("dawnline-ops-token")
-                .subject(ACTOR_PREFIX + actor)
-                .claim("roles", List.of(role))
-                .issueTime(Date.from(now.minusSeconds(60)))
-                .expirationTime(Date.from(now.plus(ttl)))
-                .build();
-        SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
-        jwt.sign(new MACSigner(secret.getBytes(StandardCharsets.UTF_8)));
-        return jwt.serialize();
+    /** {@code make token} 과 같은 다섯 클레임 ({@link OpsTokens}). */
+    private static String token(String role, String actor, String secret, Duration ttl) {
+        return OpsTokens.token(role, ACTOR_PREFIX + actor, secret, ttl);
     }
 }

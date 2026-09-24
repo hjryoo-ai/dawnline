@@ -4,7 +4,9 @@ import com.dawnline.ops.adapter.out.core.dispatch.api.PlanControllerApi;
 import com.dawnline.ops.adapter.out.core.dispatch.api.RouteControllerApi;
 import com.dawnline.ops.adapter.out.core.dispatch.model.ReassignRequest;
 import com.dawnline.ops.adapter.out.core.dispatch.model.Result;
+import com.dawnline.ops.adapter.out.core.dispatch.model.RouteView;
 import com.dawnline.ops.adapter.out.core.dispatch.model.RunPlanResponse;
+import com.dawnline.ops.adapter.out.core.dispatch.model.StopView;
 import com.dawnline.ops.adapter.out.core.fulfillment.api.WaveControllerApi;
 import com.dawnline.ops.adapter.out.core.fulfillment.model.CloseWaveRequest;
 import com.dawnline.ops.adapter.out.core.fulfillment.model.WaveView;
@@ -122,6 +124,11 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
         return answer(() -> outbox.get(service).list(limit));
     }
 
+    @Override
+    public CoreReply route(UUID routeId) {
+        return answer(() -> routeDetail(routes.get(routeId)));
+    }
+
     private static CoreReply call(UUID auditId, Supplier<CoreReply.Applied.Body> call) {
         return answer(() -> AuditIdPropagation.with(auditId, call));
     }
@@ -177,6 +184,20 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
     private static CoreReply.OrderCancelled cancelled(ResponseEntity<OrderView> response) {
         OrderView body = required(response.getBody());
         return new CoreReply.OrderCancelled(required(body.getOrderId()), required(body.getStatus()).getValue());
+    }
+
+    private static CoreReply.RouteDetail routeDetail(ResponseEntity<RouteView> response) {
+        RouteView body = required(response.getBody());
+        return new CoreReply.RouteDetail(required(body.getRouteId()), required(body.getPlanId()),
+                required(body.getVehicleId()), required(body.getStatus()), required(body.getRevision()),
+                required(body.getDistanceM()), required(body.getDurationS()), required(body.getCostKrw()),
+                required(body.getStops()).stream().map(CoreCommandsClient::routeStop).toList());
+    }
+
+    private static CoreReply.RouteStop routeStop(StopView stop) {
+        return new CoreReply.RouteStop(required(stop.getSeq()), required(stop.getLat()), required(stop.getLng()),
+                required(stop.getPlannedArrival()).toInstant(), required(stop.getStatus()),
+                required(stop.getOrderIds()));
     }
 
     /** 2xx 인데 칸이 비었다 — 적용은 됐지만 무엇이 됐는지 모른다. 호출자가 {@code UNKNOWN} 으로 접는다. */

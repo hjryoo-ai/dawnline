@@ -153,6 +153,8 @@
 
 1. **쓰기 경로는 이벤트만** 사용한다. 서비스 A가 서비스 B의 상태를 바꾸려면 이벤트를 발행하거나(도메인 사실), ops-api의 커맨드 REST를 통한다(운영자 의도).
 2. **동기 REST 조회**는 ops-api → 코어 서비스 방향만 허용한다. 코어 서비스끼리는 동기 호출하지 않는다. 필요한 데이터는 이벤트 페이로드에 포함(스냅샷)하거나 자기 DB에 프로젝션한다.
+   (2026-09-24, 묶음 C) 이 방향의 첫 **조회** 위임은 라우트 지도다 — ops-api 가 dispatch 의 `GET /routes/{id}` 를 부른다(§5.5 「조회」).
+   stop 의 좌표와 순서를 읽기 모델에 복제하지 않는 이유가 이 규칙의 쓸모다: 진실은 dispatch 에 있고, 읽기 모델은 집계다.
 3. 각 서비스는 **자기 DB(스키마)만** 접근한다. 다른 서비스 테이블에 대한 JOIN·FK는 금지.
 4. 이벤트 계약은 `contracts/events/`에서 JSON Schema로 관리하고, 발행자·소비자 모두 계약 테스트를 가진다.
 5. 의존성 방향은 항상 **상류(주문) → 하류(배송)** 이고, 하류가 상류에 알리는 것은 "상태 통지" 이벤트뿐이다. 순환 의존은 ArchUnit + 계약 테스트로 차단한다.
@@ -1192,6 +1194,52 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 - **타임아웃**: 연결 1초. 읽기는 dispatch 60초(계획 시간 p95 경보가 45초다, §9.4 — 그보다 짧으면 정상적인
   재계획이 `UNKNOWN` 이 된다), order·fulfillment·tracking 5초(취소·마감·재큐는 행 하나의 전이다).
 
+**조회** (2026-09-24, 묶음 C). 캠프 대시보드와 라우트 지도(ops-web 두 화면)가 읽는 것이다. 전부 `GET` 이라
+`OPS_VIEWER` 에게 열리고 **감사하지 않는다**.
+
+| ops-api | 출처 |
+|---|---|
+| `GET /api/v1/camps` | `rm_waves` 에 웨이브가 있는 캠프 — 캠프 목록은 fulfillment 의 참조 데이터이고 ops 는 그 사본을 두지 않는다 |
+| `GET /api/v1/camps/{campId}/waves?from=&to=` | `rm_waves` — 컷오프 창(기본 지금 ± 24시간, 최대 7일, 넘으면 400) |
+| `GET /api/v1/kpi/delivery` | `kpi_delivery_hourly` — **게이지와 같은 뷰·같은 창·같은 식**(아래) |
+| `GET /api/v1/camps/{campId}/exceptions` | `rm_orders` 의 **취소됐는데 배송된** 주문(§6.10 넷째 분기) — **창 없이 전부**, 앞 200 행과 전체 수 |
+| `GET /api/v1/waves/{waveId}/routes` | `rm_waves`(계획·창고) + `rm_routes`(진행·`at_risk`·출발) |
+| `GET /api/v1/routes/{routeId}` | **dispatch 에 조회 위임** — stop 의 순서·좌표·상태. 격리 목록과 같은 조회 위임이라 감사 id 헤더가 없다 |
+
+- **stop 좌표를 `rm_routes` 에 두지 않는다.** 좌표와 순서의 진실은 dispatch 이고(재배정이 그것을 바꾸는 곳도
+  dispatch 다), 읽기 모델은 집계다. 복제하면 `route.assigned` 의 revision 비교를 stop 단위로 한 번 더 구현하게
+  되고, 그 사본은 지도가 가장 필요한 순간(재배정 직후)에 가장 늦는다. 동기 조회는 §3.3 이 허용한 유일한 방향
+  (ops → 코어)이다.
+- **KPI 조회는 게이지와 같은 식을 쓴다** — 「대시보드의 24행과 게이지가 다를 수 없다」를 API 까지 넓힌 것이다.
+  창(`DeliveryKpis.currentBuckets`)·뷰(`window`)·식(`CampDeliveries.onTimeRatio`)이 한 곳에 있고 게이지와 조회가
+  그것을 부른다. 게이지의 `NaN` 은 JSON 에서 `null` 이다 — `0` 은 「전부 늦었다」는 주장이다.
+- **예외 목록에는 창이 없다**(2026-09-24 정정 — 처음 판은 KPI 와 같은 24 버킷이었다). **해소 여부를 이 시스템이
+  모르기 때문이다**: 환불·회수를 기록하는 칸도 사건도 없다. 창으로 자르면 처리되지 않은 건이 시간이 지났다는
+  이유만으로 **조용히 사라지고**, 화면은 그것을 「해결됐다」와 구별하지 못한다. 그래서 한 번 들어온 주문은 나가지
+  않고, 목록에 있다는 것은 「처리되지 않았다」가 아니라 「이런 일이 있었다」이다 — 응답 문서와 화면이 그렇게 말한다.
+  한 번에 싣는 것은 배송 시각 역순 200 행이고 전체 수(`total`)를 같은 질의의 창 함수로 함께 읽는다 — 잘렸다는
+  사실은 `total` 이 말한다(격리 목록과 같은 모양, §4.6).
+  **부분 인덱스 `ix_rmo_cancelled_delivered`**(V4): 술어를 만족하는 행만 담는다(측정 분포 0.09%). 창 없이 캠프를
+  고르면 `ix_rmo_delivery_hour` 의 캠프 접두가 캠프의 전 기간을 거른다 — peak 30일(450만 행)에서 **98 ms**, 43만
+  행. 부분 인덱스로 **0.31 ms**(48 kB), 1년치 캠프 몫(5,339 행)으로 **5.3 ms**
+  ([측정](benchmarks/phase6-ops-read-surface.md)). 키는 캠프 하나다 — 전체 수를 함께 읽어 캠프의 행을 어차피
+  전부 읽으므로 정렬 칸은 값을 하지 않는다. 술어의 두 칸은 질의에 리터럴이고, `KpiViewsIndexIT` 가 운영 문장의
+  **일반 계획**(캠프는 바인드)에서 그 인덱스를 보는지 본다.
+- **칸이 `null` 이면 그 사실이 아직 오지 않았다**(ADR-051 — 부재는 값이 아니다). 조회가 그 자리를 `0`·`false` 로
+  채우지 않는다. `at_risk` 의 `null` 은 「at-risk 가 온 적이 없다」이지 「위험하지 않다」가 아니다.
+  본문은 그 칸을 **빼지 않고 `null` 을 싣는다**(`"planId":null` — Jackson 의 기본 포함 규칙, 근거: 관측).
+  문서도 그렇게 말한다: 그 칸의 타입이 `[T, "null"]`(참조면 `anyOf`)이다 — 아래 §11.
+- **창고 좌표**: `rm_waves.depot_lat`·`depot_lng`(V3)는 `wave.closed` 의 `depot` 이다 — 새 출처가 아니라 이미
+  계약에 있는 사실이다. 라우트는 창고에서 출발해 창고로 돌아오므로 창고 없는 지도는 첫 구간과 마지막 구간을
+  지운 그림이다. 키 계열(먼저 온 것이 남는다)이고, 없으면 `null` — 그때 지도는 stop 들의 중심으로 물러난다.
+- **401 · 403 도 Problem Details 다** — `unauthenticated`·`forbidden`. 보안 필터의 오류는 디스패처 앞에서 나므로
+  단일 어드바이스가 보지 못한다. 필터가 예외 해석기에 넘겨 같은 문을 지나게 한다. 화면이 두 코드를 가르는
+  이유: 401 은 토큰을 다시 넣으라는 뜻이고 403 은 그 역할로는 안 된다는 뜻이다.
+- **나머지 셋에는 인덱스를 더하지 않는다** — 행 수와 함께 판단을 적었다([측정](benchmarks/phase6-ops-read-surface.md)).
+  피크일 웨이브 50 · 라우트 1,250 에서 1년치(`rm_waves` 18,250 · `rm_routes` 456,250)도 순차 스캔
+  **0.7 ms · 6.8 ms** 다. 재검토 지점: `rm_routes` 가 100만 행을 넘거나(보존 정책이 없으므로 약 2년) 지도가
+  주기 폴링을 시작할 때.
+
 ```sql
 CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR(16),
   order_status VARCHAR(16), delivery_outcome VARCHAR(16),   -- 두 출처의 사실, 두 칸 (2026-09-24 정정, 아래)
@@ -1205,7 +1253,8 @@ CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR
   CHECK (NOT (delivered_at IS NOT NULL AND failed_at IS NOT NULL)));   -- 결과의 두 시각은 배타
 CREATE TABLE rm_waves (wave_id UUID PK, camp_id UUID, service_tier VARCHAR(16), cutoff_at TIMESTAMPTZ, status VARCHAR(16),
   order_count INTEGER, plan_id UUID, plan_duration_ms INTEGER, total_cost_krw BIGINT, unassigned_count INTEGER,
-  route_count INTEGER);   -- plan.completed 의 routeCount = 기다려야 하는 route.assigned 수 (ADR-024 · ADR-051)
+  route_count INTEGER,    -- plan.completed 의 routeCount = 기다려야 하는 route.assigned 수 (ADR-024 · ADR-051)
+  depot_lat NUMERIC(9,6), depot_lng NUMERIC(9,6));   -- wave.closed 의 depot — 지도의 원점 (V3, 2026-09-24 묶음 C)
 CREATE TABLE rm_routes (route_id UUID PK, plan_id UUID, camp_id UUID, vehicle_id UUID, driver_id UUID,
   revision INTEGER, status VARCHAR(16), planned_departure TIMESTAMPTZ, departed_at TIMESTAMPTZ,   -- 2026-09-24
   stop_count INTEGER, completed_count INTEGER, failed_count INTEGER, at_risk BOOLEAN, distance_m INTEGER, cost_krw INTEGER);
@@ -1218,6 +1267,8 @@ CREATE VIEW kpi_delivery_hourly AS …  -- (camp_id, bucket_hour = date_trunc('h
                                       --     outcome_without_promise (모집단에서 빠진 수)
 CREATE INDEX ix_rmo_delivery_hour ON rm_orders (camp_id, date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC'));
 CREATE INDEX ix_rmo_intake_hour   ON rm_orders (camp_id, date_trunc('hour', placed_at, 'UTC'));
+CREATE INDEX ix_rmo_cancelled_delivered ON rm_orders (camp_id)   -- 예외 목록, 창 없이 (V4, 2026-09-24)
+  WHERE order_status = 'CANCELLED' AND delivery_outcome = 'COMPLETED';
 CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), target_type VARCHAR(24), target_id UUID,
   request JSONB, result VARCHAR(16), created_at TIMESTAMPTZ);
 ```
@@ -2711,6 +2762,8 @@ ops-api 를 거치지 않으면 감사 없이 적용되는 운영자 쓰기 열 
 - ops-api: JWT + 역할. 시크릿은 환경변수. `.env` 커밋 금지.
   (2026-09-24) 발급은 `make token ROLE=…`(만료 12시간), ops-api 는 서명·만료·역할만 본다. 사용자 관리는 범위
   밖이다 — 로그인 엔드포인트가 없다(§5.5, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 결정 2).
+  (2026-09-24, 묶음 C) 401·403 의 본문도 Problem Details(`unauthenticated`·`forbidden`)다 — 필터의 오류를 단일
+  어드바이스로 보낸다(§5.5 「조회」).
 - 입력 검증: Bean Validation, 주소·SKU 길이 제한, 좌표 범위.
 - 의존성 취약점: GitHub Dependabot + `gradle dependencyCheck`(선택).
 - 개인정보: 로그 마스킹(§9.3), 읽기 모델에는 주소 전체를 저장하지 않음.
@@ -2727,7 +2780,7 @@ ops-api 를 거치지 않으면 감사 없이 적용되는 운영자 쓰기 열 
 | RDB | PostgreSQL | **18.x** | 서비스별 DB. 파티셔닝·JSONB |
 | 캐시/조정 | Redis | 8.x 최신 안정 이미지 | GEO·Lua·NX 락. `[결정 필요: 라이선스 이슈가 있으면 Valkey로 교체 — 명령 호환]` |
 | ORM/마이그레이션 | Hibernate ORM (Boot BOM), Flyway | BOM 관리 | `ddl-auto=validate` |
-| 문서 | springdoc-openapi | **3.1.1** (Boot 4 라인) — Phase 1 에 3.1.0 으로 동작 확인, 2026-09-23 에 3.1.1 (보안 권고 8건) | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. **REST 표면이 있는 서비스마다 생성물과 계약 IT 를 둔다** — 목록이 아니라 조건이다(2026-09-19 정정). 열거였을 때 그 목록은 `order-service`(Phase 1)·`tracking-service`(Phase 5-1a) 둘이었고, springdoc 이 붙어 있는데 생성물이 없는 `dispatch-service` 는 그 문장 **밖**에 있었다 — 조건으로 적으면 새 REST 표면이 스스로 대상이 된다. tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다. 계약 IT 는 **오류 본문(`ProblemDetail`)과 성공 본문(이름 있는 타입)을 둘 다** 본다 — 한쪽만 보면 「오류를 파싱할 수 있는가」까지만 답한다. dispatch 의 생성물은 **Phase 6-0 에서 만들었다**(2026-09-23). 부재를 그때까지 둔 것은 *문서가 거짓을 말하는* 상태가 아니라 문서가 **없는** 상태였기 때문이고, 부재는 첫 소비자가 나타나는 시점에 채우는 것이 소비자 주도 원칙과 맞는다 — 그 소비자가 ops-api 다. **채우면서 결함 하나가 나왔다**: `PUT /rules/{ruleId}` 는 `Map<String, Integer>` 를, `POST /vehicles`·`POST /drivers` 는 `Map<String, UUID>` 를 돌려주어 문서가 성공 본문을 `type: object` 로 적고 있었다 — order-service 의 `ResponseEntity<Object>` 와 **같은 부류**이고, 그것을 잡은 것이 열거가 아닌 조건으로 적힌 `successBodiesWithoutNamedType()` 이다(되돌려 확인: `PUT /api/v1/rules/{ruleId} → 200 (이름 없는 object)`). 이름 있는 record 로 바꿨고 직렬화 결과는 같다. **`ProblemDetail` 의 확장 칸은 최상위다** (2026-09-24, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)): springdoc 은 확장 멤버 맵을 `properties` 라는 중첩 객체로 그렸고 실제 본문은 최상위로 펼친다 — 그 문서로 만든 ops-api 의 위임 클라이언트가 `code` 를 잃는 상태였다. **발행된 문서가 틀린 경우라 아는 순간 고쳤다**(부재와 다르다). 생성기의 오류는 생성기 쪽에서 — `libs/web` 의 `ProblemDetailSchema`(springdoc 을 쓰는 서비스 전부에 자동 구성)가 평탄화하고, 세 서비스의 `OpenApiContractIT` 가 본문 쪽 사실(`ScanApiIT` 의 `jsonPath("$.code")`)을 문서 쪽에서 대조한다 |
+| 문서 | springdoc-openapi | **3.1.1** (Boot 4 라인) — Phase 1 에 3.1.0 으로 동작 확인, 2026-09-23 에 3.1.1 (보안 권고 8건) | OpenAPI 3.1 자동 생성, `contracts/openapi/<service>.yaml` 로 내보내고 `OpenApiContractIT` 가 코드와의 일치를 검사. **REST 표면이 있는 서비스마다 생성물과 계약 IT 를 둔다** — 목록이 아니라 조건이다(2026-09-19 정정). 열거였을 때 그 목록은 `order-service`(Phase 1)·`tracking-service`(Phase 5-1a) 둘이었고, springdoc 이 붙어 있는데 생성물이 없는 `dispatch-service` 는 그 문장 **밖**에 있었다 — 조건으로 적으면 새 REST 표면이 스스로 대상이 된다. tracking 쪽은 사람만 읽는 것이 아니라 **`sim-runner` 가 다른 모듈에서 그 엔드포인트를 부르므로**(§5.6) 두 모듈이 공유하는 유일한 계약이다. 계약 IT 는 **오류 본문(`ProblemDetail`)과 성공 본문(이름 있는 타입)을 둘 다** 본다 — 한쪽만 보면 「오류를 파싱할 수 있는가」까지만 답한다. dispatch 의 생성물은 **Phase 6-0 에서 만들었다**(2026-09-23). 부재를 그때까지 둔 것은 *문서가 거짓을 말하는* 상태가 아니라 문서가 **없는** 상태였기 때문이고, 부재는 첫 소비자가 나타나는 시점에 채우는 것이 소비자 주도 원칙과 맞는다 — 그 소비자가 ops-api 다. **채우면서 결함 하나가 나왔다**: `PUT /rules/{ruleId}` 는 `Map<String, Integer>` 를, `POST /vehicles`·`POST /drivers` 는 `Map<String, UUID>` 를 돌려주어 문서가 성공 본문을 `type: object` 로 적고 있었다 — order-service 의 `ResponseEntity<Object>` 와 **같은 부류**이고, 그것을 잡은 것이 열거가 아닌 조건으로 적힌 `successBodiesWithoutNamedType()` 이다(되돌려 확인: `PUT /api/v1/rules/{ruleId} → 200 (이름 없는 object)`). 이름 있는 record 로 바꿨고 직렬화 결과는 같다. **`ProblemDetail` 의 확장 칸은 최상위다** (2026-09-24, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)): springdoc 은 확장 멤버 맵을 `properties` 라는 중첩 객체로 그렸고 실제 본문은 최상위로 펼친다 — 그 문서로 만든 ops-api 의 위임 클라이언트가 `code` 를 잃는 상태였다. **발행된 문서가 틀린 경우라 아는 순간 고쳤다**(부재와 다르다). 생성기의 오류는 생성기 쪽에서 — `libs/web` 의 `ProblemDetailSchema`(springdoc 을 쓰는 서비스 전부에 자동 구성)가 평탄화하고, 세 서비스의 `OpenApiContractIT` 가 본문 쪽 사실(`ScanApiIT` 의 `jsonPath("$.code")`)을 문서 쪽에서 대조한다. **ops-api 의 생성물은 묶음 C 에서 만들었다**(2026-09-24, `contracts/openapi/ops-api.yaml`) — 첫 소비자가 ops-web 의 TS 클라이언트다(채택 기준은 다음 PR 의 ADR-056). 채우면서 둘을 고쳤다: 커맨드 컨트롤러가 `ResponseEntity<?>` 라 성공 본문이 이름 없는 `object` 였다(`@ApiResponse` 가 `CoreReply` 의 레코드를 가리킨다), 그리고 **springdoc 은 JSpecify 를 모른다** — 응답 스키마의 칸이 전부 선택이어서 문서로 만든 TS 타입이 코드보다 약하게 말했다. ops-api 에서는 `NullabilityRequiredConverter` 가 레코드 컴포넌트의 `@Nullable` 부재를 `required` 로 옮긴다(더할 뿐 빼지 않는다). **그리고 `@Nullable` 인 칸의 타입에 `null` 을 더한다**(2026-09-24, ADR-056 의 시도에서 드러났다) — 본문은 그 칸을 빼지 않고 `null` 을 싣는데 문서가 「선택」만 말하면 TS 타입이 `undefined` 만 알고 실제로 오는 `null` 을 모른다. 검증이 이미 필수로 만든 요청 칸(`@Nullable @NotBlank reason`)은 예외다 — 서버가 `null` 을 400 으로 돌려보내므로 문서가 그보다 약하게 말하지 않는다. 문서 쪽은 `OpenApiContractIT`, 본문 쪽(「있고 `null`」)은 `ReadSurfaceIT` 가 본다. 코어 넷의 문서에는 걸지 않았다 — 그 문서로 만든 위임 클라이언트의 타입이 함께 바뀌므로 따로 판단한다 |
 | 위임 클라이언트 생성 | openapi-generator (`spring` · `spring-http-interface`) | **7.25.0** — 2026-09-24 채택([ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)) | ops-api 의 코어 위임 클라이언트를 **커밋된 `contracts/openapi/*.yaml` 에서 빌드 때** 만든다. 채택 기준(표준 템플릿·문서화된 옵션만·그대로 컴파일·Jackson 3 왕복·새 런타임 의존 없음)을 시도 전에 적었고 다섯 다 참이다. 생성물은 커밋하지 않는다. HTTP 계층은 Boot 4 의 HTTP Service Client(`@ImportHttpServices`) |
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |

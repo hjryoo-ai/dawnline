@@ -1,10 +1,14 @@
 package com.dawnline.ops.adapter.in.web;
 
-import com.dawnline.ops.application.port.in.ReplayDeadLettersUseCase;
 import com.dawnline.ops.application.port.in.ReplayDeadLettersUseCase.RecordRef;
 import com.dawnline.ops.application.port.in.ReplayDeadLettersUseCase.Replayed;
+import com.dawnline.ops.application.port.in.ReplayDeadLettersUseCase;
 import com.dawnline.ops.application.port.out.DeadLetters.DeadLetter;
 import com.dawnline.ops.domain.AuditResult;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -15,6 +19,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import org.springframework.http.ProblemDetail;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -52,6 +57,12 @@ public class DlqController {
      * @return 위치와 이름뿐인 목록
      */
     @GetMapping("/{topic}")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "위치와 이름뿐 — value 는 싣지 않는다(주소를 담을 수 있다)"),
+            @ApiResponse(responseCode = "400", description = "`limit` 이 1–500 밖이다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "계약에 없는 토픽",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public DeadLetterList list(@PathVariable String topic, @RequestParam(defaultValue = "50") int limit) {
         return new DeadLetterList(topic, dlq.list(topic, limit).stream().map(DeadLetterView::of).toList());
     }
@@ -63,6 +74,13 @@ public class DlqController {
      * @return 레코드마다 감사 id 와 결과
      */
     @PostMapping("/{topic}/replay")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "레코드마다 감사 id 와 결과 — 한 요청 안에서 결과가 갈릴 수 있다. "
+                    + "`UNKNOWN` 은 그대로 다시 누른다(재처리는 멱등, RB-05)"),
+            @ApiResponse(responseCode = "400", description = "빈 목록·100개 초과·위치 누락 — 아무것도 기록하지 않는다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "계약에 없는 토픽",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public ReplayResponse replay(@PathVariable String topic, @Valid @RequestBody ReplayBody body,
             @AuthenticationPrincipal Jwt operator) {
         List<RecordRef> records = body.records().stream()

@@ -81,8 +81,11 @@ public sealed interface Fact {
      * @param campId      웨이브 키
      * @param serviceTier 웨이브 키
      * @param cutoffAt    웨이브 키
+     * @param depotLat    창고 위도 — 계약 필수, 지도의 원점
+     * @param depotLng    창고 경도
      */
-    record WaveClosed(UUID waveId, UUID campId, String serviceTier, Instant cutoffAt) implements Fact {
+    record WaveClosed(UUID waveId, UUID campId, String serviceTier, Instant cutoffAt, double depotLat,
+            double depotLng) implements Fact {
     }
 
     /**

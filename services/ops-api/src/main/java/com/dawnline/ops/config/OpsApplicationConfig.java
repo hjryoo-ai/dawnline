@@ -6,20 +6,24 @@ import com.dawnline.ops.adapter.in.messaging.ProjectionListener;
 import com.dawnline.ops.adapter.out.persistence.JdbcAuditLog;
 import com.dawnline.ops.adapter.out.persistence.JdbcDeliveryKpis;
 import com.dawnline.ops.adapter.out.persistence.JdbcOrderRows;
+import com.dawnline.ops.adapter.out.persistence.JdbcReadModelViews;
 import com.dawnline.ops.adapter.out.persistence.JdbcRouteRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcWaveRows;
 import com.dawnline.ops.application.OnTimeRatioGauges;
 import com.dawnline.ops.application.OpsCommandService;
 import com.dawnline.ops.application.QuarantineQueryService;
 import com.dawnline.ops.application.ReadModelProjector;
+import com.dawnline.ops.application.ReadModelQueryService;
 import com.dawnline.ops.application.port.in.ListQuarantinedOutboxUseCase;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
+import com.dawnline.ops.application.port.in.QueryReadModelUseCase;
 import com.dawnline.ops.application.port.in.RunOpsCommandUseCase;
 import com.dawnline.ops.application.port.out.AuditLog;
 import com.dawnline.ops.application.port.out.CoreCommands;
 import com.dawnline.ops.application.port.out.CoreQueries;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.OrderRows;
+import com.dawnline.ops.application.port.out.ReadModelViews;
 import com.dawnline.ops.application.port.out.RouteRows;
 import com.dawnline.ops.application.port.out.WaveRows;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -150,6 +154,17 @@ public class OpsApplicationConfig {
      * @param core 코어 조회({@link CoreClientsConfig})
      * @return 격리 목록 유스케이스 — 감사 없음(§5.5)
      */
+    @Bean
+    public ReadModelViews readModelViews(JdbcTemplate jdbc) {
+        return new JdbcReadModelViews(jdbc);
+    }
+
+    @Bean
+    public QueryReadModelUseCase queryReadModel(ReadModelViews views, DeliveryKpis kpis, CoreQueries core,
+            Clock clock) {
+        return new ReadModelQueryService(views, kpis, core, clock);
+    }
+
     @Bean
     public ListQuarantinedOutboxUseCase listQuarantinedOutbox(CoreQueries core) {
         return new QuarantineQueryService(core);

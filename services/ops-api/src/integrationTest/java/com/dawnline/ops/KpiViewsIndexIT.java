@@ -2,6 +2,10 @@ package com.dawnline.ops;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.ops.adapter.out.persistence.JdbcReadModelViews;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -10,6 +14,7 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -67,12 +72,49 @@ class KpiViewsIndexIT extends OpsIntegrationTestBase {
 
     @Test
     void 두_뷰의_버킷_술어가_인덱스의_식으로_내려간다() {
-        // 측정 문서와 같은 분포: 캠프 10, 실패 5%, 배차 불가 3%(캠프·결과 없음), 개정 2%.
+        fill();
+
+        String delivery = explain("SELECT * FROM kpi_delivery_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
+        String intake = explain("SELECT * FROM kpi_intake_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
+
+        assertThat(indexCond(delivery, "ix_rmo_delivery_hour"))
+                .as("배송 축 — 캠프 접두만 타면 캠프의 전 기간을 거른다\n%s", delivery)
+                .contains("date_trunc('hour'::text, COALESCE(delivered_at, failed_at), 'UTC'::text)");
+        assertThat(indexCond(intake, "ix_rmo_intake_hour"))
+                .as("접수 축\n%s", intake)
+                .contains("date_trunc('hour'::text, placed_at, 'UTC'::text)");
+        assertThat(delivery + intake).doesNotContain("Seq Scan on rm_orders");
+    }
+
+    @Test
+    void 예외_목록이_희소_행의_부분_인덱스를_탄다() {
+        // 대시보드의 「취소됐는데 배송됨」은 창이 없다(해소 여부를 모르므로 시간이 지났다고 빠지지 않는다). 캠프 접두만
+        // 타면 캠프의 전 기간을 거른다 — 측정에서 peak 30일 98 ms, ix_rmo_delivery_hour 에서 43만 행. 부분 인덱스
+        // ix_rmo_cancelled_delivered(V4)는 술어를 만족하는 행만 담는다.
+        //
+        // 운영 코드는 캠프를 바인드로 넘긴다 — 그래서 리터럴을 끼운 EXPLAIN 이 아니라 **일반 계획**을 본다. 술어의 두
+        // 칸이 문장에 리터럴로 있어야 일반 계획에서도 플래너가 부분 인덱스의 술어를 증명한다(CLAUDE.md 「부분 인덱스의
+        // 술어 컬럼은 리터럴」).
+        fill();
+
+        String exceptions = genericPlan(JdbcReadModelViews.CANCELLED_BUT_DELIVERED_SQL, "uuid, int",
+                CAMP + ", 200");
+
+        assertThat(indexCond(exceptions, "ix_rmo_cancelled_delivered")).as("예외 목록\n%s", exceptions)
+                .contains("camp_id = $1");
+        assertThat(exceptions).doesNotContain("Seq Scan on rm_orders").doesNotContain("ix_rmo_delivery_hour");
+    }
+
+    /**
+     * 측정 문서와 같은 분포: 캠프 10, 실패 5%, 배차 불가 3%(캠프·결과 없음), 개정 2%, 취소 0.1%(997 은 10 과 서로소라
+     * 캠프마다 고르게 — 그중 배송된 것이 예외 목록이다). 통계를 첫 어설션으로 말한다.
+     */
+    private void fill() {
         jdbc.update("""
                 INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, camp_id,
                                        promised_end_original, promised_end_revised, delivered_at, failed_at, placed_at)
                 SELECT gen_random_uuid(), ?::uuid,
-                       CASE WHEN g % 33 = 0 THEN 'UNSERVICEABLE' ELSE 'DISPATCHED' END,
+                       CASE WHEN g % 33 = 0 THEN 'UNSERVICEABLE' WHEN g % 997 = 5 THEN 'CANCELLED' ELSE 'DISPATCHED' END,
                        CASE WHEN g % 33 = 0 THEN NULL WHEN g % 20 = 0 THEN 'FAILED' ELSE 'COMPLETED' END,
                        CASE WHEN g % 33 = 0 THEN NULL
                             ELSE ('00000000-0000-0000-0003-' || lpad(to_hex(g % 10), 12, '0'))::uuid END,
@@ -90,17 +132,33 @@ class KpiViewsIndexIT extends OpsIntegrationTestBase {
         assertThat(jdbc.queryForObject("SELECT reltuples FROM pg_class WHERE relname = 'rm_orders'", Double.class))
                 .as("통계가 있다 — 없으면 플래너는 짐작하고, 그 계획은 아무것도 증명하지 않는다")
                 .isGreaterThanOrEqualTo((double) ROWS);
+    }
 
-        String delivery = explain("SELECT * FROM kpi_delivery_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
-        String intake = explain("SELECT * FROM kpi_intake_hourly WHERE camp_id = " + CAMP + " AND " + DAY);
-
-        assertThat(indexCond(delivery, "ix_rmo_delivery_hour"))
-                .as("배송 축 — 캠프 접두만 타면 캠프의 전 기간을 거른다\n%s", delivery)
-                .contains("date_trunc('hour'::text, COALESCE(delivered_at, failed_at), 'UTC'::text)");
-        assertThat(indexCond(intake, "ix_rmo_intake_hour"))
-                .as("접수 축\n%s", intake)
-                .contains("date_trunc('hour'::text, placed_at, 'UTC'::text)");
-        assertThat(delivery + intake).doesNotContain("Seq Scan on rm_orders");
+    /**
+     * 운영 코드의 문장 그대로({@code ?} 를 {@code $n} 으로) 준비하고 일반 계획을 강제해 본다 — 바인드 값이 계획에 들어가지
+     * 않는다. PREPARE 는 세션의 것이므로 한 연결에서 한다.
+     */
+    private String genericPlan(String sql, String types, String args) {
+        String[] parts = sql.split("\\?", -1);
+        StringBuilder numbered = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            numbered.append('$').append(i).append(parts[i]);
+        }
+        return jdbc.execute((ConnectionCallback<String>) connection -> {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("SET plan_cache_mode = force_generic_plan");
+                statement.execute("PREPARE exceptions_plan(" + types + ") AS " + numbered);
+                List<String> lines = new ArrayList<>();
+                try (ResultSet rows = statement.executeQuery("EXPLAIN EXECUTE exceptions_plan(" + args + ")")) {
+                    while (rows.next()) {
+                        lines.add(rows.getString(1));
+                    }
+                }
+                statement.execute("DEALLOCATE exceptions_plan");
+                statement.execute("RESET plan_cache_mode");
+                return String.join("\n", lines);
+            }
+        });
     }
 
     private String explain(String query) {

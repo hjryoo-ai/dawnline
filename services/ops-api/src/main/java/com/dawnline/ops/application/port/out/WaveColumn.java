@@ -8,6 +8,9 @@ public enum WaveColumn {
     CAMP_ID(ColumnFamily.KEY),
     SERVICE_TIER(ColumnFamily.KEY),
     CUTOFF_AT(ColumnFamily.KEY),
+    /** {@code wave.closed} 의 창고 좌표 — 웨이브의 불변 속성(V3). */
+    DEPOT_LAT(ColumnFamily.KEY),
+    DEPOT_LNG(ColumnFamily.KEY),
     STATUS(ColumnFamily.AXIS),
     PLAN_ID(ColumnFamily.PLAN),
     PLAN_DURATION_MS(ColumnFamily.PLAN),

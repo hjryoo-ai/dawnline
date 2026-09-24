@@ -61,6 +61,16 @@ class CoreCommandsClientTest {
     private static final UUID ORDER = UUID.fromString("0199a000-0000-7000-8000-0000000000c1");
     private static final String INTERNAL_TOKEN = "unit-test-only-internal-token-0123456789";
 
+    /**
+     * 답을 기대하는 갈래의 읽기 타임아웃. 타임아웃 갈래의 짧은 값을 함께 쓰면 부하 걸린 러너에서 첫 요청이 그것을
+     * 넘는다 — 헤더가 늦으면 {@code Unknown}, 본문이 늦으면 본문이 빈 {@code Rejected} 로 (CI 에서 둘 다 관측,
+     * 가짜 코어의 409 를 700ms 늦춰 로컬에서 둘 다 재현).
+     */
+    private static final String ANSWERING_READ_TIMEOUT = "5s";
+    /** 타임아웃 갈래만 — 가짜 코어는 {@link #SLOW_REPLY_MILLIS} 뒤에 답하므로 이 값이 먼저 끝난다. */
+    private static final String TIMEOUT_READ_TIMEOUT = "500ms";
+    private static final long SLOW_REPLY_MILLIS = 1_500;
+
     private HttpServer core;
     private final List<Map<String, @Nullable String>> received = new CopyOnWriteArrayList<>();
     private final Map<String, Function<HttpExchange, Reply>> routes = new ConcurrentHashMap<>();
@@ -172,9 +182,9 @@ class CoreCommandsClientTest {
 
     @Test
     void 응답_전에_시간이_다_되면_적용됐는지_모른다() {
-        routes.put("/api/v1/plans/" + WAVE + "/run", e -> new Reply(200, "{}", 1_500));
+        routes.put("/api/v1/plans/" + WAVE + "/run", e -> new Reply(200, "{}", SLOW_REPLY_MILLIS));
 
-        CoreReply reply = delegate(coreUrl(), new OpsCommand.RunPlan(WAVE, null, null, null));
+        CoreReply reply = delegateTimingOut(coreUrl(), new OpsCommand.RunPlan(WAVE, null, null, null));
 
         assertThat(received).as("요청은 코어에 닿았다 — 그래서 FAILED 가 아니다").hasSize(1);
         assertThat(reply).isInstanceOfSatisfying(CoreReply.Unknown.class,
@@ -204,21 +214,35 @@ class CoreCommandsClientTest {
     }
 
     private CoreReply delegate(String baseUrl, OpsCommand command) {
+        return delegate(runner(baseUrl, ANSWERING_READ_TIMEOUT), command);
+    }
+
+    private CoreReply delegateTimingOut(String baseUrl, OpsCommand command) {
+        return delegate(runner(baseUrl, TIMEOUT_READ_TIMEOUT), command);
+    }
+
+    private static CoreReply delegate(ApplicationContextRunner runner, OpsCommand command) {
         CoreReply[] reply = new CoreReply[1];
-        runner(baseUrl).run(context -> reply[0] = context.getBean(CoreCommands.class).delegate(AUDIT, command));
+        runner.run(context -> reply[0] = context.getBean(CoreCommands.class).delegate(AUDIT, command));
         return reply[0];
     }
 
     private static ApplicationContextRunner runner(String baseUrl) {
-        return runner(baseUrl, baseUrl, baseUrl, baseUrl);
+        return runner(baseUrl, ANSWERING_READ_TIMEOUT);
+    }
+
+    private static ApplicationContextRunner runner(String baseUrl, String readTimeout) {
+        return runner(baseUrl, baseUrl, baseUrl, baseUrl, readTimeout);
     }
 
     /** 그룹마다 주소를 따로 — 재큐가 어느 코어로 갔는지 경로 접두어로 가른다. */
     private static ApplicationContextRunner prefixedRunner(String baseUrl) {
-        return runner(baseUrl + "/dispatch", baseUrl + "/order", baseUrl + "/fulfillment", baseUrl + "/tracking");
+        return runner(baseUrl + "/dispatch", baseUrl + "/order", baseUrl + "/fulfillment", baseUrl + "/tracking",
+                ANSWERING_READ_TIMEOUT);
     }
 
-    private static ApplicationContextRunner runner(String dispatch, String order, String fulfillment, String tracking) {
+    private static ApplicationContextRunner runner(String dispatch, String order, String fulfillment, String tracking,
+            String readTimeout) {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class,
                         HttpMessageConvertersAutoConfiguration.class, HttpClientAutoConfiguration.class,
@@ -230,13 +254,13 @@ class CoreCommandsClientTest {
                 .withPropertyValues(
                         "spring.http.serviceclient.dispatch.base-url=" + dispatch,
                         "spring.http.serviceclient.dispatch.connect-timeout=1s",
-                        "spring.http.serviceclient.dispatch.read-timeout=500ms",
+                        "spring.http.serviceclient.dispatch.read-timeout=" + readTimeout,
                         "spring.http.serviceclient.order.base-url=" + order,
-                        "spring.http.serviceclient.order.read-timeout=500ms",
+                        "spring.http.serviceclient.order.read-timeout=" + readTimeout,
                         "spring.http.serviceclient.fulfillment.base-url=" + fulfillment,
-                        "spring.http.serviceclient.fulfillment.read-timeout=500ms",
+                        "spring.http.serviceclient.fulfillment.read-timeout=" + readTimeout,
                         "spring.http.serviceclient.tracking.base-url=" + tracking,
-                        "spring.http.serviceclient.tracking.read-timeout=500ms");
+                        "spring.http.serviceclient.tracking.read-timeout=" + readTimeout);
     }
 
     // --- 작업 2: 조기 마감 · outbox 재큐 · 격리 목록 ----------------------------------------------------
@@ -338,8 +362,8 @@ class CoreCommandsClientTest {
         assertThat(delegate(coreUrl(), command)).isInstanceOfSatisfying(CoreReply.Unknown.class,
                 unknown -> assertThat(unknown.coreStatus()).isEqualTo(500));
 
-        routes.put(path, e -> new Reply(200, "{}", 1_500));
-        assertThat(delegate(coreUrl(), command)).isInstanceOfSatisfying(CoreReply.Unknown.class,
+        routes.put(path, e -> new Reply(200, "{}", SLOW_REPLY_MILLIS));
+        assertThat(delegateTimingOut(coreUrl(), command)).isInstanceOfSatisfying(CoreReply.Unknown.class,
                 unknown -> assertThat(unknown.timedOut()).isTrue());
 
         String closed;

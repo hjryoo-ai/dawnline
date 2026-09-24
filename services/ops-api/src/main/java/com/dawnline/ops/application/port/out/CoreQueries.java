@@ -1,6 +1,7 @@
 package com.dawnline.ops.application.port.out;
 
 import com.dawnline.ops.domain.CoreService;
+import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -17,4 +18,12 @@ public interface CoreQueries {
      * @return {@link CoreReply.Applied}({@link CoreReply.QuarantinedOutbox}) 또는 거절·연결 실패·모름
      */
     CoreReply listQuarantined(CoreService service, @Nullable Integer limit);
+
+    /**
+     * dispatch 의 라우트 하나 — 지도의 stop 순서·좌표·상태.
+     *
+     * @param routeId 라우트
+     * @return {@link CoreReply.Applied}({@link CoreReply.RouteDetail}) 또는 거절(없는 라우트는 코어의 404)·연결 실패·모름
+     */
+    CoreReply route(UUID routeId);
 }
