@@ -49,6 +49,9 @@ web() {
 }
 audit_id() { grep -i "^$AUDIT_HEADER:" "$WORK/headers" | head -1 | cut -d' ' -f2 | tr -d '\r[:space:]'; }
 
+# id 는 **뒤** 8자로 보인다 — UUIDv7 의 앞은 밀리초 시각이라 한 계획의 라우트는 앞 8자가 같다
+# (ops-web 의 shortId 와 같은 규칙, 이 데모의 첫 CI 출력이 「01a0d373 → 01a0d373」이었다).
+
 # 조건이 참이 될 때까지 기다린다 — 실패하면 마지막 값을 남긴다.
 await() {
   local label="$1" want="$2" probe="$3" got="" i=0
@@ -162,7 +165,7 @@ await "지도가 읽는 라우트 수 (읽기 모델)" "$route_count" \
   "web GET '/api/v1/waves/$WAVE/routes' \"\$VIEW\" >/dev/null; jq -r 'select(.planId != null) | .routes | length' < \"\$WORK/body\""
 jq -e '.depot.lat and .depot.lng' >/dev/null < "$WORK/body" || fail "지도의 창고 좌표가 없다(V3): $(cat "$WORK/body")"
 cp "$WORK/body" "$WORK/wave-routes.json"
-jq -r '.routes[] | "  라우트 \(.routeId[0:8])  r\(.revision)  stop \(.stopCount)  \(.costKrw)원\(if .atRisk then "  at-risk" else "" end)"' \
+jq -r '.routes[] | "  라우트 …\(.routeId[-8:])  r\(.revision)  stop \(.stopCount)  \(.costKrw)원\(if .atRisk then "  at-risk" else "" end)"' \
   < "$WORK/wave-routes.json"
 
 # 지도의 stop — dispatch 로 조회 위임(§3.3). 좌표가 있고 수가 요약과 같아야 그림이 된다.
@@ -184,7 +187,7 @@ read -r FROM ORDER < "$WORK/candidates.txt" || fail "옮길 PLANNED stop 이 없
 TO="$(jq -r --arg f "$FROM" '[.routes[].routeId | select(. != $f)][0]' < "$WORK/wave-routes.json")"
 from_before="$(dq "SELECT revision FROM routes WHERE id = '$FROM'")"
 to_before="$(dq "SELECT revision FROM routes WHERE id = '$TO'")"
-printf '  %-50s %s → %s (r%s → r%s)\n' "주문 ${ORDER:0:8}" "${FROM:0:8}" "${TO:0:8}" "$from_before" "$to_before"
+printf '  %-50s %s → %s (r%s → r%s)\n' "주문 …${ORDER: -8}" "…${FROM: -8}" "…${TO: -8}" "$from_before" "$to_before"
 
 # 화면의 재배정 창에는 이유 칸이 없다 — 계약의 본문은 targetRouteId 하나다(ADR-056 결정 2).
 status="$(web POST "/api/v1/routes/$FROM/stops/$ORDER/reassign" "$OP" "{\"targetRouteId\":\"$TO\"}")"
@@ -197,7 +200,7 @@ expect_audit "$(audit_id)" REASSIGN_STOP
 
 # 진실 — dispatch DB.
 owner="$(dq "SELECT s.route_id FROM route_stop_orders o JOIN route_stops s ON s.id = o.stop_id WHERE o.order_id = '$ORDER'")"
-printf '  %-50s %s\n' "주문이 실린 라우트 (dispatch)" "${owner:0:8}"
+printf '  %-50s %s\n' "주문이 실린 라우트 (dispatch)" "…${owner: -8}"
 [ "$owner" = "$TO" ] || fail "dispatch 에서 주문이 대상 라우트에 없다: $owner"
 printf '  %-50s r%s · r%s\n' "두 라우트의 revision (dispatch)" \
   "$(dq "SELECT revision FROM routes WHERE id = '$FROM'")" "$(dq "SELECT revision FROM routes WHERE id = '$TO'")"
