@@ -5,11 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.openapi.OpenApiResponses;
+import com.dawnline.web.internal.InternalTokenSurfaceContract;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -39,7 +42,7 @@ import tools.jackson.databind.json.JsonMapper;
 @AutoConfigureMockMvc
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("OpenApiContractIT — 문서가 코드와 어긋나지 않는다")
-class OpenApiContractIT extends FulfillmentIntegrationTestBase {
+class OpenApiContractIT extends FulfillmentIntegrationTestBase implements InternalTokenSurfaceContract {
 
     /** 저장소에 커밋되는 문서. */
     private static final Path CONTRACT = Path.of("../../contracts/openapi/fulfillment-service.yaml");
@@ -52,6 +55,28 @@ class OpenApiContractIT extends FulfillmentIntegrationTestBase {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    @Override
+    public MockMvc mockMvc() {
+        return mockMvc;
+    }
+
+    @Override
+    public ApplicationContext applicationContext() {
+        return applicationContext;
+    }
+
+    /**
+     * 토큰 없이 받는 쓰기 (DESIGN.md §10, ADR-055) — 운영자 표면뿐이다 — 조기 마감(ADR-054)과 outbox 재큐. 고객·현장 쓰기가 없다. 나머지 쓰기는 전부 문서에서 뽑혀 401 을 확인받는다
+     * ({@link InternalTokenSurfaceContract}).
+     */
+    @Override
+    public Set<String> unauthenticatedWrites() {
+        return Set.of();
+    }
 
     /**
      * 이 IT 는 발행도 Redis 도 브로커도 보지 않는다 — 문서만 읽는다. 공유 자원은 자기 자리에서

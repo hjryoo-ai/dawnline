@@ -141,3 +141,16 @@ management:
 logging:
   level:
     com.dawnline: INFO
+
+# =============================================================================
+# 내부 토큰 (DESIGN.md §10 셋째 층, ADR-055)
+#
+# 이 서비스의 운영자 쓰기(POST·PUT·PATCH·DELETE 중 @UnauthenticatedWrite 가 없는 것)는 헤더
+# X-Dawnline-Internal 이 이 값과 같아야 한다 — ops-api 가 싣는다. 값은 저장소에 두지 않는다: `make env` 가
+# 무작위로 채우고 Compose 가 넘긴다. 없거나 32바이트보다 짧으면 기동하지 않는다(InternalTokenProperties) —
+# 기본값을 두지 않는 것이 그 규칙의 일부다.
+# =============================================================================
+dawnline:
+  web:
+    internal-token:
+      secret: ${DAWNLINE_INTERNAL_TOKEN:}

@@ -47,6 +47,8 @@ dependencies {
     // MockMvc 슬라이스는 Docker 없이 돌고, JaCoCo 게이트는 test 소스셋만 보기 때문이다.
     testImplementation(libs.spring.boot.webmvc.test)
 
+    // 내부 토큰의 테스트 값(InternalTokens)과 코어의 쓰기 표면 검사(InternalTokenSurfaceContract) — ADR-055.
+    integrationTestImplementation(testFixtures(project(":libs:web")))
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.testcontainers.redis)

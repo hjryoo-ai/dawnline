@@ -53,6 +53,15 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
+            운영자는 ops-api 를 거친다 (ADR-055)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - internalToken: []
   /api/v1/vehicles:
     get:
       tags:
@@ -103,6 +112,15 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
+            운영자는 ops-api 를 거친다 (ADR-055)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - internalToken: []
   /api/v1/routes/{routeId}/stops/{orderId}/reassign:
     post:
       tags:
@@ -152,6 +170,15 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
+            운영자는 ops-api 를 거친다 (ADR-055)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - internalToken: []
   /api/v1/plans/{waveId}/run:
     post:
       tags:
@@ -199,6 +226,15 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
+            운영자는 ops-api 를 거친다 (ADR-055)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - internalToken: []
   /api/v1/drivers:
     get:
       tags:
@@ -249,6 +285,15 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
+            운영자는 ops-api 를 거친다 (ADR-055)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - internalToken: []
   /api/v1/admin/outbox/{id}/requeue:
     post:
       tags:
@@ -288,6 +333,15 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
+            운영자는 ops-api 를 거친다 (ADR-055)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - internalToken: []
   /api/v1/rules:
     get:
       tags:
@@ -837,3 +891,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/QuarantinedOutboxEvent"
+  securitySchemes:
+    internalToken:
+      type: apiKey
+      description: "코어의 운영자 쓰기 커맨드에 필요한 내부 토큰 (DESIGN.md §10 셋째 층, ADR-055). ops-api\
+        \ 가 싣는다 — 운영자는 ops-api 를 거친다."
+      name: X-Dawnline-Internal
+      in: header

@@ -31,6 +31,8 @@ dependencies {
     testImplementation(testFixtures(project(":libs:messaging")))
 
     // Boot 4 모듈화: @AutoConfigureMockMvc 는 spring-boot-starter-test 가 아니라 이 모듈에 있다.
+    // 내부 토큰의 테스트 값(InternalTokens)과 코어의 쓰기 표면 검사(InternalTokenSurfaceContract) — ADR-055.
+    integrationTestImplementation(testFixtures(project(":libs:web")))
     integrationTestImplementation(libs.spring.boot.webmvc.test)
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
