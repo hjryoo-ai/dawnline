@@ -14,6 +14,7 @@ import com.dawnline.order.domain.OrderErrorCode;
 import com.dawnline.order.domain.OrderStatus;
 import com.dawnline.common.error.DomainException;
 import com.dawnline.web.ProblemDetailsAdviceSupport;
+import com.dawnline.web.internal.UnauthenticatedWrite;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -119,6 +120,7 @@ public class OrderController {
                     description = "고객별 레이트 리밋 초과. `Retry-After` 초 뒤에 다시 시도한다",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     @PostMapping
+    @UnauthenticatedWrite(reason = "고객 주문 API — DESIGN.md §10 의 의도된 무인증(첫째 층)")
     public ResponseEntity<OrderAccepted> place(
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody PlaceOrderRequest request) {
@@ -189,6 +191,8 @@ public class OrderController {
                             + "재시도해도 결과가 같아 `Retry-After` 는 없다",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     @PostMapping("/{orderId}/cancel")
+    @UnauthenticatedWrite(reason = "고객 주문 API — DESIGN.md §10 첫째 층. ops-api 의 CANCEL_ORDER 도 이 경로로 위임하고 "
+            + "그 감사는 ops-api 쪽에 있다(ADR-055 「결과」)")
     public OrderView cancel(@PathVariable UUID orderId,
             @Valid @RequestBody(required = false) @Nullable CancelOrderRequest request) {
         return cancelOrder.cancel(orderId, request == null ? null : request.reason());

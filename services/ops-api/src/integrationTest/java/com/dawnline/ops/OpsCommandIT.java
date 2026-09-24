@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.messaging.outbox.OutboxRepository;
 import com.dawnline.messaging.web.OutboxAdminController;
 import com.dawnline.observability.MdcKeys;
+import com.dawnline.web.internal.InternalToken;
+import com.dawnline.web.internal.InternalTokenProperties;
+import com.dawnline.web.internal.InternalTokens;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.MACSigner;
@@ -143,6 +146,34 @@ class OpsCommandIT extends OpsIntegrationTestBase {
     }
 
     @Test
+    void 내부_토큰_검사는_ops_api_에_없다() {
+        // libs/web 의 내부 토큰 검사는 서블릿 웹 앱 전부에 붙고 ops-api 도 그 조건을 만족한다. ops-api 의 쓰기는 JWT·역할·
+        // 감사가 지키므로 application.yml 의 dawnline.web.internal-token.enforce=false 로 끈다 (ADR-055 결정 4) — 켜 두면
+        // 운영자가 JWT 에 더해 내부 토큰까지 알아야 한다. 이 테스트는 그 제외가 「검토했는데 뺀 것」임을 말한다.
+        assertThat(context.getBeanNamesForType(InternalTokenProperties.class))
+                .as("전제 — libs/web 이 붙어 있고 토큰 값이 바인딩됐다(ops-api 는 그 값을 코어 호출에 싣는다). 이것이 "
+                        + "비면 아래의 부재는 아무것도 말하지 않는다")
+                .isNotEmpty();
+        assertThat(context.getBean(InternalTokenProperties.class).enforce()).isFalse();
+        assertThat(context.containsBean("dawnlineInternalTokenEnforcement")).isFalse();
+    }
+
+    @Test
+    void 위임은_코어에_내부_토큰을_싣는다() throws Exception {
+        // 가짜 코어는 진짜 코어처럼 토큰 없는 쓰기를 401 로 돌려준다(startCore). 재계획은 200, 재배정은 코어의 409 가
+        // 와야 한다 — 401 이면 헤더가 빠진 것이다. 취소(order 그룹)는 이 IT 에서 닫힌 포트로 가므로
+        // CoreCommandsClientTest 가 본다.
+        assertThat(post("/api/v1/plans/" + WAVE + "/run", token("OPS_OPERATOR", "kim"), "").statusCode())
+                .isEqualTo(200);
+        assertThat(post("/api/v1/routes/" + ROUTE + "/stops/" + ORDER + "/reassign", token("OPS_OPERATOR", "kim"),
+                "{\"targetRouteId\":\"" + TARGET + "\"}").statusCode()).isEqualTo(409);
+
+        assertThat(RECEIVED).as("전제 — 두 위임이 코어에 닿았다").hasSize(2);
+        assertThat(RECEIVED).extracting(request -> request.get("internalToken"))
+                .containsOnly(InternalTokens.TEST_TOKEN);
+    }
+
+    @Test
     void 뷰어는_조회를_통과한다_404_는_인가_뒤의_답이다() throws Exception {
         assertThat(get("/api/v1/no-such-view", token("OPS_VIEWER", "viewer")).statusCode()).isEqualTo(404);
         assertThat(get("/api/v1/no-such-view", null).statusCode()).isEqualTo(401);
@@ -209,19 +240,28 @@ class OpsCommandIT extends OpsIntegrationTestBase {
     private static final String REJECTION =
             "{\"type\":\"https://dawnline.internal/problems/hard-rule-violated\",\"status\":409,\"code\":\"hard-rule-violated\"}";
 
+    private static final String UNAUTHORIZED =
+            "{\"type\":\"https://dawnline.internal/problems/internal-token-required\",\"status\":401,"
+                    + "\"code\":\"internal-token-required\"}";
+
     private static HttpServer startCore() {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/", exchange -> {
                 String path = exchange.getRequestURI().getPath();
+                String internalToken = String.valueOf(exchange.getRequestHeaders().getFirst(InternalToken.HEADER));
                 RECEIVED.add(Map.of("path", path,
                         "auditId", String.valueOf(exchange.getRequestHeaders().getFirst(MdcKeys.AUDIT_ID_HEADER)),
+                        "internalToken", internalToken,
                         "body", new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
-                boolean run = path.endsWith("/run");
-                String body = run ? "{\"waveId\":\"" + WAVE + "\",\"outcome\":\"PLANNED\"}" : REJECTION;
+                // 진짜 코어처럼 토큰 없는 운영자 쓰기는 401 이다(ADR-055) — 위임이 헤더를 잃으면 여기서 드러난다.
+                boolean authorized = InternalTokens.TEST_TOKEN.equals(internalToken);
+                boolean run = authorized && path.endsWith("/run");
+                String body = !authorized ? UNAUTHORIZED
+                        : run ? "{\"waveId\":\"" + WAVE + "\",\"outcome\":\"PLANNED\"}" : REJECTION;
                 byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", run ? "application/json" : "application/problem+json");
-                exchange.sendResponseHeaders(run ? 200 : 409, bytes.length);
+                exchange.sendResponseHeaders(!authorized ? 401 : run ? 200 : 409, bytes.length);
                 exchange.getResponseBody().write(bytes);
                 exchange.close();
             });

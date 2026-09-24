@@ -1,1 +1,2 @@
 com.dawnline.web.openapi.ProblemDetailSchemaAutoConfiguration
+com.dawnline.web.internal.InternalTokenAutoConfiguration

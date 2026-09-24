@@ -1,5 +1,6 @@
 package com.dawnline.fulfillment;
 
+import com.dawnline.web.internal.InternalTokens;
 import com.redis.testcontainers.RedisContainer;
 import org.flywaydb.core.Flyway;
 import org.testcontainers.kafka.KafkaContainer;
@@ -84,6 +85,8 @@ public abstract class FulfillmentIntegrationTestBase {
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        // 내부 토큰 (ADR-055) — 없으면 컨텍스트가 뜨지 않는다. 공유 자원이 아니라 기동 조건이라 기반이 넣는다.
+        registry.add(InternalTokens.SECRET_PROPERTY, () -> InternalTokens.TEST_TOKEN);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);

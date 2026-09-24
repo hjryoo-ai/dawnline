@@ -4,6 +4,7 @@ import com.dawnline.tracking.application.port.in.RecordScanUseCase;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase.ScanCommand;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase.ScanResult;
 import com.dawnline.tracking.domain.ScanType;
+import com.dawnline.web.internal.UnauthenticatedWrite;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -79,6 +80,7 @@ public class ScanController {
      * @return 주문마다의 결과 ({@code DEPARTED_CAMP} 는 라우트 전체)
      */
     @PostMapping
+    @UnauthenticatedWrite(reason = "현장(기사 단말) 스캔 — DESIGN.md §10 둘째 층. 단말 인증은 범위 밖이다")
     @ApiResponses({
             @ApiResponse(responseCode = "200",
                     description = "받았다. `orders[]` 의 `outcome` 이 주문마다의 결과다 — "

@@ -14,6 +14,8 @@ import com.dawnline.fulfillment.application.FulfillmentMetrics;
 import com.dawnline.fulfillment.application.port.in.PlacedOrderSnapshot;
 import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
+import com.dawnline.web.internal.InternalToken;
+import com.dawnline.web.internal.InternalTokens;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
@@ -161,6 +163,7 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
         UUID waveId = openWave(SEEDED_CAMP, futureCutoff());
 
         mvc.perform(post("/api/v1/waves/{waveId}/close", waveId)
+                        .header(InternalToken.HEADER, InternalTokens.TEST_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\" \"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("validation-failed"));
@@ -236,6 +239,7 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
 
     private ResultActions close(UUID waveId, String reason) throws Exception {
         return mvc.perform(post("/api/v1/waves/{waveId}/close", waveId)
+                .header(InternalToken.HEADER, InternalTokens.TEST_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"reason\":\"" + reason + "\"}"));
     }

@@ -1885,6 +1885,12 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      테스트가 말한다(감사 없는 재큐가 생긴다). 재큐는 RB-05 의 SQL 과 같은 조건부 `UPDATE`, 409 는 행의 지금
      위치(`currentState`)를 싣는다. 같은 PR 에서 **OpenAPI 문서를 `integrationTest` 입력으로 거는 일을
      `dawnline.spring-service` 규약으로 옮겼다** — 서비스마다 적으면 다섯째가 또 빠진다.
+   - **코어의 운영자 쓰기에 내부 토큰**(2026-09-24, §10 세 층,
+     [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)) — 격리 재큐의 재검토 지점을
+     네트워크 경계로 미루지 않고 닫았다. 범위는 경로 접두어가 아니라 호출자와 성질(ops-api 만 · 쓰기 · 감사
+     대상)이고 규칙은 **기본 거부**다: 면제는 주문 접수·취소와 기사 스캔 셋. `libs/web` 의 매핑 뒤 인터셉터,
+     강제 수단은 코어 넷의 `OpenApiContractIT` 가 **문서에서 뽑은** 쓰기를 전부 토큰 없이 부르는 검사. ops-api 의
+     기존 위임 셋이 같은 PR 에서 헤더를 싣는다.
    - 다음: ops-api 의 `fulfillment`·`tracking` 위임 그룹(§5.5 — outbox 경로에만 `{service}` 한 칸).
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.
 4. 테스트: 프로젝션 멱등(같은 이벤트 2회), **프로젝션 순서 무관(같은 사실을 씨 고정 셔플로 다시 넣어 최종 행이 같은가)**, 권한(viewer가 커맨드 403), 커맨드 감사 기록.

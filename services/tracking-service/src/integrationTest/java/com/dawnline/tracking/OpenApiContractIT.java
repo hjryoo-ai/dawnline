@@ -5,9 +5,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.openapi.OpenApiResponses;
+import com.dawnline.web.internal.InternalTokenSurfaceContract;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -35,7 +38,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("OpenAPI 문서가 코드와 어긋나지 않는다")
-class OpenApiContractIT extends TrackingIntegrationTestBase {
+class OpenApiContractIT extends TrackingIntegrationTestBase implements InternalTokenSurfaceContract {
 
     /** 저장소에 커밋되는 문서. */
     private static final Path CONTRACT = Path.of("../../contracts/openapi/tracking-service.yaml");
@@ -48,6 +51,28 @@ class OpenApiContractIT extends TrackingIntegrationTestBase {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    @Override
+    public MockMvc mockMvc() {
+        return mockMvc;
+    }
+
+    @Override
+    public ApplicationContext applicationContext() {
+        return applicationContext;
+    }
+
+    /**
+     * 토큰 없이 받는 쓰기 (DESIGN.md §10, ADR-055) — 현장(기사 단말) 스캔 — §10 둘째 층. 단말 인증은 범위 밖이다. 나머지 쓰기는 전부 문서에서 뽑혀 401 을 확인받는다
+     * ({@link InternalTokenSurfaceContract}).
+     */
+    @Override
+    public Set<String> unauthenticatedWrites() {
+        return Set.of("POST /api/v1/routes/{routeId}/stops/{stopSeq}/events");
+    }
 
     /**
      * 이 IT 는 발행도 스케줄도 브로커도 보지 않는다 — 문서만 읽는다.

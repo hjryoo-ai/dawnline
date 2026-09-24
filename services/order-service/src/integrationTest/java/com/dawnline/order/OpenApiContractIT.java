@@ -5,14 +5,17 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.openapi.OpenApiResponses;
+import com.dawnline.web.internal.InternalTokenSurfaceContract;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -33,7 +36,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest(classes = OrderApplication.class)
 @AutoConfigureMockMvc
 @DisplayName("OpenApiContractIT — 문서가 코드와 어긋나지 않는다")
-class OpenApiContractIT extends OrderIntegrationTestBase {
+class OpenApiContractIT extends OrderIntegrationTestBase implements InternalTokenSurfaceContract {
 
     /** 저장소에 커밋되는 문서. */
     private static final Path CONTRACT = Path.of("../../contracts/openapi/order-service.yaml");
@@ -46,6 +49,30 @@ class OpenApiContractIT extends OrderIntegrationTestBase {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    @Override
+    public MockMvc mockMvc() {
+        return mockMvc;
+    }
+
+    @Override
+    public ApplicationContext applicationContext() {
+        return applicationContext;
+    }
+
+    /**
+     * 토큰 없이 받는 쓰기 (DESIGN.md §10, ADR-055) — 고객 주문 API 의 접수·취소 — §10 첫째 층. 취소는 ops-api 의 `CANCEL_ORDER` 도 이 경로로 위임한다(감사는 ops-api 쪽). 나머지 쓰기는 전부 문서에서 뽑혀 401 을 확인받는다
+     * ({@link InternalTokenSurfaceContract}).
+     */
+    @Override
+    public Set<String> unauthenticatedWrites() {
+        return Set.of(
+            "POST /api/v1/orders",
+            "POST /api/v1/orders/{orderId}/cancel");
+    }
 
     /** 이 테스트는 Redis·릴레이와 무관하다. 죽은 주소로 두어 컨텍스트를 가볍게 만든다. */
     @DynamicPropertySource

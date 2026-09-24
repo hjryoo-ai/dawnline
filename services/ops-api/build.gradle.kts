@@ -28,6 +28,8 @@ dependencies {
     // 순서 검사의 사실 집합을 계약 예시에서 만든다 (ADR-051 결정 6, 불변규칙 8).
     testImplementation(testFixtures(project(":libs:messaging")))
 
+    // 내부 토큰의 테스트 값(InternalTokens)과 코어의 쓰기 표면 검사(InternalTokenSurfaceContract) — ADR-055.
+    integrationTestImplementation(testFixtures(project(":libs:web")))
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
     integrationTestImplementation(libs.awaitility)

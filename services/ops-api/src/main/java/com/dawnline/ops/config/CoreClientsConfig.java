@@ -2,10 +2,12 @@ package com.dawnline.ops.config;
 
 import com.dawnline.ops.adapter.out.core.AuditIdPropagation;
 import com.dawnline.ops.adapter.out.core.CoreCommandsClient;
+import com.dawnline.ops.adapter.out.core.InternalTokenPropagation;
 import com.dawnline.ops.adapter.out.core.dispatch.api.PlanControllerApi;
 import com.dawnline.ops.adapter.out.core.dispatch.api.RouteControllerApi;
 import com.dawnline.ops.adapter.out.core.order.api.OrderControllerApi;
 import com.dawnline.ops.application.port.out.CoreCommands;
+import com.dawnline.web.internal.InternalTokenProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.support.RestClientHttpServiceGroupConfigurer;
@@ -26,14 +28,19 @@ import org.springframework.web.service.registry.ImportHttpServices;
 public class CoreClientsConfig {
 
     /**
-     * 모든 그룹의 클라이언트에 감사 id 상관 헤더를 단다.
+     * 모든 그룹의 클라이언트에 감사 id 상관 헤더와 내부 토큰을 단다 (§5.5, ADR-055 결정 4). 한 자리에 두는 이유:
+     * 그룹이 늘 때(작업 2 의 fulfillment·tracking) 둘 중 하나만 붙는 일이 없다.
      *
+     * @param internalToken 검증된 내부 토큰 설정
      * @return 그룹 설정
      */
     @Bean
-    public RestClientHttpServiceGroupConfigurer auditIdPropagation() {
-        AuditIdPropagation interceptor = new AuditIdPropagation();
-        return groups -> groups.forEachClient((group, builder) -> builder.requestInterceptor(interceptor));
+    public RestClientHttpServiceGroupConfigurer coreCallHeaders(InternalTokenProperties internalToken) {
+        AuditIdPropagation auditId = new AuditIdPropagation();
+        InternalTokenPropagation token = new InternalTokenPropagation(internalToken);
+        return groups -> groups.forEachClient((group, builder) -> builder
+                .requestInterceptor(auditId)
+                .requestInterceptor(token));
     }
 
     /**

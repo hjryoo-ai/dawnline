@@ -13,6 +13,8 @@ import com.dawnline.messaging.outbox.OutboxAppender;
 import com.dawnline.messaging.outbox.OutboxEvent;
 import com.dawnline.messaging.outbox.OutboxMessage;
 import com.dawnline.messaging.outbox.OutboxRepository;
+import com.dawnline.web.internal.InternalToken;
+import com.dawnline.web.internal.InternalTokens;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -186,7 +188,8 @@ class OutboxQuarantineIT extends MessagingIntegrationTestBase {
         assertThat(find(poisonId).isQuarantined()).as("전제 — 원인 수정만으로는 격리가 풀리지 않는다").isTrue();
 
         // (b) 격리 해제는 엔드포인트다 (§4.6 「격리 조회·재큐 엔드포인트」).
-        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", poisonId))
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", poisonId)
+                        .header(InternalToken.HEADER, InternalTokens.TEST_TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(poisonId.toString()))
                 .andExpect(jsonPath("$.eventType").value("fulfillment.planned"));
@@ -197,7 +200,8 @@ class OutboxQuarantineIT extends MessagingIntegrationTestBase {
 
         // 응답을 못 받은 운영자가 다시 누른다 — 409 가 앞의 요청이 적용됐고 행이 이미 나갔다고 말한다
         // (ADR-015 후속 정정 결정 3, ops-api 감사 UNKNOWN 의 해소).
-        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", poisonId))
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", poisonId)
+                        .header(InternalToken.HEADER, InternalTokens.TEST_TOKEN))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("not-quarantined"))
                 .andExpect(jsonPath("$.currentState").value("PUBLISHED"))
@@ -250,7 +254,8 @@ class OutboxQuarantineIT extends MessagingIntegrationTestBase {
             outboxRepository.append(row);
         });
 
-        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", id))
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", id)
+                        .header(InternalToken.HEADER, InternalTokens.TEST_TOKEN))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("not-quarantined"))
                 .andExpect(jsonPath("$.currentState").value("PUBLISHED"))
@@ -263,7 +268,8 @@ class OutboxQuarantineIT extends MessagingIntegrationTestBase {
 
     @Test
     void 없는_행의_재큐는_404_다() throws Exception {
-        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", Ids.newId()))
+        mvc.perform(post("/api/v1/admin/outbox/{id}/requeue", Ids.newId())
+                        .header(InternalToken.HEADER, InternalTokens.TEST_TOKEN))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("not-found"));
     }
