@@ -10,6 +10,7 @@ import com.dawnline.ops.application.port.in.RunOpsCommandUseCase;
 import com.dawnline.ops.application.port.out.AuditLog;
 import com.dawnline.ops.application.port.out.CoreCommands;
 import com.dawnline.ops.application.port.out.CoreReply;
+import com.dawnline.ops.domain.AuditResult;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
@@ -56,6 +57,32 @@ public class OpsCommandService implements RunOpsCommandUseCase {
         this.core = Objects.requireNonNull(core, "core");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.registry = Objects.requireNonNull(registry, "registry");
+        OpsCommand.ACTIONS.forEach(action -> registerCommandCounters(registry, action));
+    }
+
+    /**
+     * {@code action} 의 결과 넷을 0 으로 미리 등록한다 (DESIGN.md §9.1 「없는 시계열은 0 으로 보인다」).
+     * 처음 셀 때 만들면 첫 {@code UNKNOWN} 에서 시계열이 1 로 태어나고, {@code increase()} 는 그 첫 증가를 읽지
+     * 못한다 — §9.4 의 알림이 가장 중요한 첫 번째를 놓친다. {@code PENDING} 은 세지 않는 값이라 뺀다.
+     *
+     * @param registry 카운터 레지스트리
+     * @param action   {@code audit_logs.action}
+     */
+    static void registerCommandCounters(MeterRegistry registry, String action) {
+        for (AuditResult result : AuditResult.values()) {
+            if (result != AuditResult.PENDING) {
+                commandCounter(registry, action, result);
+            }
+        }
+    }
+
+    /** 같은 이름·태그·설명으로 등록한다 — 미리 등록한 것과 세는 것이 한 시계열이어야 한다. */
+    static Counter commandCounter(MeterRegistry registry, String action, AuditResult result) {
+        return Counter.builder(COMMANDS)
+                .description("운영자 커맨드 — 감사 행의 결과를 커밋한 뒤에 센다 (DESIGN.md §9.1)")
+                .tag("action", action)
+                .tag("result", result.name())
+                .register(registry);
     }
 
     @Override
@@ -97,12 +124,7 @@ public class OpsCommandService implements RunOpsCommandUseCase {
                     command.action(), reply.result(), e);
             return;
         }
-        Counter.builder(COMMANDS)
-                .description("운영자 커맨드 — 감사 행의 결과를 커밋한 뒤에 센다 (DESIGN.md §9.1)")
-                .tag("action", command.action())
-                .tag("result", reply.result().name())
-                .register(registry)
-                .increment();
+        commandCounter(registry, command.action(), reply.result()).increment();
         if (reply instanceof CoreReply.Unknown unknown) {
             log.warn("코어에 적용됐는지 모른다 — 사람이 auditId 로 코어 로그를 보고 닫는다(RB-07) action={} detail={}",
                     command.action(), unknown.detail());

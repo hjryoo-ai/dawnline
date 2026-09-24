@@ -70,6 +70,18 @@ class RedisRateLimiterTest {
     }
 
     @Test
+    void 만들면_판정_셋이_0_으로_이미_있다() {
+        // §9.1 「없는 시계열은 0 으로 보인다」 — 첫 우회에서 bypassed 가 1 로 태어나면 increase() 가 그것을 못 읽고,
+        // §9.4 의 알림이 첫 Redis 장애를 놓친다.
+        for (RateLimiter.Outcome outcome : RateLimiter.Outcome.values()) {
+            var counter = meters.find(OrderMetrics.RATE_LIMIT_DECISIONS)
+                    .tag(OrderMetrics.TAG_OUTCOME, outcome.name().toLowerCase(java.util.Locale.ROOT)).counter();
+            assertThat(counter).as(outcome.name()).isNotNull();
+            assertThat(counter.count()).isZero();
+        }
+    }
+
+    @Test
     void 토큰이_있으면_허용이다() {
         scriptReturns(List.of(1L, 0L));
 

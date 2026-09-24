@@ -3,6 +3,8 @@ package com.dawnline.ops.application.port.in;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.ops.domain.CoreService;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -74,5 +76,18 @@ class OpsCommandTest {
         assertThat(CoreService.fromPath("Order")).as("경로는 한 가지 모양만 있다").isEmpty();
         assertThat(java.util.Arrays.stream(CoreService.values()).map(CoreService::path))
                 .containsExactly("order", "fulfillment", "dispatch", "tracking");
+    }
+
+    @Test
+    void ACTIONS_는_허용된_하위_타입의_ACTION_전부다() throws ReflectiveOperationException {
+        // 미리 등록하는 목록이 커맨드 하나를 빠뜨리면 그 커맨드의 첫 UNKNOWN 은 알림에 안 잡힌다(§9.1).
+        // 목록을 열거하지 않고 sealed 의 허용 목록에서 읽어 대조한다(CLAUDE.md 「서로를 비추는 목록에는 대조 검사」).
+        Set<String> declared = new HashSet<>();
+        for (Class<?> permitted : OpsCommand.class.getPermittedSubclasses()) {
+            declared.add((String) permitted.getField("ACTION").get(null));
+        }
+
+        assertThat(OpsCommand.ACTIONS).containsExactlyInAnyOrderElementsOf(declared)
+                .hasSize(OpsCommand.class.getPermittedSubclasses().length);
     }
 }
