@@ -62,9 +62,12 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
             "rm_waves", Set.of("order_count"),
             "rm_routes", Set.of("completed_count", "failed_count"));
 
-    /** 칸 대조에서 빼는 표와 그 이유. */
-    static final Map<String, String> EXCLUDED_TABLES = Map.of(
-            "rm_kpi_hourly", "채우는 것은 묶음 B 의 KPI 단계다 — 그 커밋에서 이 제외를 지운다. 순서 비교에는 들어간다(지금은 빈 표)");
+    /**
+     * 칸 대조에서 빼는 표와 그 이유. 비어 있는 것이 정상이다 — V1 의 {@code rm_kpi_hourly} 가 여기
+     * 있었고, KPI 가 {@code rm_orders} 위의 뷰가 되며(V2, §5.5) 쓰는 쪽이 없어져 표째 사라졌다.
+     * 뷰는 {@code rm_} 로 시작하지 않아 카탈로그 목록에 들지 않는다 — 쓰는 칸이 없으니 대조할 것도 없다.
+     */
+    static final Map<String, String> EXCLUDED_TABLES = Map.of();
 
     private static final int ROUNDS = 25;
 
@@ -173,6 +176,28 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
                 .as("배차 불가 — 캠프·웨이브는 끝까지 비어 있다")
                 .containsEntry("camp_id", null).containsEntry("wave_id", null)
                 .containsEntry("order_status", "UNSERVICEABLE");
+
+        // KPI 두 축(§5.5 「KPI — 두 축, 뷰」) — 쓰는 사람 없이 위 행에서 나온다.
+        // 배송 축: O1(15시)·O3(16시) 완료, O2(17시) 실패. O4 는 배송됐지만 취소라 빠진다.
+        assertThat(jdbc.queryForList("""
+                SELECT to_char(bucket_hour AT TIME ZONE 'UTC', 'HH24') AS h, delivered, failed,
+                       on_time_promised, on_time_revised, revised
+                  FROM kpi_delivery_hourly WHERE camp_id = ? ORDER BY bucket_hour
+                """, scenario.campId))
+                .containsExactly(
+                        kpi("15", 1, 0, 1, 1, 0),
+                        kpi("16", 1, 0, 1, 1, 0),
+                        kpi("17", 0, 1, 0, 0, 0));
+        // 접수 축: 캠프가 정해진 넷이 접수 버킷 하나에. O5 는 캠프가 없어 이 캠프의 행에 없다.
+        assertThat(jdbc.queryForList("SELECT orders, unserviceable FROM kpi_intake_hourly WHERE camp_id = ?",
+                scenario.campId))
+                .containsExactly(Map.of("orders", 4L, "unserviceable", 0L));
+    }
+
+    private static Map<String, Object> kpi(String hour, long delivered, long failed, long onTimePromised,
+            long onTimeRevised, long revised) {
+        return Map.of("h", hour, "delivered", delivered, "failed", failed, "on_time_promised", onTimePromised,
+                "on_time_revised", onTimeRevised, "revised", revised);
     }
 
     @Test

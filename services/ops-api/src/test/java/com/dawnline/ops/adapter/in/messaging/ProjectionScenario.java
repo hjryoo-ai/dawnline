@@ -66,6 +66,8 @@ public final class ProjectionScenario {
     public final UUID o4 = Ids.newId();
     public final UUID o5 = Ids.newId();
 
+    /** 다섯 주문의 접수 시각 — 접수 축 KPI 의 버킷 하나(BASE 의 정시)에 모두 든다. */
+    public final Instant placedAt = at(0);
     /** 원 약속의 끝 — 배송 시각들은 이보다 앞이라 원 약속 기준 정시다. */
     public final Instant promisedEnd = at(600);
     /** O2 의 개정 약속 — 원 약속보다 늦다. */
@@ -74,6 +76,8 @@ public final class ProjectionScenario {
     public final Instant o1Delivered = at(200);
     public final Instant o3Delivered = at(260);
     public final Instant o4Delivered = at(270);
+    /** O2 의 배송 실패 — {@code failed_at}. */
+    public final Instant o2Failed = at(330);
     public final Instant o2EtaFirst = at(300);
     public final Instant o2EtaSecond = at(320);
     public final Instant o2ArrivalOnR2 = at(290);
@@ -146,7 +150,7 @@ public final class ProjectionScenario {
         deliveryStatus(r2, "ARRIVED", at(255), o3);
         deliveryStatus(r2, "COMPLETED", o3Delivered, o3);
         deliveryStatus(r2, "COMPLETED", o4Delivered, o4);
-        deliveryStatus(r2, "FAILED", at(330), o2);
+        deliveryStatus(r2, "FAILED", o2Failed, o2);
     }
 
     // --- 이벤트 만들기 -----------------------------------------------------------
@@ -167,6 +171,10 @@ public final class ProjectionScenario {
      *                   route.assigned(계획 칸의 견줌)만 호출자가 따로 정한다
      */
     private void add(ObjectNode envelope, UUID key, String label, Instant occurredAt) {
+        causal.add(event(envelope, key, label, occurredAt));
+    }
+
+    private Event event(ObjectNode envelope, UUID key, String label, Instant occurredAt) {
         sequence++;
         UUID eventId = Ids.newId();
         envelope.put("eventId", eventId.toString());
@@ -174,14 +182,31 @@ public final class ProjectionScenario {
         envelope.put("occurredAt", occurredAt.toString());
         contracts.validateRecord(envelope);
         String eventType = envelope.get("eventType").asString();
-        causal.add(new Event(Topics.forEvent(eventType, 1), key.toString(),
-                contracts.json().write(envelope), eventId, "#" + sequence + " " + label));
+        return new Event(Topics.forEvent(eventType, 1), key.toString(),
+                contracts.json().write(envelope), eventId, "#" + sequence + " " + label);
+    }
+
+    /**
+     * 인과 순서 <em>밖</em>의 사실 하나 — 이미 {@code FAILED} 인 O2 에 오는 {@code COMPLETED}.
+     *
+     * <p>출처는 이것을 내지 않는다(두 결과는 모두 종결이다). 재배송이 같은 행의 둘째 결과로 들어오면
+     * 생기는 모양이고, 그때 조용히 두 시각을 다 갖지 않고 크게 깨지는지를 IT 가 본다(§5.5 재검토 조건).
+     *
+     * @return 계약으로 검증한 {@code delivery.status} 레코드
+     */
+    public Event o2CompletedAfterFailure() {
+        ObjectNode e = example("delivery.status.v1.example.json");
+        ObjectNode p = (ObjectNode) e.get("payload");
+        p.put("routeId", r2.toString()).put("status", "COMPLETED").put("occurredAt", at(400).toString());
+        p.putArray("orderIds").add(o2.toString());
+        return event(e, r2, "delivery.status COMPLETED R2 [O2] (FAILED 뒤)", BASE.plusSeconds(sequence + 1L));
     }
 
     private void orderPlaced(UUID order) {
         ObjectNode e = example("order.placed.v1.example.json");
         ObjectNode p = (ObjectNode) e.get("payload");
         p.put("orderId", order.toString());
+        p.put("placedAt", placedAt.toString());
         ((ObjectNode) p.get("promisedWindow")).put("start", at(300).toString()).put("end", promisedEnd.toString());
         add(e, order, "order.placed " + name(order));
     }

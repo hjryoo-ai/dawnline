@@ -98,7 +98,8 @@ public class ReadModelProjector implements ProjectFactUseCase {
         Patch<OrderColumn> patch = Patch.of(OrderColumn.class)
                 .set(OrderColumn.CUSTOMER_ID, f.customerId())
                 .set(OrderColumn.SERVICE_TIER, f.serviceTier())
-                .set(OrderColumn.PROMISED_END_ORIGINAL, f.promisedEnd());
+                .set(OrderColumn.PROMISED_END_ORIGINAL, f.promisedEnd())
+                .set(OrderColumn.PLACED_AT, f.placedAt());
         Verdict verdict = Progress.judge(row.orderStatus(), OrderStatus.PLACED);
         if (verdict.writes()) {
             patch.set(OrderColumn.ORDER_STATUS, OrderStatus.PLACED.name());
@@ -254,9 +255,10 @@ public class ReadModelProjector implements ProjectFactUseCase {
                 if (verdict.writes()) {
                     Patch<OrderColumn> patch = Patch.of(OrderColumn.class)
                             .set(OrderColumn.DELIVERY_OUTCOME, outcome.name());
-                    if (outcome == DeliveryOutcome.COMPLETED) {
-                        patch.set(OrderColumn.DELIVERED_AT, f.occurredAt());
-                    }
+                    // 결과의 시각은 결과와 같은 패치에서만 — 축이 옮길 때만 쓴다. 두 칸은 배타다
+                    // (ck_rmo_outcome_time_exclusive): 배송 축 KPI 가 COALESCE 로 버킷을 잡는다(§5.5).
+                    patch.set(outcome == DeliveryOutcome.COMPLETED ? OrderColumn.DELIVERED_AT : OrderColumn.FAILED_AT,
+                            f.occurredAt());
                     orders.write(orderId, patch, clock.instant());
                 }
                 if (row.routeId() != null) {

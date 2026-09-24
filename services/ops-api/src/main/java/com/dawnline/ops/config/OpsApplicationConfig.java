@@ -3,11 +3,14 @@ package com.dawnline.ops.config;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.ops.adapter.in.messaging.ProjectionListener;
+import com.dawnline.ops.adapter.out.persistence.JdbcDeliveryKpis;
 import com.dawnline.ops.adapter.out.persistence.JdbcOrderRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcRouteRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcWaveRows;
+import com.dawnline.ops.application.OnTimeRatioGauges;
 import com.dawnline.ops.application.ReadModelProjector;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
+import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.OrderRows;
 import com.dawnline.ops.application.port.out.RouteRows;
 import com.dawnline.ops.application.port.out.WaveRows;
@@ -16,14 +19,19 @@ import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 유스케이스 배선 (DESIGN.md §5.5).
  *
  * <p>애플리케이션·도메인 클래스에는 Spring 어노테이션이 없다(불변규칙 5). 배선이 여기 모여
  * 있어서 무엇이 무엇에 의존하는지가 한 화면에 보인다.
+ *
+ * <p>{@code @EnableScheduling} 을 여기서도 선언한다 — 정시율 게이지의 갱신이 {@code libs/messaging} 의
+ * 릴레이·정리 스위치를 따라 조용히 꺼지지 않게(다른 네 서비스와 같다).
  */
 @Configuration(proxyBeanMethods = false)
+@EnableScheduling
 public class OpsApplicationConfig {
 
     // --- 읽기 모델 프로젝션 (§5.5, ADR-051) ------------------------------------
@@ -81,5 +89,27 @@ public class OpsApplicationConfig {
     public ProjectionListener projectionListener(IdempotentConsumer consumer, ProjectFactUseCase projector,
             EventJson json, MeterRegistry meters) {
         return new ProjectionListener(consumer, projector, json, meters);
+    }
+
+    // --- KPI (§5.5 「KPI — 두 축, 뷰」, §9.1) ------------------------------------
+
+    /**
+     * @param jdbc JDBC 템플릿
+     * @return {@code kpi_delivery_hourly}
+     */
+    @Bean
+    public DeliveryKpis deliveryKpis(JdbcTemplate jdbc) {
+        return new JdbcDeliveryKpis(jdbc);
+    }
+
+    /**
+     * @param kpis   배송 축 KPI
+     * @param meters Micrometer 레지스트리
+     * @param clock  창의 기준 시각 (불변규칙 12)
+     * @return {@code dawnline_delivery_on_time_ratio} 두 계열
+     */
+    @Bean
+    public OnTimeRatioGauges onTimeRatioGauges(DeliveryKpis kpis, MeterRegistry meters, Clock clock) {
+        return new OnTimeRatioGauges(kpis, meters, clock);
     }
 }

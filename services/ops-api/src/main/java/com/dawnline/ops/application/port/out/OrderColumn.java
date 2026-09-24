@@ -21,7 +21,9 @@ public enum OrderColumn {
     PLANNED_AS_OF(ColumnFamily.PLAN),
     ETA_AT(ColumnFamily.TRACKING),
     ETA_AS_OF(ColumnFamily.TRACKING),
-    DELIVERED_AT(ColumnFamily.TRACKING);
+    DELIVERED_AT(ColumnFamily.TRACKING),
+    FAILED_AT(ColumnFamily.TRACKING),
+    PLACED_AT(ColumnFamily.ORDER);
 
     private final ColumnFamily family;
 

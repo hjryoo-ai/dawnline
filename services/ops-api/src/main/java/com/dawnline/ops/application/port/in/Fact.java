@@ -27,8 +27,10 @@ public sealed interface Fact {
      * @param customerId  고객
      * @param serviceTier 티어
      * @param promisedEnd 고객이 <em>처음</em> 받은 약속의 끝 — 원 약속 기준 정시율의 기준선(§8.1)
+     * @param placedAt    접수 시각 — 접수 축 KPI 의 버킷(§5.5 「KPI — 두 축, 뷰」)
      */
-    record OrderPlaced(UUID orderId, UUID customerId, String serviceTier, Instant promisedEnd) implements Fact {
+    record OrderPlaced(UUID orderId, UUID customerId, String serviceTier, Instant promisedEnd, Instant placedAt)
+            implements Fact {
         public OrderPlaced {
             Objects.requireNonNull(orderId, "orderId");
         }

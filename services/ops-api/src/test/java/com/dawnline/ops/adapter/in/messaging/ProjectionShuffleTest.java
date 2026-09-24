@@ -71,7 +71,9 @@ class ProjectionShuffleTest {
         assertThat(model.order(scenario.o4))
                 .containsEntry("order_status", "CANCELLED")
                 .containsEntry("delivery_outcome", "COMPLETED")
-                .containsEntry("delivered_at", scenario.o4Delivered);
+                .containsEntry("delivered_at", scenario.o4Delivered)
+                .containsEntry("placed_at", scenario.placedAt)
+                .doesNotContainKey("failed_at");
         // O2 — 재계획이 R2 로 옮겼다. 계획 칸은 새 계획, ETA 는 뒤의 at-risk, 결과는 실패.
         assertThat(model.order(scenario.o2))
                 .containsEntry("order_status", "DISPATCHED")
@@ -85,6 +87,8 @@ class ProjectionShuffleTest {
                 .containsEntry("eta_at", scenario.o2EtaSecond)
                 .containsEntry("promised_end_original", scenario.promisedEnd)
                 .containsEntry("promised_end_revised", scenario.revisedEnd)
+                // 실패의 시각은 failed_at 에 — delivered_at 은 비어 있다(두 칸은 배타, §5.5).
+                .containsEntry("failed_at", scenario.o2Failed)
                 .doesNotContainKey("delivered_at");
         // O5 — 배차 불가. 캠프·웨이브는 끝까지 비어 있다(부재는 값이 아니다).
         assertThat(model.order(scenario.o5))

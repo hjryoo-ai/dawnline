@@ -31,11 +31,11 @@ final class Payloads {
     record Window(Instant end) {
     }
 
-    record OrderPlaced(UUID orderId, UUID customerId, String serviceTier, Window promisedWindow)
+    record OrderPlaced(UUID orderId, UUID customerId, String serviceTier, Window promisedWindow, Instant placedAt)
             implements ToFact {
         @Override
         public Fact toFact(EventEnvelope<?> envelope) {
-            return new Fact.OrderPlaced(orderId, customerId, serviceTier, promisedWindow.end());
+            return new Fact.OrderPlaced(orderId, customerId, serviceTier, promisedWindow.end(), placedAt);
         }
     }
 

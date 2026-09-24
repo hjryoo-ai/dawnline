@@ -193,6 +193,11 @@ public final class InMemoryReadModel {
                 row.put(name, write.value());
             }
         });
+        // V2 의 ck_rmo_outcome_time_exclusive 를 비춘다 — 가짜가 DB 보다 너그러우면 단위 검사가 초록인 채
+        // 적재가 깨진다.
+        if (row.containsKey("delivered_at") && row.containsKey("failed_at")) {
+            throw new IllegalStateException("ck_rmo_outcome_time_exclusive: 완료와 실패의 시각이 한 행에 있다 — " + key);
+        }
     }
 
     private static <E extends Enum<E>> @Nullable E enumOf(Class<E> type, @Nullable Object value) {
