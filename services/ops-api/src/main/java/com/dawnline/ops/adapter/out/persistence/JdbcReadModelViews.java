@@ -3,7 +3,6 @@ package com.dawnline.ops.adapter.out.persistence;
 import static com.dawnline.ops.adapter.out.persistence.JdbcOrderRows.enumOf;
 import static com.dawnline.ops.adapter.out.persistence.JdbcOrderRows.instantOf;
 
-import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.ReadModelViews;
 import com.dawnline.ops.domain.RouteStatus;
 import com.dawnline.ops.domain.WaveStatus;
@@ -57,11 +56,9 @@ public class JdbcReadModelViews implements ReadModelViews {
      * 보기 때문이다 — 사본을 보면 사본의 계획을 증명한다.
      */
     public static final String CANCELLED_BUT_DELIVERED_SQL = """
-            SELECT order_id, wave_id, route_id, delivered_at
+            SELECT order_id, wave_id, route_id, delivered_at, count(*) OVER () AS total
               FROM rm_orders
              WHERE camp_id = ?
-               AND date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC') >= ?
-               AND date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC') <= ?
                AND order_status = 'CANCELLED' AND delivery_outcome = 'COMPLETED'
              ORDER BY delivered_at DESC, order_id
              LIMIT ?
@@ -128,13 +125,17 @@ public class JdbcReadModelViews implements ReadModelViews {
     }
 
     @Override
-    public List<CancelledButDelivered> cancelledButDelivered(UUID campId, DeliveryKpis.Buckets buckets, int limit) {
-        return jdbc.query(CANCELLED_BUT_DELIVERED_SQL, (rs, n) -> new CancelledButDelivered(
-                        rs.getObject("order_id", UUID.class),
-                        rs.getObject("wave_id", UUID.class),
-                        rs.getObject("route_id", UUID.class),
-                        Objects.requireNonNull(instantOf(rs, "delivered_at"), "delivered_at")),
-                campId, utc(buckets.first()), utc(buckets.last()), limit);
+    public CancelledButDeliveredPage cancelledButDelivered(UUID campId, int limit) {
+        long[] total = {0};
+        List<CancelledButDelivered> orders = jdbc.query(CANCELLED_BUT_DELIVERED_SQL, (rs, n) -> {
+            total[0] = rs.getLong("total"); // 창 함수라 모든 행에 같은 값 — 행이 없으면 0 그대로다.
+            return new CancelledButDelivered(
+                    rs.getObject("order_id", UUID.class),
+                    rs.getObject("wave_id", UUID.class),
+                    rs.getObject("route_id", UUID.class),
+                    Objects.requireNonNull(instantOf(rs, "delivered_at"), "delivered_at"));
+        }, campId, limit);
+        return new CancelledButDeliveredPage(orders, total[0]);
     }
 
     /** TIMESTAMPTZ 에는 OffsetDateTime 으로 넘긴다 — 드라이버가 Instant 를 직접 받지 않는다. */

@@ -107,23 +107,25 @@ class ReadModelQueryServiceTest {
     }
 
     @Test
-    void 예외_목록은_KPI_와_같은_창이고_넘치면_잘렸다고_말한다() {
+    void 예외_목록은_상한만큼_싣고_넘치면_전체_수가_목록보다_크다() {
         IntStream.range(0, QueryReadModelUseCase.MAX_EXCEPTIONS + 5).forEach(i -> views.exceptions.add(
                 new ReadModelViews.CancelledButDelivered(UUID.randomUUID(), WAVE, null, NOW.minusSeconds(i))));
 
         ExceptionList list = service.exceptions(CAMP);
 
-        assertThat(views.exceptionBuckets).isEqualTo(DeliveryKpis.currentBuckets(NOW));
+        assertThat(views.exceptionLimit).isEqualTo(QueryReadModelUseCase.MAX_EXCEPTIONS);
         assertThat(list.orders()).hasSize(QueryReadModelUseCase.MAX_EXCEPTIONS);
-        assertThat(list.truncated()).isTrue();
+        assertThat(list.total()).as("잘렸다는 사실은 total 이 말한다").isEqualTo(QueryReadModelUseCase.MAX_EXCEPTIONS + 5L);
     }
 
     @Test
-    void 예외_목록이_상한과_같으면_잘리지_않았다() {
+    void 예외_목록이_상한과_같으면_전체_수가_목록과_같다() {
         IntStream.range(0, QueryReadModelUseCase.MAX_EXCEPTIONS).forEach(i -> views.exceptions.add(
                 new ReadModelViews.CancelledButDelivered(UUID.randomUUID(), WAVE, null, NOW.minusSeconds(i))));
 
-        assertThat(service.exceptions(CAMP).truncated()).isFalse();
+        ExceptionList list = service.exceptions(CAMP);
+
+        assertThat(list.total()).isEqualTo(list.orders().size());
     }
 
     @Test
@@ -162,7 +164,7 @@ class ReadModelQueryServiceTest {
     private static final class FakeViews implements ReadModelViews {
         final List<CancelledButDelivered> exceptions = new ArrayList<>();
         int wavesLimit;
-        DeliveryKpis.@Nullable Buckets exceptionBuckets;
+        int exceptionLimit;
         @Nullable WavePlan plan;
         @Nullable UUID routesAsked;
 
@@ -189,9 +191,10 @@ class ReadModelQueryServiceTest {
         }
 
         @Override
-        public List<CancelledButDelivered> cancelledButDelivered(UUID campId, DeliveryKpis.Buckets buckets, int limit) {
-            exceptionBuckets = buckets;
-            return exceptions.subList(0, Math.min(limit, exceptions.size()));
+        public CancelledButDeliveredPage cancelledButDelivered(UUID campId, int limit) {
+            exceptionLimit = limit;
+            return new CancelledButDeliveredPage(exceptions.subList(0, Math.min(limit, exceptions.size())),
+                    exceptions.size());
         }
     }
 

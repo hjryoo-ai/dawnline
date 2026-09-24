@@ -128,19 +128,22 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
     }
 
     @Test
-    void 예외_목록은_취소됐는데_배송된_주문만_KPI_창_안에서_고른다() throws Exception {
+    void 예외_목록은_취소됐는데_배송된_주문을_창_없이_전부_고른다() throws Exception {
         Instant now = clock.instant();
-        UUID listed = order(CAMP, "CANCELLED", "COMPLETED", now.minus(Duration.ofHours(2)), now);
-        order(CAMP, "CANCELLED", "COMPLETED", now.minus(Duration.ofDays(3)), now);   // 창 밖
+        UUID recent = order(CAMP, "CANCELLED", "COMPLETED", now.minus(Duration.ofHours(2)), now);
+        // KPI 창(24 버킷) 밖 — 해소 여부를 모르므로 시간이 지났다고 목록에서 나가지 않는다.
+        UUID old = order(CAMP, "CANCELLED", "COMPLETED", now.minus(Duration.ofDays(40)), now);
         order(CAMP, "CANCELLED", "FAILED", now.minus(Duration.ofHours(2)), now);     // 배송되지 않았다
         order(CAMP, "DISPATCHED", "COMPLETED", now.minus(Duration.ofHours(2)), now); // 취소되지 않았다
         order(OTHER_CAMP, "CANCELLED", "COMPLETED", now.minus(Duration.ofHours(2)), now);
 
         mockMvc.perform(viewer(get("/api/v1/camps/{campId}/exceptions", CAMP)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.orders.length()").value(1))
-                .andExpect(jsonPath("$.orders[0].orderId").value(listed.toString()))
-                .andExpect(jsonPath("$.truncated").value(false));
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andExpect(jsonPath("$.orders[0].orderId").value(recent.toString()))
+                .andExpect(jsonPath("$.orders[1].orderId").value(old.toString()))
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.firstBucket").doesNotExist());
     }
 
     @Test

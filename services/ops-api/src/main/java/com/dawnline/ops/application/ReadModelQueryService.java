@@ -8,7 +8,6 @@ import com.dawnline.ops.application.port.out.CoreReply;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.DeliveryKpis.CampDeliveries;
 import com.dawnline.ops.application.port.out.ReadModelViews;
-import com.dawnline.ops.application.port.out.ReadModelViews.CancelledButDelivered;
 import com.dawnline.ops.application.port.out.ReadModelViews.WavePlan;
 import java.time.Clock;
 import java.time.Duration;
@@ -86,12 +85,8 @@ public class ReadModelQueryService implements QueryReadModelUseCase {
 
     @Override
     public ExceptionList exceptions(UUID campId) {
-        DeliveryKpis.Buckets buckets = DeliveryKpis.currentBuckets(clock.instant());
-        // 하나 더 읽어 잘렸는지를 안다 — 전체를 세는 두 번째 질의가 필요 없다.
-        List<CancelledButDelivered> rows = views.cancelledButDelivered(campId, buckets, MAX_EXCEPTIONS + 1);
-        boolean truncated = rows.size() > MAX_EXCEPTIONS;
-        return new ExceptionList(campId, buckets.first(), buckets.last(),
-                truncated ? rows.subList(0, MAX_EXCEPTIONS) : rows, truncated);
+        ReadModelViews.CancelledButDeliveredPage page = views.cancelledButDelivered(campId, MAX_EXCEPTIONS);
+        return new ExceptionList(campId, page.orders(), page.total());
     }
 
     @Override

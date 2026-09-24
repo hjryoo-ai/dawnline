@@ -42,15 +42,15 @@ public interface ReadModelViews {
     List<RouteSummary> routesOf(UUID planId);
 
     /**
-     * 취소됐는데 배송된 주문 — §6.10 넷째 분기({@code dawnline_cancel_too_late_total})가 세는 건의 목록이다. 창은
-     * KPI 와 같은 버킷 창이고, 버킷 식은 {@code ix_rmo_delivery_hour} 의 식 그대로다.
+     * 취소됐는데 배송된 주문 — §6.10 넷째 분기({@code dawnline_cancel_too_late_total})가 세는 건의 목록이다.
+     * <strong>창이 없다</strong>: 해소(환불·회수)를 기록하는 칸이 없으므로 창으로 자르면 처리되지 않은 건이 조용히
+     * 사라진다. 부분 인덱스 {@code ix_rmo_cancelled_delivered}(V4)를 탄다 — 술어의 두 칸은 리터럴이다.
      *
-     * @param campId  캠프
-     * @param buckets 배송 축의 버킷 창
-     * @param limit   최대 행 수
-     * @return 배송 시각 역순
+     * @param campId 캠프
+     * @param limit  최대 행 수
+     * @return 배송 시각 역순의 앞 {@code limit} 행과 캠프의 전체 수
      */
-    List<CancelledButDelivered> cancelledButDelivered(UUID campId, DeliveryKpis.Buckets buckets, int limit);
+        CancelledButDeliveredPage cancelledButDelivered(UUID campId, int limit);
 
     /**
      * @param campId            캠프
@@ -145,6 +145,18 @@ public interface ReadModelViews {
         public CancelledButDelivered {
             Objects.requireNonNull(orderId, "orderId");
             Objects.requireNonNull(deliveredAt, "deliveredAt");
+        }
+    }
+
+    /**
+     * 예외 목록의 앞부분과 전체 수 — 같은 질의에서 읽는다(창 함수), 둘이 서로 다른 순간을 말하지 않게.
+     *
+     * @param orders 배송 시각 역순의 앞부분
+     * @param total  캠프의 전체 수 — {@code orders} 보다 크면 잘렸다
+     */
+    record CancelledButDeliveredPage(List<CancelledButDelivered> orders, long total) {
+        public CancelledButDeliveredPage {
+            orders = List.copyOf(orders);
         }
     }
 }

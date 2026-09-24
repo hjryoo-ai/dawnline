@@ -78,8 +78,9 @@ public class ReadModelController {
      * @return 취소됐는데 배송된 주문
      */
     @GetMapping("/camps/{campId}/exceptions")
-    @ApiResponses(@ApiResponse(responseCode = "200", description = "취소됐는데 배송된 주문(§6.10 넷째 분기) — KPI 와 같은 "
-            + "버킷 창, 배송 시각 역순, 최대 200. 자동 보상은 없고 사람이 처리한다"))
+    @ApiResponses(@ApiResponse(responseCode = "200", description = "취소됐는데 배송된 주문(§6.10 넷째 분기) — **창 없이 "
+            + "전부**, 배송 시각 역순으로 앞 200 행과 전체 수(`total`). 자동 보상은 없고 사람이 처리한다. **해소 여부는 "
+            + "이 시스템이 모른다** — 환불·회수를 기록하는 칸이 없으므로 한 번 들어온 주문은 목록에서 나가지 않는다"))
     public ExceptionList exceptions(@PathVariable UUID campId) {
         return queries.exceptions(campId);
     }

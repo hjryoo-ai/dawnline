@@ -25,7 +25,7 @@ public interface QueryReadModelUseCase {
     /** 컷오프 창의 최대 길이 — 넘으면 400. 한 화면이 읽을 만큼이다. */
     Duration MAX_WAVE_SPAN = Duration.ofDays(7);
 
-    /** 예외 목록의 최대 행 수 — 넘치면 {@code truncated}. */
+    /** 예외 목록이 한 번에 싣는 행 수 — 넘치면 {@code total} 이 목록보다 크다. */
     int MAX_EXCEPTIONS = 200;
 
     /** @return 웨이브가 하나라도 있는 캠프들 */
@@ -49,7 +49,7 @@ public interface QueryReadModelUseCase {
 
     /**
      * @param campId 캠프
-     * @return 취소됐는데 배송된 주문 — KPI 와 같은 버킷 창
+     * @return 취소됐는데 배송된 주문 — 창 없이 전부(앞 {@link #MAX_EXCEPTIONS} 행과 전체 수)
      */
     ExceptionList exceptions(UUID campId);
 
@@ -121,14 +121,15 @@ public interface QueryReadModelUseCase {
     }
 
     /**
-     * @param campId      캠프
-     * @param firstBucket 첫 버킷(포함)
-     * @param lastBucket  마지막 버킷(포함)
-     * @param orders      배송 시각 역순, 최대 {@link #MAX_EXCEPTIONS}
-     * @param truncated   목록이 잘렸다
+     * 취소됐는데 배송된 주문. <strong>해소 여부는 이 시스템이 모른다</strong> — 환불·회수를 기록하는 칸도 사건도 없다.
+     * 그래서 한 번 들어온 주문은 목록에서 나가지 않고, 목록에 있다는 것은 「처리되지 않았다」가 아니라 「이런 일이
+     * 있었다」이다.
+     *
+     * @param campId 캠프
+     * @param orders 배송 시각 역순, 최대 {@link #MAX_EXCEPTIONS}
+     * @param total  캠프의 전체 수 — {@code orders} 보다 크면 잘렸다
      */
-    record ExceptionList(UUID campId, Instant firstBucket, Instant lastBucket, List<CancelledButDelivered> orders,
-            boolean truncated) {
+    record ExceptionList(UUID campId, List<CancelledButDelivered> orders, long total) {
         public ExceptionList {
             Objects.requireNonNull(campId, "campId");
             orders = List.copyOf(orders);
