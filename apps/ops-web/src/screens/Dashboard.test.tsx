@@ -20,7 +20,7 @@ describe('캠프 대시보드', () => {
     // 캠프는 코드로 부르고, 코드가 없는 캠프(옛 이벤트만 있다)는 id 를 줄여 쓴다.
     const picker = await screen.findByRole('combobox', { name: /캠프/ });
     expect(within(picker).getByRole('option', { name: 'CAMP-SEO-N · 웨이브 2' })).toBeDefined();
-    expect(within(picker).getByRole('option', { name: '0199c000 · 웨이브 1' })).toBeDefined();
+    expect(within(picker).getByRole('option', { name: '…0000ca02 · 웨이브 1' })).toBeDefined();
 
     const table = await screen.findByRole('table', { name: '웨이브' });
     expect(within(table).getByText('PLANNED')).toBeDefined();

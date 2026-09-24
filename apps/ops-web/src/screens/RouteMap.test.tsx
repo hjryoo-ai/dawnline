@@ -64,6 +64,26 @@ describe('라우트 지도의 커맨드 확인', () => {
   });
 });
 
+describe('라우트의 이름', () => {
+  it('같은 순간에 만든 라우트도 이름이 갈린다 — UUIDv7 의 앞은 시각이다', async () => {
+    // 전제: 픽스처의 두 라우트는 앞 8자가 같다 — 한 계획의 라우트는 같은 순간에 만들어진다.
+    expect(ROUTE.slice(0, 8)).toBe(OTHER_ROUTE.slice(0, 8));
+    renderWith(<RouteMap waveId={WAVE} />, core());
+
+    const list = await screen.findByRole('table', { name: '라우트' });
+    const names = within(list).getAllByRole('button').map((button) => button.textContent);
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+
+    // 재배정 대상 목록은 선택한 라우트를 빼고 보인다 — 그 이름이 선택한 라우트의 이름과 달라야 고를 수 있다.
+    await screen.findByRole('table', { name: 'stop 순서' });
+    const target = screen.getByRole('combobox', { name: '재배정 대상 라우트' });
+    const options = within(target).getAllByRole('option').map((option) => option.textContent);
+    expect(options).toEqual([names[1]]);
+    expect(options).not.toContain(names[0]);
+  });
+});
+
 describe('라우트 지도의 바탕', () => {
   it('기본은 타일 레이어가 없다', async () => {
     const { container } = renderWith(<RouteMap waveId={WAVE} />, core());

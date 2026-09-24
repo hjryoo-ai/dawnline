@@ -278,7 +278,7 @@ smoke:
 # -----------------------------------------------------------------------------
 # 아직 구현되지 않은 시나리오 타깃.
 # 성공한 척하지 않는다 — 명확히 실패해서 스크립트가 오인하지 않게 한다.
-# make demo — Phase 2·3 DoD. 주문 → 웨이브 편입 → 컷오프 → wave.closed → 계획 → 라우트 →
+# make demo — Phase 2·3·6 DoD. 주문 → 웨이브 편입 → 컷오프 → wave.closed → 계획 → 라우트 →
 # GET /api/v1/plans/{id} 까지를 DB 와 브로커 양쪽에서 확인한다. 로직은
 # tools/demo/phase2-demo.sh 와 phase3-demo.sh 에 있다 (Makefile 은 래퍼다 — DESIGN.md §14).
 #
@@ -292,6 +292,7 @@ DEMO_TIMEOUT ?= 120
 demo: env
 	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) SCENARIO=$(SCENARIO) bash tools/demo/phase2-demo.sh
 	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) bash tools/demo/phase3-demo.sh
+	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) bash tools/demo/phase6-demo.sh
 
 peak:
 	@echo ""
