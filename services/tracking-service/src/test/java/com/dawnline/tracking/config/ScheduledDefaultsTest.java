@@ -3,6 +3,7 @@ package com.dawnline.tracking.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.tracking.application.ShipmentEventPartitions;
+import com.dawnline.tracking.application.TrackingRetentionCleaner;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
@@ -35,7 +36,7 @@ class ScheduledDefaultsTest {
     private static final Pattern PLACEHOLDER = Pattern.compile("^\\$\\{[^:}]+:([^}]+)}$");
 
     /** {@code @Scheduled} 를 가진 클래스 전부. */
-    private static final Class<?>[] OWNERS = {ShipmentEventPartitions.class};
+    private static final Class<?>[] OWNERS = {ShipmentEventPartitions.class, TrackingRetentionCleaner.class};
 
     private record Schedule(Class<?> owner, String method, Function<TrackingProperties, Long> interval,
             Function<TrackingProperties, Long> initialDelay) {
@@ -48,7 +49,9 @@ class ScheduledDefaultsTest {
 
     private static final List<Schedule> SCHEDULES = List.of(
             new Schedule(ShipmentEventPartitions.class, "maintain",
-                    p -> p.partitions().intervalMs(), p -> p.partitions().initialDelayMs()));
+                    p -> p.partitions().intervalMs(), p -> p.partitions().initialDelayMs()),
+            new Schedule(TrackingRetentionCleaner.class, "cleanupExpired",
+                    p -> p.retention().cleanupIntervalMs(), p -> p.retention().cleanupInitialDelayMs()));
 
     private static List<Schedule> schedules() {
         return SCHEDULES;

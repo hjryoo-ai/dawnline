@@ -7,6 +7,7 @@ import com.dawnline.tracking.adapter.in.messaging.RouteAssignedListener;
 import com.dawnline.tracking.adapter.out.persistence.JdbcEventPartitions;
 import com.dawnline.tracking.adapter.out.persistence.JdbcRouteRevisions;
 import com.dawnline.tracking.adapter.out.persistence.JdbcShipmentEvents;
+import com.dawnline.tracking.adapter.out.persistence.JdbcTrackingRetention;
 import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
 import com.dawnline.tracking.application.ApplyRouteAssignmentService;
 import com.dawnline.messaging.outbox.OutboxAppender;
@@ -18,6 +19,7 @@ import com.dawnline.tracking.application.EtaPropagator;
 import com.dawnline.tracking.application.RecordScanService;
 import com.dawnline.tracking.application.ShipmentEventPartitions;
 import com.dawnline.tracking.application.TrackingMetrics;
+import com.dawnline.tracking.application.TrackingRetentionCleaner;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase;
 import com.dawnline.tracking.application.port.out.AtRiskCooldown;
@@ -26,6 +28,7 @@ import com.dawnline.tracking.application.port.out.EventPartitions;
 import com.dawnline.tracking.application.port.out.RouteRevisions;
 import com.dawnline.tracking.application.port.out.ShipmentEvents;
 import com.dawnline.tracking.application.port.out.ShipmentRepository;
+import com.dawnline.tracking.application.port.out.TrackingRetention;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManagerFactory;
@@ -38,6 +41,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * 유스케이스 배선 (DESIGN.md §5.4).
@@ -57,11 +61,12 @@ public class TrackingApplicationConfig {
      *
      * @param entityManagerFactory 이 서비스의 EMF. 공유 프록시를 만들어 넘긴다 —
      *                             트랜잭션마다 올바른 EntityManager 가 물린다
+     * @param clock                {@code updated_at} 시각 출처 (불변규칙 12, ADR-058)
      */
     @Bean
-    public ShipmentRepository shipmentRepository(EntityManagerFactory entityManagerFactory) {
+    public ShipmentRepository shipmentRepository(EntityManagerFactory entityManagerFactory, Clock clock) {
         return new JpaShipmentRepository(
-                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory), clock);
     }
 
     /**
@@ -193,6 +198,39 @@ public class TrackingApplicationConfig {
             DeliveryEvents delivery, EtaPropagator eta, AtRiskDetector atRisk,
             TrackingMetrics metrics, Ids ids, RouteRevisions revisions) {
         return new RecordScanService(shipments, events, delivery, eta, atRisk, metrics, ids, revisions);
+    }
+
+    // --- 보존 정리 (§5.4 「보존」, ADR-058) --------------------------------------
+
+    /**
+     * 보존 삭제 포트.
+     *
+     * @param jdbc 부르는 쪽의 트랜잭션에 참여하는 JDBC 템플릿
+     */
+    @Bean
+    public TrackingRetention trackingRetention(JdbcTemplate jdbc) {
+        return new JdbcTrackingRetention(jdbc);
+    }
+
+    /**
+     * {@code shipments} · {@code route_revisions} 정리. {@code dawnline.tracking.retention.enabled=false} 로
+     * 끌 수 있다 — 끄면 두 표가 자라기만 하고 성공 나이 게이지도 없다(정리 주체를 밖에 둔 배포).
+     *
+     * @param retention          삭제 포트
+     * @param transactionManager 배치마다 트랜잭션을 여는 데 쓴다
+     * @param clock              기준 시각 (불변규칙 12)
+     * @param properties         {@code dawnline.tracking.retention.*}
+     * @param ages               정리의 성공 나이 게이지 (ADR-058 결정 6)
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "dawnline.tracking.retention", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
+    public TrackingRetentionCleaner trackingRetentionCleaner(TrackingRetention retention,
+            PlatformTransactionManager transactionManager, Clock clock, TrackingProperties properties,
+            RetentionAges ages) {
+        TrackingProperties.Retention config = properties.retention();
+        return new TrackingRetentionCleaner(retention, transactionManager, clock, config.shipments(),
+                config.shipmentsCap(), config.routeRevisions(), config.batchSize(), config.maxBatchesPerRun(), ages);
     }
 
     // --- shipment_events 일 파티션 (§5.4) -------------------------------------
