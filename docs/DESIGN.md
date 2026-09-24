@@ -1096,7 +1096,9 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
   전부: 응답 전 타임아웃, 응답 도중 끊김, **코어의 5xx**). 5xx 를 `FAILED` 로 두지 않는 이유: 5xx 는 「무언가
   깨졌다」이지 「아무 일도 없었다」가 아니다 — 커밋 뒤 직렬화에서 난 예외도 500 이다.
 - **응답**: `SUCCEEDED` 는 코어의 본문, `REJECTED` 는 **코어의 상태와 Problem Details 본문을 바이트 그대로**
-  (생성 모델로 읽지 않는다 — ADR-052 의 「문서의 거짓 하나」), `FAILED` 는 502 `core-unreachable`,
+  (ops-api 는 이 자리에서 프록시다 — 운영자는 코어가 말한 것을 그대로 보고, 코어가 확장 멤버를 더해도 여기서
+  잘리지 않는다. 문서가 참이어야 한다는 것과 클라이언트가 그것으로 파싱해야 한다는 것은 다른 문장이다),
+  `FAILED` 는 502 `core-unreachable`,
   `UNKNOWN` 은 타임아웃이면 504 `core-timeout`, 코어의 5xx 면 502 `core-error`. 어느 경우든 응답 헤더
   `X-Dawnline-Audit-Id` 에 감사 행 id 가 온다.
 - **상관 헤더**: 같은 id 를 코어 호출에 `X-Dawnline-Audit-Id` 로 싣고, 코어는 그것을 MDC `auditId` 로 남긴다
@@ -2573,7 +2575,7 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
-RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검) · RB-07 감사 `UNKNOWN`·오래된 `PENDING` 해소(§5.5 — 코어 로그·트레이스에서 그 행의 `auditId` 를 찾아 적용 흔적이 있으면 `SUCCEEDED`, 요청이 닿은 흔적이 없으면 `FAILED` 로 사람이 닫는다. 흔적으로도 못 가리면 코어의 현재 상태(웨이브·라우트·주문)를 보고 닫고, 무엇을 근거로 닫았는지 남긴다).
+RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검) · RB-07 감사 `UNKNOWN`·오래된 `PENDING` 해소(§5.5 — 코어 로그·트레이스에서 그 행의 `auditId` 를 찾아 적용 흔적이 있으면 `SUCCEEDED`, 요청이 닿은 흔적이 없으면 `FAILED` 로 사람이 닫는다. 흔적으로도 못 가리면 코어의 현재 상태(웨이브·라우트·주문)를 보고 닫고, 무엇을 근거로 닫았는지 남긴다. 이 일을 코드로 옮기는 것 — ops-api 가 코어 상태를 다시 읽어 닫기 — 은 `UNKNOWN` 이 실제로 쌓이면 연다, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 재검토 지점 4).
 
 ---
 

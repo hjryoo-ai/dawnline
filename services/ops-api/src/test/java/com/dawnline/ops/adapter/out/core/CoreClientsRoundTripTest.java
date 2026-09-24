@@ -197,8 +197,9 @@ class CoreClientsRoundTripTest {
                 Map<String, Object> value = new LinkedHashMap<>();
                 Map<String, Object> properties = (Map<String, Object>) schema.getOrDefault("properties", Map.of());
                 properties.forEach((name, property) -> value.put(name, sample(property, components)));
-                if (properties.isEmpty() && schema.containsKey("additionalProperties")) {
-                    value.put("key", "value");
+                // 추가 칸을 허용하는 스키마(ProblemDetail 의 확장 멤버)는 선언되지 않은 칸도 잃지 않아야 한다.
+                if (schema.containsKey("additionalProperties") && !Boolean.FALSE.equals(schema.get("additionalProperties"))) {
+                    value.put("extensionMember", "value");
                 }
                 yield value;
             }

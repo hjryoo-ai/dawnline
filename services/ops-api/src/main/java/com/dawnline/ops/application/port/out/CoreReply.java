@@ -40,8 +40,8 @@ public sealed interface CoreReply {
      * 4xx — 코어가 거절했다. 적용되지 않았다.
      *
      * @param status      코어의 상태 코드
-     * @param problem     코어의 Problem Details 본문, 바이트 그대로(UTF-8). 생성 모델로 읽지 않는다 —
-     *                    계약 문서의 {@code ProblemDetail} 스키마가 실제 본문과 다르다(ADR-052)
+     * @param problem     코어의 Problem Details 본문, 바이트 그대로(UTF-8). 프록시로서 옮긴다 — 운영자는
+     *                    코어가 말한 것을 그대로 본다(DESIGN.md §5.5)
      * @param contentType 코어가 준 미디어 타입, 없으면 {@code null}
      */
     record Rejected(int status, String problem, @Nullable String contentType) implements CoreReply {

@@ -38,8 +38,9 @@ import org.springframework.web.client.RestClientException;
  *
  * <h2>갈래를 나누는 기준 — 코어에 닿았는가를 아는가</h2>
  * <ul>
- *   <li>4xx → {@link CoreReply.Rejected}. 본문은 바이트 그대로 — 계약 문서의 {@code ProblemDetail} 스키마는
- *       확장 멤버를 중첩 객체로 적지만 실제 본문은 최상위로 펼친다(ADR-052 「문서의 거짓 하나」).</li>
+ *   <li>4xx → {@link CoreReply.Rejected}. 본문은 바이트 그대로 — ops-api 는 이 자리에서 프록시다. 운영자는
+ *       코어가 말한 것을 그대로 보고, 코어가 나중에 확장 멤버를 더해도 여기서 잘리지 않는다. 문서의
+ *       {@code ProblemDetail} 은 실제 본문과 같다(ADR-052) — 읽을 수 있지만 읽을 필요가 없다.</li>
  *   <li>연결이 맺어지지 않았다({@link ConnectException}·{@link HttpConnectTimeoutException}·
  *       {@link UnknownHostException}) → {@link CoreReply.Unreachable}. 요청이 나가지 않았다는 것을 아는
  *       유일한 경우다.</li>
