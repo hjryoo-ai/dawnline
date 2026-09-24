@@ -25,8 +25,14 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>인덱스 없이는 배치마다 표 전체를 읽는다 — 90일치에서 하루치 정리가 약 76초다. <strong>인덱스가 사라지거나 질의가
  * 그것을 못 쓰게 바뀌는 것</strong>이 여기서 잡혀야 하는 사건이다. 질의는 어댑터의 상수 그대로다.
  *
- * <p>계획은 둘 다 본다 — custom 과 generic. 정리기는 같은 문장을 배치마다 다시 부르고, 드라이버의 준비된 문장은
- * 다섯 번째 실행부터 generic 계획으로 갈 수 있다.
+ * <p>삭제는 계획을 둘 다 본다 — custom 과 generic. 정리기는 같은 문장을 배치마다(하루 약 150번) 다시 부르고,
+ * 드라이버의 준비된 문장은 다섯 번째 실행부터 generic 계획으로 갈 수 있다.
+ *
+ * <p><strong>걸린 행 셈은 custom 만 본다.</strong> 하루 한 번 부르는 문장이라 도는 것은 값을 아는 계획이다 — 서버는
+ * 처음 다섯 번을 custom 으로 짜고, 그 뒤에도 generic 이 더 쌀 때만 바꾼다. 이 규모(15만 행)에서 generic 계획은
+ * 「결과 없음」의 선택도에 따라 순차 스캔으로 갈 수 있고(CI 에서 한 번 그랬다 — 같은 DB 의 다른 행이 통계를 바꾼다),
+ * 운영 크기(1,365만)에서는 generic 도 인덱스를 탔다(측정 §2.2). 여기서 generic 을 요구하면 이 검사는 운영이 아니라
+ * 픽스처의 분포를 잰다.
  *
  * <p>통계를 첫 어설션으로 말한다 — 통계가 없으면 플래너는 짐작하며 인덱스를 고른다(CLAUDE.md 불변규칙 11).
  */
@@ -60,7 +66,9 @@ class ReadModelRetentionIndexIT extends OpsIntegrationTestBase {
         jdbc.update("""
                 INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, updated_at)
                 SELECT gen_random_uuid(), ?::uuid, 'DISPATCHED',
-                       CASE WHEN g % 20 = 0 THEN 'FAILED' ELSE 'COMPLETED' END,
+                       -- 오늘치는 아직 결과가 없다 — 운영의 분포(측정 문서와 같다). 전부 결과가 있으면 「결과 없음」의
+                       -- 선택도가 0 으로 잡혀 셈의 계획이 운영과 다른 질문에 답한다.
+                       CASE WHEN g % 91 = 0 THEN NULL WHEN g % 20 = 0 THEN 'FAILED' ELSE 'COMPLETED' END,
                        now() - (g % 91) * interval '1 day' - interval '1 hour'
                   FROM generate_series(0, ?) g
                 """, MARKER, ROWS - 1);
@@ -88,11 +96,11 @@ class ReadModelRetentionIndexIT extends OpsIntegrationTestBase {
                         .contains("ix_rmo_updated").doesNotContain("Seq Scan on rm_orders");
             }
         }
-        for (String mode : List.of("force_custom_plan", "force_generic_plan")) {
-            assertThat(plan(JdbcReadModelRetention.COUNT_STUCK_SQL, mode, "(timestamptz)", "now() - interval '90 days'"))
-                    .as("%s — 걸린 행 셈", mode)
-                    .contains("ix_rmo_updated").doesNotContain("Seq Scan on rm_orders");
-        }
+        // 셈은 하루 한 번이라 custom 만 — 클래스 머리말.
+        assertThat(plan(JdbcReadModelRetention.COUNT_STUCK_SQL, "force_custom_plan", "(timestamptz)",
+                "now() - interval '90 days'"))
+                .as("걸린 행 셈 — 인덱스 없이는 매일 표 전체를 병렬로 읽는다")
+                .contains("ix_rmo_updated").doesNotContain("Seq Scan on rm_orders");
     }
 
     /** 어댑터의 문장을 그대로 준비하고({@code ?} → {@code $n}) 계획만 본다 — 실행하지 않는다. */
