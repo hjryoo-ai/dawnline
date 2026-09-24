@@ -2574,6 +2574,18 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 `dawnline_shipment_partitions_ahead` 가 「만든 파티션 수」가 아니라 「앞으로 덮인 날 수」인 이유가
 그것이고(§5.4), `dawnline_outbox_lag_seconds` 가 「발행한 건수」가 아닌 것도 같다.
 
+**짝 — 없는 시계열은 0 으로 보인다** (2026-09-24). 처음 셀 때 만들어지는 카운터는 사건이 한 번도 없으면
+시계열 자체가 없고, `> 0` 알림은 「0」과 「없음」을 구별하지 못한다. 첫 사건에서 시계열이 **1 로 태어나면**
+`increase()` 는 앞 표본이 없어 그 첫 증가를 0 으로 읽는다 — 가장 중요한 첫 번째를 놓친다(근거: Prometheus 의
+문서화된 동작 — 계측 지침 「Avoid missing metrics」가 미리 알 수 있는 시계열은 0 을 내보내라고 적는다. 이
+저장소에서는 아직 재현하지 않았고, Phase 7-1 에서 규칙 파일과 함께 컨테이너로 한 번 재현해 「관측(재현됨)」으로
+올린다). 그래서 **알림이 걸린 카운터는 라벨 값이 유한하면
+기동 때 0 으로 미리 등록한다** — `dawnline_internal_token_rejected_total{reason}` 가 첫 자리다(ADR-055 「추가」).
+라벨 값이 열린 집합이면(캠프) 미리 등록할 수 없고, 그때는 알림 식이 부재를 다룬다.
+**지금 이 원칙을 지키지 않는 알림 셋**(§9.4): `dawnline_rate_limit_decisions_total{outcome="bypassed"}` ·
+`dawnline_ops_commands_total{result="UNKNOWN"}`(둘 다 유한 — 미리 등록할 수 있다) ·
+`dawnline_cancel_too_late_total{camp}`(열린 집합 — Phase 7-1 의 규칙 파일에서 식으로 푼다).
+
 같은 계열의 설계 원칙 하나 — **실패는 원인 옆에서 나야 한다.** 관측은 그 실패를 옆으로
 옮기는 데 쓰는 것이 아니라 옆에 붙어 있을 때 그 사실을 미리 말하는 데 쓴다. `shipment_events` 에
 DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는 행에서 소리 내어 실패하는 것,
