@@ -9,6 +9,8 @@ dependencies {
     implementation(project(":libs:common"))
     implementation(project(":libs:messaging"))
     implementation(project(":libs:observability"))
+    // 오류 응답의 모양 — 이 서비스의 첫 @RestControllerAdvice (ADR-049, ArchUnit 규칙 9)
+    implementation(project(":libs:web"))
 
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.validation)
