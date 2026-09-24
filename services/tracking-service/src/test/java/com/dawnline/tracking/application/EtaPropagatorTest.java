@@ -179,7 +179,7 @@ class EtaPropagatorTest {
 
         @Override
         public Optional<RoutePlanned> find(UUID routeId) {
-            return Optional.of(new RoutePlanned(CAMP, DEPARTURE));
+            return Optional.of(new RoutePlanned(CAMP, 1, DEPARTURE));
         }
     }
 

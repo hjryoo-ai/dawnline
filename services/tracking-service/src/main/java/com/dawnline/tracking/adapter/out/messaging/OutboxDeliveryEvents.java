@@ -70,4 +70,16 @@ public class OutboxDeliveryEvents implements DeliveryEvents {
                 DeliveryAtRiskPayload.of(routeId, campId, detectedAt, deviation, remaining,
                         margin)));
     }
+
+    @Override
+    public void routeDeparted(UUID routeId, UUID campId, int revision, Instant plannedDeparture,
+            Instant departedAt) {
+        outbox.append(OutboxMessage.of(
+                RouteDepartedPayload.AGGREGATE_TYPE,
+                Objects.requireNonNull(routeId, "routeId"),
+                RouteDepartedPayload.EVENT_TYPE,
+                RouteDepartedPayload.SCHEMA_VERSION,
+                routeId.toString(),
+                RouteDepartedPayload.of(routeId, campId, revision, plannedDeparture, departedAt)));
+    }
 }

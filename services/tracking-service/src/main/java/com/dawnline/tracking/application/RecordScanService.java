@@ -6,6 +6,8 @@ import com.dawnline.common.error.ValidationException;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase;
 import com.dawnline.tracking.application.EtaPropagator.Propagation;
 import com.dawnline.tracking.application.port.out.DeliveryEvents;
+import com.dawnline.tracking.application.port.out.RouteRevisions;
+import com.dawnline.tracking.application.port.out.RouteRevisions.RoutePlanned;
 import com.dawnline.tracking.application.port.out.ShipmentEvents;
 import com.dawnline.tracking.application.port.out.ShipmentRepository;
 import com.dawnline.tracking.domain.ScanOutcome;
@@ -42,8 +44,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 보내면 400 이다) — 기사는 캠프를 한 번 떠나고, 그 순간 그 라우트의 모든 배송이 길 위에 있다.
  * stop 하나만 옮기면 나머지는 {@code SCHEDULED} 로 남아 「아직 출발하지 않은 배송」처럼 보인다.
  * 브로커로는 나가지 않는다: 한 사실을 stop 수만큼 반복해 말하는 것이고, order-service 의 상태
- * 머신은 {@code DISPATCHED} 로 그 구간을 이미 덮는다({@code ScanType.isPublished()}). 운영자가
- * 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나를 Phase 6 에서 소비자 주도로 정한다.
+ * 머신은 {@code DISPATCHED} 로 그 구간을 이미 덮는다({@code ScanType.isDeliveryStatus()}).
+ * 대신 <strong>라우트에 하나</strong> {@code delivery.route-departed} 로 나간다(ADR-050, 2026-09-24)
+ * — 이 스캔이 배송을 실제로 옮겼을 때만. 같은 출발을 다시 찍은 스캔은 전부 {@code STALE} 이라
+ * 새 사실이 없다.
  *
  * <h2>순서가 규칙이다</h2>
  * 상태를 옮기고 → 편차를 전파하고 → 위험을 판정하고 → 사건을 적재하고 →
@@ -76,6 +80,7 @@ public class RecordScanService implements RecordScanUseCase {
     private final AtRiskDetector atRisk;
     private final TrackingMetrics metrics;
     private final Ids ids;
+    private final RouteRevisions revisions;
 
     /**
      * @param shipments 배송 저장소
@@ -85,10 +90,11 @@ public class RecordScanService implements RecordScanUseCase {
      * @param atRisk    지연 위험 판정·통지 (§5.4)
      * @param metrics   §9.1 카운터
      * @param ids       UUIDv7 생성기 (불변규칙 10·12)
+     * @param revisions 라우트당 계획값 — 출발 이벤트의 캠프·개정·계획 출발이 여기서 온다
      */
     public RecordScanService(ShipmentRepository shipments, ShipmentEvents events,
             DeliveryEvents delivery, EtaPropagator eta, AtRiskDetector atRisk,
-            TrackingMetrics metrics, Ids ids) {
+            TrackingMetrics metrics, Ids ids, RouteRevisions revisions) {
         this.shipments = Objects.requireNonNull(shipments, "shipments");
         this.events = Objects.requireNonNull(events, "events");
         this.delivery = Objects.requireNonNull(delivery, "delivery");
@@ -96,6 +102,7 @@ public class RecordScanService implements RecordScanUseCase {
         this.atRisk = Objects.requireNonNull(atRisk, "atRisk");
         this.metrics = Objects.requireNonNull(metrics, "metrics");
         this.ids = Objects.requireNonNull(ids, "ids");
+        this.revisions = Objects.requireNonNull(revisions, "revisions");
     }
 
     @Override
@@ -150,6 +157,7 @@ public class RecordScanService implements RecordScanUseCase {
 
         events.appendAll(appended);
         publish(command, moved);
+        publishDeparture(command, moved);
         metrics.countScanAfterCancel(afterCancel);
         metrics.countScanAfterRelocate(offPlan);
 
@@ -174,11 +182,11 @@ public class RecordScanService implements RecordScanUseCase {
      *
      * <p>내보내지 않는 두 경우가 있고 둘 다 「소비자에게 새 사실이 없다」는 같은 이유다.
      * {@code DEPARTED_CAMP} 는 계약의 {@code status} 셋에 없고(라우트의 사건이다,
-     * {@link ScanType#isPublished()}), 옮겨진 주문이 없으면 {@code STALE}·{@code AFTER_CANCEL}
+     * {@link ScanType#isDeliveryStatus()}), 옮겨진 주문이 없으면 {@code STALE}·{@code AFTER_CANCEL}
      * 뿐이라 상태가 움직이지 않았다.
      */
     private void publish(ScanCommand command, List<Shipment> moved) {
-        if (!command.type().isPublished()) {
+        if (!command.type().isDeliveryStatus()) {
             return;
         }
         Map<StopKey, List<UUID>> byStop = new LinkedHashMap<>();
@@ -210,6 +218,29 @@ public class RecordScanService implements RecordScanUseCase {
                     routeId, stopSeq, propagation.moved().size(),
                     propagation.deviation().toSeconds());
         });
+    }
+
+    /**
+     * {@code delivery.route-departed} 를 라우트에 한 번 내보낸다 (ADR-050).
+     *
+     * <p><strong>배송을 실제로 옮긴 출발 스캔만</strong> 내보낸다. 단말의 재시도나 같은 출발을 두 번
+     * 찍은 것은 전부 {@code STALE} 이라 소비자에게 새 사실이 없다 — 그래서 「라우트 하나에 하나」가
+     * 여기서 지켜진다. 반대로 기사가 출발을 빼먹고 도착부터 찍은 뒤 뒤늦게 출발을 찍으면 옮길 배송이
+     * 없어 나가지 않는다. 그 라우트는 ops 에서 「출발했다, 시각은 모른다」로 남는다 — ops 는
+     * {@code delivery.status} 로 출발을 알고({@code rm_routes.status}), 시각을 지어내지 않는다.
+     *
+     * <p>개정·계획 출발은 {@code route_revisions} 에서 온다. 배송이 있다면 그 행이 있다 — 둘 다
+     * {@code route.assigned} 한 트랜잭션이 만든다. 없으면 계약을 채울 수 없으므로 터진다(조용히
+     * 건너뛰면 출발이 사라진다).
+     */
+    private void publishDeparture(ScanCommand command, List<Shipment> moved) {
+        if (command.type() != ScanType.DEPARTED_CAMP || moved.isEmpty()) {
+            return;
+        }
+        RoutePlanned planned = revisions.find(command.routeId()).orElseThrow(() -> new IllegalStateException(
+                "배송은 있는데 route_revisions 에 행이 없다: routeId=" + command.routeId()));
+        delivery.routeDeparted(command.routeId(), planned.campId(), planned.revision(),
+                planned.plannedDeparture(), command.occurredAt());
     }
 
     /** 기사가 찍은 자리와 우리가 아는 자리가 다른가. 판정이 아니라 <em>계량</em>에만 쓴다. */

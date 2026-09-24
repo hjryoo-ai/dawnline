@@ -39,7 +39,7 @@ public record DeliveryStatusPayload(UUID routeId, int stopSeq, List<String> orde
      * @param routeId       라우트 id
      * @param stopSeq       stop 순번
      * @param orderIds      상태가 옮겨진 주문들
-     * @param type          스캔 종류. {@link ScanType#isPublished()} 인 것만 온다
+     * @param type          스캔 종류. {@link ScanType#isDeliveryStatus()} 인 것만 온다
      * @param occurredAt    사건 시각
      * @param failureReason 실패 사유
      * @return 페이로드
@@ -47,7 +47,7 @@ public record DeliveryStatusPayload(UUID routeId, int stopSeq, List<String> orde
     public static DeliveryStatusPayload of(UUID routeId, int stopSeq, List<UUID> orderIds,
             ScanType type, Instant occurredAt, @Nullable String failureReason) {
 
-        if (!type.isPublished()) {
+        if (!type.isDeliveryStatus()) {
             // 여기까지 오면 발행 규칙이 두 곳에 있다는 뜻이다. 계약의 status enum 에 없는 값이
             // 나가면 소비자는 그것을 무시하고(§4.7), 그 무시는 어디에도 나타나지 않는다.
             throw new IllegalArgumentException("발행 대상이 아닌 스캔입니다: " + type);

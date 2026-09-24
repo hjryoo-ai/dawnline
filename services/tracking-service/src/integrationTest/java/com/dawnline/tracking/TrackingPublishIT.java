@@ -22,7 +22,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -74,6 +74,7 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
 
     private static final String STATUS_TOPIC = "dawnline.delivery.status.v1";
     private static final String AT_RISK_TOPIC = "dawnline.delivery.at-risk.v1";
+    private static final String ROUTE_DEPARTED_TOPIC = "dawnline.delivery.route-departed.v1";
     private static final String ROUTE_ASSIGNED_TOPIC = "dawnline.route.assigned.v1";
 
     private static final EventContracts CONTRACTS = EventContracts.load();
@@ -91,7 +92,7 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
     static {
         KAFKA.start();
         REDIS.start();
-        createTopics(STATUS_TOPIC, AT_RISK_TOPIC, ROUTE_ASSIGNED_TOPIC);
+        createTopics(STATUS_TOPIC, AT_RISK_TOPIC, ROUTE_DEPARTED_TOPIC, ROUTE_ASSIGNED_TOPIC);
     }
 
     @Autowired
@@ -117,6 +118,9 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
 
     private TransactionTemplate transactions;
     private UUID routeId;
+
+    /** 이 테스트의 라우트로 받았지만 아직 아무도 묻지 않은 레코드 — 토픽별. */
+    private final Map<String, List<ConsumerRecord<String, String>>> buffered = new HashMap<>();
     /** stop 순번 → 그 stop 의 주문들. 스캔의 열쇠다 (ADR-047 결정 1). */
     private final Map<Integer, List<UUID>> stopOrders = new LinkedHashMap<>();
     private Instant departure;
@@ -148,7 +152,7 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
                 ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
                 ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
                 ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName()));
-        consumer.subscribe(List.of(STATUS_TOPIC, AT_RISK_TOPIC));
+        consumer.subscribe(List.of(STATUS_TOPIC, AT_RISK_TOPIC, ROUTE_DEPARTED_TOPIC));
     }
 
     @AfterAll
@@ -248,6 +252,17 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
                     .as("stop 단위 한 건이고 orderIds 가 그 stop 의 주문을 든다")
                     .hasSize(1);
         });
+
+        // 출발은 delivery.status 가 아니라 라우트에 하나, route-departed 로 나간다 (ADR-050).
+        ConsumerRecord<String, String> departed = awaitOne(ROUTE_DEPARTED_TOPIC);
+        CONTRACTS.validateRecord(departed.value());
+        JsonNode payload = CONTRACTS.json().readTree(departed.value()).get("payload");
+        assertThat(payload.get("revision").intValue()).isEqualTo(1);
+        assertThat(payload.get("plannedDeparture").asString()).isEqualTo(departure.toString());
+        assertThat(payload.get("departedAt").asString()).isEqualTo(departure.toString());
+        assertThat(departed.key()).isEqualTo(routeId.toString());
+        assertThat(poll(ROUTE_DEPARTED_TOPIC, Duration.ofSeconds(2)))
+                .as("라우트 하나에 하나 — stop 수(3)만큼이 아니다").isEmpty();
     }
 
     @Test
@@ -331,13 +346,17 @@ class TrackingPublishIT extends TrackingIntegrationTestBase {
      * 실행 순서에 따라 나타났다 사라진다(§13 여덟째 축).
      */
     private List<ConsumerRecord<String, String>> poll(String topic, Duration timeout) {
+        // 한 번의 poll 이 구독한 토픽 전부를 가져온다. 묻지 않은 토픽의 레코드를 버리면 다음에 그
+        // 토픽을 기다리는 검사가 이미 지나간 레코드를 영영 못 본다 — 토픽이 셋이 되며(route-departed)
+        // 드러날 자리라 토픽별로 쌓아 둔다.
         ConsumerRecords<String, String> records = consumer.poll(timeout);
-        List<ConsumerRecord<String, String>> found = new ArrayList<>();
-        records.records(topic).forEach(record -> {
+        records.forEach(record -> {
             if (routeId.toString().equals(record.key())) {
-                found.add(record);
+                buffered.computeIfAbsent(record.topic(), t -> new ArrayList<>()).add(record);
             }
         });
+        List<ConsumerRecord<String, String>> found = buffered.getOrDefault(topic, new ArrayList<>());
+        buffered.remove(topic);
         return found;
     }
 

@@ -185,12 +185,13 @@ public class TrackingApplicationConfig {
      * @param atRisk    지연 위험 판정·통지
      * @param metrics   §9.1 카운터
      * @param ids       UUIDv7 생성기 (불변규칙 10)
+     * @param revisions 라우트당 계획값 — {@code delivery.route-departed} 의 출처
      */
     @Bean
     public RecordScanUseCase recordScanUseCase(ShipmentRepository shipments, ShipmentEvents events,
             DeliveryEvents delivery, EtaPropagator eta, AtRiskDetector atRisk,
-            TrackingMetrics metrics, Ids ids) {
-        return new RecordScanService(shipments, events, delivery, eta, atRisk, metrics, ids);
+            TrackingMetrics metrics, Ids ids, RouteRevisions revisions) {
+        return new RecordScanService(shipments, events, delivery, eta, atRisk, metrics, ids, revisions);
     }
 
     // --- shipment_events 일 파티션 (§5.4) -------------------------------------

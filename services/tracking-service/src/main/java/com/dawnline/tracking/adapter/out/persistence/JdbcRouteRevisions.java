@@ -33,7 +33,7 @@ public class JdbcRouteRevisions implements RouteRevisions {
             """;
 
     private static final String FIND_SQL =
-            "SELECT camp_id, planned_departure FROM route_revisions WHERE route_id = ?";
+            "SELECT camp_id, revision, planned_departure FROM route_revisions WHERE route_id = ?";
 
     private final JdbcTemplate jdbc;
 
@@ -63,8 +63,8 @@ public class JdbcRouteRevisions implements RouteRevisions {
     public Optional<RoutePlanned> find(UUID routeId) {
         Objects.requireNonNull(routeId, "routeId");
         return jdbc.query(FIND_SQL, rs -> rs.next()
-                ? Optional.of(new RoutePlanned(rs.getObject(1, UUID.class),
-                        rs.getObject(2, java.time.OffsetDateTime.class).toInstant()))
+                ? Optional.of(new RoutePlanned(rs.getObject(1, UUID.class), rs.getInt(2),
+                        rs.getObject(3, java.time.OffsetDateTime.class).toInstant()))
                 : Optional.empty(), routeId);
     }
 }

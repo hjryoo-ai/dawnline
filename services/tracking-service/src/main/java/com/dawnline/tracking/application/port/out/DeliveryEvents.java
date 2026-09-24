@@ -24,8 +24,9 @@ public interface DeliveryEvents {
      * 합치기 때문이다. 한 번의 방문을 여러 사건으로 쪼개면 소비자가 그것을 다시 합쳐야 한다.
      *
      * <p>{@code DEPARTED_CAMP} 는 <strong>여기로 오지 않는다</strong>
-     * ({@link ScanType#isPublished()}). 캠프 출발은 라우트의 사건이라 stop 수만큼 반복해 말하는
+     * ({@link ScanType#isDeliveryStatus()}). 캠프 출발은 라우트의 사건이라 stop 수만큼 반복해 말하는
      * 꼴이 되고, order-service 의 상태 머신은 {@code DISPATCHED} 로 그 구간을 이미 덮는다.
+     * 라우트에 하나 {@link #routeDeparted} 로 나간다.
      *
      * @param routeId       라우트 id. 파티션 키다
      * @param stopSeq       stop 순번
@@ -57,4 +58,20 @@ public interface DeliveryEvents {
      */
     void deliveryAtRisk(UUID routeId, UUID campId, Instant detectedAt, Duration deviation,
             List<Shipment> remaining, Duration margin);
+
+    /**
+     * {@code delivery.route-departed} 하나 — <strong>라우트 단위</strong>다
+     * ([ADR-050](docs/adr/ADR-050-route-departure-is-an-event.md), 키 {@code routeId}).
+     *
+     * <p>출발은 첫 편차의 출처이고, 이것이 없으면 ops 는 첫 {@code ARRIVED} 까지 「출발 안 함」과
+     * 「출발했는데 아직 도착 없음」을 구별하지 못한다 — 운영자가 개입할 수 있는 마지막 창이다.
+     *
+     * @param routeId          라우트 id. 파티션 키다
+     * @param campId           캠프 — ops 는 이 이벤트가 그 라우트의 계획보다 먼저 와도 행을 캠프에 올린다
+     * @param revision         출발 시점에 적용해 둔 개정
+     * @param plannedDeparture 그 개정의 계획 출발 — {@code departedAt} 과 한 쌍으로 편차의 기준선
+     * @param departedAt       스캔의 사건 시각. 처리 시각이 아니다
+     */
+    void routeDeparted(UUID routeId, UUID campId, int revision, Instant plannedDeparture,
+            Instant departedAt);
 }

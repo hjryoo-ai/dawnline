@@ -7,8 +7,9 @@ package com.dawnline.tracking.domain;
  * {@code DEPARTED_CAMP} 하나로 충분하다 — 그 사건이 만드는 상태는 {@code OUT_FOR_DELIVERY} 다.
  *
  * <p>{@code delivery.status.v1} 이 싣는 값은 셋({@code ARRIVED}·{@code COMPLETED}·{@code FAILED})
- * 이다. {@code DEPARTED_CAMP} 는 발행하지 않는다 — order-service 의 상태 머신에 대응하는 상태가
- * 없고, 라우트 진행은 ops 가 {@code shipments} 로 본다.
+ * 이다. {@code DEPARTED_CAMP} 는 그 셋에 없다 — stop 의 사건이 아니라 <strong>라우트의 사건</strong>
+ * 이라 stop 수만큼 반복해 말하는 꼴이 되기 때문이다. 대신 라우트에 하나,
+ * {@code delivery.route-departed.v1} 로 나간다(ADR-050).
  */
 public enum ScanType {
 
@@ -40,11 +41,15 @@ public enum ScanType {
     }
 
     /**
-     * {@code delivery.status.v1} 로 발행되는 스캔인가 (계약의 {@code status} enum 셋).
+     * {@code delivery.status.v1} 의 {@code status} 값인가 (계약의 enum 셋).
      *
-     * @return 발행 대상이면 {@code true}
+     * <p>이름을 {@code isPublished} 에서 좁혔다(ADR-050 결과, 2026-09-24). 그 이름은 「발행되는가」로
+     * 읽히는데 {@code DEPARTED_CAMP} 도 이제 발행된다 — 다만 이 토픽이 아니라
+     * {@code delivery.route-departed} 로. 고치지 않으면 다음 사람은 출발이 아무 데도 안 나간다고 읽는다.
+     *
+     * @return {@code delivery.status} 로 나가는 스캔이면 {@code true}
      */
-    public boolean isPublished() {
+    public boolean isDeliveryStatus() {
         return this != DEPARTED_CAMP;
     }
 }

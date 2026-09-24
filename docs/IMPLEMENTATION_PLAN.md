@@ -1820,6 +1820,9 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
    계약은 §4.1 과 ADR-050 에 적었다(`delivery.route-departed.v1`, 키 `routeId`). **스키마·예시·토픽 생성·발행은
    아래 작업 1 에서 한다** — 소비자(ops 의 `rm_routes` 프로젝션)가 먼저 정의하고 tracking 이
    outbox 로 낸다. 소비자 주도를 지키는 것이 이 순서다.
+   **그 순서대로 들어왔다**(2026-09-24): 계약·토픽은 ops 프로젝션 PR(#46)에서, 발행은 그 뒤
+   tracking 에서. `stopCount` 는 계약에서 뺐다(ADR-050 재검토 지점 3 — 부재를 다른 출처로 메우지
+   않는다).
 
 0-c. **(선결, 판정 완료) `route:{id}:progress` 를 지운다** (Phase 5-3 이월,
    [ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 재검토 지점 4 — 2026-09-23 에 닫았다).

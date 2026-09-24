@@ -198,7 +198,7 @@ com.dawnline.<service>
 | dawnline.plan.failed.v1 | waveId | dispatch | **fulfillment**, ops | 계획 실행 실패 (§5.3 Plan `FAILED` — 예외·시간초과) |
 | dawnline.delivery.status.v1 | routeId | tracking | order, **dispatch**, ops | ARRIVED/COMPLETED/FAILED |
 | dawnline.delivery.at-risk.v1 | routeId | tracking | dispatch, ops | 지연 위험 감지 |
-| dawnline.delivery.route-departed.v1 | routeId | tracking | ops | 라우트가 캠프를 떠났다 (§5.4 `DEPARTED_CAMP`). 계약은 소비자가 먼저 정의했다(2026-09-24, 묶음 B) — 발행은 같은 묶음의 tracking |
+| dawnline.delivery.route-departed.v1 | routeId | tracking | ops | 라우트가 캠프를 떠났다 (§5.4 `DEPARTED_CAMP`). 계약은 소비자가 먼저 정의했고 tracking 이 낸다(2026-09-24, 묶음 B) — 출발 스캔이 배송을 실제로 옮겼을 때 라우트에 하나 |
 | `<topic>.dlq` | 원본 키 | 각 소비자 | 운영자 | 재처리 실패 메시지 |
 
 **dispatch 가 `delivery.status` 를 소비한다** (2026-09-05 결정). 처음에는 소비자가 order 와 ops 뿐이었고, 그
@@ -262,13 +262,19 @@ tracking 의 `COUNT(DISTINCT stop_seq)` 로 그 몇 초를 메우면 같은 사�
 스스로 드러난다: `EventContractsTest` 의 `PARTITION_KEY_FIELD` 는 예시 파일에서 역으로 돌기
 때문에 `delivery.route-departed` 예시가 들어오면 그 표에 칸이 없다는 이유로 실패한다. 같은
 이유로 `deploy/compose` 의 토픽 목록도 그 커밋에서 함께 는다.
+**발행도 들어왔다** (2026-09-24, 같은 묶음). `RecordScanService` 의 `fromCamp` 갈래가 배송을
+**실제로 옮긴** 출발 스캔에만 한 건 낸다 — 단말의 재시도는 전부 `STALE` 이라 나가지 않고, 그래서
+「라우트 하나에 하나」가 거기서 지켜진다. 기사가 출발을 빼먹고 도착부터 찍은 라우트는 뒤늦은
+출발 스캔이 옮길 배송이 없어 나가지 않는다 — ops 는 `delivery.status` 로 「출발했다」를 알고
+(`rm_routes.status`) 시각은 비워 둔다. 지어내지 않는다.
+
 **채워졌다** (2026-09-24). 예고대로 `PARTITION_KEY_FIELD` 에 칸이 하나 늘었고, 토픽 목록 쪽에는
 그 문장을 확인하는 장치가 **없었다** — 그래서 `ComposeTopicsTest` 를 더했다(compose 의 토픽 집합
 = 계약 스키마의 집합, 양쪽 다 파일에서 읽는다).
 
 **브로커로 내보내지 않던 이유는 그대로 유효하다** — `DEPARTED_CAMP` 를 stop 마다 내보내면 한
 사실을 stop 수만큼 반복하는 꼴이고 order-service 는 `DISPATCHED` 로 그 구간을 이미 덮는다
-(§5.4 `ScanType.isPublished()`). 그래서 새 이벤트는 **라우트 하나에 하나**다. 그 이유가 이
+(§5.4 `ScanType.isDeliveryStatus()` — 2026-09-24 에 `isPublished` 에서 이름을 좁혔다, 출발도 이제 나가기 때문이다). 그래서 새 이벤트는 **라우트 하나에 하나**다. 그 이유가 이
 이벤트를 *라우트 단위*로 만든 것이지, 이벤트를 만들지 않을 이유였던 적은 없다.
 
 ### 4.2 이벤트 봉투 (Envelope)
@@ -932,7 +938,7 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
   찍은 자리와 tracking 이 아는 자리가 다르면 **그대로 적용하고** `dawnline_scan_after_relocate_total` 로 센다(§9.1) — 그 값이 개정과 기사가 어긋난 창의 크기이고, dispatch 의 `dawnline_status_after_relocate_total` 과 한 쌍이다. 편차 전파와 `delivery.status` 발행도 **배송이 지금 있는 (라우트, 순번)** 에서 한다: 요청이 말한 좌표로 전파하면 개정이 옮긴 stop 의 ETA 를 엉뚱하게 밀고, 옛 좌표를 그대로 실어 보내면 dispatch 의 확인용 컨텍스트가 틀린 값을 받아 저쪽 카운터가 우리 탓으로 오른다. 그래서 **한 스캔이 `delivery.status` 두 건이 될 수 있다** — 그 주문들이 지금 서로 다른 stop 에 있으면 그것은 두 지점의 사실이다.
   `DEPARTED_CAMP` 만 예외다: **라우트의 사건**이라 `orderIds` 를 싣지 않고(실으면 400) 그 라우트 전체에 적용한다. 사유를 `FAILED` 에만 붙이는 것과 같은 모양이다 — 종류가 필드의 뜻을 정하고, 어긋나면 조용히 버리지 않고 거절한다.
 - ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17). 부호를 지우지 않는다 — 일찍 도착하면 음수로 당겨진다. 「늦은 것만 민다」로 적으면 앞서 가는 라우트의 ETA 가 낡은 채로 남고 ops 화면이 그 값을 읽는다.
-- **`DEPARTED_CAMP` 는 라우트의 사건이다** (Phase 5-1b). 경로의 `{seq}` 를 무시하고 그 라우트의 배송 <em>전부</em>를 `OUT_FOR_DELIVERY` 로 옮긴다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다. stop 하나만 옮기면 나머지는 `SCHEDULED` 로 남아 「아직 출발하지 않은 배송」처럼 보인다. 그리고 이 갈래가 **첫 편차의 출처**다: 기준값은 `route_revisions.planned_departure`(= `route.assigned.v1` 의 `summary.plannedDeparture`, required)이고, 늦은 출발은 가장 흔한 지연 원인이면서 **첫 `ARRIVED` 스캔 전에 이미 알 수 있다.** 브로커로는 나가지 않는다 — 한 사실을 stop 수만큼 반복해 말하는 것이고 order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다(`ScanType.isPublished()`). 운영자가 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 **첫 소비자가 나타나는 Phase 6 에서 소비자 주도로** 정한다. **정했다** ([ADR-050](adr/ADR-050-route-departure-is-an-event.md), 2026-09-23, Phase 6-0b — §4.1 표와 그 아래 문단). 근거는 화면이 아니라 이 갈래가 *첫 편차의 출처*라는 것이다: 그 편차를 아는 것이 tracking 뿐이면 ops 는 첫 `ARRIVED` 까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, 그 구간이 운영자가 개입할 수 있는 마지막 창이다. 발행은 묶음 B 에서 이 자리에 붙는다.
+- **`DEPARTED_CAMP` 는 라우트의 사건이다** (Phase 5-1b). 경로의 `{seq}` 를 무시하고 그 라우트의 배송 <em>전부</em>를 `OUT_FOR_DELIVERY` 로 옮긴다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다. stop 하나만 옮기면 나머지는 `SCHEDULED` 로 남아 「아직 출발하지 않은 배송」처럼 보인다. 그리고 이 갈래가 **첫 편차의 출처**다: 기준값은 `route_revisions.planned_departure`(= `route.assigned.v1` 의 `summary.plannedDeparture`, required)이고, 늦은 출발은 가장 흔한 지연 원인이면서 **첫 `ARRIVED` 스캔 전에 이미 알 수 있다.** 브로커로는 나가지 않는다 — 한 사실을 stop 수만큼 반복해 말하는 것이고 order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다(`ScanType.isPublished()`). 운영자가 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 **첫 소비자가 나타나는 Phase 6 에서 소비자 주도로** 정한다. **정했다** ([ADR-050](adr/ADR-050-route-departure-is-an-event.md), 2026-09-23, Phase 6-0b — §4.1 표와 그 아래 문단). 근거는 화면이 아니라 이 갈래가 *첫 편차의 출처*라는 것이다: 그 편차를 아는 것이 tracking 뿐이면 ops 는 첫 `ARRIVED` 까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, 그 구간이 운영자가 개입할 수 있는 마지막 창이다. **발행이 이 자리에 붙었다**(2026-09-24) — 배송을 실제로 옮긴 출발 스캔에만, 라우트에 한 건.
 - **편차 전파는 애그리거트 밖이다** (`EtaPropagator`). 편차는 <em>라우트</em>의 성질이다 — 어느 stop 에서 얼마가 벌어졌고 그것이 누구에게 옮겨 가는지는 방문 순서를 아는 쪽만 안다. `Shipment` 는 주문 하나만 알고, 받는 것은 결과값 하나(`projectEta`)다. 종결 상태를 옮기지 않는 판단만 애그리거트의 것이다 — 「어디서 움직이는가」의 답이 하나여야 한다.
 - **at-risk 규칙**: 어떤 stop의 `eta > promised_end − 15분`이면 `delivery.at-risk` 1회 발행(라우트당 5분 쿨다운, Redis `SET NX`). 페이로드에 남은 stop 목록·편차 포함.
   **이것은 사건이지 상태가 아니다**([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 위험이 계속되면 다시 알리고(쿨다운이 그 주기다) **사라지는 경우는 알리지 않는다** — dispatch 가 이미 시작한 재계획을 취소할 방법이 없고, 해소된 ETA 는 ops 의 읽기 모델(§5.5)이 그대로 보여 준다. 소비자는 「위험 해제」를 기다리지 않는다.

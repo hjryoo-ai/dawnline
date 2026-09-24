@@ -59,12 +59,22 @@ class DeliveryPayloadContractTest {
     void 캠프_출발은_이_계약의_값이_아니다() {
         // 위 검사가 DEPARTED_CAMP 를 **왜** 제외하는지를 말한다. 계약의 status enum 은 셋이고,
         // 없는 값을 내보내면 소비자는 그것을 조용히 무시한다(§4.7) — 무시는 어디에도 안 남는다.
-        assertThat(ScanType.DEPARTED_CAMP.isPublished()).isFalse();
+        assertThat(ScanType.DEPARTED_CAMP.isDeliveryStatus()).isFalse();
 
         assertThatThrownBy(() -> DeliveryStatusPayload.of(Ids.newId(), 1, List.of(Ids.newId()),
                 ScanType.DEPARTED_CAMP, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("DEPARTED_CAMP");
+    }
+
+    @Test
+    void 출발은_route_departed_계약을_지킨다() {
+        // 소비자(ops)가 먼저 정의한 계약이다 — 다섯 칸, stopCount 없음(ADR-050 재검토 지점 3).
+        RouteDepartedPayload payload = RouteDepartedPayload.of(Ids.newId(), Ids.newId(), 2,
+                NOW, NOW.plus(Duration.ofMinutes(7)));
+
+        CONTRACTS.validatePayload(RouteDepartedPayload.EVENT_TYPE, RouteDepartedPayload.SCHEMA_VERSION,
+                CONTRACTS.json().toTree(payload));
     }
 
     @Test
