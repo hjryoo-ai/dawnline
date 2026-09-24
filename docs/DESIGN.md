@@ -423,7 +423,7 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 | `GET /api/v1/admin/outbox/quarantined?limit=50` | 격리 시각 순(`ORDER BY failed_at, id`). 칸은 `id`·`aggregateType`·`aggregateId`·`eventType`·`topic`·`createdAt`·`failedAt`·`publishAttempts` 와 전체 수 `total`. **`payload`·`headers`·`partition_key` 는 싣지 않는다**(§9.3 — 주소가 있을 수 있다). `limit` 은 1–500(DLQ 목록과 같다) |
 | `POST /api/v1/admin/outbox/{id}/requeue` | `UPDATE … SET failed_at = NULL, publish_attempts = 0 WHERE id = ? AND failed_at IS NOT NULL` — RB-05 의 (b) 와 **같은 문장**이다. 200 = 풀었다 · 404 = 행이 없다 · 409 `not-quarantined` = 격리된 행이 아니다. 409 본문의 최상위 `currentState`(`PENDING`·`PUBLISHED`)와 `publishedAt` 이 **지금 그 행이 어디 있는지** 말한다 |
 | 경고 | **재큐는 원인을 고치지 않는다.** 원인이 남아 있으면 릴레이가 다시 집어 다시 격리하고 `publish_attempts` 가 1 부터 다시 오른다(RB-05 1.3). 응답 문서가 이 문장을 싣는다 |
-| 인덱스 | 새로 두지 않는다. 목록은 V000_4 의 부분 인덱스 `ix_outbox_failed (failed_at) WHERE failed_at IS NOT NULL` 을 그대로 탄다 — 술어가 리터럴(`IS NOT NULL`)이고 정렬 키가 인덱스 키다. 재큐는 PK. 격리 행은 평상시 0 이고 알림(§9.4)이 그 0 을 지킨다 |
+| 인덱스 | 새로 두지 않는다. 목록은 V000_4 의 부분 인덱스 `ix_outbox_failed (failed_at) WHERE failed_at IS NOT NULL` 을 탄다 — 술어가 리터럴(`IS NOT NULL`)이다. **측정**(2026-09-24, PostgreSQL 18.2, [phase1 측정](benchmarks/phase1-retention-indexes.md)과 같은 200,000 발행 완료 행 + 격리 3, `ANALYZE` 뒤 `reltuples=200003`): `Bitmap Index Scan on ix_outbox_failed` → 3행 정렬, 0.014 ms · 버퍼 2. 재큐의 조건부 `UPDATE` 는 `outbox_events_pkey` Index Scan + `Filter: failed_at IS NOT NULL`(준비된 문장의 일반 계획도 같다). 격리 행은 평상시 0 이고 알림(§9.4)이 그 0 을 지킨다 — 그 수가 수천이 되는 날이 재검토 지점이다 |
 
 **재큐도 `UNKNOWN` 을 다시 누르기로 푼다.** 응답을 못 받은 재큐를 다시 누르면 — 앞의 것이 적용됐으면 409 에
 `currentState=PENDING`(아직 안 나감) 또는 `PUBLISHED`(나갔다)가 오고, 적용되지 않았으면 200 이다. 어느 쪽이든

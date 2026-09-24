@@ -146,7 +146,11 @@ Phase 6 작업 2. 복구의 두 절반 중 **뒤의 절반**(`failed_at = NULL, 
    「제외한 것이 왜 제외인지를 검사하는 테스트를 함께 둔다」). 속성으로 잊는 방향은 **열리는 쪽**이라 조용하지
    않다 — 그 테스트가 빨개진다.
 5. **새 인덱스는 없다.** 목록은 V000_4 의 `ix_outbox_failed (failed_at) WHERE failed_at IS NOT NULL` 을 탄다 —
-   술어가 인덱스 술어와 같은 리터럴이고 정렬 키가 인덱스 키다. 격리 행은 평상시 0 이다(알림이 지킨다). 재큐는 PK.
+   술어가 인덱스 술어와 같은 리터럴이다. **근거: 관측(재현됨)** — 200,000 발행 완료 행 + 격리 3 을 채우고
+   `ANALYZE` 한 뒤(`reltuples=200003`, `docs/benchmarks/phase1-retention-indexes.md` 와 같은 크기) 생성된 형태의
+   문장을 EXPLAIN 했다: `Bitmap Index Scan on ix_outbox_failed` → 3행 정렬, 0.014 ms · 버퍼 2. 재큐는
+   `outbox_events_pkey` Index Scan 에 `failed_at IS NOT NULL` 필터이고 준비된 문장의 일반 계획도 같다.
+   격리 행은 평상시 0 이다(알림이 지킨다). 그 수가 수천이 되면 정렬이 인덱스 밖에서 도는 비용을 다시 잰다.
 
 ### 고려한 대안
 
