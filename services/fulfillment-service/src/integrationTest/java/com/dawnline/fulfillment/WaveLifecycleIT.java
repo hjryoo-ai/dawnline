@@ -235,6 +235,8 @@ class WaveLifecycleIT extends FulfillmentIntegrationTestBase {
         assertThat(payload.get("waveId").asString()).isEqualTo(wave.id().toString());
         assertThat(payload.get("orderCount").intValue())
                 .as("마감 시점의 집계값이다 (ADR-025)").isEqualTo(3);
+        // 시드의 camps.code 스냅샷 — ops 화면이 캠프를 부르는 이름이다(§5.3 「캠프 코드」).
+        assertThat(payload.get("campCode").asString()).isEqualTo("CAMP-SEO-N");
         // §4.5 — 키가 campId 라 같은 캠프의 웨이브 계획이 직렬화된다.
         assertThat(record.key()).isEqualTo(wave.campId().toString());
     }

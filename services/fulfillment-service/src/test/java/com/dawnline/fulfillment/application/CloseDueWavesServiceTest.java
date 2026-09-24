@@ -257,7 +257,7 @@ class CloseDueWavesServiceTest {
         }
 
         @Override
-        public void waveClosed(Wave wave, com.dawnline.common.GeoPoint depot) {
+        public void waveClosed(Wave wave, com.dawnline.fulfillment.domain.Camp camp) {
             if (fail) {
                 throw new IllegalStateException("발행 실패");
             }

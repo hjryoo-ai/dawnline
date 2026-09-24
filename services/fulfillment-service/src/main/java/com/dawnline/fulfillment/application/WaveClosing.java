@@ -81,7 +81,7 @@ public class WaveClosing {
         // 호출은 불변규칙 4 가 금지한다. 캠프를 못 찾으면 이 웨이브만 실패시킨다.
         Camp camp = referenceData.findCamp(wave.campId()).orElseThrow(() -> new IllegalStateException(
                 "캠프를 찾지 못해 wave.closed 를 낼 수 없습니다: campId=" + wave.campId()));
-        events.waveClosed(wave, camp.location());
+        events.waveClosed(wave, camp);
         return new Outcome.Closed(wave, camp.code());
     }
 

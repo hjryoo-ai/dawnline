@@ -50,9 +50,10 @@ public interface FulfillmentEvents {
      * 코어 서비스 간 동기 호출을 금지한다 — 그래서 <strong>계획을 촉발하는 이벤트가 싣는다</strong>.
      * {@code order.placed} 의 {@code cutoffAt} 과 같은 논리다.
      *
-     * @param wave  마감된 웨이브. {@code orderCount} 는 마감 시점의 집계값이다 (ADR-025)
-     * @param depot 캠프 좌표
+     * <p>캠프 코드도 같은 이유로 싣는다(2026-09-24) — ops 의 화면이 캠프를 코드로 부른다(§5.3 「캠프 코드」).
+     *
+     * @param wave 마감된 웨이브. {@code orderCount} 는 마감 시점의 집계값이다 (ADR-025)
+     * @param camp 웨이브의 캠프 — 좌표와 코드의 스냅샷을 싣는다
      */
-    void waveClosed(com.dawnline.fulfillment.domain.Wave wave,
-            com.dawnline.common.GeoPoint depot);
+    void waveClosed(com.dawnline.fulfillment.domain.Wave wave, com.dawnline.fulfillment.domain.Camp camp);
 }
