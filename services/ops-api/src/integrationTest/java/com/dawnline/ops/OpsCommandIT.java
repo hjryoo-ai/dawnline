@@ -24,6 +24,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -121,9 +122,15 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         String wrongKey = token("OPS_OPERATOR", "a", "another-secret-0123456789abcdef-0123456789", Duration.ofHours(1));
         String expired = token("OPS_OPERATOR", "b", JWT_SECRET, Duration.ofMinutes(-5));
 
-        assertThat(post("/api/v1/plans/" + WAVE + "/run", null, "").statusCode()).isEqualTo(401);
-        assertThat(post("/api/v1/plans/" + WAVE + "/run", wrongKey, "").statusCode()).isEqualTo(401);
-        assertThat(post("/api/v1/plans/" + WAVE + "/run", expired, "").statusCode()).isEqualTo(401);
+        for (String bad : Arrays.asList(null, wrongKey, expired)) {
+            HttpResponse<String> response = post("/api/v1/plans/" + WAVE + "/run", bad, "");
+            assertThat(response.statusCode()).isEqualTo(401);
+            // 필터에서 난 오류도 어드바이스를 지나 Problem Details 다 — 화면은 code 로 「토큰을 다시 넣으라」를 안다.
+            assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(
+                    type -> assertThat(type).startsWith("application/problem+json"));
+            assertThat(response.body()).contains("\"code\":\"unauthenticated\"");
+            assertThat(response.headers().firstValue("WWW-Authenticate")).hasValue("Bearer");
+        }
 
         assertThat(ownRows()).isEmpty();
         assertThat(RECEIVED).isEmpty();
@@ -134,6 +141,7 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         HttpResponse<String> response = post("/api/v1/plans/" + WAVE + "/run", token("OPS_VIEWER", "viewer"), "");
 
         assertThat(response.statusCode()).isEqualTo(403);
+        assertThat(response.body()).contains("\"code\":\"forbidden\"");
         assertThat(ownRows()).isEmpty();
         assertThat(RECEIVED).isEmpty();
     }
@@ -461,22 +469,12 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private static String token(String role, String actor) throws Exception {
+    private static String token(String role, String actor) {
         return token(role, actor, JWT_SECRET, Duration.ofHours(1));
     }
 
-    /** {@code make token} 과 같은 다섯 클레임. */
-    private static String token(String role, String actor, String secret, Duration ttl) throws Exception {
-        Instant now = Instant.now();
-        JWTClaimsSet claims = new JWTClaimsSet.Builder()
-                .issuer("dawnline-ops-token")
-                .subject(ACTOR_PREFIX + actor)
-                .claim("roles", List.of(role))
-                .issueTime(Date.from(now.minusSeconds(60)))
-                .expirationTime(Date.from(now.plus(ttl)))
-                .build();
-        SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
-        jwt.sign(new MACSigner(secret.getBytes(StandardCharsets.UTF_8)));
-        return jwt.serialize();
+    /** {@code make token} 과 같은 다섯 클레임 ({@link OpsTokens}). */
+    private static String token(String role, String actor, String secret, Duration ttl) {
+        return OpsTokens.token(role, ACTOR_PREFIX + actor, secret, ttl);
     }
 }

@@ -1,12 +1,15 @@
 package com.dawnline.ops.config;
 
+import com.dawnline.common.error.DomainException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchy;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchyImpl;
@@ -23,7 +26,10 @@ import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 
 /**
  * ops-api 보안 — JWT(HS256) 검증과 역할 (DESIGN.md §5.5 · §10, ADR-052 결정 2).
@@ -61,7 +67,19 @@ class SecurityConfig {
     };
 
     @Bean
-    SecurityFilterChain opsSecurityFilterChain(HttpSecurity http) {
+    SecurityFilterChain opsSecurityFilterChain(HttpSecurity http,
+            @Qualifier("handlerExceptionResolver") HandlerExceptionResolver resolver) {
+        // 401·403 도 어드바이스를 지나 Problem Details 가 된다 (OpsAuthErrorCode). 필터 체인의 오류는 디스패처
+        // 앞에서 나므로 어드바이스가 보지 못한다 — 해석기에 넘겨 같은 문을 지나게 한다.
+        AuthenticationEntryPoint unauthenticated = (request, response, exception) -> {
+            response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+            resolver.resolveException(request, response, null, new DomainException(OpsAuthErrorCode.UNAUTHENTICATED,
+                    "토큰이 없거나 유효하지 않습니다 — make token ROLE=… 로 발급한 토큰을 Authorization: Bearer 로 싣습니다"));
+        };
+        AccessDeniedHandler forbidden = (request, response, exception) ->
+                resolver.resolveException(request, response, null, new DomainException(OpsAuthErrorCode.FORBIDDEN,
+                        "이 역할로는 할 수 없는 요청입니다 — 조회는 OPS_VIEWER, 커맨드는 OPS_OPERATOR 이상"));
+
         JwtGrantedAuthoritiesConverter authorities = new JwtGrantedAuthoritiesConverter();
         authorities.setAuthoritiesClaimName(ROLES_CLAIM);
         authorities.setAuthorityPrefix("ROLE_");
@@ -76,7 +94,11 @@ class SecurityConfig {
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
                         .requestMatchers(HttpMethod.GET, "/**").hasRole("OPS_VIEWER")
                         .anyRequest().hasRole("OPS_OPERATOR"))
-                .oauth2ResourceServer(server -> server.jwt(jwt -> jwt.jwtAuthenticationConverter(converter)))
+                .exceptionHandling(errors -> errors.authenticationEntryPoint(unauthenticated)
+                        .accessDeniedHandler(forbidden))
+                .oauth2ResourceServer(server -> server.jwt(jwt -> jwt.jwtAuthenticationConverter(converter))
+                        .authenticationEntryPoint(unauthenticated)
+                        .accessDeniedHandler(forbidden))
                 .build();
     }
 
