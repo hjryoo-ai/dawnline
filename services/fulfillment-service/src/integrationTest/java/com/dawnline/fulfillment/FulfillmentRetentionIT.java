@@ -1,5 +1,6 @@
 package com.dawnline.fulfillment;
 
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Ids;
@@ -97,7 +98,7 @@ class FulfillmentRetentionIT extends FulfillmentIntegrationTestBase {
     private Wave plannedWave(Instant cutoffAt) {
         return wave(cutoffAt, w -> {
             w.beginClosing();
-            w.close(cutoffAt.plusSeconds(120), 0);
+            w.close(cutoffAt.plusSeconds(120), 0, WaveCloseCause.SCHEDULED);
             w.markPlanned();
         });
     }
@@ -169,7 +170,7 @@ class FulfillmentRetentionIT extends FulfillmentIntegrationTestBase {
         // CLOSED 는 "마감됐다" 이지 "하류가 계획을 끝냈다" 가 아니다. 그 구분이 ADR-023 의 표다.
         Wave closed = wave(NOW.minus(Duration.ofDays(31)), w -> {
             w.beginClosing();
-            w.close(NOW.minus(Duration.ofDays(31)).plusSeconds(120), 0);
+            w.close(NOW.minus(Duration.ofDays(31)).plusSeconds(120), 0, WaveCloseCause.SCHEDULED);
         });
         UUID orderId = plannedOrder(closed, NOW.minus(Duration.ofDays(31)));
 

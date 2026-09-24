@@ -4,6 +4,7 @@ import com.dawnline.common.error.NotFoundException;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -35,8 +36,9 @@ public class JpaWaveRepository implements WaveRepository {
     private static final String FIND_FOR_UPDATE_SQL = "SELECT * FROM waves WHERE id = :id FOR UPDATE";
 
     private static final String INSERT_SQL = """
-            INSERT INTO waves (id, camp_id, service_tier, cutoff_at, status, order_count, closed_at, version)
-            VALUES (:id, :campId, :serviceTier, :cutoffAt, :status, :orderCount, :closedAt, 0)
+            INSERT INTO waves (id, camp_id, service_tier, cutoff_at, status, order_count, closed_at, close_cause, version)
+            VALUES (:id, :campId, :serviceTier, :cutoffAt, :status, :orderCount, :closedAt,
+                    CAST(:closeCause AS VARCHAR), 0)
             ON CONFLICT (camp_id, service_tier, cutoff_at) DO NOTHING
             """;
 
@@ -92,6 +94,7 @@ public class JpaWaveRepository implements WaveRepository {
     @Override
     public boolean insertIfAbsent(Wave wave) {
         Objects.requireNonNull(wave, "wave");
+        WaveCloseCause closeCause = wave.closeCause();
         int inserted = entityManager.createNativeQuery(INSERT_SQL)
                 .setParameter("id", wave.id())
                 .setParameter("campId", wave.campId())
@@ -100,6 +103,7 @@ public class JpaWaveRepository implements WaveRepository {
                 .setParameter("status", wave.status().name())
                 .setParameter("orderCount", wave.orderCount())
                 .setParameter("closedAt", wave.closedAt())
+                .setParameter("closeCause", closeCause == null ? null : closeCause.name())
                 .executeUpdate();
         return inserted == 1;
     }

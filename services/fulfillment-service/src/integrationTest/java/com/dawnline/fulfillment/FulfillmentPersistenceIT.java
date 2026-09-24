@@ -1,5 +1,6 @@
 package com.dawnline.fulfillment;
 
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Ids;
@@ -114,7 +115,7 @@ class FulfillmentPersistenceIT extends FulfillmentIntegrationTestBase {
         tx().executeWithoutResult(status -> {
             // 마감은 배타 락으로 잡는다 (ADR-025). 이 시점에는 진행 중인 편입이 없다.
             Wave loaded = waves.findByIdForUpdate(wave.id()).orElseThrow();
-            loaded.close(closedAt, 4820);
+            loaded.close(closedAt, 4820, WaveCloseCause.SCHEDULED);
             waves.update(loaded);
         });
 

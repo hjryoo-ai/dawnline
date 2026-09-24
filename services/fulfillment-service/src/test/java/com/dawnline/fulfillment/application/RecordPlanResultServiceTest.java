@@ -1,5 +1,6 @@
 package com.dawnline.fulfillment.application;
 
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Ids;
@@ -28,7 +29,7 @@ class RecordPlanResultServiceTest {
     private Wave closedWave() {
         Wave wave = Wave.open(Ids.newId(), Ids.newId(), ServiceTier.SAME_DAY, CUTOFF);
         wave.beginClosing();
-        wave.close(CUTOFF.plusSeconds(120), 3);
+        wave.close(CUTOFF.plusSeconds(120), 3, WaveCloseCause.SCHEDULED);
         repositories.waveRepository().insertIfAbsent(wave);
         repositories.waveRepository().update(wave);
         return wave;

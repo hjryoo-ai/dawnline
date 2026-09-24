@@ -6,6 +6,8 @@ dependencies {
     implementation(project(":libs:common"))
     implementation(project(":libs:messaging"))
     implementation(project(":libs:observability"))
+    // 오류 응답의 모양 — ProblemDetailsAdviceSupport (ADR-049). 첫 REST 표면(ADR-054)과 함께 왔다.
+    implementation(project(":libs:web"))
 
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.validation)
@@ -24,6 +26,9 @@ dependencies {
     // libs/messaging 의 이벤트 계약 검증 픽스처 (불변규칙 8). 발행이 브로커까지 가서 봉투까지
     // 계약을 지키는지는 FulfillmentPublishIT 가 이것으로 본다.
     testImplementation(testFixtures(project(":libs:messaging")))
+    // Boot 4 모듈화: @WebMvcTest·@AutoConfigureMockMvc 는 이 모듈에 있다(dispatch 와 같은 이유 — MockMvc
+    // 슬라이스는 Docker 없이 도는 단위 소스셋이고, JaCoCo 게이트는 test 소스셋만 본다).
+    testImplementation(libs.spring.boot.webmvc.test)
 
     integrationTestImplementation(libs.testcontainers.postgresql)
     integrationTestImplementation(libs.testcontainers.kafka)
@@ -38,4 +43,27 @@ tasks.named<Test>("integrationTest") {
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
             .withPropertyName("eventContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // OpenApiContractIT 가 커밋된 문서를 읽는다. 선언하지 않으면 문서만 손으로 고친 빌드에서 이 태스크가
+    // UP-TO-DATE 로 건너뛰고, 「문서는 생성물이다」를 지키는 검사가 돌지 않은 채 초록이 된다(CLAUDE.md).
+    inputs.file(rootProject.layout.projectDirectory.file("contracts/openapi/fulfillment-service.yaml"))
+            .withPropertyName("openApiContract")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .optional()
+}
+
+// -----------------------------------------------------------------------------
+// OpenAPI 문서 재생성 (DESIGN.md §5.2 · §11, ADR-054).
+//
+// contracts/openapi/fulfillment-service.yaml 은 생성물이고, OpenApiContractIT 가 코드와 어긋나지
+// 않는지 검사한다. 컨트롤러를 고치면 이 태스크로 문서를 다시 만든다. 소비자는 ops-api 의 위임
+// 클라이언트다(ADR-052) — 문서가 바뀌면 그쪽 컴파일이 깨진다.
+tasks.register<Test>("updateOpenApi") {
+    description = "contracts/openapi/fulfillment-service.yaml 을 코드에서 다시 만든다"
+    group = "documentation"
+    testClassesDirs = sourceSets["integrationTest"].output.classesDirs
+    classpath = sourceSets["integrationTest"].runtimeClasspath
+    useJUnitPlatform()
+    filter { includeTestsMatching("*OpenApiContractIT*") }
+    systemProperty("dawnline.openapi.update", "true")
+    outputs.upToDateWhen { false }
 }

@@ -9,10 +9,13 @@ import com.dawnline.fulfillment.application.CancelFulfillmentOrderService;
 import com.dawnline.fulfillment.application.FcCandidateAssembler;
 import com.dawnline.fulfillment.application.FulfillmentMetrics;
 import com.dawnline.fulfillment.application.CloseDueWavesService;
+import com.dawnline.fulfillment.application.CloseWaveService;
+import com.dawnline.fulfillment.application.WaveClosing;
 import com.dawnline.fulfillment.application.PlanOrderService;
 import com.dawnline.fulfillment.application.RecordPlanResultService;
 import com.dawnline.fulfillment.application.FulfillmentRetentionCleaner;
 import com.dawnline.fulfillment.application.port.in.CancelFulfillmentOrderUseCase;
+import com.dawnline.fulfillment.application.port.in.CloseWaveUseCase;
 import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
 import com.dawnline.fulfillment.application.port.in.RecordPlanResultUseCase;
 import com.dawnline.fulfillment.application.port.out.FcDistances;
@@ -149,24 +152,51 @@ public class FulfillmentApplicationConfig {
     }
 
     /**
+     * 웨이브 마감 본문 — 스케줄러와 운영자 경로가 함께 쓴다 (ADR-054 결정 5).
+     *
+     * @param waves         웨이브 저장소
+     * @param orders        주문 저장소 (마감 시 집계)
+     * @param events        outbox 발행
+     * @param referenceData 캠프 좌표·코드
+     * @param clock         시각 출처
+     */
+    @Bean
+    public WaveClosing waveClosing(WaveRepository waves, FulfillmentOrderRepository orders,
+            FulfillmentEvents events, ReferenceData referenceData, Clock clock) {
+        return new WaveClosing(waves, orders, events, referenceData, clock);
+    }
+
+    /**
      * 컷오프 스케줄러 (§5.2, ADR-020 결정 2, ADR-025).
      *
-     * @param waves              웨이브 저장소
-     * @param orders             주문 저장소 (마감 시 집계)
-     * @param events             outbox 발행
+     * @param waves              웨이브 저장소 (마감 대상 조회)
+     * @param closing            마감 본문
      * @param lock               분산 락
      * @param transactionManager 웨이브마다 트랜잭션을 여는 데 쓴다
      * @param clock              시각 출처
      * @param properties         {@code dawnline.fulfillment.wave.*}
+     * @param metrics            웨이브 편입량 게이지
      */
     @Bean
-    public CloseDueWavesService closeDueWavesService(WaveRepository waves,
-            FulfillmentOrderRepository orders, FulfillmentEvents events, WaveLock lock,
-            PlatformTransactionManager transactionManager, Clock clock,
-            FulfillmentProperties properties, FulfillmentMetrics metrics, ReferenceData referenceData) {
+    public CloseDueWavesService closeDueWavesService(WaveRepository waves, WaveClosing closing, WaveLock lock,
+            PlatformTransactionManager transactionManager, Clock clock, FulfillmentProperties properties,
+            FulfillmentMetrics metrics) {
 
-        return new CloseDueWavesService(waves, orders, events, lock, transactionManager, clock,
-                properties.wave().grace(), properties.wave().closeBatchSize(), metrics, referenceData);
+        return new CloseDueWavesService(waves, closing, lock, transactionManager, clock,
+                properties.wave().grace(), properties.wave().closeBatchSize(), metrics);
+    }
+
+    /**
+     * 운영자 조기 마감 (ADR-054). Redis 락을 받지 않는다 — 정확성은 {@code FOR UPDATE} 와 상태 전이가 지킨다.
+     *
+     * @param closing            마감 본문
+     * @param transactionManager 요청마다 트랜잭션을 연다
+     * @param metrics            웨이브 편입량 게이지
+     */
+    @Bean
+    public CloseWaveUseCase closeWaveUseCase(WaveClosing closing, PlatformTransactionManager transactionManager,
+            FulfillmentMetrics metrics) {
+        return new CloseWaveService(closing, transactionManager, metrics);
     }
 
     /**

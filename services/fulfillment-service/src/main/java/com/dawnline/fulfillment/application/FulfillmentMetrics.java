@@ -2,12 +2,15 @@ package com.dawnline.fulfillment.application;
 
 import com.dawnline.fulfillment.domain.FcFallbackReason;
 import com.dawnline.fulfillment.domain.ServiceTier;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
+import java.util.Locale;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.jspecify.annotations.Nullable;
 
 /**
  * fulfillment 고유 메트릭 (DESIGN.md §9.1).
@@ -38,6 +41,15 @@ public class FulfillmentMetrics {
     /** 개정 카운터 이름 (§9.1). */
     public static final String PROMISE_REVISED = "dawnline.promise.revised";
 
+    /**
+     * 원래 컷오프 웨이브가 닫혀 있었지만 원인을 모를 때의 라벨 값.
+     *
+     * <p>커밋된 행에서는 나올 수 없다 — 닫힌 웨이브는 {@code close_cause} 를 들고 있고(V3 CHECK),
+     * {@code CLOSING} 은 커밋된 적이 없다. 그래도 개정은 세야 하므로 예외 대신 이 값으로 센다: 이 값이
+     * 보이면 그 불변식이 깨졌다는 뜻이다.
+     */
+    public static final String CAUSE_UNKNOWN = "unknown";
+
     /** 대체 FC 카운터 이름 (§9.1). */
     public static final String FC_FALLBACK = "dawnline.fc.fallback";
 
@@ -57,17 +69,21 @@ public class FulfillmentMetrics {
     /**
      * 하류가 상류의 약속을 개정했다 (ADR-020 결정 3).
      *
-     * <p><strong>이 값이 0 이 아니라는 것은 grace 로 흡수하지 못한 지연이 있었다는 뜻이고,
-     * 늘어나면 grace 를 늘릴 것이 아니라 지연의 원인을 봐야 한다.</strong>
+     * <p><strong>{@code cause="scheduled"} 가 0 이 아니라는 것은 grace 로 흡수하지 못한 지연이 있었다는
+     * 뜻이고, 늘어나면 grace 를 늘릴 것이 아니라 지연의 원인을 봐야 한다.</strong> {@code cause="manual"} 은
+     * 운영자가 앞당긴 컷오프의 대가다 — 결정이 낳은 값이고, 이유는 감사 행에 있다(ADR-054 결정 4).
+     * 둘을 한 값으로 세면 사람이 누른 결과가 「grace 가 모자라다」로 읽힌다.
      *
      * @param campCode 캠프 코드
      * @param tier     티어
+     * @param cause    주문의 원래 컷오프 웨이브를 누가 닫았는가. 모르면 {@code null}
      */
-    public void promiseRevised(String campCode, ServiceTier tier) {
+    public void promiseRevised(String campCode, ServiceTier tier, @Nullable WaveCloseCause cause) {
         Counter.builder(PROMISE_REVISED)
-                .description("하류가 상류의 약속을 개정한 횟수 (ADR-020 결정 3)")
+                .description("하류가 상류의 약속을 개정한 횟수 (ADR-020 결정 3, cause 는 ADR-054)")
                 .tag("camp", campCode)
                 .tag("tier", tier.name())
+                .tag("cause", cause == null ? CAUSE_UNKNOWN : cause.name().toLowerCase(Locale.ROOT))
                 .register(registry)
                 .increment();
     }

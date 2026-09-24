@@ -1,5 +1,6 @@
 package com.dawnline.fulfillment.domain;
 
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -29,7 +30,7 @@ class WaveTest {
     private static Wave closedWith(int orderCount) {
         Wave wave = open();
         wave.beginClosing();
-        wave.close(CUTOFF.plusSeconds(120), orderCount);
+        wave.close(CUTOFF.plusSeconds(120), orderCount, WaveCloseCause.SCHEDULED);
         return wave;
     }
 
@@ -77,7 +78,7 @@ class WaveTest {
         Wave wave = open();
         wave.beginClosing();
 
-        assertThatThrownBy(() -> wave.close(CUTOFF.plusSeconds(120), -1))
+        assertThatThrownBy(() -> wave.close(CUTOFF.plusSeconds(120), -1, WaveCloseCause.SCHEDULED))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -89,9 +90,10 @@ class WaveTest {
         wave.beginClosing();
         assertThat(wave.status()).isEqualTo(WaveStatus.CLOSING);
 
-        wave.close(closedAt, 3);
+        wave.close(closedAt, 3, WaveCloseCause.SCHEDULED);
         assertThat(wave.status()).isEqualTo(WaveStatus.CLOSED);
         assertThat(wave.closedAt()).isEqualTo(closedAt);
+        assertThat(wave.closeCause()).isEqualTo(WaveCloseCause.SCHEDULED);
 
         wave.markPlanned();
         assertThat(wave.status()).isEqualTo(WaveStatus.PLANNED);
@@ -103,7 +105,8 @@ class WaveTest {
         // 주문 상태와 달리 건너뜀을 수용할 이유가 없다.
         Wave wave = open();
 
-        assertThatThrownBy(() -> wave.close(CUTOFF, 0)).isInstanceOf(IllegalStateTransitionException.class);
+        assertThatThrownBy(() -> wave.close(CUTOFF, 0, WaveCloseCause.SCHEDULED))
+                .isInstanceOf(IllegalStateTransitionException.class);
         assertThatThrownBy(wave::markPlanned).isInstanceOf(IllegalStateTransitionException.class);
     }
 
@@ -177,7 +180,7 @@ class WaveTest {
         UUID campId = UUID.randomUUID();
 
         Wave wave = Wave.rehydrate(id, campId, ServiceTier.SAME_DAY, CUTOFF,
-                WaveStatus.CLOSED, 42, closedAt, 7);
+                WaveStatus.CLOSED, 42, closedAt, WaveCloseCause.MANUAL, 7);
 
         assertThat(wave.id()).isEqualTo(id);
         assertThat(wave.campId()).isEqualTo(campId);
@@ -185,6 +188,25 @@ class WaveTest {
         assertThat(wave.status()).isEqualTo(WaveStatus.CLOSED);
         assertThat(wave.orderCount()).isEqualTo(42);
         assertThat(wave.closedAt()).isEqualTo(closedAt);
+        assertThat(wave.closeCause()).isEqualTo(WaveCloseCause.MANUAL);
         assertThat(wave.version()).isEqualTo(7);
+    }
+
+    @Test
+    void 열린_웨이브는_원인이_없다() {
+        assertThat(open().closeCause()).isNull();
+    }
+
+    @Test
+    void 마감_시각과_원인은_함께_있거나_함께_없다() {
+        // V3 의 CHECK 와 같은 문장이다 (ADR-054). 한쪽만 있으면 「언제 닫혔나」와 「누가 닫았나」가 어긋나고,
+        // 개정 카운터의 cause 가 그 어긋남을 그대로 센다.
+        UUID id = UUID.randomUUID();
+        UUID campId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> Wave.rehydrate(id, campId, ServiceTier.DAWN, CUTOFF, WaveStatus.CLOSED, 1,
+                CUTOFF, null, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Wave.rehydrate(id, campId, ServiceTier.DAWN, CUTOFF, WaveStatus.OPEN, 0,
+                null, WaveCloseCause.MANUAL, 0)).isInstanceOf(IllegalArgumentException.class);
     }
 }

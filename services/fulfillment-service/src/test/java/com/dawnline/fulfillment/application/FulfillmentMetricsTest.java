@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.fulfillment.domain.FcFallbackReason;
 import com.dawnline.fulfillment.domain.ServiceTier;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -19,8 +20,8 @@ class FulfillmentMetricsTest {
 
     @Test
     void 개정과_대체를_캠프_단위로_센다() {
-        metrics.promiseRevised("CAMP-SEO-C", ServiceTier.SAME_DAY);
-        metrics.promiseRevised("CAMP-SEO-C", ServiceTier.SAME_DAY);
+        metrics.promiseRevised("CAMP-SEO-C", ServiceTier.SAME_DAY, WaveCloseCause.SCHEDULED);
+        metrics.promiseRevised("CAMP-SEO-C", ServiceTier.SAME_DAY, WaveCloseCause.SCHEDULED);
         metrics.fcFallback("CAMP-GYG-N", FcFallbackReason.COLD);
 
         assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED)
@@ -53,11 +54,33 @@ class FulfillmentMetricsTest {
     @Test
     void 라벨_키_집합이_메트릭마다_일정하다() {
         // Prometheus 는 같은 이름의 미터가 같은 라벨 키 집합을 갖기를 요구한다(§9.1).
-        metrics.promiseRevised("CAMP-A", ServiceTier.DAWN);
-        metrics.promiseRevised("CAMP-B", ServiceTier.NEXT_DAY);
+        // 원인을 모르는 개정도 같은 키 집합으로 센다 — 라벨을 빼면 그 시계열만 키가 달라진다.
+        metrics.promiseRevised("CAMP-A", ServiceTier.DAWN, WaveCloseCause.SCHEDULED);
+        metrics.promiseRevised("CAMP-B", ServiceTier.NEXT_DAY, WaveCloseCause.MANUAL);
+        metrics.promiseRevised("CAMP-C", ServiceTier.SAME_DAY, null);
 
         assertThat(registry.find(FulfillmentMetrics.PROMISE_REVISED).counters())
+                .hasSize(3)
                 .allSatisfy(counter -> assertThat(counter.getId().getTags())
-                        .extracting(Tag::getKey).containsExactlyInAnyOrder("camp", "tier"));
+                        .extracting(Tag::getKey).containsExactlyInAnyOrder("camp", "tier", "cause"));
+    }
+
+    @Test
+    void 개정의_원인은_소문자_라벨_둘과_모름_하나다() {
+        // ADR-054 결정 4 — scheduled 는 grace 로 흡수하지 못한 지연, manual 은 운영자가 앞당긴 컷오프의 대가.
+        // 둘을 한 값으로 세면 사람이 누른 결과가 「grace 가 모자라다」로 읽힌다.
+        metrics.promiseRevised("CAMP-A", ServiceTier.DAWN, WaveCloseCause.SCHEDULED);
+        metrics.promiseRevised("CAMP-A", ServiceTier.DAWN, WaveCloseCause.MANUAL);
+        metrics.promiseRevised("CAMP-A", ServiceTier.DAWN, WaveCloseCause.MANUAL);
+        metrics.promiseRevised("CAMP-A", ServiceTier.DAWN, null);
+
+        assertThat(revised("scheduled")).isEqualTo(1);
+        assertThat(revised("manual")).isEqualTo(2);
+        assertThat(revised(FulfillmentMetrics.CAUSE_UNKNOWN)).isEqualTo(1);
+    }
+
+    private double revised(String cause) {
+        return registry.get(FulfillmentMetrics.PROMISE_REVISED)
+                .tag("camp", "CAMP-A").tag("tier", "DAWN").tag("cause", cause).counter().count();
     }
 }

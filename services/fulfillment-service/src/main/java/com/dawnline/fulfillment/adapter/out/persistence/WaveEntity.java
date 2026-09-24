@@ -2,6 +2,7 @@ package com.dawnline.fulfillment.adapter.out.persistence;
 
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.WaveStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -48,6 +49,11 @@ public class WaveEntity {
     @Column(name = "closed_at")
     private @Nullable Instant closedAt;
 
+    /** 누가 닫았는가 (V3, ADR-054). {@code closed_at} 과 함께 채워진다 — CHECK 가 지킨다. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "close_cause", length = 16)
+    private @Nullable WaveCloseCause closeCause;
+
     /** 낙관적 락. {@code @Version} 이 붙어 있으므로 Hibernate 가 증가시킨다. */
     @Version
     @Column(name = "version", nullable = false)
@@ -90,11 +96,13 @@ public class WaveEntity {
         this.status = wave.status();
         this.orderCount = wave.orderCount();
         this.closedAt = wave.closedAt();
+        this.closeCause = wave.closeCause();
     }
 
     /** 행을 도메인 애그리거트로 되살린다. */
     public Wave toDomain() {
-        return Wave.rehydrate(id, campId, serviceTier, cutoffAt, status, orderCount, closedAt, version);
+        return Wave.rehydrate(id, campId, serviceTier, cutoffAt, status, orderCount, closedAt, closeCause,
+                version);
     }
 
     /** 웨이브 id. */
