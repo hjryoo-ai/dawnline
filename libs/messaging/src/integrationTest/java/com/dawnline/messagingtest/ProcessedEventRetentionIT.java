@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.idempotency.ProcessedEventCleaner;
 import com.dawnline.messaging.idempotency.ProcessedEventRepository;
+import com.dawnline.messaging.retention.RetentionAges;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Duration;
@@ -81,7 +83,8 @@ class ProcessedEventRetentionIT extends MessagingIntegrationTestBase {
     /** 시각을 고정한 정리기. 보존 경계는 {@code NOW - 14일} 이다. */
     private ProcessedEventCleaner cleaner(int batchSize, int maxBatchesPerRun) {
         return new ProcessedEventCleaner(repository, transactionManager,
-                Clock.fixed(NOW, ZoneOffset.UTC), RETENTION, batchSize, maxBatchesPerRun);
+                Clock.fixed(NOW, ZoneOffset.UTC), RETENTION, batchSize, maxBatchesPerRun,
+                new RetentionAges(new SimpleMeterRegistry(), Clock.fixed(NOW, ZoneOffset.UTC)));
     }
 
     private UUID record(Instant processedAt) {

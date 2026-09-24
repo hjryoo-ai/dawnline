@@ -3,6 +3,7 @@ package com.dawnline.tracking.adapter.out.persistence;
 import com.dawnline.tracking.application.port.out.ShipmentRepository;
 import com.dawnline.tracking.domain.Shipment;
 import jakarta.persistence.EntityManager;
+import java.time.Clock;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
@@ -17,6 +18,10 @@ import java.util.UUID;
  *
  * <p>집합 경로(dispatch 의 계획 반영, ADR-029)와 달리 여기서 다루는 행 수는 한 라우트의 stop
  * 수(수십~백)이고 전부 상태 머신을 지난다. 벌크로 내려갈 이유가 없다.
+ *
+ * <p>{@code updated_at} 을 적는 자리가 여기다(ADR-058 결정 4). 쓰기 경로가 이 어댑터 하나라 시계도 여기
+ * 하나면 된다 — 유스케이스 셋(개정 반영 · 스캔 · 편차 전파)에 각자 시계를 넘겨 포트로 흘리면 같은 일을 세
+ * 자리가 하게 된다. 이 칸은 사실이 아니라 저장의 기록이고, 저장을 아는 것은 어댑터다.
  */
 public class JpaShipmentRepository implements ShipmentRepository {
 
@@ -40,12 +45,15 @@ public class JpaShipmentRepository implements ShipmentRepository {
                     + "ORDER BY s.stopSeq, s.orderId";
 
     private final EntityManager entityManager;
+    private final Clock clock;
 
     /**
      * @param entityManager 공유 EntityManager 프록시
+     * @param clock         {@code updated_at} 의 시각 출처 (불변규칙 12)
      */
-    public JpaShipmentRepository(EntityManager entityManager) {
+    public JpaShipmentRepository(EntityManager entityManager, Clock clock) {
         this.entityManager = Objects.requireNonNull(entityManager, "entityManager");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     @Override
@@ -76,7 +84,7 @@ public class JpaShipmentRepository implements ShipmentRepository {
     @Override
     public void insert(Shipment shipment) {
         Objects.requireNonNull(shipment, "shipment");
-        entityManager.persist(ShipmentEntity.from(shipment));
+        entityManager.persist(ShipmentEntity.from(shipment, clock.instant()));
     }
 
     @Override
@@ -88,6 +96,6 @@ public class JpaShipmentRepository implements ShipmentRepository {
             // 그런 삭제 경로는 이 서비스에 없다 — 조용히 넣어 버리면 그 사실이 묻힌다.
             throw new IllegalStateException("없는 배송을 갱신할 수 없습니다: " + shipment.orderId());
         }
-        entity.apply(shipment);
+        entity.apply(shipment, clock.instant());
     }
 }

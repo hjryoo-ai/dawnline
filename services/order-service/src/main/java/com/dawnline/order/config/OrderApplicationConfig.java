@@ -7,6 +7,7 @@ import com.dawnline.order.adapter.out.geo.PostalPrefixGeocoder;
 import com.dawnline.order.adapter.out.messaging.OutboxOrderEvents;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.order.adapter.in.messaging.OrderProgressListener;
 import com.dawnline.order.application.AdvanceOrderService;
 import com.dawnline.order.application.ApplyFulfillmentPlanService;
@@ -205,13 +206,15 @@ public class OrderApplicationConfig {
      * @param transactionManager 배치마다 트랜잭션을 여는 데 쓴다
      * @param clock              기준 시각
      * @param properties         {@code dawnline.order.idempotency.*}
+     * @param ages               정리의 성공 나이 게이지 (ADR-058 결정 6)
      */
     @Bean
     @ConditionalOnProperty(prefix = "dawnline.order.idempotency", name = "cleanup-enabled",
             havingValue = "true", matchIfMissing = true)
     public IdempotencyKeyCleaner idempotencyKeyCleaner(IdempotencyRecords records,
-            PlatformTransactionManager transactionManager, Clock clock, OrderProperties properties) {
+            PlatformTransactionManager transactionManager, Clock clock, OrderProperties properties,
+            RetentionAges ages) {
         return new IdempotencyKeyCleaner(records, transactionManager, clock,
-                properties.idempotency().batchSize(), properties.idempotency().maxBatchesPerRun());
+                properties.idempotency().batchSize(), properties.idempotency().maxBatchesPerRun(), ages);
     }
 }

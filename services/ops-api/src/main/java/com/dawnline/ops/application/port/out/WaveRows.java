@@ -1,6 +1,7 @@
 package com.dawnline.ops.application.port.out;
 
 import com.dawnline.ops.domain.WaveStatus;
+import java.time.Instant;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
@@ -12,16 +13,18 @@ public interface WaveRows {
     /**
      * 없으면 키만으로 만들고 잠근다.
      *
-     * @param waveId 웨이브
+     * @param waveId    웨이브
+     * @param touchedAt 새 행의 {@code updated_at} — 보존의 나이 (ADR-058)
      * @return 판정용 현재 값
      */
-    WaveRow lock(UUID waveId);
+    WaveRow lock(UUID waveId, Instant touchedAt);
 
     /**
-     * @param waveId 웨이브
-     * @param patch  적을 칸
+     * @param waveId    웨이브
+     * @param patch     적을 칸 — 비어 있으면 아무것도 하지 않는다
+     * @param touchedAt {@code updated_at} — 사실이 아니라 프로젝션의 기록이다
      */
-    void write(UUID waveId, Patch<WaveColumn> patch);
+    void write(UUID waveId, Patch<WaveColumn> patch, Instant touchedAt);
 
     /**
      * {@code order_count} 를 {@code rm_orders} 에서 다시 센다(ADR-051 결정 4) — 이 웨이브에 편입된

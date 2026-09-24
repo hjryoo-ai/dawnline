@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatNoException;
 
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.messaging.support.InMemoryOutboxRepository;
 import com.dawnline.messaging.support.MutableClock;
 import com.dawnline.messaging.support.RecordingRecordPublisher;
@@ -18,6 +19,10 @@ import java.util.Optional;
 import java.util.Random;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -42,6 +47,7 @@ class OutboxRelayTest {
     private final OutboxMetrics metrics = new OutboxMetrics(new SimpleMeterRegistry(), "order-service");
     private final RecordingRecordPublisher publisher = RecordingRecordPublisher.alwaysSucceeding();
     private final FakeLeadership leadership = new FakeLeadership();
+    private final RetentionAges ages = new RetentionAges(new SimpleMeterRegistry(), clock);
 
     /** 리더십을 시험이 정한다. 실제 판정은 {@code RedisRelayLeadershipTest} 가 본다. */
     static final class FakeLeadership implements RelayLeadership {
@@ -78,7 +84,7 @@ class OutboxRelayTest {
     void poll_예외를_삼킨다() {
         // 100ms 마다 스택 트레이스가 쏟아지면 로그를 못 쓰게 된다. 장애는 게이지와 알림이 잡는다 (§9.4).
         OutboxRelay relay = new OutboxRelay(explodingPublisher(), repository, metrics, leadership,
-                transactionManager, clock, Duration.ofDays(7));
+                transactionManager, clock, Duration.ofDays(7), ages);
 
         assertThatNoException().isThrownBy(relay::poll);
     }
@@ -139,6 +145,49 @@ class OutboxRelayTest {
         relay().cleanupPublished();
 
         assertThat(repository.rows()).hasSize(2);
+    }
+
+    @Test
+    void cleanupPublished_성공하면_성공_나이가_0_으로_돌아간다() {
+        OutboxRelay relay = relay();
+        clock.advance(Duration.ofHours(3));
+        assertThat(ages.table("outbox_events").ageSeconds()).isEqualTo(3 * 3600.0);
+
+        relay.cleanupPublished();
+
+        assertThat(ages.table("outbox_events").ageSeconds()).isZero();
+    }
+
+    @Test
+    void cleanupPublished_실패는_삼키되_성공_나이가_계속_자란다() {
+        // 정리는 예외를 삼킨다 — 그 결정의 짝이 이 값이다(ADR-058 결정 6). 삼킨 실패가 값으로 보여야 한다.
+        OutboxRelay relay = new OutboxRelay(batchPublisher(), repository, metrics, leadership, unreachableDatabase(),
+                clock, Duration.ofDays(7), ages);
+        clock.advance(Duration.ofDays(3));
+
+        assertThatNoException().isThrownBy(relay::cleanupPublished);
+
+        assertThat(ages.table("outbox_events").ageSeconds()).isEqualTo(3 * 86400.0);
+    }
+
+    /** 트랜잭션을 열 수 없다 — DB 가 없는 것과 같다. */
+    private static PlatformTransactionManager unreachableDatabase() {
+        return new PlatformTransactionManager() {
+            @Override
+            public TransactionStatus getTransaction(TransactionDefinition definition) {
+                throw new CannotCreateTransactionException("DB 에 닿지 않는다");
+            }
+
+            @Override
+            public void commit(TransactionStatus status) {
+                throw new IllegalStateException("열린 트랜잭션이 없다");
+            }
+
+            @Override
+            public void rollback(TransactionStatus status) {
+                throw new IllegalStateException("열린 트랜잭션이 없다");
+            }
+        };
     }
 
     @Test
@@ -214,12 +263,12 @@ class OutboxRelayTest {
     @Test
     void 생성자_보관기간이_0이면_예외() {
         assertThatIllegalArgumentException().isThrownBy(() -> new OutboxRelay(batchPublisher(), repository, metrics,
-                leadership, transactionManager, clock, Duration.ZERO));
+                leadership, transactionManager, clock, Duration.ZERO, ages));
     }
 
     private OutboxRelay relay() {
         return new OutboxRelay(batchPublisher(), repository, metrics, leadership, transactionManager, clock,
-                Duration.ofDays(7));
+                Duration.ofDays(7), ages);
     }
 
     private OutboxBatchPublisher batchPublisher() {

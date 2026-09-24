@@ -235,6 +235,8 @@ dispatch 쪽이 오른다. **한쪽만 오르는 것이 정보다.**
   한 건에 5.9 ms 다. 피크 673 건/초에 곱하면 한 세션으로 따라갈 수 없는 값이고, **dispatch 에는
   라우트 보존 정책이 없어 상한도 없다**([측정](../benchmarks/phase5-route-stop-orders-order-lookup.md),
   불변규칙 11). 계획을 지키는 것은 `RouteStopOrdersIndexIT` 다.
+  **→ 2026-09-25 기간을 정했다**([ADR-058](ADR-058-shipment-and-read-model-retention.md) 결정 9): 라우트 계열 90일,
+  구현은 7-0c(FK 사슬 순서 · EXPLAIN).
 - **재검토 지점 ① — 닫혔다** (2026-09-23, Phase 5-3). 결정 3 의 근거는 「근거: 추정」이었다:
   개정 번호로 거르면 재계획 직전에 완료된 stop 이 사라진다는 말에 **재현 수단이 없었다** —
   돌릴 재계획이 없었기 때문이다. 5-3 이 그것을 줬고, 이제

@@ -1,5 +1,6 @@
 package com.dawnline.order.application;
 
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.order.application.port.out.IdempotencyRecords;
 import java.time.Clock;
 import java.time.Instant;
@@ -35,6 +36,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>한 실행이 무한정 길어지지 않도록 {@code maxBatchesPerRun} 으로 상한을 둔다. 상한에 걸리면
  * 남은 행은 다음 실행이 이어서 지운다 — 정리는 정확성이 아니라 용량 관리라 밀려도 안전하다.
  * 다만 <em>계속</em> 상한에 걸린다면 정리가 유입을 못 따라간다는 뜻이므로 로그를 남긴다.
+ *
+ * <p>실패는 삼키되 보이게 한다 — 끝까지 돈 실행만 {@code dawnline_retention_last_success_age_seconds{table="idempotency_keys"}}
+ * 를 0 으로 되돌린다(ADR-058 결정 6).
  */
 public class IdempotencyKeyCleaner {
 
@@ -45,6 +49,7 @@ public class IdempotencyKeyCleaner {
     private final Clock clock;
     private final int batchSize;
     private final int maxBatchesPerRun;
+    private final RetentionAges.Table age;
 
     /**
      * @param records            {@code idempotency_keys} 저장소
@@ -52,9 +57,10 @@ public class IdempotencyKeyCleaner {
      * @param clock              기준 시각 (CLAUDE.md 불변규칙 12)
      * @param batchSize          한 트랜잭션에서 지울 최대 행 수
      * @param maxBatchesPerRun   한 번의 실행에서 반복할 최대 배치 수
+     * @param ages               성공 나이 게이지 — 생성하면서 이 표를 등록한다
      */
     public IdempotencyKeyCleaner(IdempotencyRecords records, PlatformTransactionManager transactionManager,
-            Clock clock, int batchSize, int maxBatchesPerRun) {
+            Clock clock, int batchSize, int maxBatchesPerRun, RetentionAges ages) {
         this.records = Objects.requireNonNull(records, "records");
         Objects.requireNonNull(transactionManager, "transactionManager");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -68,6 +74,7 @@ public class IdempotencyKeyCleaner {
         this.maxBatchesPerRun = maxBatchesPerRun;
         // DELETE 는 DML 이라 트랜잭션이 없으면 TransactionRequiredException 이 난다.
         this.transactions = new TransactionTemplate(transactionManager);
+        this.age = Objects.requireNonNull(ages, "ages").table("idempotency_keys");
     }
 
     /**
@@ -105,10 +112,13 @@ public class IdempotencyKeyCleaner {
             if (rows < batchSize) {
                 // 대상이 소진됐다. limit 만큼 못 채웠다는 것이 그 신호다.
                 logResult(total, now, false);
+                age.succeeded();
                 return total;
             }
         }
         logResult(total, now, true);
+        // 상한에 걸린 실행도 성공이다 — 앞으로 나아갔다. 유입을 못 따라가는지는 위 경고가 말한다.
+        age.succeeded();
         return total;
     }
 

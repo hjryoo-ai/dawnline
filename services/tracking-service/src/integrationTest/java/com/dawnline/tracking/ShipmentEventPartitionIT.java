@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.common.Ids;
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.tracking.application.ShipmentEventPartitions;
 import com.dawnline.tracking.application.port.out.EventPartitions;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Clock;
@@ -227,7 +229,8 @@ class ShipmentEventPartitionIT extends TrackingIntegrationTestBase {
 
     private ShipmentEventPartitions rotateAt(LocalDate day) {
         Clock clock = Clock.fixed(day.atStartOfDay().toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
-        return new ShipmentEventPartitions(partitions, clock, AHEAD_DAYS, RETENTION_DAYS);
+        return new ShipmentEventPartitions(partitions, clock, AHEAD_DAYS, RETENTION_DAYS,
+                new RetentionAges(new SimpleMeterRegistry(), clock));
     }
 
     private boolean partitionExists(LocalDate day) {

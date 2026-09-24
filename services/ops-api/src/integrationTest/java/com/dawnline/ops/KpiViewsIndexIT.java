@@ -112,7 +112,8 @@ class KpiViewsIndexIT extends OpsIntegrationTestBase {
     private void fill() {
         jdbc.update("""
                 INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, camp_id,
-                                       promised_end_original, promised_end_revised, delivered_at, failed_at, placed_at)
+                                       promised_end_original, promised_end_revised, delivered_at, failed_at, placed_at,
+                                       updated_at)
                 SELECT gen_random_uuid(), ?::uuid,
                        CASE WHEN g % 33 = 0 THEN 'UNSERVICEABLE' WHEN g % 997 = 5 THEN 'CANCELLED' ELSE 'DISPATCHED' END,
                        CASE WHEN g % 33 = 0 THEN NULL WHEN g % 20 = 0 THEN 'FAILED' ELSE 'COMPLETED' END,
@@ -123,7 +124,8 @@ class KpiViewsIndexIT extends OpsIntegrationTestBase {
                        CASE WHEN g % 33 = 0 OR g % 20 = 0 THEN NULL
                             ELSE p + interval '5 hours' + (g % 7) * interval '20 minutes' END,
                        CASE WHEN g % 33 <> 0 AND g % 20 = 0 THEN p + interval '5 hours' END,
-                       p
+                       p,
+                       now()
                   FROM (SELECT g, timestamptz '2031-05-01T00:00:00Z' + g * interval '1 day' / 150000 AS p
                           FROM generate_series(0, ?) g) s
                 """, MARKER, ROWS - 1);

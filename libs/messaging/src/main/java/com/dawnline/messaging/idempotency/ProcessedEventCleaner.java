@@ -1,5 +1,6 @@
 package com.dawnline.messaging.idempotency;
 
+import com.dawnline.messaging.retention.RetentionAges;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -35,6 +36,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <p>한 번의 실행이 무한정 길어지지 않도록 {@code maxBatchesPerRun} 으로 상한을 둔다. 상한에 걸리면
  * 남은 행은 다음 실행이 이어서 지운다 — 정리는 정확성이 아니라 용량 관리이므로 밀려도 안전하다.
+ *
+ * <p>실패는 삼키되 보이게 한다 — 끝까지 돈 실행만 {@code dawnline_retention_last_success_age_seconds{table="processed_events"}}
+ * 를 0 으로 되돌린다(ADR-058 결정 6).
  */
 public class ProcessedEventCleaner {
 
@@ -46,6 +50,7 @@ public class ProcessedEventCleaner {
     private final Duration retention;
     private final int batchSize;
     private final int maxBatchesPerRun;
+    private final RetentionAges.Table age;
 
     /**
      * @param repository         {@code processed_events} 저장소
@@ -54,9 +59,10 @@ public class ProcessedEventCleaner {
      * @param retention          보존 기간 (§4.4 기본 14일)
      * @param batchSize          한 트랜잭션에서 지울 최대 행 수
      * @param maxBatchesPerRun   한 번의 실행에서 반복할 최대 배치 수
+     * @param ages               성공 나이 게이지 — 생성하면서 이 표를 등록한다
      */
     public ProcessedEventCleaner(ProcessedEventRepository repository, PlatformTransactionManager transactionManager,
-            Clock clock, Duration retention, int batchSize, int maxBatchesPerRun) {
+            Clock clock, Duration retention, int batchSize, int maxBatchesPerRun, RetentionAges ages) {
         this.repository = Objects.requireNonNull(repository, "repository");
         Objects.requireNonNull(transactionManager, "transactionManager");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -74,6 +80,7 @@ public class ProcessedEventCleaner {
         this.maxBatchesPerRun = maxBatchesPerRun;
         // DELETE 는 DML 이라 트랜잭션이 없으면 TransactionRequiredException 이 난다.
         this.transactions = new TransactionTemplate(transactionManager);
+        this.age = Objects.requireNonNull(ages, "ages").table("processed_events");
     }
 
     /**
@@ -107,10 +114,13 @@ public class ProcessedEventCleaner {
             if (rows < batchSize) {
                 // 대상이 소진됐다. limit 만큼 못 채웠다는 것이 그 신호다.
                 logResult(total, threshold, false);
+                age.succeeded();
                 return total;
             }
         }
         logResult(total, threshold, true);
+        // 상한에 걸린 실행도 성공이다 — 앞으로 나아갔고, 남은 행은 다음 실행이 이어 지운다.
+        age.succeeded();
         return total;
     }
 

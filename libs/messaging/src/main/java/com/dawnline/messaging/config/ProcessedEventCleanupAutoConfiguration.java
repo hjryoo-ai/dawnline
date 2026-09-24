@@ -2,6 +2,7 @@ package com.dawnline.messaging.config;
 
 import com.dawnline.messaging.idempotency.ProcessedEventCleaner;
 import com.dawnline.messaging.idempotency.ProcessedEventRepository;
+import com.dawnline.messaging.retention.RetentionAges;
 import java.time.Clock;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -40,14 +41,15 @@ public class ProcessedEventCleanupAutoConfiguration {
      * @param transactionManager 배치마다 새 트랜잭션을 여는 데 쓴다
      * @param clock              임계 시각 계산 (불변규칙 12)
      * @param properties         {@code dawnline.messaging.*}
+     * @param ages               성공 나이 게이지 (ADR-058 결정 6)
      */
     @Bean
     @ConditionalOnMissingBean
     public ProcessedEventCleaner dawnlineProcessedEventCleaner(ProcessedEventRepository repository,
             PlatformTransactionManager transactionManager, ObjectProvider<Clock> clock,
-            DawnlineMessagingProperties properties) {
+            DawnlineMessagingProperties properties, RetentionAges ages) {
         DawnlineMessagingProperties.ProcessedEvents config = properties.processedEvents();
         return new ProcessedEventCleaner(repository, transactionManager, clock.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock),
-                config.retention(), config.batchSize(), config.maxBatchesPerRun());
+                config.retention(), config.batchSize(), config.maxBatchesPerRun(), ages);
     }
 }

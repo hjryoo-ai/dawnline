@@ -28,6 +28,7 @@ import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.outbox.OutboxAppender;
+import com.dawnline.messaging.retention.RetentionAges;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -234,16 +235,17 @@ public class FulfillmentApplicationConfig {
      * @param transactionManager 배치마다 트랜잭션을 여는 데 쓴다
      * @param clock              기준 시각
      * @param properties         {@code dawnline.fulfillment.retention.*}
+     * @param ages               정리의 성공 나이 게이지 (ADR-058 결정 6)
      */
     @Bean
     @ConditionalOnProperty(prefix = "dawnline.fulfillment.retention", name = "enabled",
             havingValue = "true", matchIfMissing = true)
     public FulfillmentRetentionCleaner fulfillmentRetentionCleaner(FulfillmentOrderRepository orders,
             WaveRepository waves, PlatformTransactionManager transactionManager, Clock clock,
-            FulfillmentProperties properties) {
+            FulfillmentProperties properties, RetentionAges ages) {
 
         FulfillmentProperties.Retention retention = properties.retention();
         return new FulfillmentRetentionCleaner(orders, waves, transactionManager, clock,
-                retention.orders(), retention.waves(), retention.batchSize(), retention.maxBatchesPerRun());
+                retention.orders(), retention.waves(), retention.batchSize(), retention.maxBatchesPerRun(), ages);
     }
 }

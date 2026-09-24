@@ -105,7 +105,7 @@ tasks.named<JavaCompile>("compileCoreClientsJava") {
 // 테스트가 읽는 저장소 파일을 입력으로 선언한다 (CLAUDE.md — 아니면 문서·계약만 고친 빌드에서
 // test 가 UP-TO-DATE 로 건너뛴다).
 //   - contracts/events: 순서 검사의 사실 집합과 구독 토픽 대조가 계약 디렉터리에서 시작한다
-//   - docs/DESIGN.md: 네 축의 선언 순서를 §5.5 「DDL 정정」 표와 대조한다
+//   - docs/DESIGN.md: 네 축의 선언 순서를 §5.5 「DDL 정정」 표와 대조한다 · §7.1 보존 표를 설정 기본값과 대조한다(ADR-058)
 //   - contracts/openapi: 생성 클라이언트의 왕복 검사가 계약 스키마에서 표본을 만든다 (ADR-052 기준 4)
 //   - tools/ops-token: 토큰 스크립트를 실행해 검증기와 맞춰 본다 (OpsTokenScriptTest)
 // -----------------------------------------------------------------------------

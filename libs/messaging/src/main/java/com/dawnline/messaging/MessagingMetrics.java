@@ -66,6 +66,18 @@ public final class MessagingMetrics {
      */
     public static final String EVENT_STALE = "dawnline.event.stale";
 
+    /**
+     * gauge — 그 표의 정리가 마지막으로 <strong>성공한</strong> 뒤로 흐른 초 (§9.1, ADR-058 결정 6). 태그: table.
+     * Prometheus 에서 {@code dawnline_retention_last_success_age_seconds}.
+     *
+     * <p>정리는 예외를 삼킨다 — 이 게이지가 그 삼킨 실패를 값으로 만든다. 알림은 {@code min by (table)} 이
+     * 2일을 넘을 때다(§9.4).
+     */
+    public static final String RETENTION_LAST_SUCCESS_AGE = "dawnline.retention.last.success.age.seconds";
+
+    /** 태그: 보존 정리의 표 이름 — §7.1 보존 표의 첫 열. */
+    public static final String TAG_TABLE = "table";
+
     /** 태그: 서비스 이름 (outbox 게이지). */
     public static final String TAG_SERVICE = "service";
 

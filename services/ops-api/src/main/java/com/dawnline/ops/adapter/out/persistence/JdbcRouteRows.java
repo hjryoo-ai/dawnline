@@ -6,6 +6,7 @@ import com.dawnline.ops.application.port.out.RouteRows;
 import com.dawnline.ops.domain.RouteStatus;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -23,8 +24,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class JdbcRouteRows implements RouteRows {
 
     private static final String ENSURE_SQL = """
-            INSERT INTO rm_routes (route_id)
-            SELECT DISTINCT id FROM unnest(?::uuid[]) AS t(id) ORDER BY id
+            INSERT INTO rm_routes (route_id, updated_at)
+            SELECT DISTINCT id, ?::timestamptz FROM unnest(?::uuid[]) AS t(id) ORDER BY id
             ON CONFLICT (route_id) DO NOTHING
             """;
 
@@ -57,7 +58,7 @@ public class JdbcRouteRows implements RouteRows {
     }
 
     @Override
-    public Map<UUID, RouteRow> lock(Collection<UUID> routeIds) {
+    public Map<UUID, RouteRow> lock(Collection<UUID> routeIds, Instant touchedAt) {
         Objects.requireNonNull(routeIds, "routeIds");
         Map<UUID, RouteRow> rows = new HashMap<>();
         if (routeIds.isEmpty()) {
@@ -65,7 +66,8 @@ public class JdbcRouteRows implements RouteRows {
         }
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(ENSURE_SQL);
-            statement.setArray(1, UuidArrays.of(connection, routeIds));
+            statement.setObject(1, PatchStatements.bindable(Objects.requireNonNull(touchedAt, "touchedAt")));
+            statement.setArray(2, UuidArrays.of(connection, routeIds));
             return statement;
         });
         jdbc.query(connection -> {
@@ -81,8 +83,8 @@ public class JdbcRouteRows implements RouteRows {
     }
 
     @Override
-    public void write(UUID routeId, Patch<RouteColumn> patch) {
-        PatchStatements.apply(jdbc, "rm_routes", "route_id", routeId, patch, Map.of());
+    public void write(UUID routeId, Patch<RouteColumn> patch, Instant touchedAt) {
+        PatchStatements.apply(jdbc, "rm_routes", "route_id", routeId, patch, Map.of("updated_at", touchedAt));
     }
 
     @Override

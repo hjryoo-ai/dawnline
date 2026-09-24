@@ -35,6 +35,8 @@ dependencies {
     testFixturesApi(libs.jackson.databind)
 
     testImplementation(libs.spring.boot.starter.test)
+    // 보존 표 파서(RetentionTable) — 모듈마다 같은 방식으로 §7.1 을 읽어야 대조가 같은 표를 본다(ADR-058).
+    testImplementation(testFixtures(project(":libs:common")))
     // 컨트롤러 테스트 — 실제 WebMvc 자동 설정 위에서 서비스와 같은 어드바이스(libs/web)로 돈다.
     // integrationTest 도 이 둘을 물려받아 MessagingTestApplication 이 서블릿 웹 앱이 된다(OutboxQuarantineIT 가
     // 재큐를 HTTP 로 부른다).
@@ -74,5 +76,15 @@ tasks.named<Test>("test") {
     // ComposeTopicsTest 가 kafka-init 의 토픽 목록을 계약과 대조한다 — 같은 이유로 입력이다.
     inputs.file(rootProject.layout.projectDirectory.file("deploy/compose/docker-compose.yml"))
             .withPropertyName("composeTopics")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// -----------------------------------------------------------------------------
+// RetentionTableDefaultsTest 가 docs/DESIGN.md §7.1 보존 표를 읽는다(ADR-058 결정 7) — 입력으로 선언하지 않으면
+// 표만 고친 빌드에서 test 가 UP-TO-DATE 로 건너뛴다. 검사가 돌지 않는데 초록인 것은 이 검사가 막으려는 모양이다.
+// -----------------------------------------------------------------------------
+tasks.named<Test>("test") {
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+            .withPropertyName("retentionTable")
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }

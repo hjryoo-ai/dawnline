@@ -12,6 +12,8 @@ import com.dawnline.fulfillment.domain.FulfillmentOrder;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.UnserviceableReason;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.messaging.retention.RetentionAges;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Duration;
@@ -72,7 +74,8 @@ class FulfillmentRetentionIT extends FulfillmentIntegrationTestBase {
 
     private FulfillmentRetentionCleaner cleaner(int batchSize, int maxBatches) {
         return new FulfillmentRetentionCleaner(orders, waves, transactionManager,
-                Clock.fixed(NOW, ZoneOffset.UTC), ORDER_RETENTION, WAVE_RETENTION, batchSize, maxBatches);
+                Clock.fixed(NOW, ZoneOffset.UTC), ORDER_RETENTION, WAVE_RETENTION, batchSize, maxBatches,
+                new RetentionAges(new SimpleMeterRegistry(), Clock.fixed(NOW, ZoneOffset.UTC)));
     }
 
     @BeforeEach

@@ -11,7 +11,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.dawnline.messaging.retention.ManualClock;
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.order.application.port.out.IdempotencyRecords;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -38,14 +42,18 @@ class IdempotencyKeyCleanerTest {
     private IdempotencyRecords records;
     private PlatformTransactionManager transactionManager;
     private IdempotencyKeyCleaner cleaner;
+    private ManualClock ageClock;
+    private RetentionAges ages;
 
     @BeforeEach
     void setUp() {
         records = mock(IdempotencyRecords.class);
         transactionManager = mock(PlatformTransactionManager.class);
         when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        ageClock = new ManualClock(NOW);
+        ages = new RetentionAges(new SimpleMeterRegistry(), ageClock);
         cleaner = new IdempotencyKeyCleaner(records, transactionManager,
-                Clock.fixed(NOW, ZoneOffset.UTC), BATCH, 3);
+                Clock.fixed(NOW, ZoneOffset.UTC), BATCH, 3, ages);
     }
 
     @Test
@@ -101,7 +109,22 @@ class IdempotencyKeyCleanerTest {
         // 정리 실패는 용량 문제지 정확성 문제가 아니다. 다음 실행이 이어받는다.
         when(records.deleteExpired(any(), anyInt())).thenThrow(new IllegalStateException("DB 불가"));
 
+        ageClock.advance(Duration.ofDays(2));
+
         assertThatCode(() -> cleaner.cleanupExpired()).doesNotThrowAnyException();
+        // 삼키되 보이게 — 성공 나이가 되돌아가지 않는다(ADR-058 결정 6).
+        assertThat(ages.table("idempotency_keys").ageSeconds()).isEqualTo(2 * 86400.0);
+    }
+
+    @Test
+    void 끝까지_돈_실행은_성공_나이를_0_으로_되돌린다() {
+        when(records.deleteExpired(any(), anyInt())).thenReturn(BATCH, BATCH, BATCH);
+        ageClock.advance(Duration.ofHours(7));
+
+        cleaner.cleanupExpired();
+
+        // 상한(3배치)에 걸렸다 — 그래도 앞으로 나아갔으니 성공이다.
+        assertThat(ages.table("idempotency_keys").ageSeconds()).isZero();
     }
 
     @Test
@@ -115,14 +138,14 @@ class IdempotencyKeyCleanerTest {
     @Test
     void 잘못된_인자는_생성에서_거부한다() {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        assertThatThrownBy(() -> new IdempotencyKeyCleaner(null, transactionManager, clock, 1, 1))
+        assertThatThrownBy(() -> new IdempotencyKeyCleaner(null, transactionManager, clock, 1, 1, ages))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new IdempotencyKeyCleaner(records, null, clock, 1, 1))
+        assertThatThrownBy(() -> new IdempotencyKeyCleaner(records, null, clock, 1, 1, ages))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new IdempotencyKeyCleaner(records, transactionManager, clock, 0, 1))
+        assertThatThrownBy(() -> new IdempotencyKeyCleaner(records, transactionManager, clock, 0, 1, ages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("batchSize");
-        assertThatThrownBy(() -> new IdempotencyKeyCleaner(records, transactionManager, clock, 1, 0))
+        assertThatThrownBy(() -> new IdempotencyKeyCleaner(records, transactionManager, clock, 1, 0, ages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("maxBatchesPerRun");
     }

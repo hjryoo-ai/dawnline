@@ -97,7 +97,7 @@ public final class InMemoryReadModel {
     private final class Orders implements OrderRows {
 
         @Override
-        public Map<UUID, OrderRow> lock(Collection<UUID> orderIds) {
+        public Map<UUID, OrderRow> lock(Collection<UUID> orderIds, Instant touchedAt) {
             Map<UUID, OrderRow> rows = new HashMap<>();
             for (UUID id : orderIds) {
                 Map<String, Object> row = orders.computeIfAbsent(id, k -> new TreeMap<>());
@@ -120,7 +120,7 @@ public final class InMemoryReadModel {
     private final class Routes implements RouteRows {
 
         @Override
-        public Map<UUID, RouteRow> lock(Collection<UUID> routeIds) {
+        public Map<UUID, RouteRow> lock(Collection<UUID> routeIds, Instant touchedAt) {
             Map<UUID, RouteRow> rows = new HashMap<>();
             for (UUID id : routeIds) {
                 Map<String, Object> row = routes.computeIfAbsent(id, k -> new TreeMap<>());
@@ -131,7 +131,7 @@ public final class InMemoryReadModel {
         }
 
         @Override
-        public void write(UUID routeId, Patch<RouteColumn> patch) {
+        public void write(UUID routeId, Patch<RouteColumn> patch, Instant touchedAt) {
             apply(routes, routeId, patch);
         }
 
@@ -157,13 +157,13 @@ public final class InMemoryReadModel {
     private final class Waves implements WaveRows {
 
         @Override
-        public WaveRow lock(UUID waveId) {
+        public WaveRow lock(UUID waveId, Instant touchedAt) {
             Map<String, Object> row = waves.computeIfAbsent(waveId, k -> new TreeMap<>());
             return new WaveRow(enumOf(WaveStatus.class, row.get("status")));
         }
 
         @Override
-        public void write(UUID waveId, Patch<WaveColumn> patch) {
+        public void write(UUID waveId, Patch<WaveColumn> patch, Instant touchedAt) {
             apply(waves, waveId, patch);
         }
 

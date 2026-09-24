@@ -1,6 +1,7 @@
 package com.dawnline.ops.application.port.out;
 
 import com.dawnline.ops.domain.RouteStatus;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
 import java.util.UUID;
@@ -14,16 +15,18 @@ public interface RouteRows {
     /**
      * 없는 행을 키만으로 만들고 전부를 {@code route_id} 순서로 잠근다.
      *
-     * @param routeIds 라우트들 (중복 허용)
+     * @param routeIds  라우트들 (중복 허용)
+     * @param touchedAt 새 행의 {@code updated_at} — 보존의 나이 (ADR-058)
      * @return 라우트 → 판정용 현재 값
      */
-    Map<UUID, RouteRow> lock(Collection<UUID> routeIds);
+    Map<UUID, RouteRow> lock(Collection<UUID> routeIds, Instant touchedAt);
 
     /**
-     * @param routeId 라우트
-     * @param patch   적을 칸
+     * @param routeId   라우트
+     * @param patch     적을 칸 — 비어 있으면 아무것도 하지 않는다
+     * @param touchedAt {@code updated_at} — 사실이 아니라 프로젝션의 기록이다
      */
-    void write(UUID routeId, Patch<RouteColumn> patch);
+    void write(UUID routeId, Patch<RouteColumn> patch, Instant touchedAt);
 
     /**
      * {@code completed_count}·{@code failed_count} 를 {@code rm_orders} 에서 다시 센다(ADR-051 결정 4).

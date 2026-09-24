@@ -3,7 +3,10 @@ package com.dawnline.tracking.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.dawnline.messaging.retention.ManualClock;
+import com.dawnline.messaging.retention.RetentionAges;
 import com.dawnline.tracking.application.port.out.EventPartitions;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -35,9 +38,11 @@ class ShipmentEventPartitionsTest {
     private static final int RETENTION = 30;
 
     private final RecordingPartitions partitions = new RecordingPartitions();
+    private final ManualClock ageClock = new ManualClock(CLOCK.instant());
+    private final RetentionAges ages = new RetentionAges(new SimpleMeterRegistry(), ageClock);
 
     private ShipmentEventPartitions partitionManager() {
-        return new ShipmentEventPartitions(partitions, CLOCK, AHEAD, RETENTION);
+        return new ShipmentEventPartitions(partitions, CLOCK, AHEAD, RETENTION, ages);
     }
 
     @Test
@@ -86,6 +91,29 @@ class ShipmentEventPartitionsTest {
     }
 
     @Test
+    void 회전이_끝까지_돌면_성공_나이가_0_으로_돌아간다() {
+        partitions.last = TODAY.plusDays(AHEAD);
+        ShipmentEventPartitions manager = partitionManager();
+        ageClock.advance(Duration.ofHours(2));
+
+        manager.maintain();
+
+        assertThat(ages.table("shipment_events").ageSeconds()).isZero();
+    }
+
+    @Test
+    void 회전이_실패하면_성공_나이가_자란다() {
+        ShipmentEventPartitions manager = partitionManager();
+        partitions.failure = new IllegalStateException("DB 불가");
+        ageClock.advance(Duration.ofDays(2));
+
+        manager.maintain();
+
+        // 앞으로 덮인 날(생성)과 별개로 지우기가 멈췄다는 것이 이 값에 보인다(ADR-058 결정 6).
+        assertThat(ages.table("shipment_events").ageSeconds()).isEqualTo(2 * 86400.0);
+    }
+
+    @Test
     void 파티션이_하나도_없으면_게이지는_0_이다() {
         partitions.last = null;
 
@@ -118,7 +146,7 @@ class ShipmentEventPartitionsTest {
         // 「마지막으로 만든 수」가 아니라 「남은 날」을 잰다.
         Clock tomorrow = Clock.offset(CLOCK, Duration.ofDays(1));
         ShipmentEventPartitions sameStateNextDay =
-                new ShipmentEventPartitions(partitions, tomorrow, AHEAD, RETENTION);
+                new ShipmentEventPartitions(partitions, tomorrow, AHEAD, RETENTION, ages);
         assertThat(sameStateNextDay.partitionsAhead()).isZero();
     }
 
@@ -146,7 +174,7 @@ class ShipmentEventPartitionsTest {
 
     @Test
     void 보존이_선행_생성보다_짧으면_기동에서_막는다() {
-        assertThatThrownBy(() -> new ShipmentEventPartitions(partitions, CLOCK, 7, 7))
+        assertThatThrownBy(() -> new ShipmentEventPartitions(partitions, CLOCK, 7, 7, ages))
                 .as("방금 만든 파티션을 같은 실행이 지우는 설정이다")
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("retentionDays");
@@ -154,10 +182,10 @@ class ShipmentEventPartitionsTest {
 
     @Test
     void 선행일과_보존일은_1_이상이어야_한다() {
-        assertThatThrownBy(() -> new ShipmentEventPartitions(partitions, CLOCK, 0, RETENTION))
+        assertThatThrownBy(() -> new ShipmentEventPartitions(partitions, CLOCK, 0, RETENTION, ages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("aheadDays");
-        assertThatThrownBy(() -> new ShipmentEventPartitions(partitions, CLOCK, AHEAD, 0))
+        assertThatThrownBy(() -> new ShipmentEventPartitions(partitions, CLOCK, AHEAD, 0, ages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("retentionDays");
     }
