@@ -27,6 +27,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 읽기 모델 조회가 실제 PostgreSQL 에서 그 행을 고르는지 (DESIGN.md §5.5 「조회」). 판정 로직은
@@ -163,7 +165,14 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
         mockMvc.perform(viewer(get("/api/v1/waves/{waveId}/routes", unplanned)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.routes.length()").value(0))
-                .andExpect(jsonPath("$.depot").doesNotExist());
+                .andExpect(jsonPath("$.depot").doesNotExist())
+                // doesNotExist 는 「없다」와 「null」을 가르지 않는다. 문서(OpenApiContractIT)는 「있고 null」이라고
+                // 말하므로 본문이 그것인지 여기서 본다 — 칸이 빠지면 TS 쪽의 null 검사가 헛돈다.
+                .andExpect(result -> {
+                    JsonNode body = JsonMapper.builder().build().readTree(result.getResponse().getContentAsString());
+                    assertThat(body.has("depot") && body.get("depot").isNull()).as("depot 는 있고 null").isTrue();
+                    assertThat(body.has("planId") && body.get("planId").isNull()).as("planId 는 있고 null").isTrue();
+                });
         mockMvc.perform(viewer(get("/api/v1/waves/{waveId}/routes", UUID.randomUUID())))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("not-found"));

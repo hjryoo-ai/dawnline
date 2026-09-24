@@ -851,9 +851,13 @@ components:
         status:
           type: string
         closeCause:
-          type: string
+          type:
+          - string
+          - "null"
         closedAt:
-          type: string
+          type:
+          - string
+          - "null"
           format: date-time
       required:
       - status
@@ -926,7 +930,9 @@ components:
       type: object
       properties:
         reason:
-          type: string
+          type:
+          - string
+          - "null"
           maxLength: 200
           minLength: 0
     OrderCancelled:
@@ -1011,7 +1017,9 @@ components:
           type: string
           format: uuid
         eventId:
-          type: string
+          type:
+          - string
+          - "null"
           format: uuid
         result:
           type: string
@@ -1022,7 +1030,9 @@ components:
           - FAILED
           - UNKNOWN
         detail:
-          type: string
+          type:
+          - string
+          - "null"
       required:
       - auditId
       - offset
@@ -1047,38 +1057,60 @@ components:
           type: string
           format: uuid
         vehicleId:
-          type: string
+          type:
+          - string
+          - "null"
           format: uuid
         revision:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         status:
-          type: string
+          type:
+          - string
+          - "null"
           enum:
           - ASSIGNED
           - DEPARTED
         plannedDeparture:
-          type: string
+          type:
+          - string
+          - "null"
           format: date-time
         departedAt:
-          type: string
+          type:
+          - string
+          - "null"
           format: date-time
         stopCount:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         completedCount:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         failedCount:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         atRisk:
-          type: boolean
+          type:
+          - boolean
+          - "null"
         distanceM:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         costKrw:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
       required:
       - routeId
@@ -1089,10 +1121,14 @@ components:
           type: string
           format: uuid
         planId:
-          type: string
+          type:
+          - string
+          - "null"
           format: uuid
         depot:
-          $ref: "#/components/schemas/Depot"
+          anyOf:
+          - $ref: "#/components/schemas/Depot"
+          - type: "null"
         routes:
           type: array
           items:
@@ -1191,10 +1227,14 @@ components:
           type: integer
           format: int64
         onTimeRatioPromised:
-          type: number
+          type:
+          - number
+          - "null"
           format: double
         onTimeRatioRevised:
-          type: number
+          type:
+          - number
+          - "null"
           format: double
       required:
       - campId
@@ -1243,7 +1283,9 @@ components:
           type: integer
           format: int64
         latestCutoffAt:
-          type: string
+          type:
+          - string
+          - "null"
           format: date-time
       required:
       - campId
@@ -1276,34 +1318,52 @@ components:
           type: string
           format: uuid
         serviceTier:
-          type: string
+          type:
+          - string
+          - "null"
         cutoffAt:
-          type: string
+          type:
+          - string
+          - "null"
           format: date-time
         status:
-          type: string
+          type:
+          - string
+          - "null"
           enum:
           - OPEN
           - CLOSED
           - PLAN_FAILED
           - PLANNED
         orderCount:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         planId:
-          type: string
+          type:
+          - string
+          - "null"
           format: uuid
         planDurationMs:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         totalCostKrw:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int64
         unassignedCount:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         routeCount:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
       required:
       - waveId
@@ -1314,10 +1374,14 @@ components:
           type: string
           format: uuid
         waveId:
-          type: string
+          type:
+          - string
+          - "null"
           format: uuid
         routeId:
-          type: string
+          type:
+          - string
+          - "null"
           format: uuid
         deliveredAt:
           type: string
@@ -1420,20 +1484,32 @@ components:
           type: string
           format: date-time
         eventType:
-          type: string
+          type:
+          - string
+          - "null"
         eventId:
-          type: string
+          type:
+          - string
+          - "null"
           format: uuid
         originalGroup:
-          type: string
+          type:
+          - string
+          - "null"
         originalPartition:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int32
         originalOffset:
-          type: integer
+          type:
+          - integer
+          - "null"
           format: int64
         exceptionClass:
-          type: string
+          type:
+          - string
+          - "null"
       required:
       - offset
       - partition

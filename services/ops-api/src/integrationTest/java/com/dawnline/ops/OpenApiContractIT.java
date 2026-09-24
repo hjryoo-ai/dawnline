@@ -184,6 +184,32 @@ class OpenApiContractIT extends OpsIntegrationTestBase {
                 .containsExactlyInAnyOrder("seq", "lat", "lng", "plannedArrival", "status", "orderIds");
     }
 
+    @Test
+    void Nullable_칸은_null_을_허용하고_검증이_필수로_만든_칸은_허용하지_않는다() throws Exception {
+        // 본문은 @Nullable 칸을 빼지 않고 null 을 싣는다(ReadSurfaceIT 가 본문 쪽에서 본다). 「선택」만 적으면 TS 타입이
+        // undefined 만 알고 실제로 오는 null 을 모른다 — ADR-056 시도에서 드러난 문서의 거짓.
+        JsonNode schemas = JsonMapper.builder().build().readTree(generatedJson()).path("components").path("schemas");
+        JsonNode waveRoutes = schemas.path("WaveRoutes").path("properties");
+
+        assertThat(texts(waveRoutes.path("planId").path("type"))).containsExactlyInAnyOrder("string", "null");
+        assertThat(waveRoutes.path("depot").path("anyOf").findValuesAsString("type")).as("참조는 anyOf 로 감싼다")
+                .containsExactly("null");
+        assertThat(waveRoutes.path("depot").path("anyOf").findValuesAsString("$ref"))
+                .containsExactly("#/components/schemas/Depot");
+        assertThat(typesOf(waveRoutes.path("waveId"))).doesNotContain("null");
+        // 요청 본문의 @Nullable @NotBlank — null 은 서버가 400 으로 돌려보낸다. 문서가 그보다 약하게 말하지 않는다.
+        assertThat(texts(schemas.path("CloseBody").path("required"))).contains("reason");
+        assertThat(typesOf(schemas.path("CloseBody").path("properties").path("reason"))).doesNotContain("null");
+        assertThat(typesOf(schemas.path("ReassignBody").path("properties").path("targetRouteId")))
+                .doesNotContain("null");
+    }
+
+    /** {@code type} 이 문자열이든 배열이든 그 값들. */
+    private static List<String> typesOf(JsonNode property) {
+        JsonNode type = property.path("type");
+        return type.isArray() ? texts(type) : List.of(type.asString());
+    }
+
     private static List<String> texts(JsonNode array) {
         List<String> values = new ArrayList<>();
         array.forEach(node -> values.add(node.asString()));
