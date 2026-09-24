@@ -10,6 +10,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -39,6 +40,8 @@ import org.postgresql.ds.PGSimpleDataSource;
 class OutboxLeaderLockIT extends MessagingIntegrationTestBase {
 
     private static final String SERVICE = "leader-lock-it";
+    /** 죽인 백엔드가 실제로 사라질 때까지 기다리는 상한. 넘으면 {@code terminateLockHolders} 가 그 행을 세지 않는다. */
+    private static final Duration TERMINATION_WAIT = Duration.ofSeconds(5);
 
     private final List<AdvisoryLockRelayLeadership> opened = new ArrayList<>();
 
@@ -178,20 +181,31 @@ class OutboxLeaderLockIT extends MessagingIntegrationTestBase {
         }
     }
 
-    /** 이 키의 락을 쥔 백엔드를 죽인다. 프로세스가 사라지는 것을 흉내 낸다. */
+    /**
+     * 이 키의 락을 쥔 백엔드를 죽인다. 프로세스가 사라지는 것을 흉내 낸다 — 그리고 <strong>사라질 때까지 기다린다</strong>.
+     *
+     * <p>타임아웃 없는 {@code pg_terminate_backend(pid)} 는 신호를 <em>보냈다</em>는 것만 말하고 곧바로
+     * true 를 돌려준다(PostgreSQL 문서 — 「whether the process actually terminates or not」). 그러면 바로 다음
+     * {@code lead()} 가 아직 살아 있는 백엔드의 락과 경합한다 — 2026-09-24 CI 에서 한 번 FOLLOWER 로 실패했다
+     * (#60, 이 IT 와 무관한 변경. 로컬 12회 반복에서는 재현되지 않았다). 인자로 준 밀리초만큼 종료를
+     * 기다리는 형태(PG 14+)는 프로세스가 실제로 사라졌을 때만 true 다 — 그래서 true 인 행만 센다.
+     */
     private int terminateLockHolders() throws SQLException {
         try (Connection connection = admin();
                 PreparedStatement statement = connection.prepareStatement("""
-                        SELECT pg_terminate_backend(pid) FROM pg_locks
+                        SELECT pg_terminate_backend(pid, ?) FROM pg_locks
                          WHERE locktype = 'advisory' AND granted
                            AND classid = ? AND objid = ? AND objsubid = 2
                         """)) {
-            statement.setInt(1, AdvisoryLockRelayLeadership.NAMESPACE);
-            statement.setInt(2, lockKey());
+            statement.setLong(1, TERMINATION_WAIT.toMillis());
+            statement.setInt(2, AdvisoryLockRelayLeadership.NAMESPACE);
+            statement.setInt(3, lockKey());
             int killed = 0;
             try (ResultSet rows = statement.executeQuery()) {
                 while (rows.next()) {
-                    killed++;
+                    if (rows.getBoolean(1)) {
+                        killed++;
+                    }
                 }
             }
             return killed;
