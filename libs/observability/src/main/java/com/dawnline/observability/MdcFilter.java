@@ -6,6 +6,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Objects;
+import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.MDC;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -35,6 +37,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * <p>요청 헤더·바디·쿼리 스트링을 MDC 에 넣지 않는다. 주소·수령인·연락처가 그대로 로그
  * 저장소로 흘러가기 때문이다(DESIGN.md §9.3, §10).
  *
+ * <p><b>예외 하나</b>: {@link MdcKeys#AUDIT_ID_HEADER}. ops-api 가 운영자 커맨드를 위임하며 싣는 감사
+ * 행 id 이고(§5.5 「커맨드 위임」), 사람이 결과를 모르는 커맨드를 해소할 때 코어 로그에서 찾을 키다.
+ * 헤더는 누구나 보낼 수 있으므로 <strong>UUID 의 정규 형식일 때만</strong> 받고 아니면 버린다 — 로그
+ * 줄에 임의 문자열이 실리지 않게 한다. 넣은 값은 다른 관리 키와 함께 {@code finally} 에서 지워진다.
+ *
  * <p>등록은 {@code com.dawnline.observability.config.ObservabilityAutoConfiguration} 이
  * 자동으로 한다. 직접 등록할 일은 없다.
  */
@@ -54,10 +61,28 @@ public final class MdcFilter extends OncePerRequestFilter {
             HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         MDC.put(MdcKeys.SERVICE, serviceName);
+        String auditId = canonicalUuid(request.getHeader(MdcKeys.AUDIT_ID_HEADER));
+        if (auditId != null) {
+            MDC.put(MdcKeys.AUDIT_ID, auditId);
+        }
         try {
             filterChain.doFilter(request, response);
         } finally {
             MdcScope.clearManaged();
+        }
+    }
+
+    /** 정규 형식(36자, 소문자·대문자 16진)의 UUID 면 그 문자열, 아니면 {@code null}. */
+    static @Nullable String canonicalUuid(@Nullable String value) {
+        if (value == null || value.length() != 36) {
+            return null;
+        }
+        try {
+            UUID parsed = UUID.fromString(value);
+            // UUID.fromString 은 "1-1-1-1-1" 같은 짧은 형태도 받는다 — 길이와 왕복으로 정규 형식만 남긴다.
+            return parsed.toString().equalsIgnoreCase(value) ? parsed.toString() : null;
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 }

@@ -94,4 +94,30 @@ class MdcFilterTest {
         // 필터가 넣는 것은 service 하나뿐이다. 헤더·파라미터·URL 을 긁어오지 않는다(§9.3, §10).
         assertThat(snapshot.get()).containsOnlyKeys(MdcKeys.SERVICE);
     }
+
+    @Test
+    void doFilter_감사_id_헤더는_요청_동안_MDC_에_있고_끝나면_지워진다() throws Exception {
+        String auditId = "0199a000-0000-7000-8000-00000000a0d1";
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/orders/x/cancel");
+        request.addHeader(MdcKeys.AUDIT_ID_HEADER, auditId);
+        AtomicReference<String> seen = new AtomicReference<>();
+
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> seen.set(MDC.get(MdcKeys.AUDIT_ID)));
+
+        assertThat(seen.get()).isEqualTo(auditId);
+        assertThat(MDC.get(MdcKeys.AUDIT_ID)).as("다음 요청에 남의 감사 id 가 붙지 않는다").isNull();
+    }
+
+    @Test
+    void doFilter_감사_id_헤더가_UUID_의_정규_형식이_아니면_버린다() throws Exception {
+        for (String forged : new String[] {"홍길동 010-0000-0000", "1-1-1-1-1", "", "0199a000-0000-7000-8000-00000000a0d1\nFAKE"}) {
+            MockHttpServletRequest request = new MockHttpServletRequest();
+            request.addHeader(MdcKeys.AUDIT_ID_HEADER, forged);
+            AtomicReference<Map<String, String>> snapshot = new AtomicReference<>();
+
+            filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> snapshot.set(MDC.getCopyOfContextMap()));
+
+            assertThat(snapshot.get()).as("[%s]", forged).containsOnlyKeys(MdcKeys.SERVICE);
+        }
+    }
 }
