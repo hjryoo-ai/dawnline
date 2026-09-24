@@ -11,6 +11,7 @@ import com.dawnline.ops.application.port.in.ProjectFactUseCase.Projection;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -57,6 +58,15 @@ public class ProjectionListener {
     static final String DELIVERY_STATUS_TOPIC = "dawnline.delivery.status.v1";
     static final String DELIVERY_AT_RISK_TOPIC = "dawnline.delivery.at-risk.v1";
     static final String ROUTE_DEPARTED_TOPIC = "dawnline.delivery.route-departed.v1";
+
+    /**
+     * 구독하는 토픽 전부 = 계약의 토픽 전부({@code ProjectionTopicsTest} 가 계약 디렉터리와 대조한다). DLQ 재처리가
+     * 받는 토픽의 목록이기도 하다(§4.6) — 어노테이션과 이 집합이 갈라지지 않는지도 같은 테스트가 본다.
+     */
+    public static final Set<String> TOPICS = Set.of(ORDER_PLACED_TOPIC, ORDER_CANCELLED_TOPIC,
+            FULFILLMENT_PLANNED_TOPIC, WAVE_CLOSED_TOPIC, ROUTE_ASSIGNED_TOPIC, ORDER_DISPATCHED_TOPIC,
+            PLAN_COMPLETED_TOPIC, PLAN_FAILED_TOPIC, DELIVERY_STATUS_TOPIC, DELIVERY_AT_RISK_TOPIC,
+            ROUTE_DEPARTED_TOPIC);
 
     private final IdempotentConsumer consumer;
     private final ProjectFactUseCase projector;

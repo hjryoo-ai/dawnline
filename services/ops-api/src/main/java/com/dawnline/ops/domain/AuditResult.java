@@ -1,7 +1,10 @@
 package com.dawnline.ops.domain;
 
 /**
- * 운영자 커맨드 한 건의 결과 — {@code audit_logs.result} (DESIGN.md §5.5 「커맨드 위임」).
+ * 운영자 커맨드 한 건의 결과 — {@code audit_logs.result} (DESIGN.md §5.5 「커맨드 위임」, §4.6 「DLQ 재처리」).
+ *
+ * <p>아래 설명은 위임의 말이다. DLQ 재처리에서는 「코어」가 브로커다 — ack 는 {@link #SUCCEEDED}, 보내기 전 거절은
+ * {@link #REJECTED}, 브로커의 재시도 불가 오류는 {@link #FAILED}, 그 밖은 {@link #UNKNOWN}(ADR-053 결정 4).
  *
  * <p>감사 행은 위임 <em>전에</em> {@link #PENDING} 으로 쓰이고, 위임이 끝나면 나머지 넷 중 하나로 한 번
  * 닫힌다. 넷의 경계는 「코어에 적용됐는가」를 <strong>아는가</strong>로 긋는다 — 모름을 값으로 접지 않는다.

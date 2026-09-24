@@ -166,3 +166,8 @@ dawnline:
   ops:
     jwt:
       secret: ${DAWNLINE_OPS_JWT_SECRET:}
+    # DLQ 재처리 (DESIGN.md §4.6 「DLQ 재처리」, ADR-053) — 기본값은 OpsDlqProperties 에 있고 여기에 적는 것은
+    # 읽는 사람을 위해서다. 읽기가 넘으면 그 레코드는 FAILED(보내지 않았다), ack 가 넘으면 UNKNOWN(다시 누르면 된다).
+    dlq:
+      read-timeout: 10s
+      send-timeout: 10s

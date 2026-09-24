@@ -46,6 +46,13 @@ class ProjectionTopicsTest {
     }
 
     @Test
+    void DLQ_재처리가_받는_토픽은_리스너가_구독하는_토픽과_같다() {
+        // 두 목록은 서로를 비춘다(CLAUDE.md). 어노테이션에만 있으면 그 토픽은 재처리할 수 없고, 집합에만 있으면
+        // 아무도 구독하지 않는 토픽의 재처리를 받는다.
+        assertThat(ProjectionListener.TOPICS).isEqualTo(ListenerTopics.of().keySet());
+    }
+
+    @Test
     void 소비자_이름이_서비스_이름이다() {
         // processed_events.consumer 값이다. 인스턴스마다 달라지면 멱등이 깨진다 (§8.5).
         assertThat(ProjectionListener.CONSUMER).isEqualTo("ops-api");
