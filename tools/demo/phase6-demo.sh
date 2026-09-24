@@ -119,6 +119,18 @@ WAVE="${pick%%|*}"; rest="${pick#*|}"; CAMP="${rest%%|*}"; wave_orders="${rest#*
 cutoff="$(fq "SELECT to_char(cutoff_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM waves WHERE id = '$WAVE'")"
 printf '  %-50s %s (캠프 %s · 주문 %s · 컷오프 %s)\n' "닫을 웨이브" "$WAVE" "$(fq "SELECT code FROM camps WHERE id = '$CAMP'")" "$wave_orders" "$cutoff"
 
+# 전제를 마감 **전에** 말한다 — 재배정은 같은 계획의 다른 라우트로만 되고(ReassignStopService), 둘째 라우트를
+# 강제하는 것은 하드 룰 max-stops 다(용량은 트럭 한 대가 먼저 흡수한다 — scenarios.yml 의 ops-demo 주석).
+# 주문 수 > 상한은 필요조건이다: 같은 지점의 주문은 stop 하나로 합쳐지므로(StopMerger) stop 은 주문보다 적다.
+# 충분조건은 마감 뒤 4 단계가 라우트 수로 본다. 여기서 멈추면 웨이브를 닫지 않았다 — 부작용 없이 실패한다.
+# 룰은 이름으로 합쳐지고 캠프 행이 전역 행을 덮는다(JdbcReferenceData.forCamp) — 같은 순서로 읽는다.
+max_stops="$(dq "SELECT params->>'max' FROM dispatch_rules WHERE enabled AND name = 'max-stops'
+                   AND (camp_id IS NULL OR camp_id = '$CAMP') ORDER BY camp_id NULLS LAST LIMIT 1")"
+printf '  %-50s %s\n' "라우트당 stop 상한 (max-stops, 전제)" "${max_stops:-∅}"
+[ -n "$max_stops" ] || fail "켜진 max-stops 룰이 없다 — 둘째 라우트를 강제할 것이 없다."
+[ "$wave_orders" -gt "$max_stops" ] || fail "가장 큰 웨이브의 주문이 $wave_orders 건 ≤ 상한 $max_stops — 라우트 하나에 다 들어갈 수 있다.
+  scenarios.yml 의 ops-demo 크기(orders)를 확인해라."
+
 # 대시보드가 그 웨이브를 OPEN 으로 보는가 — 화면이 읽는 조회 그대로.
 # 창은 그 컷오프 ± 1시간 — 계산은 DB 가 한다(GNU·BSD date 의 산술이 다르다).
 iso() { fq "SELECT to_char((cutoff_at $1) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM waves WHERE id = '$WAVE'"; }
@@ -144,8 +156,8 @@ PLAN="$(dq "SELECT id FROM route_plans WHERE wave_id = '$WAVE' AND status = 'PUB
 route_count="$(dq "SELECT count(*) FROM routes WHERE plan_id = '$PLAN'")"
 printf '  %-50s %s\n' "계획의 라우트 (dispatch)" "$route_count"
 # 전제를 스스로 말한다 — 재배정은 같은 계획의 다른 라우트로만 된다(ReassignStopService).
-[ "$route_count" -ge 2 ] || fail "계획의 라우트가 $route_count 개다 — 옮길 곳이 없다. 웨이브 주문 $wave_orders 건이 차 한 대로
-  충분했다는 뜻이다. scenarios.yml 의 ops-demo 크기(orders)를 확인해라."
+[ "$route_count" -ge 2 ] || fail "계획의 라우트가 $route_count 개다 — 옮길 곳이 없다. 웨이브 주문 $wave_orders 건이 상한 $max_stops 를
+  넘었는데도 하나라면 stop 통합이 주문을 상한 아래로 합쳤다는 뜻이다(StopMerger — 같은 geohash7 · 약속창 · 제약)."
 await "지도가 읽는 라우트 수 (읽기 모델)" "$route_count" \
   "web GET '/api/v1/waves/$WAVE/routes' \"\$VIEW\" >/dev/null; jq -r 'select(.planId != null) | .routes | length' < \"\$WORK/body\""
 jq -e '.depot.lat and .depot.lng' >/dev/null < "$WORK/body" || fail "지도의 창고 좌표가 없다(V3): $(cat "$WORK/body")"
