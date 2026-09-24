@@ -1896,6 +1896,14 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      없다. 같은 PR 에서 **내부 토큰 거부 카운터**(`dawnline_internal_token_rejected_total`, 알림 `> 0`)와 RB-07 의
      「다시 누르기가 먼저」.
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.
+   **축소안으로 간다**(2026-09-24 결정): 화면 둘 — 캠프 대시보드(웨이브·계획·정시율 두 기준·개정 수·예외 목록)와
+   라우트 지도(stop 순서 폴리라인·상태 색·at-risk 강조·재배정·조기 마감). 룰 편집은 Swagger, 설정은 토큰 붙여 넣기 하나.
+   PR 셋: C1 ops-api 조회 표면과 OpenAPI 생성물 → C2 ops-web → C3 DoD 를 Compose 스모크에서.
+   - **C1 — ops-api 조회 표면**(2026-09-24, §5.5 「조회」). 조회 여섯(캠프·웨이브 창·KPI·예외 목록·웨이브의 라우트·
+     라우트 — 마지막은 dispatch 에 조회 위임). stop 좌표는 `rm_routes` 에 두지 않는다(진실은 dispatch, 읽기 모델은
+     집계). KPI 조회는 게이지와 같은 창·뷰·식. 창고 좌표 V3(`wave.closed` 의 `depot`). 인덱스는 더하지 않았다
+     ([측정](benchmarks/phase6-ops-read-surface.md)). `contracts/openapi/ops-api.yaml` 과 `OpenApiContractIT` —
+     아래 DoD 둘째 줄. 401·403 도 Problem Details.
 4. 테스트: 프로젝션 멱등(같은 이벤트 2회), **프로젝션 순서 무관(같은 사실을 씨 고정 셔플로 다시 넣어 최종 행이 같은가)**, 권한(viewer가 커맨드 403), 커맨드 감사 기록.
    **멱등과 순서는 다른 것이다** — `processed_events`(불변규칙 2)는 *중복*만 막고 순서에 대해서는 아무것도 말하지 않는다.
    순서 IT 는 대상 토픽을 **빼는 방식**으로 정하고(§13 규칙 2), 셔플이 인과 순서와 실제로 다른지를 첫 어설션으로 말한다
@@ -1906,7 +1914,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 **DoD**
 - 운영자가 UI에서 웨이브를 조기 마감하고 계획 결과·라우트 지도를 보며, 특정 stop을 다른 라우트로 옮기는 흐름이 동작.
 - **REST 표면이 있는 서비스마다 OpenAPI 생성물과 계약 IT 가 있다**(§11) — 이 Phase 가 끝나면
-  dispatch 와 ops-api 둘 다 대상이다.
+  dispatch 와 ops-api 둘 다 대상이다. **(2026-09-24) 다섯 다 있다** — dispatch 는 6-0, ops-api 는 묶음 C1.
 
 ---
 
