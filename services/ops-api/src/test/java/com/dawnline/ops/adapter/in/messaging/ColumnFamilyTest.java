@@ -62,9 +62,12 @@ class ColumnFamilyTest {
 
     /**
      * 판정 키가 있는 칸 → 그 판정 키. 웨이브의 계획 칸은 여기 없다 — {@code plan.completed} 는 웨이브에
-     * 한 번만 온다(ADR-024, 재계획은 다시 내지 않는다). 견줄 둘째 값이 없다.
+     * 한 번만 온다(ADR-024, 재계획은 다시 내지 않는다). 견줄 둘째 값이 없다. 결과의 두 시각은 시각이
+     * 아니라 <strong>추적 축</strong>이 판정한다 — 축이 옮길 때만, 결과와 같은 패치에서 쓰인다(§5.5).
      */
     static final Map<Enum<?>, Enum<?>> GUARDED = Map.ofEntries(
+            Map.entry(OrderColumn.DELIVERED_AT, OrderColumn.DELIVERY_OUTCOME),
+            Map.entry(OrderColumn.FAILED_AT, OrderColumn.DELIVERY_OUTCOME),
             Map.entry(OrderColumn.ROUTE_ID, OrderColumn.PLANNED_AS_OF),
             Map.entry(OrderColumn.PLANNED_ARRIVAL, OrderColumn.PLANNED_AS_OF),
             Map.entry(OrderColumn.ETA_AT, OrderColumn.ETA_AS_OF),

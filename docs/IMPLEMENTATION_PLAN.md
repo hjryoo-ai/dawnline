@@ -1760,7 +1760,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | DoD 문장 | 상태 | 근거 |
 |---|---|---|
 | `late-injection` 시나리오에서 at-risk → 재계획 → revision 반영이 **로그·DB 로 확인** | ◐ **부분** | dispatch 안에서는 `ReplanIT` 이 실물 브로커·실물 PostgreSQL 로 못박는다(at-risk → 쿨다운 → 옮김 → 두 라우트 revision 2 → `plan_explanations`). **compose 전 구간의 한 번은 없다** — `late-injection` 은 기사 시뮬레이터까지만 돌고 거기서 재계획을 보지 않는다. 그 자리는 §8.2 의 시나리오 확장이고 **Phase 7-4 의 peak-day 시뮬레이션**에서 닫는다 |
-| 정시율이 `rm_kpi`/메트릭에 집계됨 | ⛔ **미구현 — Phase 6** | 두 기준 정시율(`basis=promised/revised`)은 **ops-api 가 낸다**(§9.1 의 문단 · §8.1). tracking 은 개정본 약속 하나만 알아서 그 라벨을 만들 수 없다. 읽기 모델이 없는 지금은 구현이 아니라 **미구현**이다 |
+| 정시율이 `rm_kpi`/메트릭에 집계됨 | ⛔ **미구현 — Phase 6** | 두 기준 정시율(`basis=promised/revised`)은 **ops-api 가 낸다**(§9.1 의 문단 · §8.1). tracking 은 개정본 약속 하나만 알아서 그 라벨을 만들 수 없다. 읽기 모델이 없는 지금은 구현이 아니라 **미구현**이다. **(2026-09-24, Phase 6 에서 구현)** — `kpi_delivery_hourly` 뷰와 `dawnline_delivery_on_time_ratio{camp,basis}` 게이지(§5.5 「KPI — 두 축, 뷰」) |
 | 5번에서 소비자 처리량을 다시 잰다 (Phase 4-0 의 조건) | ✅ | [측정](benchmarks/phase5-delivery-status-throughput.md). 팬아웃 배수는 문서가 아니라 `TrackingPublishIT` 의 어설션이 든다 |
 
 **대조표가 잡은 것 셋**
@@ -1855,6 +1855,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      **하지 않는 일**(칸을 덮지 않고, 재시도하지 않고, 세지 않는다)이라 코드에서 보이지 않고,
      그래서 먼저 적는다. 관측 근거는 작업 4 의 **순서를 뒤섞는 IT** 이고, 그것이 들어오는
      커밋에서 ADR 의 근거 표기를 `추정` 에서 `관측(재현됨)` 으로 바꾼다. **바꿨다**(2026-09-24).
+   - **KPI 시간 버킷 — 표가 아니라 뷰 둘**(2026-09-24, §5.5 「KPI — 두 축, 뷰」). V1 의 `rm_kpi_hourly`
+     (증감 표)를 V2 가 지우고 `rm_orders` 위에 접수 축(`kpi_intake_hourly`)·배송 축(`kpi_delivery_hourly`)을
+     둔다 — 결정 4 의 가장 순수한 형태는 쓰는 쪽이 없는 것이다. 배송 축의 분모에 실패가 들어가려고
+     `failed_at` 을 더했고(`delivered_at` 과 배타, 제약으로), 정시율 게이지는 그 뷰의 24 버킷 합이다.
+     모집단에서 빠진 수(`outcome_without_promise` → `dawnline_kpi_excluded`)와 갱신 나이
+     (`dawnline_kpi_refresh_age_seconds`, 알림은 이 값에)를 함께 낸다 — NaN 은 알림을 울리지 않는다.
+     인덱스 둘은 뷰의 버킷 식 그대로다([측정](benchmarks/phase6-kpi-hourly-views-index.md)).
 2. 코어 서비스에 필요한 운영 엔드포인트 추가(fulfillment: 웨이브 조기 마감; dispatch: 재계획·재배정은 Phase 3/5에서 존재).
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.
 4. 테스트: 프로젝션 멱등(같은 이벤트 2회), **프로젝션 순서 무관(같은 사실을 씨 고정 셔플로 다시 넣어 최종 행이 같은가)**, 권한(viewer가 커맨드 403), 커맨드 감사 기록.
