@@ -30,7 +30,7 @@ JVM 힙은 `.env` 의 `SERVICE_JAVA_TOOL_OPTIONS` / `KAFKA_HEAP_OPTS` 에 있다
 ## 빠른 시작
 
 ```bash
-make env                 # deploy/compose/.env 생성 (있으면 건드리지 않는다)
+make env                 # deploy/compose/.env 생성. 있으면 기존 줄은 두고 빠진 시크릿(JWT·내부 토큰)만 덧붙인다
 make images              # ./gradlew bootBuildImage — 서비스 이미지 5개 (첫 실행은 오래 걸린다)
 make up                  # 전체 스택 기동 + 레디니스 대기 + URL 출력
 make ps
