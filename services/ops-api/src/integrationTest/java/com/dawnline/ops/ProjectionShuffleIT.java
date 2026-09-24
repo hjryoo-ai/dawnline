@@ -223,6 +223,29 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
         }
     }
 
+    @Test
+    void 재처리_순서_사건_하나가_나머지_뒤에_와도_최종_행이_인과_순서의_최종_행과_같다() {
+        // 재처리는 정의상 순서를 어긴다 — 흡수하는 것은 판정이다(§4.6, ADR-053 결정 5). 씨 25회의 셔플에서는
+        // 31개 중 18개만 한 번이라도 맨 끝에 왔다(2026-09-24) — 그래서 이 모양은 모든 사건에 대해 따로 돈다.
+        List<Event> causal = scenario.causalOrder();
+        replay(causal);
+        var baseline = tables.snapshot(scenario.keys(), EXCLUDED_COLUMNS.keySet());
+        assertThat(baseline.get("rm_orders")).as("기준 행이 있다 — 비어 있으면 아래 비교는 공허하다").hasSize(5);
+
+        for (int i = 0; i < causal.size() - 1; i++) {
+            wipe();
+            List<Event> order = Shuffles.replayedLast(causal, i);
+            assertThat(order).as("%s 를 끝으로 옮긴 순서가 인과 순서와 달라야 한다", causal.get(i)).isNotEqualTo(causal);
+
+            replay(order);
+
+            assertThat(RowDiff.between(baseline, tables.snapshot(scenario.keys(), EXCLUDED_COLUMNS.keySet()),
+                    scenario::name))
+                    .as("재처리된 사건: %s", causal.get(i))
+                    .isEmpty();
+        }
+    }
+
     private void replay(List<Event> order) {
         long offset = 0;
         for (Event event : order) {

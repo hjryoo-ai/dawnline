@@ -131,6 +131,23 @@ class ProjectionShuffleTest {
     }
 
     @Test
+    void 재처리_순서_사건_하나가_나머지_뒤에_와도_최종_행이_인과_순서의_최종_행과_같다() {
+        // 재처리는 정의상 순서를 어긴다 — 흡수하는 것은 판정이다(§4.6, ADR-053 결정 5). 마지막 사건을 끝으로
+        // 옮기면 인과 순서 그대로라 아무것도 검사하지 않으므로 뺀다.
+        List<Event> causal = scenario.causalOrder();
+        var baseline = replay(causal).snapshot();
+
+        for (int i = 0; i < causal.size() - 1; i++) {
+            List<Event> order = Shuffles.replayedLast(causal, i);
+            assertThat(order).as("%s 를 끝으로 옮긴 순서가 인과 순서와 달라야 한다", causal.get(i)).isNotEqualTo(causal);
+
+            assertThat(RowDiff.between(baseline, replay(order).snapshot(), scenario::name))
+                    .as("재처리된 사건: %s", causal.get(i))
+                    .isEmpty();
+        }
+    }
+
+    @Test
     void 같은_씨는_같은_순서를_만든다() {
         // 깨졌을 때 실패 메시지의 씨 하나로 그 순서를 다시 만들 수 있어야 한다(불변규칙 12).
         assertThat(Shuffles.of(scenario.causalOrder(), 7)).isEqualTo(Shuffles.of(scenario.causalOrder(), 7));
