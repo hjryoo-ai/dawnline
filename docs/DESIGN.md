@@ -3056,7 +3056,7 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 
 ## 14. CI/CD와 배포
 
-**ci.yml (PR·main)**: checkout → JDK 25 → Gradle 캐시 → `./gradlew check`(단위+ArchUnit+계약+JaCoCo 게이트) → 통합 테스트(Testcontainers, Docker 서비스) → `benchmark medium` 회귀 게이트 → 이미지 빌드(Buildpacks, ADR-013) → Compose 스모크(주문 20건 E2E) → 결과 아티팩트(리포트, OpenAPI).
+**ci.yml (PR·main)**: checkout → JDK 25 → Gradle 캐시 → `./gradlew check`(단위+ArchUnit+계약+JaCoCo 게이트) → 통합 테스트(Testcontainers, Docker 서비스) → `benchmark medium` 회귀 게이트 → 이미지 빌드(Buildpacks, ADR-013 · ops-web 은 Dockerfile, ADR-057) → Compose 스모크(주문 20건 E2E) → 결과 아티팩트(리포트, OpenAPI). 곁가지로 **ops-web job**(Node 24 — `npm ci` → 타입 검사(계약 픽스처) · 컴포넌트 테스트 → 프로덕션 빌드, 2026-09-24)이 경로 필터 없이 돈다 — 타입이 `ops-api.yaml` 에서 생성되므로 문서만 바뀐 PR 에서도 화면의 컴파일이 다시 돌아야 한다(ADR-056).
 
 **release.yml (태그 `v*`)**: 이미지 GHCR 푸시(태그·`latest`), SBOM 생성, GitHub Release 노트.
 
