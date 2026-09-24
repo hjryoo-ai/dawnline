@@ -2086,7 +2086,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | D2 | 함대 규모 대 §8.1 물량 | ADR-030 · B6 | **둘로 돈다** — Phase 4 의 `peak`/`overload` 분리를 시나리오로. `peak-day` 는 실현 가능성 기준(80%)이 정하는 함대(성수기 증차), `overload-day` 는 같은 물량을 함대 그대로. 대수는 고르지 않고 기준이 낸다(부록 A) |
 | D3 | 운영자 없는 시뮬레이션 | A19 · A29 | **넣되 최소로.** peak-day 중 정해진 시각에 조기 마감·재배정을 몇 번(스크립트). `UNKNOWN` 은 peak-day 가 아니라 **7-3 카오스가 낸다** — 인위 주입은 하지 않는다 |
 | D4 | 셀 칸이 없는 둘 | ADR-048 ③ · ⑤ | **relocate 상한(⑤)**: 평가 상한 2,000회에 걸려 이동을 하나도 못 찾으면 지금은 `no-gain` 으로 접힌다 — 판정 불가를 값으로 접지 않는다. `dawnline_replan_total{outcome}` 에 **`truncated`** 를 더한다(합이 트리거 수라는 성질은 그대로). 이동을 찾았는데 상한에 걸린 경우는 `applied` 로 두되, **그 계획의 설명 행(`AT_RISK_RELOCATE`)에 `searchTruncated: true`** — 「왜 이 이동인가」에 「더 좋은 이동을 못 본 채 고른 것」이 붙어야 §6.3 의 설명이 정직하다. 메트릭은 늘리지 않는다. 7-4a. **같은 지점 제외(③)**: 후보 한 칸을 건너뛰는 자리라 outcome 의 모양이 아니다 — 표 C, 여는 조건은 「`no-gain` 이 `applied` 보다 잦을 때」(메커니즘 조건) |
-| D5 | 보존 정책 | ADR-045 · ADR-047 · §5.5 | **7-0b** 로 7-1 앞에 — ADR-023 의 두 축 그대로: `shipments` 30일(`updated_at`), `route_revisions` 90일(상위, 삭제 순서는 두 기간이 보장하되 `NOT EXISTS` 가드), `rm_*` 90일(조사 가능성 — 예외 목록의 상한). 정리 배치는 기존 패턴, 인덱스는 EXPLAIN |
+| D5 | 보존 정책 | ADR-045 · ADR-047 · §5.5 | **7-0b** 로 7-1 앞에 — ADR-023 의 두 축 그대로: `shipments` 30일(`updated_at`), `route_revisions` 90일(상위, 삭제 순서는 두 기간이 보장하되 `NOT EXISTS` 가드), `rm_*` 90일(조사 가능성 — 예외 목록의 상한). 정리 배치는 기존 패턴, 인덱스는 EXPLAIN. **→ [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md)** (2026-09-25 승인 — 덧붙은 넷: 보존 표 ↔ 설정 기본값 대조 · 모든 정리의 `dawnline_retention_last_success_age_seconds{table}` · 비종결 `rm_orders` 는 세고 365일 상한 · dispatch 는 7-0c 에서 `plan_explanations` 30일. `audit_logs` 무기한) |
 | D6 | ~~`PRIORITY_BOOST` 계약 결손~~ | Phase 3 대조표 | **잘못 뽑은 행이었다** — Phase 4-11 에서 이미 닫혔다(표 C) |
 | D7 | 재배송(+3) | ADR-028 · §6.3 | **범위 밖, 미구현으로 기록.** 세 서비스를 가로지르는 새 흐름이고 가중치의 사실 출처는 그 흐름이 생겨야 나온다 |
 | D8 | 시나리오 `normal-day` · `cold-heavy` | 부록 A | **`normal-day` 는 필수**(피크의 수치는 평일 열 옆에서 읽힌다). `cold-heavy` 는 `cold-ratio` 변형이라 포함 — 코드가 필요해지면 뺀다. 7-4a |
@@ -2135,7 +2135,7 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 | `tools/sim-runner/build.gradle.kts` | 1 | A27 |
 
 
-**작업** (순서 2026-09-25 확정 — 7-0 → 7-0b → 7-1 → 7-2 → 7-3 → 7-4a → 7-4 → 7-5 → 7-6 → 7-7)
+**작업** (순서 2026-09-25 확정 — 7-0 → 7-0b → 7-0c → 7-1 → 7-2 → 7-3 → 7-4a → 7-4 → 7-5 → 7-6 → 7-7)
 
 **대시보드가 peak-day 앞에 오는 이유**는 그 실행이 패널을 검증하는 첫 실행이어야 하기 때문이고, **카오스가 앞에
 오는 이유**는 검증 SQL 을 peak-day 가 다시 쓰기 때문이다.
@@ -2143,8 +2143,17 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 0. **이월 대조표**(위) — 그리고 마지막 커밋으로 **대조 검사**: 표의 「원천 목록」과 저장소의 「Phase 7」 표기, 표와
    재검토 지점이 있는 ADR 을 서로 비춘다(`CarryOverLedgerConsistencyTest`). 항목을 닫는 PR 은 표를 같이 고쳐야 초록이
    된다 — ADR 인덱스 검사가 하는 일과 같다.
-0b. **보존 정책**(D5) — `shipments` 30일 · `route_revisions` 90일 · `rm_*` 90일, ADR-023 의 두 축과 기존 정리 배치 패턴.
-   설계(§7.1 보존 표)와 ADR 이 먼저, 인덱스는 EXPLAIN.
+0b. **보존 정책**(D5, [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md)) — `shipments` 30일 · `route_revisions` 90일 ·
+   `rm_*` 90일, ADR-023 의 두 축과 기존 정리 배치 패턴. 순서 그대로: ① 설계(§7.1 **보존 표** — 흩어진 여섯 자리를 한 표로)와
+   ADR ② 마이그레이션 둘(tracking `V3` `shipments.updated_at` · ops-api `V6` `rm_*.updated_at NOT NULL`, 기존 행은 `now()`)
+   ③ 정리 배치 셋(`shipments` · `route_revisions` · `rm_*` — 클래스로는 서비스마다 하나) ④ 운영 크기 EXPLAIN(`shipments` 450만 · `rm_orders` 1,350만 ·
+   `route_revisions`·`rm_routes` 11만 · `rm_waves` 3,600) → `docs/benchmarks/phase7-retention-indexes.md`. **함께 세우는 것**:
+   모든 정리의 `dawnline_retention_last_success_age_seconds{table}`(기존 여섯 포함 — §9.4 알림 2일), 비종결 `rm_orders` 의
+   `dawnline_rm_orders_stuck` 과 365일 상한, 보존 표와 설정 기본값의 대조 검사(모듈마다 `RetentionTableDefaultsTest` ·
+   `libs/common` 의 `RetentionTableConsistencyTest`).
+0c. **dispatch 보존**(ADR-058 결정 9) — `dispatch_candidates` · `plan_explanations` 30일(설명은 조사 데이터 — 90일이면
+   1,800만 행), `route_plans` · `routes` · `route_stops` · `route_stop_orders` 90일. FK 사슬 순서대로 지우고, 운영 크기
+   EXPLAIN 과 함께. 보존 표에 행이 들어오고 대조 검사가 그 행을 본다.
 1. Grafana 대시보드 4종 JSON, Prometheus 알림 규칙(§9.4) 커밋.
    **없는 시계열 둘을 여기서 닫는다**(2026-09-24 이월, §9.1 「없는 시계열은 0 으로 보인다」):
    (a) `dawnline_cancel_too_late_total{camp}` 의 알림은 라벨이 열린 집합이라 미리 등록할 수 없다 — 규칙 식이

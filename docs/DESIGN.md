@@ -1028,7 +1028,8 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
 ```sql
 CREATE TABLE shipments (order_id UUID PK, route_id UUID NOT NULL, stop_seq SMALLINT NOT NULL, status VARCHAR(20) NOT NULL,
   planned_arrival TIMESTAMPTZ NOT NULL, eta_at TIMESTAMPTZ NOT NULL, promised_end TIMESTAMPTZ NOT NULL,
-  delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0);
+  delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL);   -- 보존의 나이 (V3, 2026-09-25, ADR-058) — 어댑터가 주입된 시계로, 값이 바뀐 쓰기만
 CREATE INDEX ix_ship_route ON shipments (route_id, stop_seq);
 -- 개정 비교의 자리 (§8.5 의 「routeId + revision」). 라우트당 한 행.
 CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), camp_id UUID NOT NULL, planned_departure TIMESTAMPTZ NOT NULL, applied_at TIMESTAMPTZ NOT NULL);
@@ -1036,6 +1037,14 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
   lat NUMERIC(9,6), lng NUMERIC(9,6), payload JSONB, PRIMARY KEY (occurred_at, id)) PARTITION BY RANGE (occurred_at);
 -- 일 단위 파티션, 보존 30일 (pg_partman 없이 Flyway + 스케줄러로 생성/삭제)
 ```
+
+**보존** (2026-09-25, [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md), §7.1 보존 표). `shipments` 는
+**종결 30일**(`updated_at`) — DLQ 30일과 같은 창이다. 행을 되살릴 수 있는 사실은 `route.assigned` 뿐이고 그것은
+배송이 종결되기 전에 발행되므로 DLQ 가 먼저 만료된다. 등호라 여유가 없어 둘째 방어가 있다: `route_revisions`
+**90일**(참조하는 `shipments` 가 없을 때만) — 재처리된 개정은 그 행의 번호 비교에 막힌다. 비종결 배송은 **365일
+상한**까지 남는다(정리이지 정책이 아니다 — 수는 같은 주문의 `rm_orders` 가 센다, §5.5). `updated_at` 은 새
+칸이다(V3): 쓰기 경로가 JPA 엔티티 하나라 어댑터가 주입된 시계로 적고, **값이 바뀐 쓰기만** 적는다. 기존 행은
+마이그레이션이 `now()` 로 채운다 — 모르는 나이는 늦게 지우는 쪽으로 고른다.
 
 **세 칸이 `NOT NULL` 인 것은 계약이 정했다.** `planned_arrival`·`eta_at`·`promised_end` 의 출처는
 `route.assigned.v1` 의 `plannedArrival` 과 `promisedWindow` 둘뿐이고 둘 다 **required** 다(Phase 5-1a
@@ -1210,7 +1219,7 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 | `GET /api/v1/camps` | `rm_waves` 에 웨이브가 있는 캠프 — 캠프 목록은 fulfillment 의 참조 데이터이고 ops 는 그 사본을 두지 않는다. 코드는 `wave.closed` 의 `campCode`(V5) — 그 전의 이벤트로 만든 행만 있으면 `null` |
 | `GET /api/v1/camps/{campId}/waves?from=&to=` | `rm_waves` — 컷오프 창(기본 지금 ± 24시간, 최대 7일, 넘으면 400) |
 | `GET /api/v1/kpi/delivery` | `kpi_delivery_hourly` — **게이지와 같은 뷰·같은 창·같은 식**(아래) |
-| `GET /api/v1/camps/{campId}/exceptions` | `rm_orders` 의 **취소됐는데 배송된** 주문(§6.10 넷째 분기) — **창 없이 전부**, 앞 200 행과 전체 수 |
+| `GET /api/v1/camps/{campId}/exceptions` | `rm_orders` 의 **취소됐는데 배송된** 주문(§6.10 넷째 분기) — **창 없이 전부**, 앞 200 행과 전체 수. 상한은 보존 90일이다 — 배송 결과가 있어 종결 행이다(2026-09-25, ADR-058 결정 2) |
 | `GET /api/v1/waves/{waveId}/routes` | `rm_waves`(계획·창고) + `rm_routes`(진행·`at_risk`·출발) |
 | `GET /api/v1/routes/{routeId}` | **dispatch 에 조회 위임** — stop 의 순서·좌표·상태. 격리 목록과 같은 조회 위임이라 감사 id 헤더가 없다 |
 
@@ -1252,8 +1261,8 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
   이유: 401 은 토큰을 다시 넣으라는 뜻이고 403 은 그 역할로는 안 된다는 뜻이다.
 - **나머지 셋에는 인덱스를 더하지 않는다** — 행 수와 함께 판단을 적었다([측정](benchmarks/phase6-ops-read-surface.md)).
   피크일 웨이브 50 · 라우트 1,250 에서 1년치(`rm_waves` 18,250 · `rm_routes` 456,250)도 순차 스캔
-  **0.7 ms · 6.8 ms** 다. 재검토 지점: `rm_routes` 가 100만 행을 넘거나(보존 정책이 없으므로 약 2년) 지도가
-  주기 폴링을 시작할 때.
+  **0.7 ms · 6.8 ms** 다. 재검토 지점: `rm_routes` 가 100만 행을 넘거나(보존 정책이 없으므로 약 2년 — **2026-09-25 에 보존 90일이
+  생겨 피크일 기준 약 11만 행에서 멈춘다**, ADR-058) 지도가 주기 폴링을 시작할 때.
 
 ```sql
 CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR(16),
@@ -1263,17 +1272,19 @@ CREATE TABLE rm_orders (order_id UUID PK, customer_id UUID, service_tier VARCHAR
   planned_arrival TIMESTAMPTZ, planned_as_of TIMESTAMPTZ,   -- route.assigned — 계획, 언제나
   eta_at TIMESTAMPTZ, eta_as_of TIMESTAMPTZ,                -- delivery.at-risk — 개정됐을 때만
   delivered_at TIMESTAMPTZ, on_time_promised BOOLEAN, on_time_revised BOOLEAN,   -- on_time_* 은 생성 칸
-  updated_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL,                         -- 프로젝션의 기록 · 보존의 나이 (V6 에서 NOT NULL, ADR-058)
   placed_at TIMESTAMPTZ, failed_at TIMESTAMPTZ,              -- KPI 두 축의 시각 (V2, 2026-09-24, 아래)
   CHECK (NOT (delivered_at IS NOT NULL AND failed_at IS NOT NULL)));   -- 결과의 두 시각은 배타
 CREATE TABLE rm_waves (wave_id UUID PK, camp_id UUID, service_tier VARCHAR(16), cutoff_at TIMESTAMPTZ, status VARCHAR(16),
   order_count INTEGER, plan_id UUID, plan_duration_ms INTEGER, total_cost_krw BIGINT, unassigned_count INTEGER,
   route_count INTEGER,    -- plan.completed 의 routeCount = 기다려야 하는 route.assigned 수 (ADR-024 · ADR-051)
   depot_lat NUMERIC(9,6), depot_lng NUMERIC(9,6),    -- wave.closed 의 depot — 지도의 원점 (V3, 2026-09-24 묶음 C)
-  camp_code VARCHAR(16));                             -- wave.closed 의 campCode — 선택이라 옛 이벤트의 행은 NULL (V5)
+  camp_code VARCHAR(16),                              -- wave.closed 의 campCode — 선택이라 옛 이벤트의 행은 NULL (V5)
+  updated_at TIMESTAMPTZ NOT NULL);                   -- 보존의 나이 (V6, 2026-09-25, ADR-058)
 CREATE TABLE rm_routes (route_id UUID PK, plan_id UUID, camp_id UUID, vehicle_id UUID, driver_id UUID,
   revision INTEGER, status VARCHAR(16), planned_departure TIMESTAMPTZ, departed_at TIMESTAMPTZ,   -- 2026-09-24
-  stop_count INTEGER, completed_count INTEGER, failed_count INTEGER, at_risk BOOLEAN, distance_m INTEGER, cost_krw INTEGER);
+  stop_count INTEGER, completed_count INTEGER, failed_count INTEGER, at_risk BOOLEAN, distance_m INTEGER, cost_krw INTEGER,
+  updated_at TIMESTAMPTZ NOT NULL);                   -- 보존의 나이 (V6, 2026-09-25, ADR-058)
 CREATE INDEX ix_rmo_route ON rm_orders (route_id);   -- 라우트 개수 재집계 (ADR-051 결정 4)
 CREATE INDEX ix_rmo_wave  ON rm_orders (wave_id);    -- 웨이브 개수 재집계
 -- KPI 는 표가 아니라 rm_orders 위의 뷰 둘이다 (2026-09-24, 아래 「KPI — 두 축, 뷰」). V1 의 rm_kpi_hourly 는 V2 가 지웠다.
@@ -1441,7 +1452,7 @@ Phase 2-7 에서 order-service 쪽을 구현하며 드러났고, Phase 5-1a 에�
 
 **인덱스 둘 — 개수를 다시 세는 질의의 것** (2026-09-24, ADR-051 결정 4 가 미뤄 둔 판단,
 [측정](benchmarks/phase6-rm-orders-aggregate-index.md)). `rm_orders` 에는 보존 정책이 없어 피크일
-15만 행씩 쌓이고, 재집계는 **이벤트마다** 돈다(`delivery.status` 피크 673 건/초). 인덱스 없이
+15만 행씩 쌓이고(2026-09-25: 보존 90일 — 상한 약 1,350만 행, ADR-058), 재집계는 **이벤트마다** 돈다(`delivery.status` 피크 673 건/초). 인덱스 없이
 라우트 재집계가 1일치 9.2 ms · 30일치 172 ms 이고, `(route_id)`·`(wave_id)` 로 0.19–0.31 ms 에서
 평평하다. 다른 질의(`lock` 의 키 조회)는 PK 로 충분하다 — 그 판단도 같은 문서에 있다.
 `RmOrdersIndexIT` 가 통계를 첫 어설션으로 말한 뒤 두 계획을 본다.
@@ -1512,7 +1523,8 @@ peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 212.2 → 6.
 **느려지면 다음 단계는 증분 쓰기가 아니라 materialized view 의 주기 refresh 다** — 여전히 다시 세는
 것이고, 쓰는 핸들러가 생기지 않는다. 뷰 이름을 그대로 두고 `CREATE MATERIALIZED VIEW` 로 바꾸면
 읽는 쪽(게이지·화면)은 바뀌지 않는다. 그 전에 볼 것은 `rm_orders` 의 보존이다 — 지금 보존 정책이 없어
-뷰의 비용이 날마다 는다(위 「인덱스 둘」과 같은 전제).
+뷰의 비용이 날마다 는다(위 「인덱스 둘」과 같은 전제). **2026-09-25 에 90일로 정했다**(ADR-058) — 날마다 늘던
+비용이 약 1,350만 행에서 멈춘다.
 
 **정시율 게이지** — `dawnline_delivery_on_time_ratio{camp, basis}`(§9.1)는 **이 뷰를 읽는다**
 (`OnTimeRatioGauges`). **창은 「직전 24시간」이 아니라 「현재 버킷 포함 UTC 정시 버킷 24개」다** — 현재
@@ -1534,7 +1546,12 @@ peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 212.2 → 6.
   「만든 수」가 아니라 「남은 날」을 재는 것과 같은 모양이다. 성공한 적이 없으면 기동부터 센다.
 
 **`updated_at` 은 사실이 아니라 프로젝션의 기록이다** — 마지막으로 행을 만진 시각이라 정의상 처리
-순서를 탄다. 순서를 뒤섞는 IT 가 비교에서 빼는 칸은 이것 하나이고, 그 IT 는 칸도 토픽처럼
+순서를 탄다. 그리고 **보존의 나이**다(2026-09-25, [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md)):
+세 표 모두 `NOT NULL` 이고(V6) 행을 키만으로 만드는 `lock` 의 `INSERT` 도 적는다 — 「행을 만드는 핸들러가 없다」는
+결정(ADR-051 결정 1) 때문에 패치가 빈 채로 끝나는 행이 있었고, 그 행은 나이가 없었다. 정리는 종결 행을
+90일에(NULL 은 종결이 아니다), 비종결 행을 365일에(정리이지 정책이 아니다) 지우고, 라우트·웨이브는 참조하는
+주문이 없을 때만 지운다. 90일을 넘긴 비종결 행의 수는 `dawnline_rm_orders_stuck` 이 낸다 — **부재는 값이
+아니지만 부재의 수는 값이다.** 순서를 뒤섞는 IT 가 비교에서 빼는 칸은 이것 하나이고, 그 IT 는 칸도 토픽처럼
 **빼는 방식**으로 돈다(칸 목록을 `information_schema` 에서 읽는다).
 
 **ops-web (React, 최소 범위)** — 처음 판은 화면 넷(대시보드 · 웨이브/계획 상세 · 라우트 지도 · 룰 편집)이었고 **축소안으로 간다**(2026-09-24, [ADR-057](adr/ADR-057-map-draws-without-tiles-ops-web-is-an-nginx-image.md) 결정 3): ① 캠프 대시보드(웨이브 · 계획 · 정시율 두 기준 · 개정 수 · 예외 목록) ② 라우트 지도(stop 순서 폴리라인 · 상태 색 · at-risk 강조 · 재배정 · 조기 마감). 룰 편집은 Swagger, 설정은 토큰 붙여 넣기 하나. 호출은 계약에서 타입을 받는 얇은 함수다([ADR-056](adr/ADR-056-ops-web-client-is-typed-from-the-committed-contract.md)) — 화면의 입력은 계약에 있는 칸만.
@@ -2464,10 +2481,31 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 - **FK 대상 컬럼은 전체 인덱스로 만든다. 부분 인덱스는 참조 무결성(RI) 검사에 쓰이지 않는다** — 플래너가 부분 인덱스의 술어로 RI 검사(모든 상태)를 덮을 수 있음을 증명하지 못하기 때문이다. 부모 행을 지울 때마다 자식 테이블 전수 스캔이 된다.
 - **부분 인덱스는 걸러내는 비율이 클 때만 쓴다.** 2% 를 거르려고 술어를 다는 것은 크기를 거의 줄이지 못하면서 위 RI 경로에서는 *인덱스가 없는 것과 같은 결과*를 낳을 수 있다. 두 규칙 모두 [측정](benchmarks/phase2-fulfillment-orders-indexes.md) §3 에서 나왔다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
 - `fulfillment_orders` 의 두 인덱스는 [EXPLAIN 근거](benchmarks/phase2-fulfillment-orders-indexes.md)를 갖는다. `wave_id` 는 **부분 인덱스가 아니다** — 부분 조건이 거르는 행이 2% 뿐이고(정상 상태의 98% 가 `PLANNED`), 무엇보다 부분 인덱스는 FK 검사에 쓰이지 못해 `waves` 삭제가 웨이브당 전수 스캔이 된다([ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 후속 정정).
-- 보존 정책 한눈에: `outbox_events` 7일 · `processed_events` 14일(§4.4) · `idempotency_keys` 7일([ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md)) · **`fulfillment_orders` 30일 · `waves` 90일**([ADR-023](adr/ADR-023-fulfillment-retention.md)) · `shipment_events` 30일(§5.4). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
+- **보존은 이 절 끝의 「보존 표」 하나가 전부다**([ADR-058](adr/ADR-058-shipment-and-read-model-retention.md), 2026-09-25 — 여섯 자리에 흩어져 있던 기간을 모았다). 기간은 설정에 살고 **이 표는 그 기본값을 비춘다** — 설정을 가진 모듈마다 `RetentionTableDefaultsTest` 가 이 표와 기본값을 대조하고, `RetentionTableConsistencyTest` 가 모든 행이 어느 대조에 걸려 있는지 본다. 축은 둘이다(ADR-023): 길이는 **조사 가능성**이 정하고, 하한은 **DLQ 보존 30일**(§7.3)이다 — 모든 기간이 그 이상이라 재처리가 지운 행을 되살리지 못한다. 지우는 것은 **종결 행**뿐이고, 부모는 참조하는 자식이 없을 때만 지운다(`NOT EXISTS` — 짧은 기간이 먼저라는 것은 고른 결과이지 강제가 아니다). 정리는 전부 일 1회(outbox 는 1시간) 배치 삭제이고, 실패는 `dawnline_retention_last_success_age_seconds{table}` 이 말한다(§9.1 — 라벨 값이 이 표의 첫 열이다). `fulfillment_orders` 는 **파티셔닝하지 않는다** — 파티션 키가 PK 에 들어가면 [ADR-022](adr/ADR-022-fulfillment-order-aggregate.md) 가 확보한 `order_id` 단독 PK 보장이 약해진다.
 - 낙관적 락(`version`)은 상태 전이가 있는 모든 애그리거트에 적용. 비관적 락은 `waves` 행 두 자리뿐이고 둘 다 짧은 트랜잭션이다 — **편입은 `SELECT … FOR SHARE`, 마감은 `SELECT … FOR UPDATE`**([ADR-025](adr/ADR-025-wave-admission-share-lock.md)). 편입에 배타 락을 쓰면 §8.2 피크에서 웨이브 행 하나가 처리량 상한이 된다. 공유 락끼리는 막지 않고, 마감의 배타 락이 진행 중인 편입을 기다렸다가 `CLOSING` 으로 바꾸므로 "마감된 웨이브에 주문이 새는" 창도 함께 닫힌다.
 - **최적화기 I/O 경로(입력 적재·결과 저장)는 ORM 이 아니라 벌크**([ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md)). 계획의 입력(후보)은 읽기 전용 프로젝션으로 읽고, 결과(라우트·stop·설명)는 JDBC 배치로 쓰며, 후보 상태 반영은 결과별 집합 `UPDATE … WHERE order_id = ANY(?)` 다. 이유는 성능 이전에 **의미**다 — 최적화기의 입력은 순수 값이고(불변규칙 5) 결과물은 쓰는 시점에 도메인 동작이 없다. 값을 관리 엔티티로 읽어 두면 그 뒤의 모든 네이티브 질의가 auto-flush 로 전수 더티 체크를 하며, 측정된 대가는 **21.9배**였다([측정](benchmarks/phase4-plan-roundtrip-breakdown.md)).
 - N+1 방지: 컬렉션 로딩은 `@EntityGraph` 또는 명시 fetch join. 테스트에서 Hibernate statement 카운터로 쿼리 수 상한 검증.
+
+**보존 표**
+
+| 표 | 보존 | 나이의 기준 | 지우는 행 | 설정 키 | 근거 |
+|---|---|---|---|---|---|
+| `outbox_events` | 7일 | `published_at` | 발행된 행 — 미발행·격리 행은 남는다(ADR-015, 사람이 재큐해 닫는다) | `dawnline.messaging.outbox.retention` | §4.4 |
+| `processed_events` | 14일 | `processed_at` | 전부 — 본 토픽 보존 7일의 2배 | `dawnline.messaging.processed-events.retention-days` | §4.4 |
+| `idempotency_keys` | 7일 | `expires_at`(행이 든다 — 설정을 바꿔도 소급하지 않는다) | 만료 행 | `dawnline.order.idempotency.retention-days` | [ADR-019](adr/ADR-019-idempotency-record-retention-7-days.md) |
+| `fulfillment_orders` | 30일 | `updated_at` | 종결 — 진행 중 웨이브의 주문은 남는다 | `dawnline.fulfillment.retention.orders` | [ADR-023](adr/ADR-023-fulfillment-retention.md) |
+| `waves` | 90일 | `closed_at` | 계획이 끝났고 참조하는 주문이 없다 | `dawnline.fulfillment.retention.waves` | [ADR-023](adr/ADR-023-fulfillment-retention.md) |
+| `shipment_events` | 30일 | `occurred_at`(일 파티션) | 파티션째 | `dawnline.tracking.partitions.retention-days` | §5.4 |
+| `shipments` | 30일 | `updated_at` | 종결(`COMPLETED`·`FAILED`·`CANCELLED`) | `dawnline.tracking.retention.shipments` | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+| `shipments` — 상한 | 365일 | `updated_at` | 전부 — **정리이지 정책이 아니다** | `dawnline.tracking.retention.shipments-cap` | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+| `route_revisions` | 90일 | `applied_at` | 참조하는 `shipments` 가 없다 | `dawnline.tracking.retention.route-revisions` | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+| `rm_orders` | 90일 | `updated_at` | 종결 — 주문 취소·배차 불가이거나 배송 결과가 있다. NULL 은 종결이 아니다 | `dawnline.ops.retention.orders` | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+| `rm_orders` — 상한 | 365일 | `updated_at` | 전부 — **정리이지 정책이 아니다.** 그 전까지 `dawnline_rm_orders_stuck` 이 센다 | `dawnline.ops.retention.orders-cap` | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+| `rm_routes` | 90일 | `updated_at` | 참조하는 `rm_orders` 가 없다 | `dawnline.ops.retention.routes` | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+| `rm_waves` | 90일 | `updated_at` | 참조하는 `rm_orders` 가 없다 | `dawnline.ops.retention.waves` | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+| `audit_logs` | 무기한 | — | — — **설계상 상한이 없는 유일한 표다.** 축이 책임 추적이고 행 수가 운영자 커맨드 수다. 필요해지면 답은 삭제가 아니라 보관(archive)이다 | — | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
+
+dispatch 의 여섯 표는 7-0c 에서 이 표에 들어온다 — 기간은 이미 정했다(ADR-058 결정 9: `dispatch_candidates` · `plan_explanations` 30일, 계획·라우트 계열 90일). 표의 행은 설정이 있어야 대조되므로 설정과 함께 온다.
 
 ### 7.2 Redis 사용 카탈로그
 
@@ -2536,7 +2574,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 
 ### 7.3 Kafka 토픽 설정 (로컬)
 
-파티션 12, replication 1(로컬), `retention.ms` 7일, DLQ 30일. 프로덕션 확장 시 파티션 = 캠프 수 × 2 이상, replication 3, `min.insync.replicas=2`, 프로듀서 `acks=all`, `enable.idempotence=true`.
+파티션 12, replication 1(로컬), `retention.ms` 7일, DLQ 30일. **DLQ 30일은 §7.1 보존 표의 하한이다** — 표의 모든 기간이 그 이상이라 재처리가 지운 행을 되살리지 못한다([ADR-023](adr/ADR-023-fulfillment-retention.md) · [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md)). DLQ 보존을 늘리는 변경은 그 표를 함께 본다. 프로덕션 확장 시 파티션 = 캠프 수 × 2 이상, replication 3, `min.insync.replicas=2`, 프로듀서 `acks=all`, `enable.idempotence=true`.
 
 ---
 
@@ -2701,6 +2739,8 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_ops_commands_total` | counter | **ops-api** | action(`RUN_PLAN`·`REASSIGN_STOP`·`CANCEL_ORDER`·`DLQ_REPLAY` — 재처리는 레코드마다 하나), result(`SUCCEEDED`·`REJECTED`·`FAILED`·`UNKNOWN`) — 감사 행의 결과를 **커밋한 뒤에** 센다(CLAUDE.md 「카운터는 커밋 뒤에 센다」). `PENDING` 은 세지 않는다 — 끝나지 않은 커맨드의 수는 카운터가 아니라 `audit_logs` 가 안다 |
 | `dawnline_internal_token_rejected_total` | counter | 코어 넷(`libs/web`) | reason(`missing`·`mismatch`) — 운영자 쓰기가 내부 토큰 없이·틀린 토큰으로 들어와 401 을 받았다(§10 셋째 층, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)). 정상 운영에서 **0** 이다 — ops-api 는 모든 호출에 싣고 고객·현장 표면은 면제다. 레이트 리밋의 `bypassed` 와 같은 부류: 보상 통제가 뚫리는 것을 센다 |
 | `dawnline_kpi_refresh_age_seconds` | gauge | **ops-api** | 라벨 없음 — 마지막으로 **성공한** KPI 갱신 뒤로 흐른 초. 스크레이프마다 계산하므로 갱신이 멈추면 값이 멈추지 않고 커진다(성공한 적이 없으면 기동부터). 위 둘은 갱신이 죽으면 `NaN` 이고 **`NaN` 에는 어떤 비교 알림도 울리지 않는다** — 그래서 알림은 이 값에 건다(§9.4). `dawnline_shipment_partitions_ahead` 와 같은 모양이다 |
+| `dawnline_retention_last_success_age_seconds` | gauge | 정리를 가진 전 서비스 | table — 그 표의 정리가 마지막으로 **성공한** 뒤로 흐른 초([ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) 결정 6). 라벨 값은 §7.1 보존 표의 첫 열이고 정리가 있는 표마다 **기동 때** 등록한다(값이 유한하다 — 위 「짝」). 스크레이프마다 계산하므로 정리가 멈추면 값이 멈추지 않고 커진다 — `dawnline_kpi_refresh_age_seconds` 와 같은 모양이다. **정리 배치는 예외를 삼킨다**(용량 문제지 정확성 문제가 아니다) — 그 결정의 짝이 이 게이지다: 조용히 실패하는 정리는 멈춘 게이지의 정리판이다. 배치 상한에 걸린 실행도 성공이다(앞으로 나아갔다). 정리를 끈 배포에는 없다 |
+| `dawnline_rm_orders_stuck` | gauge | **ops-api** | 라벨 없음 — 보존 기간(90일)을 넘겼는데 **종결이 아닌** `rm_orders` 행 수([ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) 결정 3). 배송 결과가 끝내 오지 않았거나 접수 사실이 끝내 오지 않은 주문 — 프로젝션 결손이다. 그 행은 조사 대상이라 남기되(365일 상한까지) **센다**: 부재는 값이 아니지만 부재의 수는 값이다(`dawnline_kpi_excluded` 와 같은 문장). 정리 배치가 돌 때 세고, 세기 전과 세기에 실패한 동안은 `NaN` — 0 은 「걸린 것이 없다」는 주장이다. 비종결 `shipments` 는 같은 주문이라 따로 세지 않는다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
 
@@ -2740,7 +2780,7 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%(창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다), **`dawnline_kpi_refresh_age_seconds` > 300**(**초기값 — Phase 7 peak-day 에서 재검토**. KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 바로 앞의 정시율 알림은 **울리지 않는다**. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다, §5.5), **`dawnline_kpi_excluded{reason="promise_unknown"}` > 0 이 30분 지속**(**초기값 — Phase 7 peak-day 에서 재검토**. 결과는 났는데 약속을 모르는 주문이 정시율에서 빠지고 있다 — 프로젝션 랙으로 설명되는 길이를 넘었으면 `fulfillment.planned` 가 오지 않고 있다), **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06), **`dawnline_internal_token_rejected_total` > 0**(ops-api 를 거치지 않는 누군가가 코어의 운영자 쓰기를 두드렸다 — 그 커맨드는 거부됐지만, 누가 왜 코어 포트를 직접 부르는지는 사람이 본다. `reason=mismatch` 가 계속되면 서비스 사이의 토큰이 어긋난 것일 수 있다 — ops-api 의 위임이 전부 401 로 실패하고 있다, ADR-055), **`dawnline_ops_commands_total{result="UNKNOWN"}` 증가**(운영자 커맨드가 코어에 적용됐는지 모른다 — 사람이 `auditId` 로 코어 로그를 보고 닫는다, RB-07. **`action="DLQ_REPLAY"` 는 예외다** — 재처리는 멱등이라 그대로 다시 누르는 것이 해소다, RB-05)
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%(창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다), **`dawnline_kpi_refresh_age_seconds` > 300**(**초기값 — Phase 7 peak-day 에서 재검토**. KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 바로 앞의 정시율 알림은 **울리지 않는다**. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다, §5.5), **`dawnline_kpi_excluded{reason="promise_unknown"}` > 0 이 30분 지속**(**초기값 — Phase 7 peak-day 에서 재검토**. 결과는 났는데 약속을 모르는 주문이 정시율에서 빠지고 있다 — 프로젝션 랙으로 설명되는 길이를 넘었으면 `fulfillment.planned` 가 오지 않고 있다), **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06), **`dawnline_internal_token_rejected_total` > 0**(ops-api 를 거치지 않는 누군가가 코어의 운영자 쓰기를 두드렸다 — 그 커맨드는 거부됐지만, 누가 왜 코어 포트를 직접 부르는지는 사람이 본다. `reason=mismatch` 가 계속되면 서비스 사이의 토큰이 어긋난 것일 수 있다 — ops-api 의 위임이 전부 401 로 실패하고 있다, ADR-055), **`dawnline_ops_commands_total{result="UNKNOWN"}` 증가**(운영자 커맨드가 코어에 적용됐는지 모른다 — 사람이 `auditId` 로 코어 로그를 보고 닫는다, RB-07. **`action="DLQ_REPLAY"` 는 예외다** — 재처리는 멱등이라 그대로 다시 누르는 것이 해소다, RB-05), **`min by (table) (dawnline_retention_last_success_age_seconds)` > 2일**(그 표의 정리가 어느 인스턴스에서도 두 번 연속 성공하지 못했다 — 정리는 예외를 삼키므로 이 값이 아니면 표가 자라는 것을 아무도 모른다. `min` 인 이유는 여러 인스턴스가 같은 표를 정리해서, 하나라도 성공했으면 표는 정리되고 있기 때문이다. 2일은 일 1회 정리가 한 번 빠진 뒤의 여유다, ADR-058). `dawnline_rm_orders_stuck` 에는 알림을 걸지 않는다 — 결손의 **추세**를 보는 값이라 패널이다(`Platform`)
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
@@ -3153,6 +3193,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 055 | **코어의 운영자 쓰기 커맨드는 내부 토큰을 요구한다** — 정의는 경로가 아니라 호출자와 성질(ops-api 만 부르고 · 쓰기이며 · ops-api 가 감사하는 커맨드) · **기본 거부**: 코어의 모든 `POST`·`PUT`·`PATCH`·`DELETE` 가 대상이고 면제는 고객·현장 표면의 명시 목록 셋(주문 접수·취소, 기사 스캔 — `@UnauthenticatedWrite`)뿐 · `X-Dawnline-Internal` 헤더, 상수 시간 비교, 없거나 짧으면 기동하지 않는다 · `libs/web` 의 **매핑 뒤** 인터셉터(404·400 은 그대로) · 401 은 전용 예외로 어드바이스를 지난다 · 강제 수단은 **문서에서 뽑는 IT**(등록 여부와 무관하게 결과를 본다) + 면제 어노테이션 ↔ 목록 대조 · ops-api 는 모든 코어 호출에 싣고 자기 쓰기에는 끈다 · `GET` 은 대상이 아니다 · ADR-015 후속 정정의 재검토 지점을 닫는다 · 근거는 **관측(재현됨)**(등록을 빼자 열린 쓰기 열 개가 나열됐다) | outbox 관리 경로에만(같은 근거를 한 번만 쓴다), 읽기까지(막는 것 없이 도구 셋에 비용), 서블릿 필터 + 경로 목록(둘째 라우터 · 404 가 401 이 된다), 코어에 Spring Security, 네트워크 경계만(추정으로 남는 약속), 서비스별 토큰, 인터셉터가 401 을 직접 쓴다 | [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md) |
 | 056 | **ops-web 의 클라이언트는 커밋된 계약에서 타입을 받는다 — 채택 기준을 먼저 적는다** — 후보 한 쌍(`openapi-typescript` 가 `contracts/openapi/ops-api.yaml` 에서 타입만 만들고 `openapi-fetch` 가 그 타입으로 `fetch` 를 부른다), 기준 일곱(표준 출력 · `npm ci` 가 peer 범위 안에서 성립 — TypeScript 판은 생성기의 peer 가 정한다 · strict `tsc` 오류 0 · 계약의 `required` 가 타입에 도착 · 없는 경로·메서드·본문 칸은 컴파일 오류 · 오류 본문이 `ProblemDetail` 과 `code` · 런타임 의존 둘 이하) · **후보 1 은 기준 5 로 기각**(`openapi-fetch` 의 본문이 제네릭 추론이라 초과 속성 검사가 돌지 않는다), **후보 2 채택** — 생성된 타입 + 연산마다 손으로 쓴 얇은 함수(본문을 정해진 타입으로 받는다, 런타임 의존 0) · 입력은 커밋된 문서, 생성물은 커밋하지 않는다 · **화면의 입력은 계약에 있는 칸만**(재배정 창에 이유 칸 없음 — 버려지는 입력) | `openapi-fetch`(시도 — 기준 5 거짓), 코드 생성형 TS 클라이언트(자기 런타임을 가져온다), 손으로 쓴 타입(커밋한 기각 경로 — 사용자가 후보 2 를 골랐다), 생성물 커밋(문서와 두 벌), 화면 전용 이유 칸 | [ADR-056](adr/ADR-056-ops-web-client-is-typed-from-the-committed-contract.md) |
 | 057 | **지도는 타일 없이 그린다 · ops-web 은 nginx 이미지 하나다** — 기본은 타일 레이어 없음(캠프 중심 · 창고 · stop · 순서 폴리라인 · 도로 없음), OSM 타일은 설정에서 켜는 데모용 선택(적은 빈도 · 표시), 타일이 안 와도 화면이 깨지지 않는다(컴포넌트 테스트) · 다단 빌드 node → nginx, 판은 `.env.example` · nginx 가 `/api/` 를 넘겨 같은 출처(CORS 없음) · `Authorization`·`X-Dawnline-Audit-Id` 통과는 스모크가 본다 · `make images` 가 함께 만든다(스모크의 빌드 대상) · 대가: Buildpacks 규칙(ADR-013)의 예외 하나 · 화면 둘(축소안) | OSM 기본(오프라인 데모가 빈 지도, 공개 서버를 두드린다), 자체 타일 서버·벡터 타일, 상용 타일 API(키), Buildpacks 의 Node·nginx 빌드팩(한 경로의 프록시가 빌더 설정 속으로 숨는다), Node 설치를 전제로 한 개발 서버 데모(조용한 전제), CORS 를 연 교차 출처 | [ADR-057](adr/ADR-057-map-draws-without-tiles-ops-web-is-an-nginx-image.md) |
+| 058 | **배송과 읽기 모델의 보존 — ADR-023 의 두 축을 넓힌다** — `shipments` 종결 30일 · `route_revisions` 90일 · `rm_*` 90일(종결, 부모는 참조 없을 때) · 중심은 부등식 「모든 보존 ≥ DLQ 30일 → 재처리가 지운 행을 되살리지 못한다」(`shipments` 는 등호, 둘째 방어가 `route_revisions` 의 개정 비교) · 비종결은 남기되 센다(`dawnline_rm_orders_stuck`, 365일 상한은 정리이지 정책이 아니다) · 나이의 칸 `updated_at NOT NULL`, 기존 행은 `now()`(늦게 지우는 쪽) · 모든 정리가 `dawnline_retention_last_success_age_seconds{table}` 을 낸다(기존 여섯 포함, §9.4 2일) · 보존은 §7.1 한 표이고 설정 기본값과 대조한다 · `audit_logs` 무기한(책임 추적 — 필요하면 보관) · dispatch 는 7-0c(`plan_explanations` 30일) | `shipments` 90일(조사 창이 DLQ 를 넘을 근거 없음), `rm_*` 30일(KPI 이력·예외 목록의 창), 비종결도 나이로 삭제(사고 중 데이터를 먼저 지운다), 비종결 영구 보존(결손이 소리 없이 누적), DB 트리거로 `updated_at`(시계가 둘), 기존 행을 먼 과거로(첫 정리가 전부 지운다), 「지운 행 수」 게이지(멈춘 게이지), `audit_logs` 90일(축이 다르다) | [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md) |
 | 052 | **위임 클라이언트는 커밋된 계약에서 만든다 — 채택 기준을 먼저 적는다** — 후보 하나(`spring` 생성기 · `spring-http-interface`), 기준 다섯(표준 템플릿 · 문서화된 옵션만 · 생성물 그대로 컴파일 · Jackson 3 왕복 · 새 런타임 의존 없음) — 하나라도 거짓이면 손으로 쓴 인터페이스 + YAML 대조 테스트 — **채택**(7.25.0, 다섯 기준 모두 참 · 왕복 32개) · 토큰은 스크립트가 찍고 ops-api 는 검증만 · 감사 행은 위임 **전에** `PENDING`, 응답을 못 받으면 `UNKNOWN` · 감사 id 를 상관 헤더로 | 계약 없이 컨트롤러 소스에서, 살아 있는 `/v3/api-docs` 에서 생성(입력이 커밋에 남지 않는다), 생성물 커밋(서로를 비추는 목록이 하나 는다), 개발 전용 로그인 엔드포인트(프로필이 꺼져 있다는 조용한 전제), 위임 뒤 한 번만 기록(죽으면 기록이 사라진다) | [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) |
 | 051 | **읽기 모델의 행은 먼저 온 사실이 만든다 — 부재는 값이 아니다** — 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **다섯 번째 자리**이고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓴다**(`rm_orders` 에 여섯 — 2026-09-24 DDL 정정 뒤 일곱 · `rm_waves` 에 넷 · `rm_routes` 에 넷) — 그래서 「이 전이를 받는가」 앞에 **「그 행이 아직 있기는 한가」**가 하나 더 있다 · 핸들러는 전부 **upsert** 이고 「행을 만드는 핸들러」를 두지 않는다(늦게 온 `UPDATE` 는 0 행을 갱신하고 **예외 없이 성공**한다) · **자기 칸만 쓴다** — 모르는 칸에 `NULL`·`0`·`false` 를 넣지 않는다(`false` 는 「위험하지 않다」라는, 아직 아무도 하지 않은 주장이다) · 개수는 증감이 아니라 **집계**다([ADR-025](adr/ADR-025-wave-admission-share-lock.md) 의 「카운터 드리프트가 구조적으로 불가능」과 같은 형태 — `delivery.status` 가 `order.dispatched` 보다 먼저 오면 올릴 라우트가 없다) · 「아직 안 왔다」는 DLQ 도 `rejected` 도 아니다(§4.6) · 관측 근거는 **순서를 뒤섞는 IT** 이고 토픽을 **빼는 방식**으로 돈다([ADR-050](adr/ADR-050-route-departure-is-an-event.md) 이 방금 열한 번째를 더했다 — 열거였다면 그 토픽은 검사 밖이었다) · 근거는 **관측(재현됨)**(2026-09-24 — 기각한 반대안 셋을 임시로 넣자 셋 다 씨 1 에서 사실을 조용히 잃었다) | 정방향 전제 + 어긋나면 DLQ(정상 트래픽을 DLQ 로 보내고 화면의 정확성이 그날의 컨슈머 랙에 걸린다), 행이 없으면 재시도(그 6초가 다른 파티션의 지연과 아무 관계가 없다 — ADR-017 이 같은 제안을 같은 이유로 기각했다), 키별 재정렬 버퍼(**완료 조건이 없다** — 끝내 오지 않는 것이 정상인 토픽이 있고, 지연이 열한 소비자 랙의 최소가 아니라 최대가 된다), 전 토픽 단일 스레드 소비(직렬화는 순서가 아니다 — 아무것도 사지 않고 처리량만 판다), 골격 행에 기본값 채우기(**없는 사실을 지어내는 일** — `NULL` 은 「아직 모른다」라는 참인 말을 하지만 기본값은 거짓인 말을 한다), `rm_*` 없이 동기 조회(불변규칙 4 · ADR-012), ADR 없이 코드에만(이 규칙은 **하지 않는 일**들이라 코드에서 보이지 않는다 — 가장 먼저 「`SET (…) = EXCLUDED.(…)` 로 줄이자」가 들어온다) | [ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) |
 | 050 | **라우트 출발은 이벤트다 — 출발이 첫 편차의 출처이기 때문이다** — `dawnline.delivery.route-departed.v1`(키 `routeId`, 소비자 **ops 뿐**) · 근거는 화면이 아니라 **사실의 가시성**이다: 지금 출발을 아는 것은 tracking 뿐이라(`ScanType.isPublished()` 가 `DEPARTED_CAMP` 를 뺀다) ops 는 첫 `ARRIVED` 가 올 때까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, **그 구간이 운영자가 개입할 수 있는 마지막 창이다**(아직 안 나간 차는 다시 짤 수 있다) · **라우트 하나에 이벤트 하나** — 반복하지 않는다는 이유가 말하지 않을 이유였던 적은 없다([ADR-024](adr/ADR-024-plan-completed-event.md) 의 거울상: 사실의 단위와 토픽의 단위를 맞춘다) · 페이로드 여섯 칸(`routeId`·`campId`·`revision`·`plannedDeparture`·`departedAt`·`stopCount` — 2026-09-24 `stopCount` 를 빼 다섯: 부재를 다른 출처로 메우지 않는다)은 **마이그레이션 없이** 나온다 · `revision` 을 싣는 이유는 「어느 개정본의 계획에 대해 늦었나」를 말해야 하기 때문 · 스키마·예시·토픽·발행은 **소비자가 먼저**(묶음 B, ops 의 `rm_routes`) | 정의하지 않는다(더 단순하지만 그 대가가 **마지막 개입 창을 숨기는 것**이다 — `rm_routes` 는 없는 사실을 만들어 내지 못한다), `delivery.status` 의 `status` 에 `DEPARTED_CAMP` 추가(한 사실이 stop 수만큼 반복된다 — 5-1b 가 발행하지 않기로 한 그 이유), `route.assigned` 에 `departedAt` 을 나중에 채우기(계획 이벤트를 사실로 갱신하면 개정으로 거르는 소비자가 사실을 함께 버린다), ops-api 가 tracking 에 동기 조회(출발은 사건이지 조회 대상이 아니다 — 해상도가 폴링 주기가 된다), 페이로드를 `{routeId, departedAt}` 둘로(편차의 기준선 `plannedDeparture` 가 개정마다 다르다) | [ADR-050](adr/ADR-050-route-departure-is-an-event.md) |

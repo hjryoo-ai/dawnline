@@ -157,3 +157,13 @@ ADR-019 는 멱등 기록의 보존으로 30일을 **기각**했다. 기각 사�
 기간은 설정값이라 바꿀 수 있다. 되돌리기 어려운 것은 둘이다 — "종결 상태만 지운다" 는 규칙
 (진행 중 주문을 지우기 시작하면 사고 중 데이터가 사라진다)과 "파티셔닝하지 않는다" 는 결정
 (파티셔닝으로 가려면 PK 를 바꿔야 하고 그것은 ADR-022 를 되돌리는 일이다).
+
+---
+
+## 후속 (2026-09-25)
+
+**두 축이 넓어졌다** — [ADR-058](ADR-058-shipment-and-read-model-retention.md) 이 같은 논리(조사 가능성이 길이를,
+DLQ 30일이 하한을 정한다)를 `shipments` · `route_revisions` · `rm_*` 에 적용했다. 이 ADR 의 두 기간은 §7.1 의
+**보존 표**로 옮겨 갔고, 그 표가 설정 기본값(`dawnline.fulfillment.retention.*`)과 대조된다. 그리고 이 정리기도
+`dawnline_retention_last_success_age_seconds{table}`(`fulfillment_orders` · `waves`)을 낸다 — 예외를 삼키는
+결정은 그대로이고, 삼킨 실패가 이제 값으로 보인다.
