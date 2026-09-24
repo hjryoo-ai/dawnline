@@ -37,6 +37,22 @@ dawnline:
           SAME_DAY: 1
           NEXT_DAY: 1
 
+      # Phase 6 의 DoD 시나리오 — 운영자가 조기 마감하고 stop 을 옮길 웨이브 (tools/demo/phase6-demo.sh).
+      #
+      # 재배정은 **같은 계획의 다른 라우트**로만 된다(dispatch ReassignStopService) — 그래서 한 웨이브의
+      # 계획이 라우트를 둘 이상 만들어야 한다. smoke 의 웨이브는 캠프·티어 29개에 2–19건이라 전부 라우트
+      # 하나였다(2026-09-24 CI). DAWN 하나로 몰아 캠프당 약 60건 — 새벽 창(00:00–07:00) 안에 차 한 대가 돌
+      # 수 있는 stop 수를 넘기려는 크기다. 그것이 실제로 둘을 만들었는지는 데모가 첫 전제로 확인한다.
+      # 고객당 1건이라 §7.2 레이트 리밋에 닿지 않는다.
+      ops-demo:
+        orders: 600
+        rate-per-second: 20
+        seed: 20260924
+        customers: 600
+        cold-ratio: 0.25
+        tier-weights:
+          DAWN: 1
+
       # Phase 5-2 의 DoD 시나리오 — 늦게 출발한 기사 (IMPLEMENTATION_PLAN Phase 5-2).
       #
       # 출발을 최대 30분 늦추고 구간마다 최대 60%를 더 쓴다. 그 지연이 곧 tracking 이
