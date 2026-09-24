@@ -4,7 +4,7 @@
 |---|---|
 | 대상 | 소비 측 DLQ 적재, 발행 측 outbox 격리 |
 | 알림 | `DLQ 신규 > 0`, `dawnline_outbox_failed > 0` (DESIGN.md §9.4) |
-| 관련 설계 | §4.6(재시도/DLQ, 발행 측 실패), §5.1(outbox DDL), ADR-015 |
+| 관련 설계 | §4.6(재시도/DLQ, 발행 측 실패, DLQ 재처리), §5.1(outbox DDL), ADR-015, ADR-053 |
 
 이 런북은 **두 개의 다른 장애**를 다룬다. 먼저 어느 쪽인지 가른다.
 
@@ -129,6 +129,20 @@ DELETE FROM outbox_events WHERE id = '...';
 
 ### 2.1 무엇이 DLQ에 들어갔는지 본다
 
+ops-api 의 목록이 먼저다 — value 를 싣지 않으므로(§9.3) 운영자 누구나 봐도 된다(`OPS_VIEWER`).
+
+```bash
+TOKEN=$(make -s token ROLE=OPS_VIEWER)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/v1/admin/dlq/dawnline.order.placed.v1 | jq
+```
+
+칸은 위치(`partition`·`offset`)·시각·`eventType`·`eventId`·**원래 그룹**(`originalGroup` — 어느 소비자가
+실패했나)·예외 클래스다. 같은 이벤트가 그룹 둘에서 실패했으면 **레코드도 둘**이다 — DLQ 레코드는 이벤트의
+실패가 아니라 그룹 하나의 실패다(ADR-053).
+
+원인 메시지·스택까지 봐야 하면 콘솔 컨슈머로 헤더를 본다. value 에 주소가 있을 수 있으니 출력을 남기지 않는다.
+
 ```bash
 make topics       # 토픽 목록에서 <topic>.dlq 확인
 
@@ -150,6 +164,10 @@ DLQ 레코드의 헤더에 원인 예외와 원본 토픽·파티션·오프셋�
 | 비즈니스 규칙 위반 | DLQ에 오면 안 되는 경우다. `dawnline_event_rejected_total` 로 가야 한다 — 소비자 버그 |
 
 > **replay 버튼을 누르기 전에 알아야 할 것 — 24시간 넘은 `order.placed` 는 replay 해도 실패로 종결된다.**
+>
+> (2026-09-24) 재처리는 이제 **원래 그룹에게만** 간다(ADR-053). 아래는 원래 그룹이 fulfillment 인 레코드의
+> 이야기다 — fulfillment 는 그 이벤트를 처리하다 롤백됐으므로 `processed_events` 도 `fulfillment_orders` 행도
+> 없고, 받는 것은 셋째 겹(`STALE_PLACED`)이다. 아래 표의 앞 두 겹은 재처리가 아닌 재전달(오프셋 리셋 등)을 막는다.
 >
 > fulfillment-service 는 `cutoffAt` 이 24시간을 넘긴 `order.placed` 를 다음 웨이브로 밀지 않고
 > `UNSERVICEABLE`(`reason=STALE_PLACED`)로 종결한다([ADR-020](../adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md)
@@ -184,15 +202,51 @@ DLQ 레코드의 헤더에 원인 예외와 원본 토픽·파티션·오프셋�
 
 ### 2.3 재처리
 
-```
-POST /api/v1/admin/dlq/{topic}/replay      (ops-api, OPS_OPERATOR 이상, audit_logs 기록)
+**소비자를 먼저 고친다.** 고치지 않고 누르면 같은 이유로 다시 DLQ 에 들어간다(새 오프셋으로).
+
+2.1 의 목록에서 고른 것만 보낸다. 한 번에 100개까지.
+
+```bash
+TOKEN=$(make -s token ROLE=OPS_OPERATOR ACTOR=<내 이름>)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"records":[{"partition":3,"offset":17}]}' \
+  http://localhost:8080/api/v1/admin/dlq/dawnline.order.placed.v1/replay | jq
 ```
 
-> Phase 6 이전에는 이 엔드포인트가 없다. 그때까지는 DLQ 토픽을 원본 토픽으로 되돌리는
-> 콘솔 프로듀서 수동 작업이며, **반드시 소비자를 먼저 고친 뒤에** 한다.
+답은 레코드마다 `auditId`·`eventId`·`result` 다. 무슨 일이 일어나는가(DESIGN.md §4.6 「DLQ 재처리」):
 
-멱등 소비자(`processed_events`)가 있으므로 **이미 처리된 이벤트를 다시 넣어도 안전하다**(§4.4).
-중복 replay 를 두려워하지 않아도 된다.
+- 원래 바이트 그대로 원래 토픽·파티션에 다시 나간다 — **`eventId` 가 같다.**
+- 헤더 `dawnline-replay-for` 가 **원래 그룹만** 지목한다. 다른 그룹은 받고 건너뛴다
+  (`dawnline_event_processed_total{outcome="replay_not_target"}` 가 오른다 — 정상이다). 그래서 그 이벤트를
+  이미 처리한 다른 그룹에서 두 번 처리되는 일이 없다 — 그 그룹의 `processed_events` 가 14일 보존으로 지워진
+  뒤라도.
+- 재발행은 파티션 **끝**에 붙는다 — 같은 키의 더 새 이벤트 뒤에 도착한다. 소비자의 역행 무시가 흡수한다
+  (§4.6). 「재처리했는데 상태가 그 이벤트의 것으로 돌아가지 않았다」는 정상일 수 있다 — 더 새 사실이 이긴다.
+
+| `result` | 뜻 | 할 일 |
+|---|---|---|
+| `SUCCEEDED` | 브로커가 받았다 | 원래 그룹의 처리를 본다 — `dawnline_event_processed_total{consumer=<그룹>, outcome="ok"}` |
+| `REJECTED` | 보내지 않았다 — 레코드가 없다(보존 30일이 지났거나 오프셋 오타), 원래 그룹 헤더가 없다, 원래 토픽이 다르다 | `detail` 을 본다. **원래 그룹 헤더가 없는 레코드는 여기서 재처리하지 않는다** — 대상을 모르는 재처리는 모든 그룹에게 간다. 그런 레코드는 리스너 밖의 실패(역직렬화 이전 단계)라 원인부터 다시 본다 |
+| `FAILED` | 브로커가 재시도 불가 오류로 거절했다 — 쓰이지 않은 것이 확실하다 | 오류(`RecordTooLarge` 등)를 고친 뒤 다시 누른다 |
+| `UNKNOWN` | 보냈는지 모른다 — 타임아웃 등 | **그대로 다시 누른다** (아래) |
+
+**`UNKNOWN`·오래된 `PENDING` 인 `DLQ_REPLAY` 감사 행은 다시 누르는 것이 해소다.** 재처리 커맨드는 멱등이다 —
+첫 번째가 실제로 나갔고 원래 그룹이 처리했으면 그 그룹의 `processed_events` 가 두 번째를 `dup` 으로 막고, 다른
+그룹은 두 번 다 건너뛴다. 코어 로그를 뒤지는 RB-07 의 절차가 여기에는 필요 없다(ADR-052 재검토 지점 4 의 첫 사례).
+
+```sql
+-- 해소할 행 — ops DB. target_id 가 eventId 다.
+SELECT id, actor, target_id AS event_id, request, result, created_at
+  FROM audit_logs
+ WHERE action = 'DLQ_REPLAY' AND result IN ('UNKNOWN', 'PENDING')
+ ORDER BY created_at;
+```
+
+다시 누르면 **새 감사 행**이 생긴다. 옛 행은 그대로 둔다 — 「그때 모른다고 적었다」도 기록이다.
+
+> **콘솔 프로듀서로 DLQ 레코드를 원래 토픽에 되돌리지 않는다.** 그 레코드에는 `dawnline-replay-for` 가
+> 없어서 **모든 그룹**이 받고, 그 이벤트를 이미 처리한 그룹의 `processed_events` 가 지워졌으면(14일) 두 번
+> 처리된다. 감사 행도 남지 않는다. Phase 6 이전의 수동 절차는 이 이유로 지웠다(ADR-053).
 
 ---
 
@@ -208,4 +262,5 @@ POST /api/v1/admin/dlq/{topic}/replay      (ops-api, OPS_OPERATOR 이상, audit_
 
 - `docs/DESIGN.md` §4.6, §5.1, §9.4
 - `docs/adr/ADR-015-outbox-publish-side-quarantine.md`
+- `docs/adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md` — 재처리가 원래 그룹에게만 가는 이유
 - `libs/messaging/.../outbox/PublishFailureClassifier.java` — 결정적/일시적 판정 규칙
