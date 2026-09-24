@@ -1686,7 +1686,7 @@ SOFT 지만 **평가 시점이 다르다** — 배정에 실패한 주문에 붙
 |---|---:|---|
 | `promiseRevised` | **+2** | [ADR-020](adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md) 의 개정은 <em>한 번 깬 약속</em>이다 |
 | `requiresCold` | **+1** | 미배정의 비용이 다른 주문보다 크다 (cold-chain) |
-| 배송 실패 후 재배송 | +3 | **Phase 5** — 그 사실은 tracking 이 만든다. 사실이 오기 전에 가중치만 먼저 두지 않는다 |
+| 배송 실패 후 재배송 | ~~+3~~ | **범위 밖 — 미구현** (2026-09-25, Phase 7-0). 재배송은 order·dispatch·tracking 을 가로지르는 새 흐름이고, 이 가중치의 사실 출처는 그 흐름이 생겨야 나온다. 사실 없는 가중치는 다음 사람이 측정 없이 믿는 값이 된다([ADR-028](adr/ADR-028-unassigned-policy.md)) — 그래서 행을 지우지 않고 이 표시로 남긴다 |
 
 **범위 밖 — VIP 같은 고객 등급 우선순위.** 고객 서비스가 없어 등급의 출처가 없고, 있는 척하면
 `serviceTier` 를 등급으로 몰래 읽는 코드가 된다.
@@ -3215,7 +3215,21 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
   서울이라 캠프가 서울에 몰린다.
 - 시드는 Flyway `R__seed_*.sql` 로 넣는다(Phase 2 확정). `sim-runner` 는 §5.6 대로 REST 전용으로
   남아 남의 서비스 DB 에 쓰지 않는다(불변규칙 3).
-- 시나리오 YAML: `smoke`(200 주문, 1 캠프), `normal-day`(30k), `peak-day`(150k, 컷오프 전 버스트), `cold-heavy`(냉장 40%), `late-injection`(지연 확률 15%, 실패 3%).
+- 시나리오 YAML: `smoke`(200 주문, 1 캠프), `normal-day`(30k), `peak-day`(150k, 컷오프 전 버스트), `overload-day`(150k, 함대 그대로), `cold-heavy`(냉장 40%), `late-injection`(지연 확률 15%, 실패 3%).
+- **피크는 둘로 돈다 — 실현 가능한 피크와 과부하** (2026-09-25, Phase 7-0). Phase 4 벤치마크의 `peak`/`overload` 분리를 시나리오로
+  옮긴 것이다. 캠프당 20대(위 함대)로 하루 15만 건은 **정의상 과부하**다 — 차량당 187 stop 이고([ADR-030](adr/ADR-030-night-shift-seed.md)
+  재검토 지점), 그 위에서 잰 정시율·미배정은 SLO 가 아니라 함대 부족을 잰다.
+  - `peak-day` 는 **실현 가능성 기준(제약 조합별 수요 ≤ 그 조합 차량 용량의 80%, [ADR-033](adr/ADR-033-constraint-classes.md))이
+    정하는 함대**로 돈다 — 성수기 증차는 실제 운영이 하는 일이다. 대수는 고르지 않고 기준이 낸다. §8.1 SLO 는 이 실행에서 잰다.
+  - `overload-day` 는 같은 물량을 **함대 그대로** 돈다 — 열화 사다리([ADR-034](adr/ADR-034-degrade-mode.md)) · 미배정 정책
+    ([ADR-028](adr/ADR-028-unassigned-policy.md)) · 계획 시간 상한의 판정 데이터다.
+  - `peak-day` 는 **콜드 스택에서 시작**하고 첫 계획·첫 소비 처리량을 정상 상태와 분리해 기록한다(Phase 1 의 콜드 스타트,
+    Phase 4-0 의 JIT 관찰과 같은 자리).
+  - `peak-day` 는 운영자 커맨드를 **정해진 시각에 몇 번** 섞는다 — 조기 마감과 재배정(`tools/demo/phase6-demo.sh` 의 두 호출).
+    `cause="manual"` 과 감사 행이 0 이 아니어야 [ADR-054](adr/ADR-054-early-wave-close-is-an-operator-cutoff.md) 재검토 지점 1 을 판정할 수 있다.
+    감사 `UNKNOWN` 은 인위로 만들지 않는다 — 카오스(Kafka·Redis 중단) 중의 커맨드가 코어의 5xx·타임아웃으로 자연히 낸다.
+  - `normal-day` 는 **필수**다: 피크의 수치는 평일 열 옆에 있어야 읽힌다. `cold-heavy` 는 `cold-ratio` 변형이고, 좌석 예약
+    ([ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md))이 수요 쪽에서 눌리는 유일한 시나리오다.
 
 ## 부록 B. 면접 스토리 매핑
 
