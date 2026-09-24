@@ -26,6 +26,30 @@ dependencies {
     add("testImplementation", libs.findLibrary("archunit-junit5").get())
 }
 
+// -----------------------------------------------------------------------------
+// 커밋된 OpenAPI 문서를 integrationTest 의 입력으로 선언한다 (DESIGN.md §11, CLAUDE.md 「서로를 비추는
+// 목록에는 대조 검사를 둔다」).
+//
+// OpenApiContractIT 는 contracts/openapi/<서비스>.yaml 을 런타임에 읽는다. 그 파일은 이 모듈의 소스도
+// 리소스도 아니라서, 선언하지 않으면 문서만 손으로 고친 빌드에서 Gradle 이 integrationTest 를 UP-TO-DATE
+// 로 건너뛴다 — 「문서는 생성물이다」를 지키는 검사가 돌지 않은 채 초록이 된다(2026-09-24 에 tracking 으로
+// 재현했다: 문서 끝에 한 줄을 붙이고 돌렸더니 UP-TO-DATE).
+//
+// **서비스마다가 아니라 여기에 둔다.** 처음에는 fulfillment 하나에만 있었고 dispatch·order·tracking 에는
+// 없었다. 서비스마다 적는 선언은 문서가 늘 때마다 기억해야 하는 규칙이고, 그런 규칙은 조용히 샌다 —
+// 다음 문서(ops-api 의 것)가 정확히 그 자리다.
+//
+// inputs.file 이 아니라 inputs.files 인 이유: 문서가 없는 서비스(ops-api)도 이 규약을 쓴다. inputs.file 은 파일이
+// 없으면 태스크 검증에서 실패하고, 거기에 붙는 .optional() 은 「속성이 비어도 된다」이지 「파일이 없어도 된다」가
+// 아니다(Gradle 9 — ops-api 에서 `Input file does not exist` 로 확인했다). 파일 컬렉션 입력은 없는 파일을 「없음」
+// 으로 지문에 넣으므로, 문서가 생기는 날 그 변화가 곧 입력 변화가 된다 — 「있으면 선언한다」를 구성 시점의
+// exists() 로 적지 않는 이유다.
+tasks.named<Test>("integrationTest") {
+    inputs.files(rootProject.layout.projectDirectory.file("contracts/openapi/${project.name}.yaml"))
+        .withPropertyName("openApiContract")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 // 라이브러리가 아니라 애플리케이션이므로 plain jar 는 만들지 않는다.
 tasks.named<Jar>("jar") {
     enabled = false

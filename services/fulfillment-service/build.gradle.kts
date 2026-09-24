@@ -43,12 +43,8 @@ tasks.named<Test>("integrationTest") {
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
             .withPropertyName("eventContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
-    // OpenApiContractIT 가 커밋된 문서를 읽는다. 선언하지 않으면 문서만 손으로 고친 빌드에서 이 태스크가
-    // UP-TO-DATE 로 건너뛰고, 「문서는 생성물이다」를 지키는 검사가 돌지 않은 채 초록이 된다(CLAUDE.md).
-    inputs.file(rootProject.layout.projectDirectory.file("contracts/openapi/fulfillment-service.yaml"))
-            .withPropertyName("openApiContract")
-            .withPathSensitivity(PathSensitivity.RELATIVE)
-            .optional()
+    // OpenApiContractIT 가 읽는 contracts/openapi/fulfillment-service.yaml 은 dawnline.spring-service 규약이
+    // 입력으로 건다 — 서비스마다 적으면 다음 서비스가 빠진다.
 }
 
 // -----------------------------------------------------------------------------
