@@ -1760,7 +1760,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | DoD 문장 | 상태 | 근거 |
 |---|---|---|
 | `late-injection` 시나리오에서 at-risk → 재계획 → revision 반영이 **로그·DB 로 확인** | ◐ **부분** | dispatch 안에서는 `ReplanIT` 이 실물 브로커·실물 PostgreSQL 로 못박는다(at-risk → 쿨다운 → 옮김 → 두 라우트 revision 2 → `plan_explanations`). **compose 전 구간의 한 번은 없다** — `late-injection` 은 기사 시뮬레이터까지만 돌고 거기서 재계획을 보지 않는다. 그 자리는 §8.2 의 시나리오 확장이고 **Phase 7-4 의 peak-day 시뮬레이션**에서 닫는다 |
-| 정시율이 `rm_kpi`/메트릭에 집계됨 | ⛔ **미구현 — Phase 6** | 두 기준 정시율(`basis=promised/revised`)은 **ops-api 가 낸다**(§9.1 의 문단 · §8.1). tracking 은 개정본 약속 하나만 알아서 그 라벨을 만들 수 없다. 읽기 모델이 없는 지금은 구현이 아니라 **미구현**이다. **(2026-09-24, Phase 6 에서 구현)** — `kpi_delivery_hourly` 뷰와 `dawnline_delivery_on_time_ratio{camp,basis}` 게이지(§5.5 「KPI — 두 축, 뷰」) |
+| 정시율이 `rm_kpi`/메트릭에 집계됨 | ✅ **닫힘 — Phase 6** (`7283caa`, #48 · 이 표를 쓴 시점에는 ⛔ 미구현) | 두 기준 정시율(`basis=promised/revised`)은 **ops-api 가 낸다**(§9.1 의 문단 · §8.1). tracking 은 개정본 약속 하나만 알아서 그 라벨을 만들 수 없다. 읽기 모델이 없는 지금은 구현이 아니라 **미구현**이다. **(2026-09-24, Phase 6 에서 구현)** — `kpi_delivery_hourly` 뷰와 `dawnline_delivery_on_time_ratio{camp,basis}` 게이지(§5.5 「KPI — 두 축, 뷰」) |
 | 5번에서 소비자 처리량을 다시 잰다 (Phase 4-0 의 조건) | ✅ | [측정](benchmarks/phase5-delivery-status-throughput.md). 팬아웃 배수는 문서가 아니라 `TrackingPublishIT` 의 어설션이 든다 |
 
 **대조표가 잡은 것 셋**
