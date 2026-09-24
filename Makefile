@@ -73,18 +73,25 @@ help:
 # -----------------------------------------------------------------------------
 # .env 준비 — 이미 있으면 절대 덮어쓰지 않는다.
 #
-# ops-api 의 JWT 시크릿(DESIGN.md §5.5)만은 예시 값을 그대로 쓰지 않는다 — 저장소에 있는 값으로
-# 서명한 토큰은 누구나 찍을 수 있다. 새 .env 를 만들 때 무작위로 채우고, 예전에 만든 .env 에 그
-# 키가 없으면 무작위 값을 **덧붙인다**(기존 줄은 건드리지 않는다).
+# ops-api 의 JWT 시크릿(DESIGN.md §5.5)과 코어 내부 토큰(§10, ADR-055)만은 예시 값을 그대로 쓰지 않는다 —
+# 저장소에 있는 값으로 서명한 토큰은 누구나 찍을 수 있고, 저장소에 있는 내부 토큰은 누구나 싣을 수 있다. 새 .env 를
+# 만들 때 무작위로 채우고, 예전에 만든 .env 에 그 키가 없으면 무작위 값을 **덧붙인다**(기존 줄은 건드리지 않는다).
 env:
 	@if [ ! -f $(ENV_FILE) ]; then \
 	cp $(ENV_EXAMPLE) $(ENV_FILE); \
-	sed -i.bak "s/^DAWNLINE_OPS_JWT_SECRET=.*/DAWNLINE_OPS_JWT_SECRET=$$(openssl rand -hex 32)/" $(ENV_FILE); \
+	sed -i.bak -e "s/^DAWNLINE_OPS_JWT_SECRET=.*/DAWNLINE_OPS_JWT_SECRET=$$(openssl rand -hex 32)/" \
+	           -e "s/^DAWNLINE_INTERNAL_TOKEN=.*/DAWNLINE_INTERNAL_TOKEN=$$(openssl rand -hex 32)/" $(ENV_FILE); \
 	rm -f $(ENV_FILE).bak; \
-	echo "생성: $(ENV_FILE) (원본 $(ENV_EXAMPLE), JWT 시크릿은 무작위). 필요하면 포트·비밀번호를 고쳐라."; \
-	elif ! grep -q '^DAWNLINE_OPS_JWT_SECRET=' $(ENV_FILE); then \
+	echo "생성: $(ENV_FILE) (원본 $(ENV_EXAMPLE), JWT 시크릿·내부 토큰은 무작위). 필요하면 포트·비밀번호를 고쳐라."; \
+	else \
+	if ! grep -q '^DAWNLINE_OPS_JWT_SECRET=' $(ENV_FILE); then \
 	printf '\n# ops-api JWT 시크릿 (make env 가 덧붙였다, DESIGN.md §5.5)\nDAWNLINE_OPS_JWT_SECRET=%s\n' "$$(openssl rand -hex 32)" >> $(ENV_FILE); \
 	echo "덧붙임: $(ENV_FILE) 에 DAWNLINE_OPS_JWT_SECRET (무작위)"; \
+	fi; \
+	if ! grep -q '^DAWNLINE_INTERNAL_TOKEN=' $(ENV_FILE); then \
+	printf '\n# 코어 내부 토큰 (make env 가 덧붙였다, DESIGN.md §10, ADR-055)\nDAWNLINE_INTERNAL_TOKEN=%s\n' "$$(openssl rand -hex 32)" >> $(ENV_FILE); \
+	echo "덧붙임: $(ENV_FILE) 에 DAWNLINE_INTERNAL_TOKEN (무작위)"; \
+	fi; \
 	fi
 
 # -----------------------------------------------------------------------------

@@ -31,6 +31,9 @@ x-service-env: &service-env
   JAVA_TOOL_OPTIONS: ${SERVICE_JAVA_TOOL_OPTIONS}
   # Paketo 메모리 계산기의 스택 예약량 입력 (스레드수 × -Xss).
   BPL_JVM_THREAD_COUNT: ${SERVICE_JVM_THREAD_COUNT}
+  # 내부 토큰 (DESIGN.md §10 셋째 층, ADR-055) — 코어 넷은 운영자 쓰기에 이 값을 요구하고, ops-api 는 모든 코어
+  # 호출에 싣는다. 다섯이 같은 값이어야 하므로 이 앵커에 둔다. 없거나 32바이트보다 짧으면 뜨지 않는다(make env 가 만든다).
+  DAWNLINE_INTERNAL_TOKEN: ${DAWNLINE_INTERNAL_TOKEN}
 
 x-service-base: &service-base
   profiles: ["app"]
