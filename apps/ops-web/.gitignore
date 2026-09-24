@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# 생성물 — contracts/openapi/ops-api.yaml 에서 매번 만든다 (ADR-056)
+src/api/schema.ts
