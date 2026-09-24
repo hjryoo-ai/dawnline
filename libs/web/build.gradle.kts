@@ -13,6 +13,10 @@ dependencies {
     // 시그니처에서 그대로 쓴다.
     api(libs.spring.boot.starter.web)
 
+    // 내부 토큰 거부 카운터(dawnline_internal_token_rejected_total, ADR-055 「추가」). 레지스트리는 서비스의
+    // actuator 가 준다 — 여기서는 API 만 안다.
+    implementation(libs.micrometer.core)
+
     // 문서의 ProblemDetail 스키마를 실제 본문의 모양으로 고친다(openapi.ProblemDetailSchema).
     // compileOnly 인 이유: springdoc 을 쓰는 서비스만 그 customizer 를 받는다(@ConditionalOnClass).
     compileOnly(libs.springdoc.openapi.webmvc)

@@ -13,6 +13,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.dawnline.web.ProblemDetailsAdviceSupport;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,6 +56,7 @@ class InternalTokenInterceptorTest {
                     HttpMessageConvertersAutoConfiguration.class, WebMvcAutoConfiguration.class,
                     InternalTokenAutoConfiguration.class))
             .withUserConfiguration(ServiceLikeWeb.class)
+            .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
             .withPropertyValues(InternalToken.PROPERTY_PREFIX + ".secret=" + TOKEN);
 
     private final Logger logger = (Logger) LoggerFactory.getLogger(InternalTokenInterceptor.class);
@@ -82,6 +85,7 @@ class InternalTokenInterceptorTest {
                 .andExpect(jsonPath("$.instance").value("/api/v1/things/close")));
         assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
                 .singleElement().asString().contains("reason=missing").doesNotContain(TOKEN);
+        assertThat(rejected).containsEntry("missing", 1.0).containsEntry("mismatch", 0.0);
     }
 
     @Test
@@ -93,6 +97,7 @@ class InternalTokenInterceptorTest {
                 .andExpect(jsonPath("$.code").value("internal-token-required")));
         assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
                 .singleElement().asString().contains("reason=mismatch").doesNotContain(wrong);
+        assertThat(rejected).containsEntry("missing", 0.0).containsEntry("mismatch", 1.0);
     }
 
     @Test
@@ -108,8 +113,12 @@ class InternalTokenInterceptorTest {
             mvc.perform(post("/api/v1/things/close").header(InternalToken.HEADER, TOKEN)).andExpect(status().isOk());
             mvc.perform(put("/api/v1/things/1").header(InternalToken.HEADER, TOKEN)).andExpect(status().isOk());
             mvc.perform(delete("/api/v1/things/1").header(InternalToken.HEADER, TOKEN)).andExpect(status().isOk());
+            mvc.perform(get("/api/v1/things/1")).andExpect(status().isOk());
+            mvc.perform(post("/api/v1/things")).andExpect(status().isOk());
         });
         assertThat(logs.list).isEmpty();
+        // 두 시계열은 거부가 없어도 0 으로 있다 — `> 0` 알림이 「0」과 「시계열 없음」을 구별하지 않아도 된다.
+        assertThat(rejected).containsEntry("missing", 0.0).containsEntry("mismatch", 0.0);
     }
 
     @Test
@@ -152,12 +161,17 @@ class InternalTokenInterceptorTest {
                         .rootCause().hasMessageContaining("DAWNLINE_INTERNAL_TOKEN 이 없다"));
     }
 
+    /** 마지막 {@link #withMockMvc} 가 본 거부 카운터 — reason → 값. */
+    private final Map<String, Double> rejected = new java.util.HashMap<>();
+
     private void withMockMvc(ThrowingConsumer<MockMvc> body) {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
             body.accept(MockMvcBuilders
                     .webAppContextSetup((WebApplicationContext) context.getSourceApplicationContext())
                     .build());
+            context.getBean(MeterRegistry.class).find(InternalToken.REJECTED_METRIC).counters().forEach(counter ->
+                    rejected.put(counter.getId().getTag(InternalToken.REASON_TAG), counter.count()));
         });
     }
 

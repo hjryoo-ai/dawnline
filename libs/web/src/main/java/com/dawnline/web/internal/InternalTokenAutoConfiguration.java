@@ -1,7 +1,10 @@
 package com.dawnline.web.internal;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
 import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springdoc.core.customizers.OperationCustomizer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -34,11 +37,14 @@ public class InternalTokenAutoConfiguration {
 
         /**
          * @param properties 검증된 토큰 설정
+         * @param registry   서비스의 레지스트리(actuator). 없으면(자동 설정 단위 테스트) 전역 레지스트리
          * @return 인터셉터를 등록하는 설정
          */
         @Bean
-        WebMvcConfigurer dawnlineInternalTokenEnforcement(InternalTokenProperties properties) {
-            InternalTokenInterceptor interceptor = new InternalTokenInterceptor(properties);
+        WebMvcConfigurer dawnlineInternalTokenEnforcement(InternalTokenProperties properties,
+                ObjectProvider<MeterRegistry> registry) {
+            InternalTokenInterceptor interceptor = new InternalTokenInterceptor(properties,
+                    registry.getIfAvailable(() -> Metrics.globalRegistry));
             return new WebMvcConfigurer() {
                 @Override
                 public void addInterceptors(InterceptorRegistry registry) {
