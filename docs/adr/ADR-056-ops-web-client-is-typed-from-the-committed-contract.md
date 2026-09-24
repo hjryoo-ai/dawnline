@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 상태 | Proposed — 후보 1 은 **기준 5 거짓으로 기각**(아래). 후보 2 는 사용자가 골랐고(2026-09-24), 같은 기준으로 시도 전이다 |
+| 상태 | Accepted (2026-09-24) — 후보 1(`openapi-fetch`)은 **기준 5 거짓으로 기각**, 후보 2(생성된 타입 + 얇은 호출 층, 사용자 결정)는 **일곱 전부 참으로 채택**. 기준은 두 시도 모두보다 먼저 커밋했다 |
 | 결정일 | 2026-09-24 |
 | 관련 문서 | `docs/DESIGN.md` §5.5 「조회」 · §11 · §13 · `docs/IMPLEMENTATION_PLAN.md` Phase 6 작업 3 (묶음 C2) · `CLAUDE.md` 「서로를 비추는 목록에는 대조 검사를 둔다」 |
 | 관련 ADR | [ADR-052](ADR-052-delegation-client-is-generated-from-the-committed-contract.md) (같은 원칙의 Java 쪽 — ops-api 가 코어의 문서에서 위임 클라이언트를 만든다) |
@@ -136,4 +136,23 @@ HTTP 는 브라우저의 `fetch` 가 한다. 코드 생성형(`openapi-generator
 
 **대가**: 연산이 늘면 함수가 는다. 화면이 부르는 것만 쓰고, 문서가 바뀌면 그 함수의 타입이 생성물에서 오므로
 컴파일이 알려 준다 — 손으로 쓴 것은 경로 문자열과 함수 이름뿐이고, 경로 문자열도 `paths` 의 키로 검사된다.
+
+## 후보 2 의 시도 결과 — 채택 (2026-09-24)
+
+같은 생성물(`openapi-typescript` 7.13.0 · `typescript` 5.9.3)에 `apps/ops-web/src/api/client.ts` 의 호출 층.
+판정은 Node 24(`node:24` 컨테이너, v24.21.0).
+
+| 기준 | 결과 | 근거 |
+|---|---|---|
+| 1. 표준 출력 | ✅ | 후보 1 과 같다 — CLI 인자는 입력·출력 경로뿐 |
+| 2. peer 범위 안의 설치 | ✅ | Node 24 에서 `npm ci` — 130개, 경고 0 |
+| 3. 그대로 컴파일 | ✅ | 같은 tsconfig(`strict` · `noUncheckedIndexedAccess` · `exactOptionalPropertyTypes`)에서 오류 0 |
+| 4. `required` 도착 | ✅ | 같은 픽스처. 음성 표본(`CampKpi.campId` 의 `required` 제거) → `Unused '@ts-expect-error'` |
+| 5. 계약 밖 호출은 컴파일 오류 | ✅ | 재배정의 `reason` · 조기 마감의 `extra` · 조기 마감의 `reason` 누락 · 없는 경로 · 그 경로에 없는 메서드 — 다섯 다 `tsc` 오류. **음성 표본 둘**: 재배정의 본문을 제네릭(`<B extends ReassignBody>`, 후보 1 의 모양)으로 바꾸면 `reason` 줄의 지시문이 쓰이지 않는다고 실패하고, 그 줄의 지시문을 지우면 `TS2353: 'reason' does not exist in type '{ targetRouteId: string; }'` |
+| 6. 오류 본문의 `code` | ✅ | 실패한 결과의 `problem` 이 `ProblemDetail \| null` 이고 `code` 를 읽는다 |
+| 7. 런타임 의존 | ✅ | **0** — `npm ls --omit=dev` 가 React · ReactDOM(+scheduler) · Leaflet 뿐 |
+
+**손으로 쓴 것의 범위**: 경로 문자열(생성된 `paths` 의 키로 검사된다), 함수 이름, 그리고 `fetch` 를 부르는 한
+함수(`call`). 응답·본문·경로 변수·쿼리의 타입은 전부 생성된 `paths` 에서 뽑는다 — 경로와 메서드가 정해지면 나머지가
+따라오므로 「경로는 A 인데 응답 타입은 B」 같은 짝 어긋남을 손으로 만들 자리가 없다.
 
