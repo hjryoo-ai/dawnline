@@ -1088,7 +1088,8 @@ CREATE INDEX ix_rmo_wave  ON rm_orders (wave_id);    -- 웨이브 개수 재집�
 -- KPI 는 표가 아니라 rm_orders 위의 뷰 둘이다 (2026-09-24, 아래 「KPI — 두 축, 뷰」). V1 의 rm_kpi_hourly 는 V2 가 지웠다.
 CREATE VIEW kpi_intake_hourly   AS …  -- (camp_id, bucket_hour = date_trunc('hour', placed_at, 'UTC')) → orders, unserviceable
 CREATE VIEW kpi_delivery_hourly AS …  -- (camp_id, bucket_hour = date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC'))
-                                      --   → delivered, failed, on_time_promised, on_time_revised, revised
+                                      --   → delivered, failed, on_time_promised, on_time_revised, revised,
+                                      --     outcome_without_promise (모집단에서 빠진 수)
 CREATE INDEX ix_rmo_delivery_hour ON rm_orders (camp_id, date_trunc('hour', COALESCE(delivered_at, failed_at), 'UTC'));
 CREATE INDEX ix_rmo_intake_hour   ON rm_orders (camp_id, date_trunc('hour', placed_at, 'UTC'));
 CREATE TABLE audit_logs (id UUID PK, actor VARCHAR(64), action VARCHAR(48), target_type VARCHAR(24), target_id UUID,
@@ -1266,14 +1267,22 @@ V2 가 그 표를 지우고 `rm_orders` 위의 뷰 둘을 둔다. 뷰는 `rm_` �
 | 뷰 | 버킷 | 열 |
 |---|---|---|
 | `kpi_intake_hourly` | `placed_at` (`order.placed` 의 `placedAt`) | `orders` · `unserviceable` |
-| `kpi_delivery_hourly` | `COALESCE(delivered_at, failed_at)` — 결과가 난 시각 | `delivered` · `failed` · `on_time_promised` · `on_time_revised` · `revised` |
+| `kpi_delivery_hourly` | `COALESCE(delivered_at, failed_at)` — 결과가 난 시각 | `delivered` · `failed` · `on_time_promised` · `on_time_revised` · `revised` · `outcome_without_promise` |
 
 - **버킷은 UTC 정시다** — `date_trunc('hour', …, 'UTC')`. §5.4 의 파티션 경계와 같은 이유로 세션 존에
   따라 움직이지 않고, 세 인자 형태는 `IMMUTABLE` 이라 인덱스 식이 될 수 있다(두 인자 형태는 `STABLE`
   이라 안 된다 — PG 18.2 의 `pg_proc` 에서 확인).
 - **배송 축의 한 행은 한 모집단을 센다** — 결과·캠프·두 약속을 모두 아는, 취소되지 않은 주문.
-  약속을 아직 모르는 완료는 분모에도 분자에도 없다 — 「모름」을 「늦음」으로 세지 않는다(결정 2).
+  약속을 아직 모르는 결과는 분모에도 분자에도 없다 — 「모름」을 「늦음」으로 세지 않는다(결정 2).
+  캠프는 개정 약속과 같은 사실(`fulfillment.planned`)로 오므로 캠프를 모르는 것은 약속을 모르는 것의 한 형태다.
   취소된 주문은 배송됐어도 빠진다 — 약속이 더는 서 있지 않고, 그 주문은 예외 목록의 행이다(위 「DDL 정정」).
+- **그러나 빠진 수는 보인다 — `outcome_without_promise`** (2026-09-24, 리뷰에서 더했다). 분모에서 조용히
+  빠지는 것은 실패를 빼서 정시율을 올리는 것과 같은 부류다. **부재는 값이 아니지만 부재의 수는 값이다.**
+  같은 행, 같은 시간 축에 모집단 밖의 결과를 센다 — 캠프를 모르는 결과는 `camp_id IS NULL` 행에 있고 그
+  행의 정시율 칸은 0 이다(접수 축의 배차 불가와 같은 모양). 정상에서 이 수는 프로젝션 랙만큼의 일시값이고,
+  **계속 0 이 아니면 `fulfillment.planned`(또는 `order.placed`)가 오지 않고 있다.** 취소는 세지 않는다 —
+  모름이 아니라 정의로 빠진 것이다. 모집단 판정(`known`)은 뷰의 안쪽 질의에 한 번만 적고, 플래너가 그것을
+  끌어올려 버킷 술어는 여전히 인덱스의 식 그대로 내려간다(`KpiViewsIndexIT`).
 - **`late` 는 없다** — `delivered + failed − on_time_*` 로 유도된다. 세는 것과 다시 세는 것의 구분 그대로다.
 - **`revised`** 는 그 버킷에서 완료된 주문 중 약속의 끝이 개정된 수(`promised_end_revised <> promised_end_original`).
   두 정시율의 격차가 개정의 효과를 보여 주지만, 격차만 있고 건수가 없으면 「몇 건을 개정해서 얻은
@@ -1301,8 +1310,8 @@ V2 가 그 표를 지우고 `rm_orders` 위의 뷰 둘을 둔다. 뷰는 `rm_` �
 뒤면 이 제약과 버킷 식을 함께 바꾼다.
 
 **인덱스 둘 — 뷰의 버킷 식 그대로** ([측정](benchmarks/phase6-kpi-hourly-views-index.md), 불변규칙 11).
-peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 219.1 → 6.18 ms, 접수 축 188.3 → 5.50 ms, 게이지(전
-캠프 24 버킷) 491 → 37.8 ms. 뷰의 `bucket_hour` 술어가 뷰 안으로 내려가 인덱스의 식과 만나야 하므로
+peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 212.2 → 6.38 ms, 접수 축 187.4 → 4.98 ms, 게이지(전
+캠프 24 버킷) 474 → 39.6 ms. 뷰의 `bucket_hour` 술어가 뷰 안으로 내려가 인덱스의 식과 만나야 하므로
 **두 식은 글자 그대로 같아야 한다.** 어긋나면 플래너는 조용히 다른 길로 간다 — 측정한 음성 표본
 (`COALESCE(failed_at, delivered_at)`)은 순차 스캔도 아니고 **다른 인덱스의 캠프 접두**만 타며 43만 행을
 걸렀다(158 ms). 그래서 `KpiViewsIndexIT` 는 인덱스 이름이 아니라 `Index Cond` 에 버킷 식이 있는지를 본다.
@@ -1313,10 +1322,23 @@ peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 219.1 → 6.
 뷰의 비용이 날마다 는다(위 「인덱스 둘」과 같은 전제).
 
 **정시율 게이지** — `dawnline_delivery_on_time_ratio{camp, basis}`(§9.1)는 **이 뷰를 읽는다**
-(`OnTimeRatioGauges`). 창은 지금 시각이 든 버킷과 그 앞 23개, 1분마다 다시 센다. 분모는 `delivered +
-failed` — **실패는 분모에 있고 분자에 없다; 실패를 빼면 정시율이 오른다.** 게이지가 뷰를 읽으므로
-대시보드의 24행과 게이지가 다른 수를 말할 수 없다. 창에 결과가 없는 캠프, 갱신이 실패한 동안의 모든
-캠프는 `NaN` 이다 — 0 은 「전부 늦었다」는 주장이고 멈춘 값은 건강해 보인다.
+(`OnTimeRatioGauges`). **창은 「직전 24시간」이 아니라 「현재 버킷 포함 UTC 정시 버킷 24개」다** — 현재
+버킷은 늘 부분이라 창의 길이는 23시간 남짓에서 24시간 사이를 움직인다(2026-09-24 승인). 이유는 둘이다:
+① 게이지가 뷰를 읽으므로 **대시보드의 24행과 게이지가 다른 수를 말할 수 없다** — 같은 사실을 두 경로로
+세면 언젠가 갈리고, 갈린 날 운영자는 어느 쪽을 믿을지 모른다. ② 원시 시각으로 정확히 24시간을 자르는
+질의는 플래너가 행 수를 269 로 추정해(실제 11.8만) 10일치에서도 순차 스캔을 골랐다. 1분마다 다시 센다.
+분모는 `delivered + failed` — **실패는 분모에 있고 분자에 없다; 실패를 빼면 정시율이 오른다.** 창에 결과가
+없는 캠프, 갱신이 실패한 동안의 모든 캠프는 `NaN` 이다 — 0 은 「전부 늦었다」는 주장이고 멈춘 값은
+건강해 보인다.
+
+같은 갱신이 두 값을 더 낸다 — 정시율이 **정직한지**를 말하는 값이다.
+
+- `dawnline_kpi_excluded{reason="promise_unknown"}` — 같은 창의 `outcome_without_promise` 합(캠프가 없는 행
+  포함). 모르면 `NaN`.
+- `dawnline_kpi_refresh_age_seconds` — 마지막으로 **성공한** 갱신 뒤로 흐른 초를 스크레이프마다 계산한다.
+  **NaN 은 정직하지만 아무도 못 듣는다**: Prometheus 의 `< 0.95` 는 `NaN` 에 대해 거짓이라 갱신이 죽으면
+  정시율 알림이 조용해진다. 그래서 알림은 이 값에 건다(§9.4) — `dawnline_shipment_partitions_ahead` 가
+  「만든 수」가 아니라 「남은 날」을 재는 것과 같은 모양이다. 성공한 적이 없으면 기동부터 센다.
 
 **`updated_at` 은 사실이 아니라 프로젝션의 기록이다** — 마지막으로 행을 만진 시각이라 정의상 처리
 순서를 탄다. 순서를 뒤섞는 IT 가 비교에서 빼는 칸은 이것 하나이고, 그 IT 는 칸도 토픽처럼
@@ -2464,7 +2486,9 @@ DEFAULT 파티션을 두지 않는 것(§5.4), 개정 발행이 약속창 없는
 | `dawnline_replan_total` | counter | dispatch | outcome(applied/cooldown/no-anchor/no-candidate/no-gain) — §6.8 부분 재계획이 `delivery.at-risk` 하나를 받고 **무엇을 했는가**([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 5). 다섯 갈래를 한 카운터의 라벨로 두는 이유는 **합이 곧 트리거 수**여야 하기 때문이다 — 나누면 「받았는데 아무 갈래에도 안 들어간 것」이 보이지 않는다. 실패를 DLQ 로 보내지 않으므로 이 라벨이 그 자리를 대신한다: `no-candidate`·`no-gain` 은 재시도로 달라지지 않는 <em>결과</em>이고 DLQ 는 「처리하지 못했다」의 자리다(§4.6). **`no-anchor` 가 `no-gain` 과 따로 있는 이유**는 모름이 0 이 아니기 때문이다 — 편차를 모른 채 0 으로 두면 출발 지연 라우트가 「옮겨도 이득 없음」으로 조용히 닫힌다(`PlanModeReason.LAG_UNKNOWN` 과 같은 규칙) |
 | `dawnline_at_risk_deviation_mismatch_total` | counter | dispatch | 라벨 없음 — dispatch 가 자기 `route_stops.actual_at` 으로 계산한 편차와 `delivery.at-risk` 페이로드의 `deviationSeconds` 가 **60초 넘게 갈린** 횟수 ([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 2). 페이로드는 입력이 아니라 **대조값**이고, 이 값이 오른다는 것은 tracking 과 dispatch 가 같은 라우트를 다르게 보고 있다는 뜻이다 — 원인은 `delivery.status` 컨슈머 랙 · 개정이 한쪽에만 닿음 · 기사 단말의 밀린 스캔 중 하나다. 셋을 이 카운터 혼자 가르지는 못하지만 **갈린다는 사실 자체가 먼저 필요하다.** 허용 오차를 둔 이유: 두 값은 서로 다른 시각 원천에서 오므로(스캔의 `occurredAt` 과 저장 정밀도로 자른 `Clock`) 초 단위 일치를 요구하면 이 카운터는 늘 켜져 있어 아무 말도 하지 않는다 |
 | `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
-| `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다. `kpi_delivery_hourly` 뷰의 버킷 24개(지금 버킷 포함)의 합이고 1분마다 다시 센다. 분모는 완료 + **실패**, 취소·배차 불가는 뺀다(§5.5 「KPI — 두 축, 뷰」). 결과가 없는 캠프와 갱신 실패 중에는 `NaN` — 0 도 마지막 값도 아니다 |
+| `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다. 창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개**(`kpi_delivery_hourly` 의 24행 합 — 현재 버킷은 늘 부분이라 23시간 남짓~24시간)이고 1분마다 다시 센다. 분모는 완료 + **실패**, 취소·배차 불가는 뺀다(§5.5 「KPI — 두 축, 뷰」). 결과가 없는 캠프와 갱신 실패 중에는 `NaN` — 0 도 마지막 값도 아니다. 약속을 모르는 결과도 빠지고, 그 수는 아래 `dawnline_kpi_excluded` 가 낸다 |
+| `dawnline_kpi_excluded` | gauge | **ops-api** | reason(promise_unknown) — 정시율의 창에서 **모집단 밖으로 빠진** 결과: 완료·실패했는데 약속(또는 캠프)을 아직 모른다(`kpi_delivery_hourly.outcome_without_promise` 의 합, 캠프가 없는 행 포함). 분모에서 조용히 빠지는 것은 실패를 빼서 정시율을 올리는 것과 같은 부류다 — **부재는 값이 아니지만 부재의 수는 값이다.** 정상에서는 프로젝션 랙만큼의 일시값이고 계속 0 이 아니면 `fulfillment.planned` 가 오지 않고 있다. 갱신 실패 중에는 `NaN` — 0 은 「빠진 것이 없다」는 주장이다 |
+| `dawnline_kpi_refresh_age_seconds` | gauge | **ops-api** | 라벨 없음 — 마지막으로 **성공한** KPI 갱신 뒤로 흐른 초. 스크레이프마다 계산하므로 갱신이 멈추면 값이 멈추지 않고 커진다(성공한 적이 없으면 기동부터). 위 둘은 갱신이 죽으면 `NaN` 이고 **`NaN` 에는 어떤 비교 알림도 울리지 않는다** — 그래서 알림은 이 값에 건다(§9.4). `dawnline_shipment_partitions_ahead` 와 같은 모양이다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
 
@@ -2500,7 +2524,7 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 - `Waves & Plans`: 웨이브별 주문 수, 계획 시간, 비용, 미배정, degraded
 - `Delivery`: 정시율, at-risk, 실패, 라우트 진행
 - `Platform`: consumer lag, DLQ 건수, DB 커넥션, JVM
-- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%, **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06)
+- 알림 규칙: outbox 지연 > 30s, `dawnline_outbox_failed` > 0(격리 행 발생 — RB-05), DLQ 신규 > 0, consumer lag > 1,000, 계획 시간 p95 > 45s, 정시율 < 95%(창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다), **`dawnline_kpi_refresh_age_seconds` > 300**(KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 바로 앞의 정시율 알림은 **울리지 않는다**. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다, §5.5), **`dawnline_kpi_excluded{reason="promise_unknown"}` > 0 이 30분 지속**(결과는 났는데 약속을 모르는 주문이 정시율에서 빠지고 있다 — 프로젝션 랙으로 설명되는 길이를 넘었으면 `fulfillment.planned` 가 오지 않고 있다), **`dawnline_rate_limit_decisions_total{outcome="bypassed"}` 증가**(Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단이 사라진 상태다, RB-03), **`dawnline_cancel_too_late_total` 증가**(배송이 끝난 주문에 취소가 도착했다 — 물리적 배송과 주문 상태가 어긋난 건이 생겼고 사람이 처리해야 한다. 자동 보상은 없다, §6.10), **`dawnline_shipment_partitions_ahead` < 2**(`shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다, §5.4·RB-06)
 
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 

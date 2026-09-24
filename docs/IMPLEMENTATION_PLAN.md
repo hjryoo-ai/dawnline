@@ -1859,6 +1859,8 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      (증감 표)를 V2 가 지우고 `rm_orders` 위에 접수 축(`kpi_intake_hourly`)·배송 축(`kpi_delivery_hourly`)을
      둔다 — 결정 4 의 가장 순수한 형태는 쓰는 쪽이 없는 것이다. 배송 축의 분모에 실패가 들어가려고
      `failed_at` 을 더했고(`delivered_at` 과 배타, 제약으로), 정시율 게이지는 그 뷰의 24 버킷 합이다.
+     모집단에서 빠진 수(`outcome_without_promise` → `dawnline_kpi_excluded`)와 갱신 나이
+     (`dawnline_kpi_refresh_age_seconds`, 알림은 이 값에)를 함께 낸다 — NaN 은 알림을 울리지 않는다.
      인덱스 둘은 뷰의 버킷 식 그대로다([측정](benchmarks/phase6-kpi-hourly-views-index.md)).
 2. 코어 서비스에 필요한 운영 엔드포인트 추가(fulfillment: 웨이브 조기 마감; dispatch: 재계획·재배정은 Phase 3/5에서 존재).
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.

@@ -12,7 +12,7 @@ KPI 시간 버킷이 증감 표(`rm_kpi_hourly`)에서 `rm_orders` 위의 뷰 �
 |---|---|---|
 | `SELECT * FROM kpi_delivery_hourly WHERE camp_id = ? AND bucket_hour >= ? AND bucket_hour < ?` (24 버킷) | 캠프 대시보드(묶음 C) | 화면 갱신마다 |
 | `SELECT * FROM kpi_intake_hourly WHERE camp_id = ? AND bucket_hour >= ? AND bucket_hour < ?` (24 버킷) | 캠프 대시보드(묶음 C) | 화면 갱신마다 |
-| `JdbcDeliveryKpis.SUM_BY_CAMP_SQL` — 전 캠프, 24 버킷 합 | `OnTimeRatioGauges` | 1분마다 |
+| `JdbcDeliveryKpis.SUM_BY_CAMP_SQL` — 전 캠프(캠프 없는 행 포함), 24 버킷 합 | `OnTimeRatioGauges` | 1분마다 |
 
 ## 측정 환경
 
@@ -34,35 +34,42 @@ KPI 시간 버킷이 증감 표(`rm_kpi_hourly`)에서 `rm_orders` 위의 뷰 �
 
 ## 1. 결과 — peak 30일 (4,500,000 행)
 
+2026-09-24 에 배송 축 뷰에 `outcome_without_promise`(모집단에서 빠진 수)를 더하면서 **다시 쟀다.** 모집단
+판정이 뷰의 `WHERE` 에서 안쪽 질의의 `known` 과 `FILTER` 로 옮겨 가 `camp_id IS NOT NULL` 이 `WHERE` 에서
+빠졌고(캠프 없는 행도 빠진 수를 세야 한다), 게이지 질의는 캠프 없는 행까지 읽는다. 계획의 선택은 같고
+값은 측정 잡음 안에서 움직였다. 앞 판(`WHERE` 에 모집단)의 값은 괄호 안이다.
+
 | 질의 | 인덱스 없음 | 인덱스 | 계획 (인덱스) |
 |---|---|---|---|
-| 배송 축, 캠프 하나 24 버킷 | `Parallel Seq Scan` · **219.1 ms** | **6.18 ms** | `Bitmap Index Scan on ix_rmo_delivery_hour` · 14,545 행 |
-| 접수 축, 캠프 하나 24 버킷 | `Parallel Seq Scan` · **188.3 ms** | **5.50 ms** | `Bitmap Index Scan on ix_rmo_intake_hour` · 14,545 행 |
-| 게이지, 전 캠프 24 버킷 | `Parallel Seq Scan` · **490.7 ms** | **37.8 ms** | `Bitmap Index Scan on ix_rmo_delivery_hour` · 145,459 행 |
+| 배송 축, 캠프 하나 24 버킷 | `Parallel Seq Scan` · **212.2 ms** (219.1) | **6.38 ms** (6.18) | `Bitmap Index Scan on ix_rmo_delivery_hour` · 14,545 행 |
+| 접수 축, 캠프 하나 24 버킷 | `Parallel Seq Scan` · **187.4 ms** (188.3) | **4.98 ms** (5.50) | `Bitmap Index Scan on ix_rmo_intake_hour` · 14,545 행 |
+| 게이지, 전 캠프 24 버킷 | `Parallel Seq Scan` · **473.8 ms** (490.7) | **39.6 ms** (37.8) | `Bitmap Index Scan on ix_rmo_delivery_hour` · 145,459 행 |
 
-게이지의 37.8 ms 는 창 안의 행(전 캠프 하루치)을 **전부 읽는** 값이라 더 줄일 곳이 없다 — 1분에 한 번이다.
+적재 분포에는 약속을 모르는 결과가 없다 — 그 행은 정상에서 프로젝션 랙만큼이라 계획을 바꿀 수가 아니다.
+
+게이지의 39.6 ms 는 창 안의 행(전 캠프 하루치)을 **전부 읽는** 값이라 더 줄일 곳이 없다 — 1분에 한 번이다.
 인덱스 크기는 각각 **32 MB**(30일).
 
 ```
 -- ix_rmo_delivery_hour — 뷰의 bucket_hour 술어가 인덱스의 식 그대로 내려간다
 Bitmap Index Scan on ix_rmo_delivery_hour (actual time=0.373..0.373 rows=14545.00 loops=1)
-  Index Cond: ((camp_id IS NOT NULL) AND (camp_id = '…'::uuid)
+  Index Cond: ((camp_id = '…'::uuid)
     AND (date_trunc('hour'::text, COALESCE(delivered_at, failed_at), 'UTC'::text) >= '2026-09-23 00:00:00+00'::timestamp with time zone)
     AND (date_trunc('hour'::text, COALESCE(delivered_at, failed_at), 'UTC'::text) <  '2026-09-24 00:00:00+00'::timestamp with time zone))
 ```
 
 ## 2. 규모별 계획 선택
 
-1–10일 줄은 최종 뷰의 한 단계 앞(배송 축 모집단에 `order_status <> 'CANCELLED'` 가 들기 전)으로 잰 값이다.
-그 술어는 힙 행의 필터라 계획의 선택을 바꾸지 않는다 — 30일 줄은 최종 `V2__ops_kpi.sql` 로 다시 잰
-값이고(위 표와 같다) 선택이 같다.
+1–10일 줄은 최종 뷰의 두 단계 앞(배송 축 모집단에 `order_status <> 'CANCELLED'` 가 들기 전, 모집단이
+`WHERE` 에 있던 판)으로 잰 값이다. 두 변경 다 힙 행의 필터라 계획의 선택을 바꾸지 않는다 — 30일 줄은
+최종 `V2__ops_kpi.sql` 로 다시 잰 값이고(위 표와 같다) 선택이 같다.
 
 | 규모 | 배송 축(캠프) | 접수 축(캠프) | 게이지(전 캠프) |
 |---|---|---|---|
 | 1일 (150,000) | `ix_rmo_delivery_hour` · 4.4 ms | **`ix_rmo_delivery_hour` 의 캠프 접두** · 9.4 ms | `Seq Scan` · 30.1 ms |
 | 3일 (450,000) | `ix_rmo_delivery_hour` · 6.7 ms | `ix_rmo_intake_hour` · 5.3 ms | `Seq Scan` · 55.6 ms |
 | 10일 (1,500,000) | `ix_rmo_delivery_hour` · 5.9 ms | `ix_rmo_intake_hour` · 5.6 ms | `ix_rmo_delivery_hour` · 21.6 ms |
-| 30일 (4,500,000) — 최종 V2 | `ix_rmo_delivery_hour` · 6.18 ms | `ix_rmo_intake_hour` · 5.50 ms | `ix_rmo_delivery_hour` · 37.8 ms |
+| 30일 (4,500,000) — 최종 V2 | `ix_rmo_delivery_hour` · 6.38 ms | `ix_rmo_intake_hour` · 4.98 ms | `ix_rmo_delivery_hour` · 39.6 ms |
 
 - 게이지가 3일 이하에서 순차 스캔을 고르는 것은 **맞다** — 창이 표의 3분의 1 이상이다.
 - 1일치에서 접수 축이 배송 축 인덱스의 캠프 접두를 빌리는 것은 표 전체가 하루라 버킷 범위가 걸러
@@ -72,7 +79,7 @@ Bitmap Index Scan on ix_rmo_delivery_hour (actual time=0.373..0.373 rows=14545.0
 ## 3. 음성 표본 — 뷰의 식과 인덱스의 식이 어긋나면
 
 뷰를 `date_trunc('hour', COALESCE(failed_at, delivered_at), 'UTC')` 로 적고(인수 순서만 바꿨다) 같은
-질의를 돌렸다(30일).
+질의를 돌렸다(30일, 모집단이 `WHERE` 에 있던 판 — 식이 어긋나는 모양은 판과 무관하다).
 
 ```
 Parallel Bitmap Heap Scan on rm_orders (actual time=137.782..143.105 rows=4848.33 loops=3)
