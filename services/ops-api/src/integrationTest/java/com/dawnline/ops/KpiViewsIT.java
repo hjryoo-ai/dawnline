@@ -203,14 +203,15 @@ class KpiViewsIT extends OpsIntegrationTestBase {
             @Nullable Instant promisedRevised, @Nullable Instant deliveredAt, @Nullable Instant failedAt) {
         jdbc.update("""
                 INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, camp_id,
-                                       promised_end_original, promised_end_revised, delivered_at, failed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       promised_end_original, promised_end_revised, delivered_at, failed_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
                 """, Ids.newId(), MARKER, status, outcome, campId, utc(promisedOriginal), utc(promisedRevised),
                 utc(deliveredAt), utc(failedAt));
     }
 
     private void placed(@Nullable UUID campId, String status) {
-        jdbc.update("INSERT INTO rm_orders (order_id, customer_id, order_status, camp_id, placed_at) VALUES (?, ?, ?, ?, ?)",
+        jdbc.update("INSERT INTO rm_orders (order_id, customer_id, order_status, camp_id, placed_at, updated_at) "
+                        + "VALUES (?, ?, ?, ?, ?, now())",
                 Ids.newId(), MARKER, status, campId, utc(INTAKE_HOUR.plusSeconds(90)));
     }
 

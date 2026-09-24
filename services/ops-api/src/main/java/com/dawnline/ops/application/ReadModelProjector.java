@@ -177,7 +177,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
      */
     private int waveFact(UUID waveId, @Nullable UUID campId, @Nullable String serviceTier,
             @Nullable Instant cutoffAt, WaveStatus target, Patch<WaveColumn> patch) {
-        WaveRows.WaveRow row = waves.lock(waveId);
+        WaveRows.WaveRow row = waves.lock(waveId, clock.instant());
         if (campId != null) {
             patch.setIfAbsent(WaveColumn.CAMP_ID, campId);
         }
@@ -191,7 +191,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
         if (verdict.writes()) {
             patch.set(WaveColumn.STATUS, target.name());
         }
-        waves.write(waveId, patch);
+        waves.write(waveId, patch, clock.instant());
         return staleOf(verdict);
     }
 
@@ -205,7 +205,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
                 arrivals.put(orderId, stop.plannedArrival());
             }
         }
-        Map<UUID, OrderRow> rows = orders.lock(arrivals.keySet());
+        Map<UUID, OrderRow> rows = orders.lock(arrivals.keySet(), clock.instant());
         int stale = 0;
         Set<UUID> recount = new LinkedHashSet<>();
         recount.add(f.routeId());
@@ -226,7 +226,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
         }
 
         // 2) 라우트 — 라우트 칸은 개정 번호로 거른다(§6.8 4단계, ADR-045).
-        Map<UUID, RouteRow> routeRows = routes.lock(recount);
+        Map<UUID, RouteRow> routeRows = routes.lock(recount, clock.instant());
         RouteRow route = routeRows.get(f.routeId());
         Patch<RouteColumn> patch = Patch.of(RouteColumn.class).setIfAbsent(RouteColumn.CAMP_ID, f.campId());
         Verdict revision = Progress.judgeVersion(route.revision(), f.revision());
@@ -244,7 +244,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
             // 이 축에서 ASSIGNED 는 맨 아래라 역행이 정상이다(출발이 먼저 왔을 뿐) — 세지 않는다.
             patch.set(RouteColumn.STATUS, RouteStatus.ASSIGNED.name());
         }
-        routes.write(f.routeId(), patch);
+        routes.write(f.routeId(), patch, clock.instant());
         routes.recount(recount);
         return stale + staleOf(revision);
     }
@@ -255,7 +255,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
         routeIds.add(f.routeId());
         DeliveryOutcome outcome = f.outcome();
         if (outcome != null) {
-            Map<UUID, OrderRow> rows = orders.lock(f.orderIds());
+            Map<UUID, OrderRow> rows = orders.lock(f.orderIds(), clock.instant());
             for (UUID orderId : f.orderIds()) {
                 OrderRow row = rows.get(orderId);
                 Verdict verdict = Progress.judge(row.deliveryOutcome(), outcome);
@@ -277,11 +277,11 @@ public class ReadModelProjector implements ProjectFactUseCase {
             }
         }
 
-        Map<UUID, RouteRow> routeRows = routes.lock(routeIds);
+        Map<UUID, RouteRow> routeRows = routes.lock(routeIds, clock.instant());
         // 배송이 일어났다면 라우트는 출발한 것이다 — ARRIVED 도 같다. 역행은 없다(DEPARTED 가 맨 위).
         if (Progress.judge(routeRows.get(f.routeId()).status(), RouteStatus.DEPARTED).writes()) {
             routes.write(f.routeId(), Patch.of(RouteColumn.class)
-                    .set(RouteColumn.STATUS, RouteStatus.DEPARTED.name()));
+                    .set(RouteColumn.STATUS, RouteStatus.DEPARTED.name()), clock.instant());
         }
         if (outcome != null) {
             routes.recount(routeIds);
@@ -294,7 +294,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
         for (Fact.OrderEta eta : f.etas()) {
             orderIds.add(eta.orderId());
         }
-        Map<UUID, OrderRow> rows = orders.lock(orderIds);
+        Map<UUID, OrderRow> rows = orders.lock(orderIds, clock.instant());
         int stale = 0;
         for (Fact.OrderEta eta : f.etas()) {
             Verdict verdict = Progress.judgeVersion(rows.get(eta.orderId()).etaAsOf(), f.detectedAt());
@@ -305,16 +305,16 @@ public class ReadModelProjector implements ProjectFactUseCase {
             }
             stale += staleOf(verdict);
         }
-        routes.lock(List.of(f.routeId()));
+        routes.lock(List.of(f.routeId()), clock.instant());
         // at-risk 는 사건이고(ADR-046) 해제가 오지 않는다 — 이 칸은 「통지가 있었다」를 적는다.
         routes.write(f.routeId(), Patch.of(RouteColumn.class)
                 .setIfAbsent(RouteColumn.CAMP_ID, f.campId())
-                .set(RouteColumn.AT_RISK, Boolean.TRUE));
+                .set(RouteColumn.AT_RISK, Boolean.TRUE), clock.instant());
         return stale;
     }
 
     private int routeDeparted(Fact.RouteDeparted f) {
-        RouteRow row = routes.lock(List.of(f.routeId())).get(f.routeId());
+        RouteRow row = routes.lock(List.of(f.routeId()), clock.instant()).get(f.routeId());
         Patch<RouteColumn> patch = Patch.of(RouteColumn.class)
                 .setIfAbsent(RouteColumn.CAMP_ID, f.campId())
                 .set(RouteColumn.DEPARTED_AT, f.departedAt());
@@ -322,14 +322,14 @@ public class ReadModelProjector implements ProjectFactUseCase {
         if (verdict.writes()) {
             patch.set(RouteColumn.STATUS, RouteStatus.DEPARTED.name());
         }
-        routes.write(f.routeId(), patch);
+        routes.write(f.routeId(), patch, clock.instant());
         return staleOf(verdict);
     }
 
     // --- 공통 ------------------------------------------------------------------
 
     private OrderRow lockOne(UUID orderId) {
-        return orders.lock(List.of(orderId)).get(orderId);
+        return orders.lock(List.of(orderId), clock.instant()).get(orderId);
     }
 
     private static int staleOf(Verdict verdict) {

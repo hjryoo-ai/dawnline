@@ -4,6 +4,7 @@ import com.dawnline.ops.application.port.out.Patch;
 import com.dawnline.ops.application.port.out.WaveColumn;
 import com.dawnline.ops.application.port.out.WaveRows;
 import com.dawnline.ops.domain.WaveStatus;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -16,7 +17,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class JdbcWaveRows implements WaveRows {
 
     private static final String ENSURE_SQL =
-            "INSERT INTO rm_waves (wave_id) VALUES (?) ON CONFLICT (wave_id) DO NOTHING";
+            "INSERT INTO rm_waves (wave_id, updated_at) VALUES (?, ?) ON CONFLICT (wave_id) DO NOTHING";
 
     private static final String LOCK_SQL = "SELECT status FROM rm_waves WHERE wave_id = ? FOR UPDATE";
 
@@ -37,16 +38,16 @@ public class JdbcWaveRows implements WaveRows {
     }
 
     @Override
-    public WaveRow lock(UUID waveId) {
+    public WaveRow lock(UUID waveId, Instant touchedAt) {
         Objects.requireNonNull(waveId, "waveId");
-        jdbc.update(ENSURE_SQL, waveId);
+        jdbc.update(ENSURE_SQL, waveId, PatchStatements.bindable(Objects.requireNonNull(touchedAt, "touchedAt")));
         String status = jdbc.queryForObject(LOCK_SQL, String.class, waveId);
         return new WaveRow(JdbcOrderRows.enumOf(WaveStatus.class, status));
     }
 
     @Override
-    public void write(UUID waveId, Patch<WaveColumn> patch) {
-        PatchStatements.apply(jdbc, "rm_waves", "wave_id", waveId, patch, Map.of());
+    public void write(UUID waveId, Patch<WaveColumn> patch, Instant touchedAt) {
+        PatchStatements.apply(jdbc, "rm_waves", "wave_id", waveId, patch, Map.of("updated_at", touchedAt));
     }
 
     @Override

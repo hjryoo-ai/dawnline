@@ -56,11 +56,12 @@ class RmOrdersIndexIT extends OpsIntegrationTestBase {
     void 두_재집계가_인덱스를_탄다() {
         // 라우트당 210 · 웨이브당 1,500 (측정 문서와 같은 분포).
         jdbc.update("""
-                INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, wave_id, route_id)
+                INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, wave_id, route_id, updated_at)
                 SELECT gen_random_uuid(), ?::uuid, 'DISPATCHED',
                        CASE WHEN g % 20 = 0 THEN 'FAILED' ELSE 'COMPLETED' END,
                        ('00000000-0000-0000-0001-' || lpad(to_hex(g / 1500), 12, '0'))::uuid,
-                       ('00000000-0000-0000-0002-' || lpad(to_hex(g / 210), 12, '0'))::uuid
+                       ('00000000-0000-0000-0002-' || lpad(to_hex(g / 210), 12, '0'))::uuid,
+                       now()
                   FROM generate_series(0, ?) g
                 """, MARKER, ROWS - 1);
         jdbc.execute("ANALYZE rm_orders");

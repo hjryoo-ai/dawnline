@@ -22,10 +22,14 @@ public interface OrderRows {
      *
      * <p>순서가 계약이다 — 여러 행을 잠그는 트랜잭션끼리 같은 순서로 잠가야 교착하지 않는다.
      *
-     * @param orderIds 주문들 (중복 허용)
+     * <p>새로 만드는 행은 {@code touchedAt} 을 {@code updated_at} 으로 갖는다 — 모든 행이 나이를 갖는다
+     * (ADR-058 결정 4). 이미 있는 행은 건드리지 않는다: 잠금은 쓰기가 아니고, 패치가 빈 채로 끝날 수 있다.
+     *
+     * @param orderIds  주문들 (중복 허용)
+     * @param touchedAt 새 행의 {@code updated_at}
      * @return 주문 → 판정용 현재 값
      */
-    Map<UUID, OrderRow> lock(Collection<UUID> orderIds);
+    Map<UUID, OrderRow> lock(Collection<UUID> orderIds, Instant touchedAt);
 
     /**
      * 한 행에 패치를 적는다. {@link #lock} 으로 잠근 행에만 부른다.

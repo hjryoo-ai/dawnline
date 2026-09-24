@@ -240,8 +240,9 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
     private UUID wave(UUID campId, Instant cutoffAt, UUID planId, double[] depot) {
         UUID waveId = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO rm_waves (wave_id, camp_id, service_tier, cutoff_at, status, plan_id, depot_lat, depot_lng)
-                VALUES (?, ?, 'DAWN', ?, ?, ?, ?, ?)
+                INSERT INTO rm_waves (wave_id, camp_id, service_tier, cutoff_at, status, plan_id, depot_lat, depot_lng,
+                                      updated_at)
+                VALUES (?, ?, 'DAWN', ?, ?, ?, ?, ?, now())
                 """, waveId, campId, cutoffAt.atOffset(ZoneOffset.UTC), planId == null ? "OPEN" : "PLANNED", planId,
                 depot == null ? null : depot[0], depot == null ? null : depot[1]);
         return waveId;
@@ -250,8 +251,8 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
     private UUID route(UUID planId, Boolean atRisk) {
         UUID routeId = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO rm_routes (route_id, plan_id, camp_id, revision, status, stop_count, at_risk)
-                VALUES (?, ?, ?, 1, 'ASSIGNED', 12, ?)
+                INSERT INTO rm_routes (route_id, plan_id, camp_id, revision, status, stop_count, at_risk, updated_at)
+                VALUES (?, ?, ?, 1, 'ASSIGNED', 12, ?, now())
                 """, routeId, planId, CAMP, atRisk);
         return routeId;
     }
@@ -261,8 +262,8 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
         boolean completed = "COMPLETED".equals(outcome);
         jdbc.update("""
                 INSERT INTO rm_orders (order_id, order_status, delivery_outcome, camp_id, promised_end_original,
-                                       promised_end_revised, delivered_at, failed_at, placed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       promised_end_revised, delivered_at, failed_at, placed_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
                 """, orderId, orderStatus, outcome, campId, promisedEnd.atOffset(ZoneOffset.UTC),
                 promisedEnd.atOffset(ZoneOffset.UTC), completed ? at.atOffset(ZoneOffset.UTC) : null,
                 completed ? null : at.atOffset(ZoneOffset.UTC), at.minus(Duration.ofHours(6)).atOffset(ZoneOffset.UTC));

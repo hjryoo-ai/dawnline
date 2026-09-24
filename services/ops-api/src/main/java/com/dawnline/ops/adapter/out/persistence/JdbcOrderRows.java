@@ -32,9 +32,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
  */
 public class JdbcOrderRows implements OrderRows {
 
+    /** 키와 나이만으로 — 나이는 사실이 아니라 프로젝션의 기록이라 여기서 적는다(ADR-058 결정 4). */
     private static final String ENSURE_SQL = """
-            INSERT INTO rm_orders (order_id)
-            SELECT DISTINCT id FROM unnest(?::uuid[]) AS t(id) ORDER BY id
+            INSERT INTO rm_orders (order_id, updated_at)
+            SELECT DISTINCT id, ?::timestamptz FROM unnest(?::uuid[]) AS t(id) ORDER BY id
             ON CONFLICT (order_id) DO NOTHING
             """;
 
@@ -56,7 +57,7 @@ public class JdbcOrderRows implements OrderRows {
     }
 
     @Override
-    public Map<UUID, OrderRow> lock(Collection<UUID> orderIds) {
+    public Map<UUID, OrderRow> lock(Collection<UUID> orderIds, Instant touchedAt) {
         Objects.requireNonNull(orderIds, "orderIds");
         Map<UUID, OrderRow> rows = new HashMap<>();
         if (orderIds.isEmpty()) {
@@ -64,7 +65,8 @@ public class JdbcOrderRows implements OrderRows {
         }
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(ENSURE_SQL);
-            statement.setArray(1, UuidArrays.of(connection, orderIds));
+            statement.setObject(1, PatchStatements.bindable(Objects.requireNonNull(touchedAt, "touchedAt")));
+            statement.setArray(2, UuidArrays.of(connection, orderIds));
             return statement;
         });
         jdbc.query(connection -> {
