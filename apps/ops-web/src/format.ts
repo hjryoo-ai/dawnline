@@ -27,7 +27,13 @@ export function formatCount(value: number | null | undefined): string {
   return value === null || value === undefined ? DASH : value.toLocaleString('ko-KR');
 }
 
-/** UUID 를 앞 8자로. 캠프 코드가 없을 때(옛 이벤트)의 이름이기도 하다. */
+/**
+ * UUID 를 **뒤** 8자로. 캠프 코드가 없을 때(옛 이벤트)의 이름이기도 하다.
+ *
+ * 앞이 아니라 뒤인 이유: UUIDv7(불변규칙 10)의 앞 48비트는 밀리초 시각이다. 함께 만들어진 id —
+ * 한 계획의 라우트, 시드의 캠프 — 는 앞 8자가 같고, 앞을 보이면 재배정 대상 목록의 두 라우트가 같은
+ * 이름이 된다(2026-09-24 Phase 6 데모에서 관측: 두 라우트가 둘 다 `01a0d373`). 뒤는 난수 부분이다.
+ */
 export function shortId(id: string | null | undefined): string {
-  return id ? id.slice(0, 8) : DASH;
+  return id ? `…${id.slice(-8)}` : DASH;
 }
