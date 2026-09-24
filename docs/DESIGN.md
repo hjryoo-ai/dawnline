@@ -422,6 +422,7 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 | 빠지는 곳 | **ops-api.** 조건은 맞지만(자기 outbox 가 있다) `dawnline.messaging.outbox.admin-api=false` 로 끈다. ops-api 의 운영 표면은 전부 감사 행을 남기는데 이 경로는 남기지 않는다 — 켜 두면 감사 없는 재큐가 ops-api 에 생긴다. 게다가 ops-api 는 outbox 에 쓰지 않는다(DLQ 재처리의 상태는 감사 행이다, 위 「DLQ 재처리」). 끈 이유는 ops-api 의 테스트가 말한다 |
 | `GET /api/v1/admin/outbox/quarantined?limit=50` | 격리 시각 순(`ORDER BY failed_at, id`). 칸은 `id`·`aggregateType`·`aggregateId`·`eventType`·`topic`·`createdAt`·`failedAt`·`publishAttempts` 와 전체 수 `total`. **`payload`·`headers`·`partition_key` 는 싣지 않는다**(§9.3 — 주소가 있을 수 있다). `limit` 은 1–500(DLQ 목록과 같다) |
 | `POST /api/v1/admin/outbox/{id}/requeue` | `UPDATE … SET failed_at = NULL, publish_attempts = 0 WHERE id = ? AND failed_at IS NOT NULL` — RB-05 의 (b) 와 **같은 문장**이다. 200 = 풀었다 · 404 = 행이 없다 · 409 `not-quarantined` = 격리된 행이 아니다. 409 본문의 최상위 `currentState`(`PENDING`·`PUBLISHED`)와 `publishedAt` 이 **지금 그 행이 어디 있는지** 말한다 |
+| 인증 | 재큐는 **내부 토큰** `X-Dawnline-Internal` 을 요구한다(§10 셋째 층, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)) — 없거나 다르면 401 `internal-token-required`. 목록(`GET`)은 대상이 아니다. 운영자 경로는 ops-api 위임(§5.5, 감사 `REQUEUE_OUTBOX` — 작업 2 의 마지막 PR 에서 붙는다)이다. 코어를 직접 부르는 것은 RB-05 1.4 의 절차이고 그때는 `.env` 의 값을 싣는다 — 감사가 남지 않는 길이라는 것을 런북이 말한다 |
 | 경고 | **재큐는 원인을 고치지 않는다.** 원인이 남아 있으면 릴레이가 다시 집어 다시 격리하고 `publish_attempts` 가 1 부터 다시 오른다(RB-05 1.3). 응답 문서가 이 문장을 싣는다 |
 | 인덱스 | 새로 두지 않는다. 목록은 V000_4 의 부분 인덱스 `ix_outbox_failed (failed_at) WHERE failed_at IS NOT NULL` 을 탄다 — 술어가 리터럴(`IS NOT NULL`)이다. **측정**(2026-09-24, PostgreSQL 18.2, [phase1 측정](benchmarks/phase1-retention-indexes.md)과 같은 200,000 발행 완료 행 + 격리 3, `ANALYZE` 뒤 `reltuples=200003`): `Bitmap Index Scan on ix_outbox_failed` → 3행 정렬, 0.014 ms · 버퍼 2. 재큐의 조건부 `UPDATE` 는 `outbox_events_pkey` Index Scan + `Filter: failed_at IS NOT NULL`(준비된 문장의 일반 계획도 같다). 격리 행은 평상시 0 이고 알림(§9.4)이 그 0 을 지킨다 — 그 수가 수천이 되는 날이 재검토 지점이다 |
 
@@ -1166,6 +1167,12 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
   `X-Dawnline-Audit-Id` 에 감사 행 id 가 온다.
 - **상관 헤더**: 같은 id 를 코어 호출에 `X-Dawnline-Audit-Id` 로 싣고, 코어는 그것을 MDC `auditId` 로 남긴다
   (§9.3). `UNKNOWN` 행을 사람이 해소할 때 어디를 볼지가 그 id 로 정해진다(RB-07).
+- **내부 토큰** (2026-09-24, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)): 모든
+  그룹의 모든 코어 호출에 `X-Dawnline-Internal` 을 싣는다 — 감사 id 와 같은 자리(그룹 `RestClient` 인터셉터)다.
+  코어의 운영자 쓰기는 이 헤더 없이 401 이다(§10 셋째 층). 그것이 「모든 커맨드는 `audit_logs` 에 기록」을
+  **코어 쪽에서도** 참으로 만든다 — 헤더가 없던 동안은 ops-api 를 거치지 않은 같은 커맨드가 감사 없이 적용됐다.
+  면제 경로(취소)에도 싣는다: 호출마다 싣을지 고르는 규칙은 새는 규칙이다. ops-api 자신의 쓰기에는 이 장치를
+  끈다(`dawnline.web.internal-token.enforce=false`) — JWT·역할·감사가 지킨다.
 - **`request` JSONB 에는 커맨드의 인자만** 넣는다(경로 변수·쿼리·본문). 코어의 응답 본문은 넣지 않는다 —
   취소 응답의 `OrderView` 는 주소 전체를 싣는다(§10 「읽기 모델에는 주소 전체를 저장하지 않음」).
 - **타임아웃**: 연결 1초. 읽기는 dispatch 60초(계획 시간 p95 경보가 45초다, §9.4 — 그보다 짧으면 정상적인
@@ -2644,6 +2651,23 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 
 ## 10. 보안 (최소 범위)
 
+**코어의 HTTP 표면은 세 층이다** (2026-09-24 정정, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)).
+앞의 문장은 「고객 주문 API 는 무인증」 하나였고, 코어의 나머지 쓰기가 어느 층인지는 적혀 있지 않았다 — 그 빈칸에
+ops-api 를 거치지 않으면 감사 없이 적용되는 운영자 쓰기 열 개가 있었다.
+
+| 층 | 표면 | 인증 |
+|---|---|---|
+| 고객 | order 의 주문 접수 · 취소 | **없음 — 의도된 결정**(아래) |
+| 현장 | tracking 의 기사 스캔 | **없음** — 단말 인증은 범위 밖이다. 기사 시뮬레이터(sim-runner)가 부르는 표면이고, 증명하려는 것(상태 전이·편차 추적)에 단말 인증이 더하는 것이 없다 |
+| 운영자 쓰기 | 코어의 **그 밖의 모든** `POST`·`PUT`·`PATCH`·`DELETE` — 조기 마감, 재계획, 룰 수정, 차량·기사 등록, 재배정, outbox 재큐 | **내부 토큰** `X-Dawnline-Internal` + ops-api 의 JWT·역할·감사 |
+
+- 셋째 층은 경로가 아니라 **호출자와 성질**로 정한다: ops-api 만 부르고, 쓰기이며, ops-api 가 감사 행을 남기는
+  커맨드. 규칙은 **기본 거부**다 — 면제는 위 두 층의 명시 목록(`@UnauthenticatedWrite`)뿐이고, 새 쓰기 엔드포인트는
+  아무것도 적지 않으면 토큰 대상이다. 강제 수단은 코어 넷의 `OpenApiContractIT` 가 **문서에서 뽑은** 쓰기
+  오퍼레이션을 전부 토큰 없이 불러 401 을 보는 검사다(§13).
+- 토큰은 `DAWNLINE_INTERNAL_TOKEN` 하나(`make env` 가 무작위로 채운다), 비교는 상수 시간, 없거나 32바이트보다
+  짧으면 기동하지 않는다. `GET` 은 대상이 아니다 — 감사 대상이 아니고, 읽기 노출은 §9.3 이 다룬다.
+
 - **고객 주문 API: 무인증 — 의도된 결정** (Phase 1 확정, §17 참조). 데모용 `X-Api-Key` 는 넣지 않는다.
   이 프로젝트가 증명하려는 것(멱등 처리, 상태 머신, 경로 최적화)에 API 키가 더하는 것이 없고,
   보안 역량은 아래 ops-api 의 JWT 가 담당한다. 나중에 붙이면 k6·sim-runner·통합 테스트를 전부
@@ -2789,6 +2813,15 @@ dawnline/
 | 4 · 5 | DESIGN §3.4 의 레이어 책임 (+ 규칙 5 는 불변규칙 1 을 함께 받친다) | 어노테이션의 *위치* 규약 |
 | 2 | DESIGN §3.4 의 의존 방향, [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) | 헥사고날의 방향 자체 — 불변규칙 목록에는 없다 |
 | 8 | [ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2 | 결정이 **한 서비스에만** 적용되고 있는지를 보는 유일한 자리 |
+
+**코어 쓰기 표면의 내부 토큰은 ArchUnit 이 아니라 문서에서 뽑는 IT 가 강제한다** (2026-09-24,
+[ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)). 규칙 8 과 같은 부류(ADR 을 강제한다)지만
+자리가 다르다. 어노테이션의 자리를 보는 규칙은 「면제가 붙었는가」까지는 보지만 **「그 서비스에서 장치가 실제로
+도는가」**는 볼 수 없다 — 인터셉터 등록이 한 서비스에서 빠지면 그 서비스의 쓰기가 조용히 열린다. 그래서 코어 넷의
+`OpenApiContractIT` 가 `InternalTokenSurfaceContract`(`libs/web` testFixtures)를 구현해 **생성된 문서에서 `GET` 이
+아닌 오퍼레이션을 전부** 읽고 토큰 없이·틀린 토큰으로 불러 401 `internal-token-required` 를 본다 — 장치가 아니라
+결과를 본다. 예외는 면제 목록뿐이고, 그 목록은 `@UnauthenticatedWrite` 가 붙은 핸들러 집합과 대조된다(쓰인 제외는
+읽힌다). 음성 검증: 인터셉터 등록을 빼자 네 서비스의 검사가 열린 쓰기를 전부 나열하며 빨개졌다.
 
 **손으로 옮기는 매핑은 단위 테스트가 잡는다.** 애그리거트와 엔티티를 분리하면(ADR-007) 필드를
 양방향으로 옮기는 코드가 생기고, 거기서 **하나를 빠뜨리면 그 값은 예외 없이 조용히 사라진다.**
@@ -3014,6 +3047,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 044 | **끝점은 전부 본다 — 근사는 stop 이 많을 때의 것이지 라우트가 적을 때의 것이 아니다** — savings 구성에 2단계를 붙인다: 1단계(K-최근접) 뒤 남은 라우트들의 (꼬리, 머리) 쌍을 **전부** 만들어 같은 게이트로 잇고 고정점까지 돈다 · 쌍 예산 `R(R−1) ≤ n·K`(성능 가드이지 동작 게이트가 아니다 — 부등식이 참인 구간의 쌍은 K 표가 이미 본 것이다) · 상한에 찬 라우트는 후보에서 뺀다 · **`peak` 라우트 216 → 90**(stop 하나짜리 67개가 0 이 된다), 밀린 라우트 128 → 2, FULL 이 13,018 ms 에 수렴 · `large` 차량 40 → 35 | 전체 K 키우기(개선 단계 K 도 움직여야 해 비교가 표 크기를 잰다 · 157 까지밖에 안 내려간다 · **206 ms 로 더 비싸다**), 끝점만 K_end=50·100(같은 이유로 비싸고 상한 미달), 라우트 뒤집기(순서는 5단계의 일), 2단계에서 게이트 느슨하게(집계가 2단계에서도 638건을 거절한다), 부착이 한 차에 둘(증상을 고친다 — 90개가 88대에 맞으므로 지금은 불필요), 쌍 예산 없이(못 이은 입력에서 `O(n²)` 가 마감을 먹는다) | [ADR-044](adr/ADR-044-endpoints-are-few-enough-to-see-all.md) |
 | 053 | **DLQ 재처리는 실패한 소비자 그룹에게만 의미 있는 사건이다** — 원래 바이트 그대로(키·value·원래 헤더, `kafka_dlt-*` 만 뺌) 원래 토픽·파티션으로 — **`eventId` 유지는 value 불변과 같은 말**이다 · 헤더 `dawnline-replay-for=<원래 그룹>` 으로 대상을 지목하고 다른 그룹은 멱등 게이트 **앞에서** 건너뛴다 — **`processed_events` 에 적지 않는다**, 흔적은 `outcome="replay_not_target"` 뿐 · 그래서 §4.4 의 「DLQ 30일은 `processed_events` 14일과 무관하다」가 참이 된다(처음 문장은 실패한 그룹 하나만 보고 쓴 것이었다) · 불변규칙 1 은 해당 없음 — **이 발행의 상태는 감사 행이다** · 레코드 하나에 감사 행 하나(`DLQ_REPLAY`·`EVENT`·`eventId`), 재처리 커맨드는 멱등이라 `UNKNOWN` 의 해소는 **다시 누르기**(ADR-052 재검토 지점 4 의 첫 사례) · 재처리는 정의상 순서를 어기고 흡수하는 것은 소비자의 축 규칙이다 · 근거는 **관측(재현됨)**(필터를 빼자 보존이 지난 이벤트를 다른 그룹이 두 번째로 처리했다) | 나이 상한 14일(문제를 푸는 것이 아니라 DLQ 보존을 14일로 줄인다 — 두 보존 기간을 묶는 조건이 하나 는다), outbox 를 거친 재발행(릴레이가 봉투를 다시 조립하고 열지 못하는 바이트를 격리한다), `IdempotentConsumer` 안에서 건너뛰기(헤더를 모른다 — 다섯 서비스의 리스너가 옮겨 적어야 한다), 건너뛰기를 `dup` 으로 세기(「이미 처리했다」와 「내 일이 아니다」가 섞인다), 대상을 모르면 전 그룹에(이 ADR 이 막는 모양) | [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md) |
 | 054 | **웨이브 조기 마감은 운영자가 컷오프를 앞당기는 결정이다** — 컷오프 전에도 닫고, 늦은 주문은 이미 있는 개정 경로(다음 웨이브 + `promiseRevised`)를 탄다 — 대가는 개정 횟수와 원 약속 정시율이 잰다 · `reason` 필수(코어 계약부터) · 마감 원인은 파생하지 않고 **저장한다**(`waves.close_cause`, V3 — `closedAt < cutoffAt + grace` 는 grace 설정값에 기대는 숨은 의존) · `promise_revised_total{cause}` 는 그 칸에서 · 마감 본문은 스케줄러와 하나, 수동은 Redis 락 없이 · 409 `wave-not-open` 이 `UNKNOWN` 해소의 근거 | `cutoffAt` 이후에만 허용(최대 90초를 버는 다른 기능), 원인 파생, `reason` 선택, 같은 컷오프의 둘째 웨이브(자연키가 깨진다), 수동 경로도 락, 마감 코드 두 벌 | [ADR-054](adr/ADR-054-early-wave-close-is-an-operator-cutoff.md) |
+| 055 | **코어의 운영자 쓰기 커맨드는 내부 토큰을 요구한다** — 정의는 경로가 아니라 호출자와 성질(ops-api 만 부르고 · 쓰기이며 · ops-api 가 감사하는 커맨드) · **기본 거부**: 코어의 모든 `POST`·`PUT`·`PATCH`·`DELETE` 가 대상이고 면제는 고객·현장 표면의 명시 목록 셋(주문 접수·취소, 기사 스캔 — `@UnauthenticatedWrite`)뿐 · `X-Dawnline-Internal` 헤더, 상수 시간 비교, 없거나 짧으면 기동하지 않는다 · `libs/web` 의 **매핑 뒤** 인터셉터(404·400 은 그대로) · 401 은 전용 예외로 어드바이스를 지난다 · 강제 수단은 **문서에서 뽑는 IT**(등록 여부와 무관하게 결과를 본다) + 면제 어노테이션 ↔ 목록 대조 · ops-api 는 모든 코어 호출에 싣고 자기 쓰기에는 끈다 · `GET` 은 대상이 아니다 · ADR-015 후속 정정의 재검토 지점을 닫는다 · 근거는 **관측(재현됨)**(등록을 빼자 열린 쓰기 열 개가 나열됐다) | outbox 관리 경로에만(같은 근거를 한 번만 쓴다), 읽기까지(막는 것 없이 도구 셋에 비용), 서블릿 필터 + 경로 목록(둘째 라우터 · 404 가 401 이 된다), 코어에 Spring Security, 네트워크 경계만(추정으로 남는 약속), 서비스별 토큰, 인터셉터가 401 을 직접 쓴다 | [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md) |
 | 052 | **위임 클라이언트는 커밋된 계약에서 만든다 — 채택 기준을 먼저 적는다** — 후보 하나(`spring` 생성기 · `spring-http-interface`), 기준 다섯(표준 템플릿 · 문서화된 옵션만 · 생성물 그대로 컴파일 · Jackson 3 왕복 · 새 런타임 의존 없음) — 하나라도 거짓이면 손으로 쓴 인터페이스 + YAML 대조 테스트 — **채택**(7.25.0, 다섯 기준 모두 참 · 왕복 32개) · 토큰은 스크립트가 찍고 ops-api 는 검증만 · 감사 행은 위임 **전에** `PENDING`, 응답을 못 받으면 `UNKNOWN` · 감사 id 를 상관 헤더로 | 계약 없이 컨트롤러 소스에서, 살아 있는 `/v3/api-docs` 에서 생성(입력이 커밋에 남지 않는다), 생성물 커밋(서로를 비추는 목록이 하나 는다), 개발 전용 로그인 엔드포인트(프로필이 꺼져 있다는 조용한 전제), 위임 뒤 한 번만 기록(죽으면 기록이 사라진다) | [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) |
 | 051 | **읽기 모델의 행은 먼저 온 사실이 만든다 — 부재는 값이 아니다** — 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **다섯 번째 자리**이고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓴다**(`rm_orders` 에 여섯 — 2026-09-24 DDL 정정 뒤 일곱 · `rm_waves` 에 넷 · `rm_routes` 에 넷) — 그래서 「이 전이를 받는가」 앞에 **「그 행이 아직 있기는 한가」**가 하나 더 있다 · 핸들러는 전부 **upsert** 이고 「행을 만드는 핸들러」를 두지 않는다(늦게 온 `UPDATE` 는 0 행을 갱신하고 **예외 없이 성공**한다) · **자기 칸만 쓴다** — 모르는 칸에 `NULL`·`0`·`false` 를 넣지 않는다(`false` 는 「위험하지 않다」라는, 아직 아무도 하지 않은 주장이다) · 개수는 증감이 아니라 **집계**다([ADR-025](adr/ADR-025-wave-admission-share-lock.md) 의 「카운터 드리프트가 구조적으로 불가능」과 같은 형태 — `delivery.status` 가 `order.dispatched` 보다 먼저 오면 올릴 라우트가 없다) · 「아직 안 왔다」는 DLQ 도 `rejected` 도 아니다(§4.6) · 관측 근거는 **순서를 뒤섞는 IT** 이고 토픽을 **빼는 방식**으로 돈다([ADR-050](adr/ADR-050-route-departure-is-an-event.md) 이 방금 열한 번째를 더했다 — 열거였다면 그 토픽은 검사 밖이었다) · 근거는 **관측(재현됨)**(2026-09-24 — 기각한 반대안 셋을 임시로 넣자 셋 다 씨 1 에서 사실을 조용히 잃었다) | 정방향 전제 + 어긋나면 DLQ(정상 트래픽을 DLQ 로 보내고 화면의 정확성이 그날의 컨슈머 랙에 걸린다), 행이 없으면 재시도(그 6초가 다른 파티션의 지연과 아무 관계가 없다 — ADR-017 이 같은 제안을 같은 이유로 기각했다), 키별 재정렬 버퍼(**완료 조건이 없다** — 끝내 오지 않는 것이 정상인 토픽이 있고, 지연이 열한 소비자 랙의 최소가 아니라 최대가 된다), 전 토픽 단일 스레드 소비(직렬화는 순서가 아니다 — 아무것도 사지 않고 처리량만 판다), 골격 행에 기본값 채우기(**없는 사실을 지어내는 일** — `NULL` 은 「아직 모른다」라는 참인 말을 하지만 기본값은 거짓인 말을 한다), `rm_*` 없이 동기 조회(불변규칙 4 · ADR-012), ADR 없이 코드에만(이 규칙은 **하지 않는 일**들이라 코드에서 보이지 않는다 — 가장 먼저 「`SET (…) = EXCLUDED.(…)` 로 줄이자」가 들어온다) | [ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) |
 | 050 | **라우트 출발은 이벤트다 — 출발이 첫 편차의 출처이기 때문이다** — `dawnline.delivery.route-departed.v1`(키 `routeId`, 소비자 **ops 뿐**) · 근거는 화면이 아니라 **사실의 가시성**이다: 지금 출발을 아는 것은 tracking 뿐이라(`ScanType.isPublished()` 가 `DEPARTED_CAMP` 를 뺀다) ops 는 첫 `ARRIVED` 가 올 때까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, **그 구간이 운영자가 개입할 수 있는 마지막 창이다**(아직 안 나간 차는 다시 짤 수 있다) · **라우트 하나에 이벤트 하나** — 반복하지 않는다는 이유가 말하지 않을 이유였던 적은 없다([ADR-024](adr/ADR-024-plan-completed-event.md) 의 거울상: 사실의 단위와 토픽의 단위를 맞춘다) · 페이로드 여섯 칸(`routeId`·`campId`·`revision`·`plannedDeparture`·`departedAt`·`stopCount` — 2026-09-24 `stopCount` 를 빼 다섯: 부재를 다른 출처로 메우지 않는다)은 **마이그레이션 없이** 나온다 · `revision` 을 싣는 이유는 「어느 개정본의 계획에 대해 늦었나」를 말해야 하기 때문 · 스키마·예시·토픽·발행은 **소비자가 먼저**(묶음 B, ops 의 `rm_routes`) | 정의하지 않는다(더 단순하지만 그 대가가 **마지막 개입 창을 숨기는 것**이다 — `rm_routes` 는 없는 사실을 만들어 내지 못한다), `delivery.status` 의 `status` 에 `DEPARTED_CAMP` 추가(한 사실이 stop 수만큼 반복된다 — 5-1b 가 발행하지 않기로 한 그 이유), `route.assigned` 에 `departedAt` 을 나중에 채우기(계획 이벤트를 사실로 갱신하면 개정으로 거르는 소비자가 사실을 함께 버린다), ops-api 가 tracking 에 동기 조회(출발은 사건이지 조회 대상이 아니다 — 해상도가 폴링 주기가 된다), 페이로드를 `{routeId, departedAt}` 둘로(편차의 기준선 `plannedDeparture` 가 개정마다 다르다) | [ADR-050](adr/ADR-050-route-departure-is-an-event.md) |

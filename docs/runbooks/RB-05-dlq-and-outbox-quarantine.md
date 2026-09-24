@@ -106,13 +106,20 @@ COMMIT;
 같은 문장이고, 격리된 행에만 적용된다.
 
 ```bash
-curl -s -X POST http://localhost:8081/api/v1/admin/outbox/<id>/requeue | jq
+set -a; . deploy/compose/.env; set +a    # DAWNLINE_INTERNAL_TOKEN
+curl -s -X POST -H "X-Dawnline-Internal: $DAWNLINE_INTERNAL_TOKEN" \
+  http://localhost:8081/api/v1/admin/outbox/<id>/requeue | jq
 ```
+
+재큐는 코어의 운영자 쓰기라 **내부 토큰**이 필요하다(DESIGN.md §10 셋째 층, ADR-055) — 없거나 다르면
+401 `internal-token-required`. 이 길은 ops-api 를 거치지 않으므로 **감사 행이 남지 않는다.** ops-api 의 재큐
+위임(§5.5 `REQUEUE_OUTBOX`)이 들어오면 운영자 경로는 그쪽이고, 여기는 ops-api 가 죽었을 때의 절차다.
 
 | 응답 | 뜻 | 할 일 |
 |---|---|---|
 | 200 | 풀었다 — 릴레이가 다음 폴링에 집는다 | 아래 확인 |
 | 404 | 그 id 의 행이 없다 | 서비스(포트)를 잘못 골랐는지 본다 |
+| 401 `internal-token-required` | 헤더가 없거나 값이 서비스의 것과 다르다 | `.env` 를 내보냈는지, 서비스가 그 `.env` 로 떴는지 본다 |
 | 409 `not-quarantined` | 격리된 행이 아니다. 본문 최상위 `currentState` 가 지금 위치다 — `PENDING`(풀려서 발행 대기) · `PUBLISHED`(`publishedAt` 에 나갔다) | 응답을 못 받고 다시 누른 것이면 **앞의 요청이 적용됐다** |
 
 > **재큐는 원인을 고치지 않는다.** (a) 를 건너뛰고 누르면 릴레이가 다시 집어 다시 격리한다 — 200 이 왔는데
