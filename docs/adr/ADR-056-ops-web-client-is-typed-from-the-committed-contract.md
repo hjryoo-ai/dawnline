@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 상태 | Proposed — 시도 전에 채택 기준을 적는다(아래 결정 1). 시도 결과가 이 표를 바꾼다 |
+| 상태 | Proposed — 기준은 시도 전에 커밋했다. **시도 결과 기준 5 가 거짓**(아래) — 결정 1 의 기각 조건이 성립했고, 다음 후보는 사용자 결정을 기다린다 |
 | 결정일 | 2026-09-24 |
 | 관련 문서 | `docs/DESIGN.md` §5.5 「조회」 · §11 · §13 · `docs/IMPLEMENTATION_PLAN.md` Phase 6 작업 3 (묶음 C2) · `CLAUDE.md` 「서로를 비추는 목록에는 대조 검사를 둔다」 |
 | 관련 ADR | [ADR-052](ADR-052-delegation-client-is-generated-from-the-committed-contract.md) (같은 원칙의 Java 쪽 — ops-api 가 코어의 문서에서 위임 클라이언트를 만든다) |
@@ -84,6 +84,32 @@ HTTP 는 브라우저의 `fetch` 가 한다. 코드 생성형(`openapi-generator
 화면에 칸이 필요해지면 **계약이 먼저 바뀐다** — ops-api 의 요청 레코드, 그다음 생성물, 그다음 화면. 결정 1
 의 기준 5 가 이 순서를 컴파일 오류로 강제한다.
 
-## 시도 결과
+## 시도 결과 — 기준 5 거짓 (2026-09-24)
 
-(시도 뒤에 채운다.)
+`openapi-typescript` **7.13.0** · `openapi-fetch` **0.17.0** · `typescript` **5.9.3**(생성기의 peer `^5.x` 안의
+최신). 판정은 `.nvmrc` 의 Node 24 에서(`node:24` 컨테이너, v24.21.0) — 로컬의 Node 25 는 `jsdom` 의 engines
+범위 밖이라 그 경고로 기준 2 를 판정하지 않았다.
+
+| 기준 | 결과 | 근거 |
+|---|---|---|
+| 1. 표준 출력 | ✅ | CLI 인자는 입력·출력 경로뿐. `transform`·`postTransform` 없음, 후처리 없음 |
+| 2. peer 범위 안의 설치 | ✅ | Node 24 에서 `npm ci` — 132개, peer·engines 경고 0. `--legacy-peer-deps`·`overrides` 없음 |
+| 3. 그대로 컴파일 | ✅ | 생성물을 `.d.ts` 가 아니라 `.ts` 로 받는다 — `skipLibCheck` 가 `.d.ts` 를 건너뛰므로. `strict` · `noUncheckedIndexedAccess` · `exactOptionalPropertyTypes` 에서 생성물의 오류 0 |
+| 4. `required` 도착 | ✅ | `CampKpi` · `WaveRoutes` · `RouteStop` 픽스처 통과, `@Nullable` 칸은 `null` 을 받는다. **음성 표본**: 문서 사본에서 `CampKpi.campId` 의 `required` 를 빼면 `Unused '@ts-expect-error'` (17행) |
+| 5. 계약 밖 호출은 컴파일 오류 | ❌ | 없는 경로 ✅ · 없는 메서드 ✅ · 필수 본문 칸 누락 ✅ — **본문의 계약 밖 칸은 오류가 아니다.** `{ targetRouteId, reason }` 이 통과한다(스프레드 없는 평범한 리터럴에서도, 조기 마감 본문의 `extra` 에서도) |
+| 6. 오류 본문의 `code` | ✅ | `GET /camps` 의 `error` 가 `ProblemDetail` 에 대입되고 `code` 를 읽는다 |
+| 7. 런타임 의존 둘 | ✅ | `npm ls --omit=dev`: `openapi-fetch` → `openapi-typescript-helpers` 뿐(React·Leaflet 제외) |
+
+**기준 5 가 거짓인 이유 — 근거: 관측(재현됨).** `openapi-fetch` 의 메서드 서명이
+`<Path, Init extends MaybeOptionalInit<Paths[Path], Method>>(url: Path, ...init: InitParam<Init>)` 다
+(`dist/index.d.ts` 의 `ClientMethod`). 본문을 담은 `Init` 이 **제네릭 파라미터**라서 인자에서 추론되고, 추론된
+타입은 제약에 **대입 가능한지**만 검사받는다 — 초과 속성 검사는 신선한 객체 리터럴이 **정해진 타입**에 대입될
+때만 돈다. 문서화된 옵션 중에 이것을 바꾸는 것은 없다. 그래서 결정 2 의 문장 — 화면의 입력은 계약에 있는
+칸만 — 을 이 쌍은 컴파일로 지키지 못한다: 재배정 창에 이유 칸을 더한 코드가 초록으로 지나간다.
+
+**생성물 쪽(`openapi-typescript`)은 기준 1–4·6 을 전부 통과했다.** 거짓인 것은 호출 층의 서명 하나다.
+
+**시도가 드러낸 C1 문서의 거짓 하나 — C1 PR 에서 고쳤다.** 본문은 `@Nullable` 칸을 빼지 않고 `null` 을
+싣는데(`"planId":null` — 근거: 관측) 문서는 그 칸을 「선택」으로만 적었다. 그 문서로 만든 타입은
+`string | undefined` 여서 실제로 오는 `null` 을 몰랐다. `NullabilityRequiredConverter` 가 `@Nullable` 칸의
+타입에 `null` 을 더한다(§11).
