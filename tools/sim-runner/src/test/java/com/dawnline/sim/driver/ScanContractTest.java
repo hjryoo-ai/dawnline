@@ -39,11 +39,28 @@ class ScanContractTest {
     /** 계약이 약속한 경로. 이 도구가 실제로 부르는 경로와 대조한다 (ADR-009 의 {@code v1} 포함). */
     private static final String SCAN_PATH = "/api/v1/routes/{routeId}/stops/{stopSeq}/events";
 
+    /**
+     * 운영자 표면의 접두어. tracking 의 문서에는 기사 단말이 부르지 않는 경로도 있다 — {@code libs/messaging} 이
+     * 네 코어에 같은 코드로 붙이는 outbox 격리 조회·재큐(DESIGN.md §4.6, 2026-09-24)다. 이 도구의 대조 대상은
+     * 기사 경로이므로 그 표면을 <strong>빼고</strong> 본다. 뺀 것이 무엇인지는 아래 검사가 말한다.
+     */
+    private static final String OPERATOR_PREFIX = "/api/v1/admin/";
+
     private static final Map<String, Object> CONTRACT = loadContract();
 
     @Test
-    void 계약에는_스캔_경로가_하나_있다() {
-        assertThat(paths()).containsOnlyKeys(SCAN_PATH);
+    void 계약의_기사_경로는_스캔_하나다() {
+        assertThat(paths().keySet().stream().filter(path -> !path.startsWith(OPERATOR_PREFIX)).toList())
+                .containsExactly(SCAN_PATH);
+    }
+
+    @Test
+    void 기사_경로에서_뺀_운영자_경로는_outbox_격리_조회_재큐뿐이다() {
+        // 위 검사가 무엇을 빼는지를 말하는 검사다(CLAUDE.md 「제외한 것이 왜 제외인지를 검사하는 테스트를 함께
+        // 둔다」). 이 목록에 다른 것이 생기면 그것이 정말 운영자 표면인지 — 기사 단말이 불러야 하는 것은 아닌지 —
+        // 다시 본다.
+        assertThat(paths().keySet().stream().filter(path -> path.startsWith(OPERATOR_PREFIX)).toList())
+                .containsExactlyInAnyOrder("/api/v1/admin/outbox/quarantined", "/api/v1/admin/outbox/{id}/requeue");
     }
 
     @Test

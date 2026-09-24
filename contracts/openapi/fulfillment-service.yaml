@@ -61,6 +61,72 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/admin/outbox/{id}/requeue:
+    post:
+      tags:
+      - outbox-admin-controller
+      operationId: requeue
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: "격리를 풀었다 — 릴레이가 다음 폴링에 집는다. **재큐는 원인을 고치지 않는다**: 원인이 남아 있으면\
+            \ 다시 격리되고 `publishAttempts` 가 1 부터 다시 오른다(RB-05). 원인 수정이 먼저다"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RequeuedOutboxEvent"
+        "400":
+          description: "`id` 가 UUID 형식이 아니다, 또는 지원하지 않는 API 버전"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 그 id 의 outbox 행이 이 서비스에 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: '`not-quarantined` — 격리된 행이 아니다. 확장 멤버 `currentState`(`PENDING`·`PUBLISHED`)와
+            `publishedAt` 이 지금 위치를 말한다. 응답을 못 받은 재큐를 다시 눌러 이것을 받았으면 앞의 요청이 적용된 것이다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /api/v1/admin/outbox/quarantined:
+    get:
+      tags:
+      - outbox-admin-controller
+      operationId: listQuarantined
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 50
+      responses:
+        "200":
+          description: 격리 시각 순. `total` 이 `events` 보다 크면 `limit` 에 잘렸다. `payload`·`headers`
+            는 싣지 않는다 — 원인을 고치려고 행 전체를 봐야 하면 DB 에서 본다(RB-05 1.2)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/QuarantinedOutboxEvents"
+        "400":
+          description: '`limit` 이 1–500 밖이다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
 components:
   schemas:
     CloseWaveRequest:
@@ -132,3 +198,52 @@ components:
           enum:
           - SCHEDULED
           - MANUAL
+    RequeuedOutboxEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+        topic:
+          type: string
+    QuarantinedOutboxEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+        topic:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        failedAt:
+          type: string
+          format: date-time
+        publishAttempts:
+          type: integer
+          format: int32
+    QuarantinedOutboxEvents:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int64
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuarantinedOutboxEvent"

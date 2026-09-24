@@ -14,6 +14,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -255,6 +256,21 @@ class OutboxRelayTest {
 
             @Override
             public int deletePublishedBefore(Instant publishedBefore) {
+                throw new IllegalStateException("DB 연결 실패");
+            }
+
+            @Override
+            public List<QuarantinedOutboxEvent> findQuarantined(int limit) {
+                throw new IllegalStateException("DB 연결 실패");
+            }
+
+            @Override
+            public boolean releaseQuarantine(UUID id) {
+                throw new IllegalStateException("DB 연결 실패");
+            }
+
+            @Override
+            public Optional<OutboxEvent> findById(UUID id) {
                 throw new IllegalStateException("DB 연결 실패");
             }
         };

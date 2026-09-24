@@ -1879,8 +1879,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      fulfillment 의 첫 REST 표면과 첫 OpenAPI 문서. 컷오프 전에도 닫고 늦은 주문은 이미 있는 개정 경로를
      탄다. `reason` 필수, 마감 원인은 `waves.close_cause`(V3)에 **저장**하고 `promise_revised_total{cause}` 가
      그 칸에서 온다. 마감 본문은 스케줄러와 하나(`WaveClosing`).
-   - 다음: 네 코어의 outbox 격리 조회·재큐(`libs/messaging` 공유 코드), 그 뒤 ops-api 의 `fulfillment`·
-     `tracking` 위임 그룹(§5.5 — outbox 경로에만 `{service}` 한 칸).
+   - **outbox 격리 조회·재큐**(2026-09-24, §4.6 「격리 조회·재큐 엔드포인트」,
+     [ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md)) — `libs/messaging` 의 공유 코드 한 벌을
+     자동 설정이 네 코어에 붙인다(조건: `OutboxRepository` + 서블릿 웹 앱). ops-api 는 속성으로 끄고 그 이유를
+     테스트가 말한다(감사 없는 재큐가 생긴다). 재큐는 RB-05 의 SQL 과 같은 조건부 `UPDATE`, 409 는 행의 지금
+     위치(`currentState`)를 싣는다. 같은 PR 에서 **OpenAPI 문서를 `integrationTest` 입력으로 거는 일을
+     `dawnline.spring-service` 규약으로 옮겼다** — 서비스마다 적으면 다섯째가 또 빠진다.
+   - 다음: ops-api 의 `fulfillment`·`tracking` 위임 그룹(§5.5 — outbox 경로에만 `{service}` 한 칸).
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.
 4. 테스트: 프로젝션 멱등(같은 이벤트 2회), **프로젝션 순서 무관(같은 사실을 씨 고정 셔플로 다시 넣어 최종 행이 같은가)**, 권한(viewer가 커맨드 403), 커맨드 감사 기록.
    **멱등과 순서는 다른 것이다** — `processed_events`(불변규칙 2)는 *중복*만 막고 순서에 대해서는 아무것도 말하지 않는다.

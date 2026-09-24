@@ -2,8 +2,9 @@
 
 | 항목 | 내용 |
 |---|---|
-| 상태 | Accepted |
+| 상태 | Accepted (**후속 정정 있음** — 아래 「[후속 정정 — 2026-09-24]」) |
 | 결정일 | 2026-09-01 |
+| 정정일 | 2026-09-24 — **재큐가 엔드포인트가 됐다**(코어 넷, `libs/messaging` 공유 코드). 「결과」 절의 「Phase 6까지 없다」는 원 결정의 문장이고 고쳐 쓰지 않는다 |
 | 관련 문서 | `docs/DESIGN.md` §4.4(전달 보장), §4.6(재시도/DLQ), §5.1(outbox DDL), §9.1·§9.4(메트릭·알림) |
 | 구현 위치 | `libs/messaging/.../outbox/PublishFailureClassifier.java`, `OutboxBatchPublisher.java`, `db/migration/common/V000_3__outbox_quarantine.sql` |
 | 런북 | `docs/runbooks/RB-05-dlq-and-outbox-quarantine.md` |
@@ -106,7 +107,7 @@ Phase 0 감사에서 실제 결함이 하나 나왔다.
 - **분류가 틀릴 수 있다.** 결정적인데 일시적으로 분류하면 예전 동작(무한 재시도)으로 돌아가고,
   반대면 회복 가능한 행이 격리된다. 그래서 기본값을 일시적으로 두고, 분류기를 한 곳에 모아
   테스트로 고정했다.
-- **복구가 수동이다.** ops-api 재큐 엔드포인트는 Phase 6까지 없다. 그전까지는 SQL이다(RB-05).
+- **복구가 수동이다.** ops-api 재큐 엔드포인트는 Phase 6까지 없다. 그전까지는 SQL이다(RB-05). → 2026-09-24 후속 정정.
 
 **되돌리는 방법**
 
@@ -118,3 +119,54 @@ Phase 0 감사에서 실제 결함이 하나 나왔다.
 - `docs/DESIGN.md` §4.6(발행 측 실패), §5.1(outbox DDL), §9.1·§9.4
 - 관련 ADR: ADR-002(폴링 Outbox 릴레이), ADR-006(at-least-once + 멱등 소비자)
 - `docs/runbooks/RB-05-dlq-and-outbox-quarantine.md`
+
+---
+
+## [후속 정정 — 2026-09-24] 격리 조회·재큐는 코어 넷에, 공유 코드 한 벌로
+
+Phase 6 작업 2. 복구의 두 절반 중 **뒤의 절반**(`failed_at = NULL, publish_attempts = 0`)이 엔드포인트가 됐다.
+앞의 절반(원인 수정)은 여전히 사람의 일이고, 이 정정이 그것을 바꾸지 않는다. 전문은 `docs/DESIGN.md` §4.6
+「격리 조회·재큐 엔드포인트」.
+
+### 결정
+
+1. **네 코어 전부, 공유 코드 한 벌.** `libs/messaging` 의 `OutboxAdminController` 를 자동 설정이 등록한다.
+   조건은 `OutboxRepository` 빈 + 서블릿 웹 앱이다. 서비스마다 컨트롤러를 두면 비용은 코드 네 벌이고, 켜는
+   스위치를 서비스가 들면 **새 서비스가 한 줄을 잊었을 때 조용히 빠진다.** 조건으로 두면 비용은 문서 재생성뿐이다.
+2. **표면.** `GET /api/v1/admin/outbox/quarantined?limit=` · `POST /api/v1/admin/outbox/{id}/requeue`.
+   목록은 `payload`·`headers`·`partition_key` 를 싣지 않는다(§9.3). 재큐는 RB-05 의 SQL 과 같은 조건부
+   `UPDATE … WHERE id = ? AND failed_at IS NOT NULL` 이고, 0 행이면 다시 읽어 404(없음)와
+   409 `not-quarantined`(격리가 아님)를 가른다.
+3. **409 는 지금 그 행이 어디 있는지 말한다** — 본문 최상위의 `currentState`(`PENDING`·`PUBLISHED`)와
+   `publishedAt`. ADR-054 의 `wave-not-open` 과 같은 이유다: 응답을 못 받은 재큐를 다시 누른 사람이 이 409 로
+   앞의 요청이 적용됐는지 읽는다(ops-api 감사 `UNKNOWN` 의 해소, §5.5).
+4. **ops-api 는 끈다.** 조건은 맞는다(ops-api 에도 outbox 표와 릴레이가 있다). 그러나 ops-api 의 운영 표면은
+   전부 감사 행을 남기고 이 경로는 남기지 않는다 — 켜 두면 **감사 없는 재큐**가 ops-api 에 생긴다. 끄는 자리는
+   속성 `dawnline.messaging.outbox.admin-api=false` 이고, 끈 이유는 ops-api 의 테스트가 말한다(CLAUDE.md
+   「제외한 것이 왜 제외인지를 검사하는 테스트를 함께 둔다」). 속성으로 잊는 방향은 **열리는 쪽**이라 조용하지
+   않다 — 그 테스트가 빨개진다.
+5. **새 인덱스는 없다.** 목록은 V000_4 의 `ix_outbox_failed (failed_at) WHERE failed_at IS NOT NULL` 을 탄다 —
+   술어가 인덱스 술어와 같은 리터럴이다. **근거: 관측(재현됨)** — 200,000 발행 완료 행 + 격리 3 을 채우고
+   `ANALYZE` 한 뒤(`reltuples=200003`, `docs/benchmarks/phase1-retention-indexes.md` 와 같은 크기) 생성된 형태의
+   문장을 EXPLAIN 했다: `Bitmap Index Scan on ix_outbox_failed` → 3행 정렬, 0.014 ms · 버퍼 2. 재큐는
+   `outbox_events_pkey` Index Scan 에 `failed_at IS NOT NULL` 필터이고 준비된 문장의 일반 계획도 같다.
+   격리 행은 평상시 0 이다(알림이 지킨다). 그 수가 수천이 되면 정렬이 인덱스 밖에서 도는 비용을 다시 잰다.
+
+### 고려한 대안
+
+- **서비스마다 컨트롤러.** 네 벌이 갈라지는 자리가 없는데 네 벌을 둔다 — ADR-049 가 `ProblemDetailsAdviceSupport`
+  를 뽑은 것과 같은 판단이다.
+- **서비스가 켜는 스위치(`admin-api=true` 를 각 서비스가 적는다).** 잊으면 **닫히는 쪽**이라 조용하다. 결정 4 의
+  스위치는 그 반대 방향이다.
+- **ops-api 가 코어의 DB 를 직접 고친다.** 불변규칙 3 위반.
+- **엔티티 전이 메서드(`OutboxEvent.releaseQuarantine()`) + 더티 체킹.** 읽고-고치고-쓰는 세 단계가 되고, 운영자가
+  RB-05 에서 쓰던 문장과 다른 문장이 된다. 조건부 `UPDATE` 는 원자적이고 런북과 같은 문장이다.
+
+### 재검토 지점
+
+- **order-service 의 `/api/v1/admin/**` 은 고객 표면과 같은 포트에 있다.** 코어의 운영 경로가 무인증인 것은
+  §10 의 결정(인증은 ops-api 가 맡는다)과 같지만, 고객 API 를 가진 서비스는 order 하나다. 목록은 격리된 행의
+  `aggregateId`(주문 id)를 싣는다. **근거: 추정** — 재지 않았다. 실서비스 전환 시 §10 의 인증 재검토와 함께
+  `/api/*/admin/**` 을 네트워크 경계에서 닫는다.
+- **격리가 잦아지면** 한 건씩 누르는 재큐는 느리다. 일괄 재큐는 RB-05 1.4 가 SQL 에서도 막은 것(원인이 다른
+  행이 섞인다)이라 넣지 않았다 — 그 판단이 바뀌는 날은 원인별로 묶을 칸(예외 클래스)이 행에 생기는 날이다.

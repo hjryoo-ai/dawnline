@@ -413,6 +413,26 @@ fulfillment-service 는 웨이브 키 `(campId, tier, cutoffAt)` 에 이 값을 
 
 격리된 행의 복구는 수동이다: 원인 수정 → `UPDATE outbox_events SET failed_at = NULL, publish_attempts = 0 WHERE id = …` (RB-05). ops-api 격리 조회·재큐 엔드포인트는 Phase 6 범위(§5.5 커맨드 목록에 추가).
 
+**격리 조회·재큐 엔드포인트** (2026-09-24, Phase 6 작업 2, [ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md)).
+위 문장의 「원인 수정 → UPDATE」 중 **뒤의 절반**이 엔드포인트가 됐다. 앞의 절반(원인 수정)은 여전히 사람의 일이다.
+
+| | |
+|---|---|
+| 자리 | `libs/messaging` 의 공유 코드 한 벌(`OutboxAdminController` + 자동 설정). 조건은 **`OutboxRepository` 빈 + 서블릿 웹 앱** — 새 서비스가 한 줄을 잊어서 조용히 빠지는 형태가 아니다. 코어 넷(order·fulfillment·dispatch·tracking)이 받는다 |
+| 빠지는 곳 | **ops-api.** 조건은 맞지만(자기 outbox 가 있다) `dawnline.messaging.outbox.admin-api=false` 로 끈다. ops-api 의 운영 표면은 전부 감사 행을 남기는데 이 경로는 남기지 않는다 — 켜 두면 감사 없는 재큐가 ops-api 에 생긴다. 게다가 ops-api 는 outbox 에 쓰지 않는다(DLQ 재처리의 상태는 감사 행이다, 위 「DLQ 재처리」). 끈 이유는 ops-api 의 테스트가 말한다 |
+| `GET /api/v1/admin/outbox/quarantined?limit=50` | 격리 시각 순(`ORDER BY failed_at, id`). 칸은 `id`·`aggregateType`·`aggregateId`·`eventType`·`topic`·`createdAt`·`failedAt`·`publishAttempts` 와 전체 수 `total`. **`payload`·`headers`·`partition_key` 는 싣지 않는다**(§9.3 — 주소가 있을 수 있다). `limit` 은 1–500(DLQ 목록과 같다) |
+| `POST /api/v1/admin/outbox/{id}/requeue` | `UPDATE … SET failed_at = NULL, publish_attempts = 0 WHERE id = ? AND failed_at IS NOT NULL` — RB-05 의 (b) 와 **같은 문장**이다. 200 = 풀었다 · 404 = 행이 없다 · 409 `not-quarantined` = 격리된 행이 아니다. 409 본문의 최상위 `currentState`(`PENDING`·`PUBLISHED`)와 `publishedAt` 이 **지금 그 행이 어디 있는지** 말한다 |
+| 경고 | **재큐는 원인을 고치지 않는다.** 원인이 남아 있으면 릴레이가 다시 집어 다시 격리하고 `publish_attempts` 가 1 부터 다시 오른다(RB-05 1.3). 응답 문서가 이 문장을 싣는다 |
+| 인덱스 | 새로 두지 않는다. 목록은 V000_4 의 부분 인덱스 `ix_outbox_failed (failed_at) WHERE failed_at IS NOT NULL` 을 탄다 — 술어가 리터럴(`IS NOT NULL`)이다. **측정**(2026-09-24, PostgreSQL 18.2, [phase1 측정](benchmarks/phase1-retention-indexes.md)과 같은 200,000 발행 완료 행 + 격리 3, `ANALYZE` 뒤 `reltuples=200003`): `Bitmap Index Scan on ix_outbox_failed` → 3행 정렬, 0.014 ms · 버퍼 2. 재큐의 조건부 `UPDATE` 는 `outbox_events_pkey` Index Scan + `Filter: failed_at IS NOT NULL`(준비된 문장의 일반 계획도 같다). 격리 행은 평상시 0 이고 알림(§9.4)이 그 0 을 지킨다 — 그 수가 수천이 되는 날이 재검토 지점이다 |
+
+**재큐도 `UNKNOWN` 을 다시 누르기로 푼다.** 응답을 못 받은 재큐를 다시 누르면 — 앞의 것이 적용됐으면 409 에
+`currentState=PENDING`(아직 안 나감) 또는 `PUBLISHED`(나갔다)가 오고, 적용되지 않았으면 200 이다. 어느 쪽이든
+결과는 「격리가 풀려 있다」로 같다. 다만 **원인이 남아 있으면 그 사이 다시 격리됐을 수 있고** 그때 두 번째 누름은
+200 이다 — 그것은 멱등의 실패가 아니라 경고 칸의 상황이다.
+
+**서비스별 API 표(§5.1–§5.4)에는 싣지 않는다.** 공유 코드 한 벌이 네 서비스에 같은 경로를 만든다 — 표 넷에
+적으면 서로를 비추는 목록이 넷 늘고, 그 대조는 각 서비스의 `OpenApiContractIT`(커밋된 문서 = 코드)가 이미 한다.
+
 **DLQ 재처리** (2026-09-24, Phase 6 묶음 B, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md))
 
 두 축이 이 설계를 정한다 — **재처리한 이벤트가 원래 `eventId` 를 유지하는가**(멱등 소비자가 중복을 막는 근거)와
@@ -1107,7 +1127,8 @@ KST 경계로 바꾸면 서머타임이 없는 지금은 괜찮아 보이지만,
 - 커맨드는 코어 서비스 REST로 위임: 웨이브 조기 마감, 계획 재실행, stop 재배정, 주문 홀드/취소, DLQ 재처리, **outbox 격리 행 조회·재큐**(§4.6 발행 측 실패).
   (2026-09-24, 묶음 B) 들어온 것은 코어에 엔드포인트와 계약 문서가 **이미 있는** 셋이다 — 아래 「커맨드 위임」.
   **웨이브 조기 마감**·**outbox 격리 조회·재큐**는 작업 2(fulfillment 의 첫 운영 엔드포인트와 그 OpenAPI 문서)
-  뒤에 같은 경로로 붙는다. **DLQ 재처리**는 ops-api 가 직접 하는 일이라 위임과 모양이 달라 따로 붙었다 — §4.6 「DLQ 재처리」
+  뒤에 같은 경로로 붙는다 — 코어 쪽은 둘 다 들어왔다(조기 마감 ADR-054, 격리 조회·재큐는 코어 넷의 공유 코드
+  §4.6 「격리 조회·재큐 엔드포인트」). **DLQ 재처리**는 ops-api 가 직접 하는 일이라 위임과 모양이 달라 따로 붙었다 — §4.6 「DLQ 재처리」
   ([ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md), 감사 `action=DLQ_REPLAY`·`target_type=EVENT`).
   **주문 홀드는 미구현 — 전이 없음**: order-service 의 상태 머신(§5.1)에 홀드 전이가 없다. 목록에서 지우지
   않고 이 표시로 남긴다 — 지우면 「검토했는데 없는 것」과 「잊은 것」을 구별할 수 없다.
@@ -2872,7 +2893,7 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 |---|---|---|---|
 | 1 | **시드 행** | `DispatchAdminIT` 가 <em>전역</em> 시드 룰(`camp_id IS NULL`)을 고치고 `@AfterEach` 로 되돌렸다 — 병렬 실행이 들어오면 무너지는 격리 | 안 깨진 채로 **닫았다** (2026-09-18, Phase 5-0): 되돌리는 대신 **캠프 범위 픽스처 행**을 만들어 고치고 지운다. 지우는 것은 되돌리는 것과 달리 「무엇을 덮는가」를 묻지 않는다 |
 | 2 | **시각** | dispatch IT 셋이 약속창을 `Instant.now()` 로 만들었다 | 21시에 돌렸더니 근무창 밖 |
-| 3 | **릴레이 리더** | 발행을 보는 IT 가 리더가 되는 것이 클래스 시작 순서에 달려 있었다 | 리더 락이 Redis→advisory 로 옮겨져 **실제로 동작하기 시작**하자. dispatch·order 는 Phase 4-0 에서, **fulfillment 는 2026-09-18 (Phase 5-0)** 에 닫혔다 — 자기 `@DynamicPropertySource` 를 가진 `GeoFallbackIT` 가 둘째 컨텍스트라 릴레이가 둘이었고 락은 하나였다. 발행을 보지 않는 IT 가 자기 자리에서 끄고, 보는 IT 둘은 **`lead()` 가 `LEADER` 인가**를 첫 어설션으로 묻는다 |
+| 3 | **릴레이 리더** | 발행을 보는 IT 가 리더가 되는 것이 클래스 시작 순서에 달려 있었다 | 리더 락이 Redis→advisory 로 옮겨져 **실제로 동작하기 시작**하자. dispatch·order 는 Phase 4-0 에서, **fulfillment 는 2026-09-18 (Phase 5-0)** 에 닫혔다 — 자기 `@DynamicPropertySource` 를 가진 `GeoFallbackIT` 가 둘째 컨텍스트라 릴레이가 둘이었고 락은 하나였다. 발행을 보지 않는 IT 가 자기 자리에서 끄고, 보는 IT 둘은 **`lead()` 가 `LEADER` 인가**를 첫 어설션으로 묻는다. **이 축의 이름은 좁았다 — 축은 「한 DB 의 공유 자원을 두 컨텍스트가 다른 설정으로 본다」이고 락은 그 첫 사례다.** **둘째 사례가 Phase 6 작업 2 에서 나왔다** (2026-09-24): 공유 자원이 락이 아니라 **표**(`outbox_events`)였다. 릴레이를 끈 `WaveEarlyCloseIT` 가 남긴 미발행 행(`wave.closed` 포함)을 릴레이를 켠 `FulfillmentPublishIT` 의 컨텍스트가 집었다 — 그 실행에는 `wave.closed` 토픽이 없었고, 전송은 일시적 실패로 끝나 배치가 거기서 멈췄다. `FulfillmentPublishIT` 의 두 테스트는 **자기 행이 그 뒤에 서 있어서** 타임아웃으로 실패했다. 쓴 컨텍스트는 「이 행은 아무도 안 보낸다」로, 읽은 컨텍스트는 「보이는 행은 다 보낸다」로 설정돼 있었다 — 둘 다 자기 설정 안에서는 옳았다. 닫은 방식은 축 1 의 규칙이다(**만들고 지운다** — 릴레이를 끈 IT 가 `@AfterEach` 에서 자기 aggregate 의 outbox 행을 지운다). 그리고 **분류기는 옳았다**: 「토픽 없음」은 브로커가 토픽을 만드는 중일 수 있으므로 일시적이 맞다(메타데이터 대기 타임아웃이든 `UnknownTopicOrPartitionException` 이든 Kafka 가 재시도 가능으로 표시한다)(§4.6, `OutboxQuarantineIT.브로커가_받아주지_않으면_격리하지_않고_복구_후_전량_발행한다`) — 격리했다면 멀쩡한 행이 사람 손을 기다렸다. 그 옳은 판단이 이 간섭을 **조용하게** 만든 것이지 틀린 것이 아니다. 격리였다면 `dawnline_outbox_failed` 가 올라 누군가 봤을 것이다 |
 | 4 | **플래너 통계** | 통계 없는 테이블에서 플래너가 *짐작으로* 인덱스를 골랐다 — 50행에서 순차 스캔이 옳다 | CI 에서 autoanalyze 가 먼저 돌아 |
 | 5 | **컷오프 상한** | `GeoFallbackIT` 의 시각 리터럴이 `isStale` 24시간을 넘겼다 — 작성한 날로부터 25시간짜리 | 이틀 뒤 열 캠프 전부 배차 불가 |
 | 6 | **배정 동률** | 한계비용이 같을 때 `ORDER BY code` 순서로 차를 골랐다. cold-chain 공허성 검사의 통과·실패가 **시각과 시드 배분**에 달려 있었고, **CI 의 이전 통과는 시각 운이었다** | 근무조를 나누자 한 대가 웨이브를 흡수하게 되어([ADR-030](adr/ADR-030-night-shift-seed.md)) 드러남 |
@@ -2893,6 +2914,8 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 2. **공유 자원을 쓰는 IT 는 자기 자리에서 켜고 끈다 — 기반 클래스는 그 속성에 의견을 갖지
    않는다.** 기반의 기본값은 하위 클래스가 말하지 않는 조용한 전제가 되고, 자원이 하나뿐이면
    (advisory lock) 켜 둔 IT 들이 서로를 조용히 막는다(축 3·8).
+   **공유 표도 자원이다**(2026-09-24, 축 3 의 둘째 사례): 끈 쪽이 자기 설정 안에서 남긴 행은 켠 쪽의
+   설정으로 읽힌다. 그래서 끈 IT 는 끄는 것만으로 끝나지 않고 **자기가 만든 행을 지운다**(규칙 1).
 
 **결정론**: 최적화 테스트는 seed 고정. 시간은 `Clock` 주입으로 제어. Testcontainers 재사용(`testcontainers.reuse.enable=true`)으로 로컬 실행 시간 단축.
 

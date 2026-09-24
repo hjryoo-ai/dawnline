@@ -2,6 +2,8 @@ package com.dawnline.ops;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.messaging.outbox.OutboxRepository;
+import com.dawnline.messaging.web.OutboxAdminController;
 import com.dawnline.observability.MdcKeys;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -35,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -71,6 +74,9 @@ class OpsCommandIT extends OpsIntegrationTestBase {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private ApplicationContext context;
 
     @DynamicPropertySource
     static void wiring(DynamicPropertyRegistry registry) {
@@ -116,6 +122,24 @@ class OpsCommandIT extends OpsIntegrationTestBase {
         assertThat(response.statusCode()).isEqualTo(403);
         assertThat(ownRows()).isEmpty();
         assertThat(RECEIVED).isEmpty();
+    }
+
+    @Test
+    void 감사_없는_outbox_재큐는_ops_api_에_없다() throws Exception {
+        // libs/messaging 의 격리 조회·재큐는 조건(outbox + 서블릿 웹 앱)으로 켜지고 ops-api 는 그 조건을 만족한다.
+        // ops-api 의 운영 표면은 전부 감사 행을 남기는데 그 경로는 남기지 않으므로 application.yml 의
+        // dawnline.messaging.outbox.admin-api=false 로 끈다 (ADR-015 후속 정정 결정 4). 이 테스트는 그 제외가
+        // 「검토했는데 뺀 것」임을 말한다 — 그 줄이 사라지면 여기가 빨개진다.
+        assertThat(context.getBeanNamesForType(OutboxRepository.class))
+                .as("전제 — 자동 설정의 조건은 맞는다(ops-api 에도 outbox 가 있다). 이것이 비면 아래의 부재는 "
+                        + "아무것도 말하지 않는다")
+                .isNotEmpty();
+        assertThat(context.getBeanNamesForType(OutboxAdminController.class)).isEmpty();
+
+        HttpResponse<String> response = post("/api/v1/admin/outbox/" + TARGET + "/requeue",
+                token("OPS_OPERATOR", "kim"), "");
+        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(ownRows()).isEmpty();
     }
 
     @Test

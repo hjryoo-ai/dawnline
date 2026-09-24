@@ -97,7 +97,7 @@ class DawnlineMessagingPropertiesTest {
     void 바인딩_batchSize가_0이면_예외() {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> new DawnlineMessagingProperties.Outbox(true, 0, Duration.ofSeconds(10),
-                        Duration.ofDays(7), 100L, 5000L, 3_600_000L))
+                        Duration.ofDays(7), 100L, 5000L, 3_600_000L, true))
                 .withMessageContaining("batch-size");
     }
 

@@ -19,6 +19,13 @@ dependencies {
     implementation(libs.micrometer.core)
     compileOnly(libs.spring.boot.starter.actuator)
 
+    // outbox 격리 조회·재큐 엔드포인트 (DESIGN.md §4.6, ADR-015 후속 정정). compileOnly 인 이유: 웹이 없는
+    // 소비자(도구·배치)가 이 라이브러리를 쓰면서 서블릿 스택을 끌어오지 않게 한다. 자동 설정은
+    // DispatcherServlet 을 이름으로 조건에 걸어 그 클래스패스에서 조용히 빠진다. springdoc 은 문서 어노테이션만
+    // 쓴다(libs/web 과 같은 형태) — 없는 런타임에서 어노테이션은 무시된다.
+    compileOnly(libs.spring.boot.starter.web)
+    compileOnly(libs.springdoc.openapi.webmvc)
+
     // 이 라이브러리는 Redis 를 참조하지 않는다. 릴레이 리더 락이 잠깐 Redis 를 썼고
     // (ADR-027 원 결정) 그 의존은 compileOnly 였는데, advisory lock 으로 옮기면서
     // 조정자가 이미 쓰고 있는 DataSource 가 되어 의존 자체가 사라졌다.
@@ -28,6 +35,14 @@ dependencies {
     testFixturesApi(libs.jackson.databind)
 
     testImplementation(libs.spring.boot.starter.test)
+    // 컨트롤러 테스트 — 실제 WebMvc 자동 설정 위에서 서비스와 같은 어드바이스(libs/web)로 돈다.
+    // integrationTest 도 이 둘을 물려받아 MessagingTestApplication 이 서블릿 웹 앱이 된다(OutboxQuarantineIT 가
+    // 재큐를 HTTP 로 부른다).
+    testImplementation(libs.spring.boot.starter.web)
+    testImplementation(libs.spring.boot.webmvc.test)
+    testImplementation(project(":libs:web"))
+    // 컨트롤러의 문서 어노테이션을 읽을 수 있어야 테스트 컴파일이 -Werror 를 넘는다(libs/web 과 같은 이유).
+    testImplementation(libs.springdoc.openapi.webmvc)
 
     integrationTestImplementation(libs.spring.boot.starter.test)
     integrationTestImplementation(libs.spring.boot.testcontainers)

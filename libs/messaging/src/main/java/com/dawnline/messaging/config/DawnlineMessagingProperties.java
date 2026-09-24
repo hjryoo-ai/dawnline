@@ -46,6 +46,9 @@ public record DawnlineMessagingProperties(
      * @param pollIntervalMs     폴링 간격(ms) (§4.4)
      * @param metricsIntervalMs  게이지 갱신 간격(ms)
      * @param cleanupIntervalMs  정리 실행 간격(ms)
+     * @param adminApi           격리 조회·재큐 엔드포인트(§4.6). {@code OutboxAdminAutoConfiguration} 이 속성으로 직접
+     *                           읽는다. <strong>끄는 쪽만 의미가 있다</strong> — 켜는 것은 조건(outbox + 서블릿 웹 앱)이
+     *                           하고, 끄는 서비스는 ops-api 하나다(감사 없는 재큐가 생긴다, ADR-015 후속 정정 결정 4)
      */
     public record Outbox(
             @DefaultValue("true") boolean enabled,
@@ -54,7 +57,8 @@ public record DawnlineMessagingProperties(
             @DefaultValue("7d") Duration retention,
             @DefaultValue("100") long pollIntervalMs,
             @DefaultValue("5000") long metricsIntervalMs,
-            @DefaultValue("3600000") long cleanupIntervalMs) {
+            @DefaultValue("3600000") long cleanupIntervalMs,
+            @DefaultValue("true") boolean adminApi) {
 
         public Outbox {
             if (batchSize < 1) {

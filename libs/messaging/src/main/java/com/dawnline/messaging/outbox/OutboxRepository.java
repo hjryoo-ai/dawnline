@@ -2,6 +2,8 @@ package com.dawnline.messaging.outbox;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * {@code outbox_events} 접근 포트.
@@ -65,4 +67,35 @@ public interface OutboxRepository {
      * @return 삭제된 행 수
      */
     int deletePublishedBefore(Instant publishedBefore);
+
+    /**
+     * 격리된 행을 격리 시각 순으로 (§4.6 「격리 조회·재큐 엔드포인트」).
+     *
+     * <p>{@code payload}·{@code headers}·{@code partition_key} 는 읽지 않는다 — 운영자 화면에 가는 값이고
+     * 주소가 있을 수 있다(§9.3). 원인을 고치려고 행 전체를 봐야 하면 사람이 SQL 로 본다(RB-05).
+     *
+     * @param limit 최대 행 수 (1 이상)
+     * @return 격리 시각({@code failed_at}), 같으면 id 순
+     */
+    List<QuarantinedOutboxEvent> findQuarantined(int limit);
+
+    /**
+     * 격리를 푼다 — {@code failed_at = NULL, publish_attempts = 0}, <strong>격리된 행일 때만</strong> (RB-05).
+     *
+     * <p>조건부 {@code UPDATE} 한 문장이다. 읽고 고치고 쓰지 않으므로 릴레이와 경합할 틈이 없고(릴레이는 격리
+     * 행을 집지 않는다), 운영자가 런북에서 쓰던 SQL 과 같은 문장이다.
+     *
+     * @param id 행 id ({@code eventId})
+     * @return 풀었으면 {@code true}. 행이 없거나 격리된 행이 아니면 {@code false} — 둘을 가르는 것은
+     *         {@link #findById(UUID)} 로 다시 읽는 호출자의 몫이다
+     */
+    boolean releaseQuarantine(UUID id);
+
+    /**
+     * 행 하나.
+     *
+     * @param id 행 id
+     * @return 없으면 비어 있다
+     */
+    Optional<OutboxEvent> findById(UUID id);
 }

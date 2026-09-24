@@ -27,6 +27,17 @@
 
 ### 1.2 무엇이 격리됐는지 본다
 
+(2026-09-24) **목록 엔드포인트가 먼저다.** 네 코어(order·fulfillment·dispatch·tracking)가 같은 경로를 갖는다
+(DESIGN.md §4.6 「격리 조회·재큐 엔드포인트」). `payload`·`headers` 를 싣지 않으므로(§9.3) 출력을 남겨도 된다.
+포트는 `deploy/compose/.env` 의 `*_SERVICE_PORT`(order 8081 · fulfillment 8082 · dispatch 8083 · tracking 8084).
+
+```bash
+curl -s 'http://localhost:8081/api/v1/admin/outbox/quarantined?limit=50' | jq
+```
+
+칸은 `id`·`aggregateType`·`aggregateId`·`eventType`·`topic`·`createdAt`·`failedAt`·`publishAttempts` 와 전체 수
+`total` 이다. 격리 시각 순이다. 원인을 고치려면 행 자체(`headers`·`payload`)를 봐야 하므로 아래 SQL 로 간다.
+
 PostgreSQL 컨테이너는 하나이고 그 안에 서비스별 데이터베이스가 5개 있다. 계정도 서비스마다 다르다
 (`deploy/compose/initdb/01-roles-and-databases.sql`).
 
@@ -88,13 +99,24 @@ UPDATE outbox_events
        headers    = jsonb_set(headers, '{eventType}', '"order.placed"')
  WHERE id = '...';
 
--- (b) 격리를 푼다.
-UPDATE outbox_events
-   SET failed_at = NULL, publish_attempts = 0
- WHERE id = '...';
-
 COMMIT;
 ```
+
+(b) 격리를 푼다 — **엔드포인트로**(2026-09-24). 예전의 SQL(`SET failed_at = NULL, publish_attempts = 0 WHERE id = …`)과
+같은 문장이고, 격리된 행에만 적용된다.
+
+```bash
+curl -s -X POST http://localhost:8081/api/v1/admin/outbox/<id>/requeue | jq
+```
+
+| 응답 | 뜻 | 할 일 |
+|---|---|---|
+| 200 | 풀었다 — 릴레이가 다음 폴링에 집는다 | 아래 확인 |
+| 404 | 그 id 의 행이 없다 | 서비스(포트)를 잘못 골랐는지 본다 |
+| 409 `not-quarantined` | 격리된 행이 아니다. 본문 최상위 `currentState` 가 지금 위치다 — `PENDING`(풀려서 발행 대기) · `PUBLISHED`(`publishedAt` 에 나갔다) | 응답을 못 받고 다시 누른 것이면 **앞의 요청이 적용됐다** |
+
+> **재큐는 원인을 고치지 않는다.** (a) 를 건너뛰고 누르면 릴레이가 다시 집어 다시 격리한다 — 200 이 왔는데
+> 목록에 그 행이 다시 보이면 원인이 남아 있다(1.3). `publish_attempts` 는 1 부터 다시 오른다.
 
 100ms 안에 릴레이가 집어 간다. 확인:
 
