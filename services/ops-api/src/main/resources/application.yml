@@ -136,20 +136,33 @@ logging:
     com.dawnline: INFO
 
 # =============================================================================
-# 코어 서비스 커맨드 위임 대상 (DESIGN.md §5.5, CLAUDE.md 불변규칙 4)
+# 코어 서비스 커맨드 위임 (DESIGN.md §5.5 「커맨드 위임」, ADR-052, CLAUDE.md 불변규칙 4)
 #
-# 동기 REST 는 ops-api → 코어 방향만 허용된다. 코어 서비스끼리는 호출하지 않는다.
-# Compose 가 DAWNLINE_CORE_*_URL 환경 변수로 주입한다(docker-compose.yml ops-api 블록).
-# 이 값을 읽는 @ConfigurationProperties 바인딩 클래스는 Phase 6 에서 만든다.
+# 동기 REST 는 ops-api → 코어 방향만 허용된다. 클라이언트는 커밋된 contracts/openapi/*.yaml 에서 빌드 때
+# 생성되고(CoreClientsConfig 의 @ImportHttpServices), 그룹 이름이 아래 키와 이어진다(Boot 4 HTTP Service
+# Client). 주소는 Compose 가 DAWNLINE_CORE_*_URL 로 주입한다(docker-compose.yml ops-api 블록).
+#
+# 타임아웃 — 넘으면 감사 결과가 UNKNOWN 이다(적용됐는지 모른다):
+#   - 연결 1초: 맺어지지 않으면 FAILED(닿지 않았다는 것을 아는 유일한 경우)
+#   - dispatch 읽기 60초: 재계획은 동기로 계획을 푼다. 계획 시간 p95 경보가 45초라(§9.4) 그보다 짧으면
+#     정상적인 재계획이 UNKNOWN 이 된다
+#   - order 읽기 5초: 취소는 상태 전이 하나다
+# fulfillment(웨이브 조기 마감)는 그 엔드포인트와 계약 문서가 생기는 작업 2 에서 그룹으로 더한다.
 # =============================================================================
-dawnline:
-  core:
-    order:
-      url: ${DAWNLINE_CORE_ORDER_URL:http://localhost:8081}
-    fulfillment:
-      url: ${DAWNLINE_CORE_FULFILLMENT_URL:http://localhost:8082}
-    dispatch:
-      url: ${DAWNLINE_CORE_DISPATCH_URL:http://localhost:8083}
-    tracking:
-      url: ${DAWNLINE_CORE_TRACKING_URL:http://localhost:8084}
+spring.http.serviceclient:
+  dispatch:
+    base-url: ${DAWNLINE_CORE_DISPATCH_URL:http://localhost:8083}
+    connect-timeout: 1s
+    read-timeout: 60s
+  order:
+    base-url: ${DAWNLINE_CORE_ORDER_URL:http://localhost:8081}
+    connect-timeout: 1s
+    read-timeout: 5s
 
+dawnline:
+  # JWT 검증 (DESIGN.md §5.5 · §10, ADR-052 결정 2) — 시크릿은 저장소에 두지 않는다. `make env` 가
+  # 무작위로 채우고 `make token ROLE=…` 가 같은 시크릿으로 찍는다(12시간). 없거나 32바이트보다 짧으면
+  # 기동하지 않는다(OpsJwtProperties) — 기본값을 두지 않는 것이 그 규칙의 일부다.
+  ops:
+    jwt:
+      secret: ${DAWNLINE_OPS_JWT_SECRET:}

@@ -150,4 +150,33 @@ class OpenApiResponsesTest {
                 .extracting(OpenApiResponses.Response::status)
                 .containsExactly("200");
     }
+
+    @Test
+    void springdoc_이_그리던_중첩_확장_칸을_집어낸다() {
+        // 2026-09-24 까지 세 서비스의 문서가 실제로 말하던 모양이다.
+        String nested = """
+                {"components": {"schemas": {"ProblemDetail": {"type": "object", "properties": {
+                  "type": {"type": "string"}, "status": {"type": "integer"},
+                  "properties": {"type": "object", "additionalProperties": {}}}}}}}
+                """;
+
+        assertThat(OpenApiResponses.problemDetailShapeViolations(nested)).hasSize(3);
+    }
+
+    @Test
+    void 확장_칸이_최상위면_어긋난_것이_없다() {
+        String flat = """
+                {"components": {"schemas": {"ProblemDetail": {"type": "object", "properties": {
+                  "type": {"type": "string"}, "code": {"type": "string"}},
+                  "additionalProperties": true}}}}
+                """;
+
+        assertThat(OpenApiResponses.problemDetailShapeViolations(flat)).isEmpty();
+    }
+
+    @Test
+    void ProblemDetail_이_없는_문서를_맞다고_하지_않는다() {
+        assertThat(OpenApiResponses.problemDetailShapeViolations("{\"paths\": {}}"))
+                .containsExactly("문서에 ProblemDetail 스키마가 없다");
+    }
 }

@@ -275,6 +275,7 @@ components:
       - serviceTier
     ProblemDetail:
       type: object
+      additionalProperties: true
       properties:
         type:
           type: string
@@ -289,9 +290,10 @@ components:
         instance:
           type: string
           format: uri
-        properties:
-          type: object
-          additionalProperties: {}
+        code:
+          type: string
+          description: "오류 코드 — `type` 의 마지막 세그먼트와 같다. 모든 오류에 실린다. 그 밖의 확장 멤버(`retryAfterSeconds`,\
+            \ 검증 오류, 도메인 예외의 상세)도 이 칸처럼 최상위에 온다"
     OrderAccepted:
       type: object
       properties:

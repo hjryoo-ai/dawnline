@@ -66,10 +66,20 @@ public final class MdcKeys {
     public static final String ROUTE_ID = "routeId";
 
     /**
+     * ops-api 감사 행의 id(UUIDv7) — 운영자 커맨드가 코어를 부를 때 {@link #AUDIT_ID_HEADER} 로 싣는다
+     * (DESIGN.md §5.5 「커맨드 위임」, §9.3). 사람이 결과를 모르는({@code UNKNOWN}) 감사 행을 해소할 때
+     * 코어의 로그에서 찾는 키다. ops-api 가 만든 id 라 개인을 식별하지 않는다.
+     */
+    public static final String AUDIT_ID = "auditId";
+
+    /** {@link #AUDIT_ID} 를 싣는 요청 헤더. ops-api 가 보내고 {@link MdcFilter} 가 읽는다. */
+    public static final String AUDIT_ID_HEADER = "X-Dawnline-Audit-Id";
+
+    /**
      * 애플리케이션이 관리하는 키 목록 — 즉 {@link MdcScope} 가 넣고, {@link MdcFilter} 가
      * 요청 종료 시 지우는 대상이다. {@link #TRACE_ID}/{@link #SPAN_ID} 는 소유자가
      * Micrometer Tracing 이므로 <strong>일부러 제외</strong>했다.
      */
     public static final List<String> MANAGED = List.of(
-            SERVICE, EVENT_ID, ORDER_ID, WAVE_ID, ROUTE_ID);
+            SERVICE, EVENT_ID, ORDER_ID, WAVE_ID, ROUTE_ID, AUDIT_ID);
 }

@@ -12,6 +12,11 @@ dependencies {
     // 시그니처에서 그대로 쓴다.
     api(libs.spring.boot.starter.web)
 
+    // 문서의 ProblemDetail 스키마를 실제 본문의 모양으로 고친다(openapi.ProblemDetailSchema).
+    // compileOnly 인 이유: springdoc 을 쓰는 서비스만 그 customizer 를 받는다(@ConditionalOnClass).
+    compileOnly(libs.springdoc.openapi.webmvc)
+    testImplementation(libs.springdoc.openapi.webmvc)
+
     // jspecify 와 Boot BOM 은 dawnline.java-conventions 가 이미 건다.
 
     testImplementation(libs.spring.boot.starter.test)

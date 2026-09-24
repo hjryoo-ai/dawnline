@@ -387,6 +387,8 @@ services:
       DAWNLINE_CORE_FULFILLMENT_URL: http://fulfillment-service:8080
       DAWNLINE_CORE_DISPATCH_URL: http://dispatch-service:8080
       DAWNLINE_CORE_TRACKING_URL: http://tracking-service:8080
+      # JWT 검증 시크릿 — 없거나 짧으면 ops-api 가 뜨지 않는다 (DESIGN.md §5.5, make env 가 만든다)
+      DAWNLINE_OPS_JWT_SECRET: ${DAWNLINE_OPS_JWT_SECRET}
     ports:
       - "${OPS_API_PORT}:8080"
 

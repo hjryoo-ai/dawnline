@@ -1862,6 +1862,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
      모집단에서 빠진 수(`outcome_without_promise` → `dawnline_kpi_excluded`)와 갱신 나이
      (`dawnline_kpi_refresh_age_seconds`, 알림은 이 값에)를 함께 낸다 — NaN 은 알림을 울리지 않는다.
      인덱스 둘은 뷰의 버킷 식 그대로다([측정](benchmarks/phase6-kpi-hourly-views-index.md)).
+   - **JWT·역할 + 커맨드 위임 + `audit_logs`**(2026-09-24, §5.5 「커맨드 위임」,
+     [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)). 위임 클라이언트는 6-0 의
+     생성물이 아니라 **그 문서**에서 빌드 때 만든다 — 채택 기준을 시도 전에 적었고 다섯 다 참이었다. 발급은
+     `make token ROLE=…`(12시간), ops-api 는 검증만. 감사 행은 위임 전에 `PENDING`, 결과는 넷(`UNKNOWN` 포함),
+     감사 id 는 코어 호출의 상관 헤더와 코어 MDC `auditId` 로. 이번에 붙는 것은 엔드포인트가 이미 있는
+     셋(재계획·재배정·취소)이고, 웨이브 조기 마감·outbox 격리는 작업 2 뒤, DLQ 재처리는 따로, **주문 홀드는
+     「미구현 — 전이 없음」**(§5.5).
 2. 코어 서비스에 필요한 운영 엔드포인트 추가(fulfillment: 웨이브 조기 마감; dispatch: 재계획·재배정은 Phase 3/5에서 존재).
 3. ops-web: 캠프 대시보드, 웨이브/계획 상세(설명 조회 포함), 라우트 지도(Leaflet, 폴리라인·상태 색), 룰 편집.
 4. 테스트: 프로젝션 멱등(같은 이벤트 2회), **프로젝션 순서 무관(같은 사실을 씨 고정 셔플로 다시 넣어 최종 행이 같은가)**, 권한(viewer가 커맨드 403), 커맨드 감사 기록.

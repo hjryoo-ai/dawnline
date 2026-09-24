@@ -22,7 +22,7 @@ class MdcKeysTest {
     @Test
     void MANAGED_설계서9_3이요구하는애플리케이션소유키를모두담는다() {
         assertThat(MdcKeys.MANAGED)
-                .containsExactlyInAnyOrder("service", "eventId", "orderId", "waveId", "routeId");
+                .containsExactlyInAnyOrder("service", "eventId", "orderId", "waveId", "routeId", "auditId");
     }
 
     @Test

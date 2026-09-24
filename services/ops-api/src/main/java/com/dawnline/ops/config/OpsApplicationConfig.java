@@ -3,13 +3,18 @@ package com.dawnline.ops.config;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.ops.adapter.in.messaging.ProjectionListener;
+import com.dawnline.ops.adapter.out.persistence.JdbcAuditLog;
 import com.dawnline.ops.adapter.out.persistence.JdbcDeliveryKpis;
 import com.dawnline.ops.adapter.out.persistence.JdbcOrderRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcRouteRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcWaveRows;
 import com.dawnline.ops.application.OnTimeRatioGauges;
+import com.dawnline.ops.application.OpsCommandService;
 import com.dawnline.ops.application.ReadModelProjector;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
+import com.dawnline.ops.application.port.in.RunOpsCommandUseCase;
+import com.dawnline.ops.application.port.out.AuditLog;
+import com.dawnline.ops.application.port.out.CoreCommands;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.OrderRows;
 import com.dawnline.ops.application.port.out.RouteRows;
@@ -20,6 +25,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 유스케이스 배선 (DESIGN.md §5.5).
@@ -111,5 +117,29 @@ public class OpsApplicationConfig {
     @Bean
     public OnTimeRatioGauges onTimeRatioGauges(DeliveryKpis kpis, MeterRegistry meters, Clock clock) {
         return new OnTimeRatioGauges(kpis, meters, clock);
+    }
+
+    // --- 운영자 커맨드 (§5.5 「커맨드 위임」, ADR-052) ------------------------------
+
+    /**
+     * @param jdbc 트랜잭션 밖에서 부른다 — {@code PENDING} 이 위임 전에 커밋된다
+     * @param json {@code request} JSONB 직렬화
+     * @return {@code audit_logs}
+     */
+    @Bean
+    public AuditLog auditLog(JdbcTemplate jdbc, JsonMapper json) {
+        return new JdbcAuditLog(jdbc, json);
+    }
+
+    /**
+     * @param audit    {@code audit_logs}
+     * @param core     코어 위임({@link CoreClientsConfig})
+     * @param clock    저장 정밀도로 자른 시계
+     * @param registry 카운터 레지스트리
+     * @return 커맨드 유스케이스
+     */
+    @Bean
+    public RunOpsCommandUseCase runOpsCommand(AuditLog audit, CoreCommands core, Clock clock, MeterRegistry registry) {
+        return new OpsCommandService(audit, core, clock, registry);
     }
 }

@@ -37,6 +37,12 @@ public abstract class OpsIntegrationTestBase {
                 .migrate();
     }
 
+    /**
+     * JWT 검증 시크릿 — 없으면 ops-api 가 뜨지 않는다(DESIGN.md §5.5). 테스트 전용 값이고, 토큰을 찍는 IT 가
+     * 같은 값을 쓴다.
+     */
+    protected static final String JWT_SECRET = "integration-test-only-ops-jwt-secret-0123456789";
+
     /** 하위 클래스가 상속한다. */
     protected OpsIntegrationTestBase() {
     }
@@ -53,5 +59,6 @@ public abstract class OpsIntegrationTestBase {
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.flyway.enabled", () -> "false");
+        registry.add("dawnline.ops.jwt.secret", () -> JWT_SECRET);
     }
 }
