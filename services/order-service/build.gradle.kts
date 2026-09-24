@@ -82,3 +82,13 @@ tasks.register<Test>("updateOpenApi") {
     systemProperty("dawnline.openapi.update", "true")
     outputs.upToDateWhen { false }
 }
+
+// -----------------------------------------------------------------------------
+// RetentionTableDefaultsTest 가 docs/DESIGN.md §7.1 보존 표를 읽는다(ADR-058 결정 7) — 입력으로 선언하지 않으면
+// 표만 고친 빌드에서 test 가 UP-TO-DATE 로 건너뛴다. 검사가 돌지 않는데 초록인 것은 이 검사가 막으려는 모양이다.
+// -----------------------------------------------------------------------------
+tasks.named<Test>("test") {
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+            .withPropertyName("retentionTable")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
