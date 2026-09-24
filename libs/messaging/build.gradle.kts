@@ -44,6 +44,8 @@ dependencies {
     // 컨트롤러의 문서 어노테이션을 읽을 수 있어야 테스트 컴파일이 -Werror 를 넘는다(libs/web 과 같은 이유).
     testImplementation(libs.springdoc.openapi.webmvc)
 
+    // 내부 토큰의 테스트 값(InternalTokens)과 코어의 쓰기 표면 검사(InternalTokenSurfaceContract) — ADR-055.
+    integrationTestImplementation(testFixtures(project(":libs:web")))
     integrationTestImplementation(libs.spring.boot.starter.test)
     integrationTestImplementation(libs.spring.boot.testcontainers)
     integrationTestImplementation(libs.testcontainers.junit.jupiter)

@@ -1,5 +1,6 @@
 package com.dawnline.messagingtest;
 
+import com.dawnline.web.internal.InternalTokens;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -103,6 +104,8 @@ public abstract class MessagingIntegrationTestBase {
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+        // 내부 토큰 (ADR-055) — 없으면 컨텍스트가 뜨지 않는다. 공유 자원이 아니라 기동 조건이라 기반이 넣는다.
+        registry.add(InternalTokens.SECRET_PROPERTY, () -> InternalTokens.TEST_TOKEN);
         // Flyway 로 만든 스키마와 JPA 엔티티가 정확히 일치하는지 기동 시 검증한다 (§7.1).
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         // 봉투의 producer. 없으면 자동설정이 기동 시점에 예외를 던진다.

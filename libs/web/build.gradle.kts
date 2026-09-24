@@ -1,5 +1,6 @@
 plugins {
     id("dawnline.java-conventions")
+    `java-test-fixtures`
 }
 
 // libs/web 은 Spring 을 **아는** 공유 조각이다 (ADR-049). 그것이 libs/common 과 갈리는 자리이고,
@@ -23,4 +24,8 @@ dependencies {
     // 규칙 9 의 표본과 대조 검사가 쓴다 (ADR-049 결정 4).
     testImplementation(testFixtures(project(":libs:common")))
     testImplementation(libs.archunit.junit5)
+
+    // InternalTokenSurfaceContract — 코어의 OpenApiContractIT 가 구현하는 검사(ADR-055 결정 3). 코어마다 같은
+    // 다섯 검사를 옮겨 적으면 그 목록이 넷으로 갈라진다. JUnit·AssertJ·MockMvc 가 starter-test 에서 온다.
+    testFixturesApi(libs.spring.boot.starter.test)
 }
