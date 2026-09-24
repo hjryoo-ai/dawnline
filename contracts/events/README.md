@@ -22,7 +22,14 @@ Dawnline 의 Kafka 이벤트는 **코드보다 계약이 먼저**다 (CLAUDE.md 
   → 스키마 파일 = <eventType>.v<major>.schema.json
 ```
 
-`variant` 는 같은 이벤트의 다른 분기를 담는다. 현재 `fulfillment.planned.v1.unserviceable.example.json` 하나뿐이다.
+`variant` 는 같은 이벤트의 다른 분기를 담는다 — 예: `fulfillment.planned.v1.unserviceable`, `route.assigned.v1.revised`,
+그리고 **추가된 선택 칸이 없던 때의 모양**(`wave.closed.v1.before-camp-code` — `campCode` 이전의 발행자가 보내던 메시지).
+
+**예시마다 `eventId` 가 다르다.** 리스너 테스트는 예시를 Kafka 에 그대로 발행하고, 소비자는 `processed_events` 로
+멱등을 지킨다(불변규칙 2). eventId 가 같은 두 예시를 한 소비자가 받으면 둘째는 **이미 처리한 것으로 버려진다** —
+그 분기는 검사되지 않은 채 테스트가 통과한다. `before-camp-code` 가 처음에 본 예시의 eventId 를 복사한 채로
+그렇게 조용히 버려졌다(2026-09-24). 그래서 변형 예시는 본 예시를 복사해 만들더라도 eventId 를 새로 받는다.
+`EventContractsTest.예시의_eventId는_서로_다르다` 가 강제한다.
 
 ### 현재 있는 것 / 아직 없는 것
 
@@ -220,7 +227,7 @@ fulfillment-service 구현 시 이 목록이 확정되면 enum 으로 좁히는 
 - [ ] 추가한 필드가 `required` 에 들어가지 않았는가? (기존 발행자는 그 필드를 보내지 않는다)
 - [ ] 기존 필드의 제약을 **좁히지** 않았는가? (`maxLength` 축소, `minimum` 상향, enum 값 삭제, `pattern` 강화는 전부 파괴적)
 - [ ] `examples/` 를 함께 갱신했는가? 기존 예시는 **그대로 통과해야 한다** (통과하지 못하면 그건 major 변경이다)
-- [ ] 새 분기가 생겼다면 variant 예시를 추가했는가?
+- [ ] 새 분기가 생겼다면 variant 예시를 추가했는가? 그 예시의 `eventId` 는 새로 받았는가? (§1 — 같으면 멱등 소비자가 버린다)
 - [ ] 소비자 쪽 record 에 필드를 추가했다면, 그 필드가 없는 옛 메시지를 받았을 때의 동작(기본값·`@Nullable`)을 정했는가?
 - [ ] 파괴적 변경이라면 ADR 을 추가하고 `docs/DESIGN.md` §4 를 먼저 고쳤는가?
 
