@@ -50,14 +50,17 @@ public interface ReadModelViews {
      * @param limit  최대 행 수
      * @return 배송 시각 역순의 앞 {@code limit} 행과 캠프의 전체 수
      */
-        CancelledButDeliveredPage cancelledButDelivered(UUID campId, int limit);
+    CancelledButDeliveredPage cancelledButDelivered(UUID campId, int limit);
 
     /**
      * @param campId            캠프
+     * @param campCode          캠프 코드 — {@code wave.closed} 의 스냅샷(V5). 그것을 싣지 않은 옛 이벤트의 웨이브만
+     *                          있으면 {@code null} 이고, 화면은 그때 id 를 줄여 보인다. 코드는 캠프마다 하나라
+     *                          웨이브들 중 아무것이나 같다({@code max})
      * @param waves             웨이브 수
      * @param latestCutoffAt    가장 늦은 컷오프
      */
-    record CampSummary(UUID campId, long waves, @Nullable Instant latestCutoffAt) {
+    record CampSummary(UUID campId, @Nullable String campCode, long waves, @Nullable Instant latestCutoffAt) {
         public CampSummary {
             Objects.requireNonNull(campId, "campId");
         }

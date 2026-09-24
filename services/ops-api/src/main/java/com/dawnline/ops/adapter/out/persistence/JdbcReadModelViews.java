@@ -24,7 +24,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class JdbcReadModelViews implements ReadModelViews {
 
     static final String CAMPS_SQL = """
-            SELECT camp_id, count(*) AS waves, max(cutoff_at) AS latest_cutoff_at
+            SELECT camp_id, max(camp_code) AS camp_code, count(*) AS waves, max(cutoff_at) AS latest_cutoff_at
               FROM rm_waves
              WHERE camp_id IS NOT NULL
              GROUP BY camp_id
@@ -76,7 +76,7 @@ public class JdbcReadModelViews implements ReadModelViews {
     @Override
     public List<CampSummary> camps() {
         return jdbc.query(CAMPS_SQL, (rs, n) -> new CampSummary(rs.getObject("camp_id", UUID.class),
-                rs.getLong("waves"), instantOf(rs, "latest_cutoff_at")));
+                rs.getString("camp_code"), rs.getLong("waves"), instantOf(rs, "latest_cutoff_at")));
     }
 
     @Override

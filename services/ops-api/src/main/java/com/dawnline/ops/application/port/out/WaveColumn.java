@@ -11,6 +11,8 @@ public enum WaveColumn {
     /** {@code wave.closed} 의 창고 좌표 — 웨이브의 불변 속성(V3). */
     DEPOT_LAT(ColumnFamily.KEY),
     DEPOT_LNG(ColumnFamily.KEY),
+    /** {@code wave.closed} 의 캠프 코드 — 계약에서 선택이라 그 전의 이벤트는 싣지 않는다(V5). */
+    CAMP_CODE(ColumnFamily.KEY),
     STATUS(ColumnFamily.AXIS),
     PLAN_ID(ColumnFamily.PLAN),
     PLAN_DURATION_MS(ColumnFamily.PLAN),
