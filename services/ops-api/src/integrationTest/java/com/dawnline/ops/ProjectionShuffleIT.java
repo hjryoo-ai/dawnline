@@ -56,6 +56,9 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
     static final Map<String, String> EXCLUDED_COLUMNS = Map.of(
             "updated_at", "사실이 아니라 프로젝션의 기록 — 마지막으로 행을 만진 시각이라 정의상 처리 순서를 탄다(§5.5)");
 
+    /** 시나리오가 채우지 않아도 되는 칸과 그 이유 — 순서 비교의 비공허 검사에서 뺀다. */
+    static final Map<String, Map<String, String>> NULL_IN_SCENARIO = Map.of();
+
     /** 핸들러가 쓰지 않고 다시 세는 칸 (ADR-051 결정 4). */
     static final Map<String, Set<String>> AGGREGATES = Map.of(
             "rm_orders", Set.of(),
@@ -207,6 +210,7 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
         replay(causal);
         var baseline = tables.snapshot(scenario.keys(), EXCLUDED_COLUMNS.keySet());
         assertThat(baseline.get("rm_orders")).as("기준 행이 있다 — 비어 있으면 아래 비교는 공허하다").hasSize(5);
+        assertEveryColumnFilled(baseline);
 
         for (long seed = 1; seed <= ROUNDS; seed++) {
             wipe();
@@ -231,6 +235,7 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
         replay(causal);
         var baseline = tables.snapshot(scenario.keys(), EXCLUDED_COLUMNS.keySet());
         assertThat(baseline.get("rm_orders")).as("기준 행이 있다 — 비어 있으면 아래 비교는 공허하다").hasSize(5);
+        assertEveryColumnFilled(baseline);
 
         for (int i = 0; i < causal.size() - 1; i++) {
             wipe();
@@ -244,6 +249,28 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
                     .as("재처리된 사건: %s", causal.get(i))
                     .isEmpty();
         }
+    }
+
+    /**
+     * 기준 행이 비교하는 칸을 <strong>전부 한 번은</strong> 채운다 — 뺀 칸만 빼고. 두 순서가 모두 {@code null} 로 남긴 칸은
+     * 「같다」로 통과하지만 아무것도 검사하지 않았다. 칸 enum 과 DDL 의 대조(위)는 칸이 <em>비교 대상</em>인지만 말하고,
+     * 시나리오가 그 칸을 <em>채우는지</em>는 말하지 않는다 — 2026-09-24 에 {@code camp_code} 의 투영을 지운 음성 표본이
+     * 이 IT 에서 초록이었다.
+     */
+    private void assertEveryColumnFilled(Map<String, Map<Object, Map<String, Object>>> baseline) {
+        baseline.forEach((table, rows) -> {
+            Set<String> expected = new TreeSet<>(tables.columns(table));
+            expected.removeAll(EXCLUDED_COLUMNS.keySet());
+            expected.removeAll(NULL_IN_SCENARIO.getOrDefault(table, Map.of()).keySet());
+            Set<String> filled = new TreeSet<>();
+            rows.values().forEach(row -> filled.addAll(row.keySet()));
+            assertThat(filled).as("%s — 시나리오가 한 번도 채우지 않은 칸은 순서 비교가 공허하다", table)
+                    .containsAll(expected);
+        });
+        NULL_IN_SCENARIO.forEach((table, columns) -> columns.forEach((column, reason) -> {
+            assertThat(tables.columns(table)).as("뺀 칸 %s.%s 는 있는 칸이어야 한다", table, column).contains(column);
+            assertThat(reason).isNotBlank();
+        }));
     }
 
     private void replay(List<Event> order) {
