@@ -253,4 +253,37 @@ public final class OpenApiResponses {
                 .map(Response::status)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     }
+
+    /**
+     * 문서의 {@code ProblemDetail} 이 <strong>실제 본문의 모양</strong>인가 — 확장 멤버가 최상위에 있는가.
+     *
+     * <p>본문 쪽 사실은 서비스 IT 가 {@code jsonPath("$.code")} 로 본다(tracking 의 {@code ScanApiIT}).
+     * 이 메서드는 같은 사실을 <em>문서</em> 쪽에서 대조한다. springdoc 은 확장 멤버 맵을 {@code properties}
+     * 라는 중첩 객체로 그렸고, 그 문서로 만든 클라이언트(ops-api)는 {@code code} 를 잃었다(ADR-052).
+     *
+     * @param apiDocsJson springdoc 이 낸 문서
+     * @return 어긋난 점. 비어 있어야 한다. 문서에 {@code ProblemDetail} 이 없으면 그 사실 하나를 돌려준다 —
+     *         없는 스키마를 「맞다」고 하지 않는다
+     */
+    public static List<String> problemDetailShapeViolations(String apiDocsJson) {
+        Objects.requireNonNull(apiDocsJson, "apiDocsJson");
+        JsonNode problem = JsonMapper.builder().build().readTree(apiDocsJson)
+                .path("components").path("schemas").path("ProblemDetail");
+        if (problem.isMissingNode()) {
+            return List.of("문서에 ProblemDetail 스키마가 없다");
+        }
+        List<String> violations = new ArrayList<>();
+        JsonNode properties = problem.path("properties");
+        if (properties.has("properties")) {
+            violations.add("확장 멤버가 중첩 객체 `properties` 로 그려져 있다 — 실제 본문은 최상위로 펼친다");
+        }
+        if (!properties.has("code")) {
+            violations.add("`code` 가 최상위 칸에 없다 — 모든 오류에 실리는 확장 멤버다");
+        }
+        JsonNode additional = problem.path("additionalProperties");
+        if (!(additional.isBoolean() && additional.booleanValue()) && !additional.isObject()) {
+            violations.add("추가 칸을 허용하지 않는다 — `retryAfterSeconds`·검증 오류 같은 확장 멤버가 문서 밖이 된다");
+        }
+        return violations;
+    }
 }

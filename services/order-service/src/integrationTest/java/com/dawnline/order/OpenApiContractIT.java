@@ -126,6 +126,14 @@ class OpenApiContractIT extends OrderIntegrationTestBase {
     }
 
     @Test
+    void ProblemDetail_의_확장_칸은_최상위다() throws Exception {
+        // 본문 쪽 사실은 서비스 IT 가 jsonPath("$.code") 로 본다(tracking 의 ScanApiIT). 여기서는 같은 사실을
+        // 문서 쪽에서 대조한다. springdoc 은 확장 멤버 맵을 `properties` 라는 중첩 객체로 그렸고, 그 문서로
+        // 만든 ops-api 의 위임 클라이언트는 `code` 를 잃었다(ADR-052). 고치는 것은 libs/web 의 ProblemDetailSchema.
+        assertThat(OpenApiResponses.problemDetailShapeViolations(generatedJson())).isEmpty();
+    }
+
+    @Test
     void 오류_응답의_본문은_모두_Problem_Details_다() throws Exception {
         // 코드를 열거하지 않는다 — **2xx 가 아닌 전부**다. 열거하면 새로 생긴 코드가 조용히 검사
         // 밖에 남는다(CLAUDE.md 「집합을 도는 검사는 열거하지 않고 전체에서 뺀다」).
