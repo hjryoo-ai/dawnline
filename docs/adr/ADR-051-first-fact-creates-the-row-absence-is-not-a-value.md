@@ -21,7 +21,7 @@ DB 를 읽지 않으므로(불변규칙 4) 이 열한 개가 운영자 화면이
 | `rm_orders` | `order_id` | **여섯** — `order.placed` · `fulfillment.planned` · `order.dispatched` · `delivery.status` · `order.cancelled` · `delivery.at-risk` (2026-09-24 정정 뒤 **일곱** — `route.assigned` 가 `planned_arrival` 을 쓴다, 재검토 지점 2) |
 | `rm_waves` | `wave_id` | 넷 — `fulfillment.planned`(웨이브를 처음 이름으로 부른다) · `wave.closed` · `plan.completed` · `plan.failed` |
 | `rm_routes` | `route_id` | 넷 — `route.assigned` · `delivery.status` · `delivery.at-risk` · `delivery.route-departed` |
-| `rm_kpi_hourly` | `(camp_id, bucket_hour)` | 위 전부의 파생 |
+| `rm_kpi_hourly` | `(camp_id, bucket_hour)` | 위 전부의 파생 — **(2026-09-24) 표가 아니라 `rm_orders` 위의 뷰 둘(`kpi_intake_hourly`·`kpi_delivery_hourly`)이 됐다. 쓰는 토픽이 없다** — 결정 4 의 가장 순수한 형태다(`docs/DESIGN.md` §5.5 「KPI — 두 축, 뷰」) |
 
 그 여섯·넷·넷 **사이의 순서는 보장되지 않는다.** §4.5 가 보장하는 것은 *같은 키, 같은
 토픽* 안의 순서이고, 여기서는 토픽이 전부 다르다. 같은 주문의 `order.placed`(orderId 키) ·
