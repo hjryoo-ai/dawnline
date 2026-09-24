@@ -7,6 +7,8 @@ import com.dawnline.ops.application.port.in.OpsCommand;
 import com.dawnline.ops.application.port.out.CoreCommands;
 import com.dawnline.ops.application.port.out.CoreReply;
 import com.dawnline.ops.config.CoreClientsConfig;
+import com.dawnline.web.internal.InternalToken;
+import com.dawnline.web.internal.InternalTokenProperties;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -55,6 +57,7 @@ class CoreCommandsClientTest {
     private static final UUID ROUTE = UUID.fromString("0199a000-0000-7000-8000-0000000000b1");
     private static final UUID TARGET = UUID.fromString("0199a000-0000-7000-8000-0000000000b2");
     private static final UUID ORDER = UUID.fromString("0199a000-0000-7000-8000-0000000000c1");
+    private static final String INTERNAL_TOKEN = "unit-test-only-internal-token-0123456789";
 
     private HttpServer core;
     private final List<Map<String, @Nullable String>> received = new CopyOnWriteArrayList<>();
@@ -69,6 +72,7 @@ class CoreCommandsClientTest {
                     "method", exchange.getRequestMethod(),
                     "path", exchange.getRequestURI().toString(),
                     "auditId", String.valueOf(exchange.getRequestHeaders().getFirst(MdcKeys.AUDIT_ID_HEADER)),
+                    "internalToken", String.valueOf(exchange.getRequestHeaders().getFirst(InternalToken.HEADER)),
                     "body", body));
             Reply reply = routes.getOrDefault(exchange.getRequestURI().getPath(), e -> new Reply(404, "{}", 0))
                     .apply(exchange);
@@ -101,6 +105,22 @@ class CoreCommandsClientTest {
             assertThat(request.get("path")).isEqualTo("/api/v1/plans/" + WAVE + "/run?mode=FAST");
             assertThat(request.get("auditId")).isEqualTo(AUDIT.toString());
         });
+    }
+
+    @Test
+    void 기존_위임_셋이_모두_내부_토큰을_싣는다() {
+        // ADR-055 결정 4 — 빠지면 코어가 401 을 돌려주고 기존 커맨드가 머지 직후 깨진다. 취소는 코어에서 면제
+        // 경로지만 싣는다: 호출마다 고르는 규칙은 새는 규칙이다.
+        delegate(coreUrl(), new OpsCommand.RunPlan(WAVE, null, null, null));
+        delegate(coreUrl(), new OpsCommand.ReassignStop(ROUTE, ORDER, TARGET));
+        delegate(coreUrl(), new OpsCommand.CancelOrder(ORDER, null));
+
+        assertThat(received).extracting(request -> request.get("path"))
+                .as("전제 — 세 위임이 코어에 닿았다")
+                .containsExactly("/api/v1/plans/" + WAVE + "/run",
+                        "/api/v1/routes/" + ROUTE + "/stops/" + ORDER + "/reassign",
+                        "/api/v1/orders/" + ORDER + "/cancel");
+        assertThat(received).extracting(request -> request.get("internalToken")).containsOnly(INTERNAL_TOKEN);
     }
 
     @Test
@@ -194,6 +214,8 @@ class CoreCommandsClientTest {
                         ImperativeHttpClientAutoConfiguration.class, HttpServiceClientPropertiesAutoConfiguration.class,
                         RestClientAutoConfiguration.class, HttpServiceClientAutoConfiguration.class))
                 .withUserConfiguration(CoreClientsConfig.class)
+                // ops-api 의 모양 — 검사는 끄고 값은 싣는다(ADR-055 결정 4).
+                .withBean(InternalTokenProperties.class, () -> new InternalTokenProperties(false, INTERNAL_TOKEN))
                 .withPropertyValues(
                         "spring.http.serviceclient.dispatch.base-url=" + baseUrl,
                         "spring.http.serviceclient.dispatch.connect-timeout=1s",
