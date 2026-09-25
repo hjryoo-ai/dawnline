@@ -2843,12 +2843,16 @@ OpenTelemetry(Micrometer Tracing → OTLP → Tempo). Kafka 헤더로 `tracepare
 | 트레이스 | 시작 | 지나는 곳 |
 |---|---|---|
 | 주문 | `POST /orders` | order → fulfillment → dispatch(후보 적재) · order · ops-api |
-| 계획 | 웨이브 마감(fulfillment 스케줄러) | fulfillment → dispatch(계획) → tracking · order · fulfillment · ops-api |
+| 계획 | 웨이브 마감 — fulfillment 스케줄러, 또는 운영자의 조기 마감(ops-api `POST /waves/{waveId}/close`) | (ops-api →) fulfillment → dispatch(계획) → tracking · order · fulfillment · ops-api |
 
 `{ span.dawnline.wave_id = "<waveId>" }` 가 두 트레이스를 함께 돌려준다 — 후보 적재 스팬(주문 트레이스의 끝)과 계획 스팬(계획
 트레이스의 시작, dispatch 의 `wave.closed` 소비 — 리스너가 계획 하나를 그 스레드에서 돈다)이 둘 다 그 속성을 단다(§9.3).
 **데모의 한 줄은 그 질의다.** Compose 스모크(`make obs-check`)가 데모의 웨이브로 그 질의를 Tempo API 에 묻고, 결과
-트레이스들의 `service.name` 합집합에 코어 넷(order · fulfillment · dispatch · tracking)이 있는지 본다.
+트레이스들의 `service.name` 합집합에 코어 넷(order · fulfillment · dispatch · tracking)이 있는지 본다. 로컬 실측(2026-09-25):
+데모 웨이브 하나에 트레이스 177개 — 주문 176(tracking 없음) · 계획 1(조기 마감이 뿌리, 다섯 서비스). tracking 의 리스너
+관측만 끈 음성 표본에서는 `tracking-service` 가 빠져 빨갛다. **검색 한도에 닿은 결과는 답이 아니다** — 처음 판은 한도 100 이었고
+데모 웨이브의 트레이스는 177개였다. 계획 트레이스는 그중 하나라 잘린 결과에서 빠질 수 있고, 그러면 초록도 빨강도 순서의 우연이다.
+한도를 1000 으로 올리고 결과가 한도에 닿으면 실패로 둔다.
 
 **outbox 를 지나는 한 줄** — 세 자리가 모두 살아 있어야 이어진다(ADR-062):
 

@@ -28,7 +28,9 @@
    트레이스가 끊겼다. 근거: 관측(재현됨) — 그 키로 켠 IT 에서 전파기가 아무것도 주입하지 않았다.
 4. **§9.2 의 「하나의 주문 traceId 로 order → fulfillment → dispatch → tracking」은 이벤트 흐름상 성립하지 않는다.** 계획은
    웨이브 마감(fulfillment 의 스케줄러)이 시작하고 주문 여럿을 모은다 — 주문의 트레이스는 dispatch 의 후보 적재에서 끝나고,
-   tracking 은 계획의 트레이스(`route.assigned`)에만 나온다. 근거: 추정(리스너 표에서 읽었다 — Compose 스모크가 재현한다).
+   tracking 은 계획의 트레이스(`route.assigned`)에만 나온다. 근거: 관측(재현됨) — 처음에는 리스너 표에서 읽은 추정이었고,
+   결정 5 의 스모크가 로컬 스택에서 재현했다: 데모 웨이브 하나의 질의가 트레이스 177개를 돌려줬고 그중 주문 트레이스 176개
+   (`POST /orders` 가 뿌리)는 order · fulfillment · dispatch · ops-api 만, 계획 트레이스 1개는 tracking 까지 다섯 서비스를 지났다.
 
 ## 결정
 
