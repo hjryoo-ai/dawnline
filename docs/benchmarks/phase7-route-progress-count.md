@@ -5,6 +5,8 @@
 > [ADR-061](../adr/ADR-061-unfinished-work-has-no-window.md)) 읽기는 `rm_routes` 만 읽는다. 첫 판의 기록은 그대로 둔다 —
 > 「왜 `EXISTS` 가 아니었나」와 「왜 읽기에서 창을 걷지 않았나」의 근거다. **첫 판의 숫자 하나는 잘못 읽었다**: 아래
 > 「`rm_routes` 병렬 순차 스캔(약 53 ms)」은 스캔이 아니라 **JIT 컴파일**이었다(둘째 판 표의 넷째 줄).
+> 둘째 판은 같은 날 리뷰에서 한 번 더 바뀌었다 — 할 일이 없는 라우트는 완료가 아니라 다섯째 값 `void` 이고
+> (`rm_routes.live_count = 0`), `assigned` 도 창이 없다. 맨 아래 「둘째 판의 개정」이 지금의 문장과 숫자다.
 
 ## 첫 판 — 읽을 때 판정 (7-1, #68)
 
@@ -140,3 +142,47 @@ SELECT camp_id,
   계획 선택이 아니라 문장의 구조라서 작은 픽스처에서도 참 · 거짓이 갈린다.
 - **재검토 지점**: 순차 스캔이 1분 갱신의 의미 있는 몫이 될 때 — 대략 100 ms, `rm_routes` 약 200만 행(보존 기간이 늘거나 캠프가
   크게 늘 때). 그때 위의 두 인덱스를 다시 잰다.
+
+### 둘째 판의 개정 — `void` (같은 날, 리뷰)
+
+**바뀐 것.** 위 문장은 빈 라우트 · 전부 취소된 라우트의 `completed_at` 에 계획 출발을 적어 `completed` 로 셌다. 일어나지 않은
+완료에 시각을 만드는 것이라 기각됐다(ADR-061 대안 F). 재집계가 비취소 주문 수 `live_count` 를 함께 적고, 0 이면 `void` 다 —
+`completed_at` 은 `NULL` 로 남는다. `assigned` 의 창은 재계획이 비운 라우트를 치우려던 것이라 함께 걷었다.
+
+```sql
+SELECT camp_id,
+       CASE WHEN revision IS NULL OR status IS NULL THEN 'UNKNOWN'
+            WHEN live_count = 0 THEN 'VOID'
+            WHEN status = 'ASSIGNED' THEN 'ASSIGNED'
+            WHEN completed_at IS NULL THEN 'IN_PROGRESS'
+            ELSE 'COMPLETED' END AS progress,
+       count(*) AS routes
+  FROM rm_routes
+ WHERE (completed_at IS NULL AND live_count IS DISTINCT FROM 0)   -- 끝나지 않은 것(출발 전 포함): 창 없음
+    OR planned_departure >= ?                                     -- 완료 · void: 창
+ GROUP BY 1, 2
+```
+
+**측정 환경.** 위와 같은 컨테이너 구성 · 같은 적재에 둘을 더했다: void 라우트 40(창 안 20 · 창 밖 20 — 반은 빈 `ASSIGNED`,
+반은 주문 셋이 전부 취소된 `DEPARTED`)과 창 밖(3일 전)의 떠나지 않은 라우트 7(결과 없는 주문 둘). 적재 뒤 V8(칸 둘 · 백필),
+`ANALYZE` — `reltuples` 가 `rm_orders` 13,612,522 · `rm_routes` 112,567. 참값(라우트마다 `EXISTS` 로 판정):
+
+| 진행 | 창 안 | 창 밖 |
+|---|---|---|
+| `assigned` | 104 | **7** |
+| `in_progress` | 416 | **55** |
+| `completed` | 677 | 111,248 |
+| `void` | 20 | 20 |
+| `unknown` | 0 | 20 (창 없음) |
+
+**결과.**
+
+| 항목 | 값 |
+|---|---|
+| 질의의 결과(진행별 합) | `assigned` 111 · `in_progress` 471 · `completed` 677 · `void` 20 · `unknown` 20 — **참값과 같다**(창 없는 셋은 창 밖까지, 창 있는 둘은 창 안만) |
+| 질의(`force_generic_plan`, 9회) | 순차 스캔 5,011 페이지(39 MB), 비용 추정 7,174 — JIT 없음. **7.1–10.7 ms**. 표가 `shared_buffers` 의 1/4 를 넘어 순차 스캔이 링 버퍼로 읽으므로 캐시가 찬 뒤에도 페이지의 대부분이 `read`(OS 캐시)다 — 위의 5.2 ms 와의 차이는 백필이 모든 행을 한 번 고쳐 쓴 페이지와 측정 간 편차다 |
+| 재집계(라우트 하나, 주문 121, 4회) | 칸 넷을 한 부분 질의로 — **0.08–0.21 ms**(첫 실행이 0.21). 위의 칸 셋 0.04–0.19 ms 와 같은 범위 |
+| 백필(V8, 계획이 도착한 112,547 라우트) | 적재 직후 첫 실행 **6.7 초** · 캐시가 찬 뒤(롤백한 재실행) **1.4 초** |
+
+**판단은 그대로다** — 인덱스를 더하지 않는다. 문장은 여전히 `rm_routes` 순차 스캔 한 번이고, 술어 하나가 칸 하나를 더
+볼 뿐이다. 재검토 지점도 그대로다(대략 100 ms, `rm_routes` 약 200만 행).
