@@ -18,7 +18,17 @@ public enum FulfillmentErrorCode implements ErrorCode {
      * 요청이 적용됐는지({@code MANUAL}) 스케줄러가 먼저 닫았는지({@code SCHEDULED})를 읽는다. 일반 전이
      * 오류와 섞이면 그 읽기가 「본문의 칸이 있으면」이라는 조건부가 된다.
      */
-    WAVE_NOT_OPEN("wave-not-open", 409, "웨이브가 이미 닫혀 있습니다");
+    WAVE_NOT_OPEN("wave-not-open", 409, "웨이브가 이미 닫혀 있습니다"),
+
+    /**
+     * 닫으려는 웨이브보다 이른 컷오프의 {@code OPEN} 웨이브가 같은 캠프 · 티어에 있다 (ADR-054 후속, 2026-09-25).
+     *
+     * <p>조기 마감은 그 캠프 · 티어의 <strong>가장 이른</strong> 열린 웨이브에만 한다 — 앞의 것이 열려 있는데 뒤의 것을
+     * 닫는 것은 거의 확실히 실수다. 본문의 {@code earlierWaveId} · {@code earlierCutoffAt} 이 닫아야 했던 웨이브를
+     * 말한다. {@code wave-not-open} 과 나누는 이유: 저쪽은 「이미 닫혔다」(다시 누른 사람의 근거)이고 이쪽은 「닫을
+     * 차례가 아니다」다 — 적용되지 않았다는 것은 같지만 다음 행동이 다르다.
+     */
+    NOT_NEXT_WAVE("not-next-wave", 409, "더 이른 열린 웨이브가 있습니다");
 
     private final String code;
     private final int status;

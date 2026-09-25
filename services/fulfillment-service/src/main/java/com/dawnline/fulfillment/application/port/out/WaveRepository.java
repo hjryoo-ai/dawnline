@@ -86,6 +86,20 @@ public interface WaveRepository {
     List<Wave> findDueForClosing(Instant cutoffAtOrBefore, int limit);
 
     /**
+     * 같은 캠프 · 티어에서 {@code cutoffAt} 보다 <strong>이른</strong> 컷오프의 {@code OPEN} 웨이브 중 가장 이른 것.
+     *
+     * <p>운영자 조기 마감이 순서를 건너뛰지 않게 하는 판정이다(ADR-054 후속 — 409 {@code not-next-wave}). 스케줄러는
+     * 컷오프 순으로 닫으므로 부르지 않는다. 인덱스를 따로 두지 않는다 — {@code waves} 는 90일 보존에 4,000행 남짓이고
+     * 이 조회는 사람이 누를 때 한 번이다(불변규칙 11, 넣지 않은 판단).
+     *
+     * @param campId      캠프
+     * @param serviceTier 티어
+     * @param cutoffAt    이 컷오프보다 이른 것만
+     * @return 가장 이른 열린 웨이브, 없으면 빈 값
+     */
+    Optional<Wave> findEarliestOpenBefore(UUID campId, ServiceTier serviceTier, Instant cutoffAt);
+
+    /**
      * 변경을 반영한다 (낙관적 락).
      *
      * @param wave 변경된 웨이브

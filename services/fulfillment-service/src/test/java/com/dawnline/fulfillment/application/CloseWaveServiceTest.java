@@ -19,6 +19,7 @@ import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.observability.MdcKeys;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -61,7 +62,8 @@ class CloseWaveServiceTest {
     }
 
     private CloseWaveUseCase service(PlatformTransactionManager transactions) {
-        return new CloseWaveService(closing, transactions, new FulfillmentMetrics(registry));
+        return new CloseWaveService(closing, repositories.waveRepository(), transactions,
+                new FulfillmentMetrics(registry));
     }
 
     private CloseWaveUseCase service() {
@@ -69,10 +71,16 @@ class CloseWaveServiceTest {
     }
 
     private Wave openWave() {
-        Wave wave = Wave.open(Ids.newId(), CAMP_ID, ServiceTier.DAWN, CUTOFF);
+        return openWave(CAMP_ID, ServiceTier.DAWN, CUTOFF);
+    }
+
+    private Wave openWave(UUID campId, ServiceTier tier, Instant cutoffAt) {
+        Wave wave = Wave.open(Ids.newId(), campId, tier, cutoffAt);
         repositories.waveRepository().insertIfAbsent(wave);
         return wave;
     }
+
+    private static final Duration DAY = Duration.ofDays(1);
 
     @Test
     void 컷오프_전에도_닫고_원인은_MANUAL_이다() {
@@ -137,6 +145,59 @@ class CloseWaveServiceTest {
         assertThatThrownBy(() -> service().close(wave.id(), "r"))
                 .isInstanceOfSatisfying(DomainException.class, e ->
                         assertThat(e.details()).containsEntry("closeCause", "SCHEDULED"));
+    }
+
+    @Test
+    void 더_이른_열린_웨이브가_있으면_409_not_next_wave_이고_아무것도_닫지_않는다() {
+        // ADR-054 후속 — 차례를 건너뛰는 조기 마감은 거의 확실히 실수다. 본문이 닫아야 했던 웨이브를 말한다.
+        Wave earlier = openWave();
+        Wave later = openWave(CAMP_ID, ServiceTier.DAWN, CUTOFF.plus(DAY));
+
+        assertThatThrownBy(() -> service().close(later.id(), "내일 것을 닫으려 했다"))
+                .isInstanceOfSatisfying(DomainException.class, e -> {
+                    assertThat(e.code()).isEqualTo("not-next-wave");
+                    assertThat(e.status()).isEqualTo(409);
+                    assertThat(e.details()).containsEntry("earlierWaveId", earlier.id().toString())
+                            .containsEntry("earlierCutoffAt", CUTOFF.toString());
+                });
+        assertThat(repositories.waveRepository().findById(later.id()).orElseThrow().status())
+                .isEqualTo(WaveStatus.OPEN);
+        assertThat(events.closed).isEmpty();
+        assertThat(registry.find(DawnlineMetrics.WAVE_ORDERS.meterName()).gauge()).isNull();
+    }
+
+    @Test
+    void 더_이른_웨이브가_닫혀_있으면_다음_것을_닫는다() {
+        // 경계의 안쪽 — 데모가 매번 하는 일이다(앞의 것을 닫고, 다음 실행이 그다음 것을 닫는다). 위 테스트만 있으면
+        // 「뒤의 것은 늘 거절」도 통과한다.
+        Wave earlier = openWave();
+        Wave later = openWave(CAMP_ID, ServiceTier.DAWN, CUTOFF.plus(DAY));
+        service().close(earlier.id(), "오늘 것");
+
+        assertThat(service().close(later.id(), "내일 것").status()).isEqualTo(WaveStatus.CLOSED);
+    }
+
+    @Test
+    void 다른_캠프나_다른_티어의_이른_웨이브는_차례에_들지_않는다() {
+        openWave(Ids.newId(), ServiceTier.DAWN, CUTOFF);
+        openWave(CAMP_ID, ServiceTier.SAME_DAY, CUTOFF);
+        Wave target = openWave(CAMP_ID, ServiceTier.DAWN, CUTOFF.plus(DAY));
+
+        assertThat(service().close(target.id(), "r").status()).isEqualTo(WaveStatus.CLOSED);
+    }
+
+    @Test
+    void 이미_닫힌_웨이브를_다시_누르면_더_이른_열린_웨이브가_있어도_wave_not_open_이다() {
+        // 차례 판정은 대상이 열려 있을 때만 한다 — 다시 누른 사람은 closeCause 를 받아야 감사 UNKNOWN 을 닫는다(RB-07).
+        openWave();
+        Wave later = openWave(CAMP_ID, ServiceTier.DAWN, CUTOFF.plus(DAY));
+        closing.closeIfOpen(later.id(), WaveCloseCause.MANUAL);
+
+        assertThatThrownBy(() -> service().close(later.id(), "다시 누름"))
+                .isInstanceOfSatisfying(DomainException.class, e -> {
+                    assertThat(e.code()).isEqualTo("wave-not-open");
+                    assertThat(e.details()).containsEntry("closeCause", "MANUAL");
+                });
     }
 
     @Test

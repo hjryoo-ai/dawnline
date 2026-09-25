@@ -282,6 +282,11 @@ class FulfillmentRetentionCleanerTest {
                 }
 
                 @Override
+                public Optional<Wave> findEarliestOpenBefore(UUID campId, ServiceTier tier, Instant cutoffAt) {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
                 public void update(Wave wave) {
                     throw new UnsupportedOperationException();
                 }
