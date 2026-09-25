@@ -54,6 +54,13 @@ sample() {
 say "전제 — 스택이 떠 있고 $ROLE 이 로그인할 수 있다"
 [[ "$(sqlv admin "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$ROLE'")" == t ]] || { echo "$ROLE 이 이미 NOLOGIN 이다 — 앞 실행을 확인한다" >&2; exit 1; }
 curl -sf "http://localhost:$PROMETHEUS_PORT/-/ready" >/dev/null || { echo "Prometheus 가 없다" >&2; exit 1; }
+# 규칙 파일을 다시 읽힌다 — 떠 있는 Prometheus 는 파일이 바뀌어도 스스로 다시 읽지 않고, make up 은 그 컨테이너를 다시 만들지 않는다.
+# 두 번째 실행의 앞 10분이 바뀌기 전의 식으로 판정됐다(2026-09-25) — 「울리지 않았다」가 식의 결론이 아니라 적재의 결과였다.
+curl -sf -X POST "http://localhost:$PROMETHEUS_PORT/-/reload" >/dev/null || { echo "Prometheus 규칙을 다시 읽히지 못했다" >&2; exit 1; }
+rule_errors=$(curl -s "http://localhost:$PROMETHEUS_PORT/api/v1/rules" | jq '[.data.groups[].rules[] | select((.lastError // "") != "")] | length')
+[[ "$rule_errors" == 0 ]] || { echo "적재된 규칙에 평가 오류가 있다($rule_errors)" >&2; exit 1; }
+[[ "$(curl -s "http://localhost:$PROMETHEUS_PORT/api/v1/status/runtimeinfo" | jq -r .data.reloadConfigSuccess)" == true ]] \
+  || { echo "Prometheus 가 설정 · 규칙을 다시 읽는 데 실패했다" >&2; exit 1; }
 [[ -n "$(promv "max(dawnline_event_retry_age_seconds{service=\"$APP\"})")" ]] \
   || { echo "$APP 의 dawnline_event_retry_age_seconds 가 없다 — 이미지가 7-3 이전이다(make images)" >&2; exit 1; }
 

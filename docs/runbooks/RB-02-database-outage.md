@@ -68,6 +68,11 @@ sql admin "SELECT datname, usename, state, count(*) FROM pg_stat_activity GROUP 
 가져왔지만 재시도에 막힌 레코드를 세지 않는다. **멈춘 소비를 보는 것은 랙이 아니라 재시도의 나이다.** 그룹의 실제 랙은 위의 명령으로 본다
 ([RB-01](RB-01-kafka-recovery.md) §2.1).
 
+**두 알림 — 2차 실행(2026-09-25, `make chaos-db HOLD=1900`, 같은 1,200 건 · 33분 장애)**: 밀림 `DawnlineConsumerLag`(브로커 랙 — kafka-exporter
+1,200 · CLI 1,200 · 클라이언트 합 500)이 울렸고, 정지 `DawnlineConsumerRetryStuck` 이 재시도 나이 1,840초(30분 + 평가 간격)에 울렸다. 둘 다 실제
+Prometheus(`/api/v1/alerts`)에서 본 것이다. 복구 30초 안에 둘 다 꺼졌다 · DLQ 0 · 1,200 전부 처리 · 재시도 0 → 171. **읽는 법**: 밀림은 「쌓였다」를
+말하고 정지는 「풀리지 않는다」를 말한다 — 이 장애에서는 둘 다 맞지만, 정지를 말하는 것은 나이다.
+
 그래서 DB 복구 뒤의 일은 **기다렸다가 따라왔는지 보는 것** 하나다 — 아래 4. 재처리할 것이 없다.
 
 **그 전(7-5 의 재현)** — 같은 장애를 200건으로 냈을 때 6건이 DLQ 로 갔다(3회 재시도 뒤). 재처리하니 전부 `SUCCEEDED` 였다 — 독약이 아니었다.
