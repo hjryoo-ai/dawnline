@@ -166,7 +166,10 @@ docker run --rm --entrypoint /opt/kafka/bin/kafka-storage.sh apache/kafka:4.3.1 
   Alertmanager 는 없다 — 울린 알림은 Prometheus `/alerts` 와 Grafana 에서 본다. `make obs-check` 가 규칙 적재 ·
   대시보드 등록 · 패널이 쓰는 플랫폼 지표와 버킷이 실제로 긁히는지를 본다(Compose 스모크가 demo 뒤에 돌린다).
 - 서비스가 안 떠 있으면 Prometheus 타깃 5개가 `DOWN` 으로 보이는 게 정상이다.
-- Tempo `metrics_generator`(서비스 그래프)는 Prometheus remote-write 가 필요해서 꺼 두었다. Phase 7.
+- **서비스 그래프**: Tempo `metrics_generator` 의 `service-graphs` 프로세서가 스팬의 부모-자식 쌍이 서비스 경계를 넘을 때마다
+  간선을 세어 Prometheus 로 remote-write 한다(`traces_service_graph_request_total{client, server}`). Grafana 의 Tempo
+  데이터소스가 그것을 `serviceMap` 으로 읽는다(Explore → Tempo → Service Graph). `make obs-check` 가 코어 넷 사이의 간선이
+  실제로 긁히는지 본다 — TraceQL 검사와 독립된 둘째 증거다(DESIGN.md §9.2).
 
 Spring Boot 4.1 은 `management.opentelemetry.map-environment-variables=true` 가 기본이라
 compose 가 넣어 주는 표준 `OTEL_*` 환경 변수(`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` …)를

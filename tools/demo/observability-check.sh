@@ -2,7 +2,7 @@
 # =============================================================================
 # make obs-check — 떠 있는 스택의 관측성이 설계서대로 섰는가 (DESIGN.md §9.4, ADR-060)
 #
-# Compose 스모크가 `make demo` 뒤에 돌린다. 넷을 본다:
+# Compose 스모크가 `make demo` 뒤에 돌린다. 다섯을 본다:
 #   1. Prometheus 가 규칙 파일의 알림 전부를 적재했고 평가에 실패한 규칙이 없다
 #   2. Grafana 가 커밋된 대시보드 JSON 전부를 프로비저닝했다(uid 집합이 같다)
 #   3. 패널 · 규칙이 쓰는 이름 가운데 **표(§9.1)가 없는 이름**(kafka_* · hikaricp_* · jvm_* · http_server_requests_*)과
@@ -11,6 +11,10 @@
 #      결과 트레이스들의 service.name 합집합에 코어 넷(order · fulfillment · dispatch · tracking)이 있다.
 #      주문과 계획은 두 트레이스이고 이 질의가 둘을 함께 돌려준다 — 「이 웨이브의 일이 네 서비스를 지나 한 질의로
 #      찾아진다」가 §9.2 의 요구 그대로다. 서비스 이름으로 검색해 트레이스를 하나씩 여는 것은 그 뜻이 아니다.
+#   5. 서비스 그래프 (§9.2) — Tempo metrics_generator 가 remote-write 한 traces_service_graph_request_total 에서
+#      코어 넷 사이의 간선(client → server)만 골라, 그 양 끝의 합집합이 코어 넷이다. 4 와 독립된 둘째 증거다: 전파가
+#      서비스 경계를 넘는다는 것을 트레이스 검색이 아니라 **메트릭**이 말한다. 코어 사이에는 동기 호출이 없으므로
+#      (불변 규칙 4) 그 간선은 Kafka 의 PRODUCER → CONSUMER 쌍뿐이다 — 발행 스팬의 id 가 소비 스팬의 부모일 때만 생긴다.
 #
 # 3 이 따로 있는 이유: dawnline_* 이름은 단위 테스트가 §9.1 과 대조하지만(DashboardsConsistencyTest), 플랫폼 지표는
 # 대조할 표가 없다 — 이름이 틀리면 패널이 조용히 비어 있다. 버킷도 같다: 계획 시간의 버킷은 속성 파일의 키가 미터 이름과
@@ -126,4 +130,16 @@ def one_query_finds_the_core():
         found |= services_of(trace["traceID"])
     return CORE <= found, f"트레이스 {len(traces)}개 · 서비스 {sorted(found)} · 빠진 것 {sorted(CORE - found)}"
 until(f"TraceQL 한 줄(웨이브 {WAVE})의 트레이스들이 코어 넷을 지난다", one_query_finds_the_core)
+
+# 5. 서비스 그래프 — Prometheus 의 즉시 질의는 한도가 없다(limit 파라미터를 주지 않는다). 4 처럼 잘린 결과를 읽을 일이 없다.
+def core_edge_is_scraped():
+    query = urllib.parse.quote("sum by (client, server, connection_type) (traces_service_graph_request_total)")
+    result = get(PROM + "/api/v1/query?query=" + query)["data"]["result"]
+    edges = sorted((r["metric"].get("client", ""), r["metric"].get("server", ""),
+                    r["metric"].get("connection_type", "")) for r in result)
+    core = [e for e in edges if e[0] in CORE and e[1] in CORE and e[0] != e[1]]
+    reached = {end for c, s, _ in core for end in (c, s)}
+    shown = ", ".join(f"{c}→{s}" + (f"({t})" if t else "") for c, s, t in core) or "없음"
+    return CORE <= reached, f"코어 간선 {shown} · 빠진 것 {sorted(CORE - reached)}"
+until("서비스 그래프의 코어 간선이 코어 넷을 잇는다", core_edge_is_scraped)
 PY
