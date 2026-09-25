@@ -5,6 +5,7 @@ import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
+import com.dawnline.dispatch.domain.DispatchErrorCode;
 import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
 import com.dawnline.dispatch.domain.optimizer.Parcel;
@@ -29,6 +30,12 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>화물·약속창을 {@code dispatch_candidates} 에서 가져오는 이유: 계획의 <em>근거</em>는 후보이고
  * {@code route_stops} 는 그 <em>결과</em>다. 룰을 다시 돌리려면 근거가 필요하다.
+ *
+ * <h2>후보가 없으면 실패한다 — 빼지 않는다</h2>
+ * 후보는 보존 정리가 지운다(ADR-059 — 계획이 끝났을 때만, 계획 단위로). 그 조건이 이 클래스의 조인을 덮는 것은
+ * <em>고른 결과</em>이지 강제가 아니라서, 후보를 읽는 네 자리는 후보가 없는 주문을 만나면
+ * {@code candidates-expired}(409)로 실패한다. 내부 조인이던 때는 그 주문이 — 주문이 전부 그런 stop 이면 stop 이 —
+ * 목록에서 <strong>조용히 빠졌고</strong>, 빠진 목록이 비면 재배정이 그 라우트를 비웠다.
  */
 public class JdbcRouteMutations implements RouteMutations {
 
@@ -61,14 +68,19 @@ public class JdbcRouteMutations implements RouteMutations {
                        c.promised_start, c.promised_end, c.priority
                   FROM route_stops s
                   JOIN route_stop_orders o ON o.stop_id = s.id
-                  JOIN dispatch_candidates c ON c.order_id = o.order_id
-                 WHERE s.route_id = ? AND s.status <> 'CANCELLED' AND c.status <> 'CANCELLED'
+                  LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+                 WHERE s.route_id = ? AND s.status <> 'CANCELLED'
+                   AND (c.order_id IS NULL OR c.status <> 'CANCELLED')
                  ORDER BY s.seq, o.order_id
                 """).setParameter(1, routeId).getResultList();
 
         Map<UUID, Builder> byStop = new LinkedHashMap<>();
         Map<UUID, Integer> seqOf = new LinkedHashMap<>();
         for (Object[] row : rows) {
+            if (row[6] == null) {
+                // 후보가 없다 — 빼면 이 stop 이 계산에서 사라지고 다시 쓰기가 그 자리를 지운다(ADR-059 결정 3).
+                throw DispatchErrorCode.candidatesExpired(routeId, (UUID) row[5]);
+            }
             Builder builder = byStop.computeIfAbsent((UUID) row[0], id -> new Builder(
                     GeoPoint.of(((BigDecimal) row[2]).doubleValue(),
                             ((BigDecimal) row[3]).doubleValue()),
@@ -116,7 +128,8 @@ public class JdbcRouteMutations implements RouteMutations {
                   FROM dispatch_candidates WHERE order_id = ?
                 """).setParameter(1, orderId).getResultList();
         if (candidate.isEmpty()) {
-            throw new IllegalStateException("후보가 없는 주문은 옮길 수 없습니다: " + orderId);
+            // 500 이던 자리다 — 원인은 이 서비스의 결함이 아니라 보존 정리다(ADR-059 결정 3).
+            throw DispatchErrorCode.candidatesExpired(targetRouteId, orderId);
         }
         BigDecimal lat = (BigDecimal) candidate.getFirst()[0];
         BigDecimal lng = (BigDecimal) candidate.getFirst()[1];
@@ -341,13 +354,15 @@ public class JdbcRouteMutations implements RouteMutations {
     public boolean cancelStopIfAllOrdersCancelled(UUID stopId) {
         // 술어를 리터럴로 적는다 (CLAUDE.md 코딩 컨벤션). 여기서는 부분 인덱스 때문이 아니라
         // 상태 문자열이 스키마의 값이고 파라미터로 받을 이유가 없기 때문이다.
+        // 후보가 없는 주문은 취소가 아니다 — 내부 조인이던 때는 그 주문이 NOT EXISTS 에서 빠져 「전부 취소됐다」가
+        // 참이 됐다. 여기서는 stop 을 살려 두고, 뒤따르는 시각 재계산(loadStops)이 409 로 되돌린다(ADR-059 결정 3).
         return entityManager.createNativeQuery("""
                 UPDATE route_stops s SET status = 'CANCELLED'
                  WHERE s.id = ? AND s.status = 'PLANNED'
                    AND NOT EXISTS (
                        SELECT 1 FROM route_stop_orders o
-                         JOIN dispatch_candidates c ON c.order_id = o.order_id
-                        WHERE o.stop_id = s.id AND c.status <> 'CANCELLED')
+                         LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+                        WHERE o.stop_id = s.id AND (c.order_id IS NULL OR c.status <> 'CANCELLED'))
                 """).setParameter(1, stopId).executeUpdate() == 1;
     }
 
@@ -399,13 +414,17 @@ public class JdbcRouteMutations implements RouteMutations {
                        o.order_id, c.status, s.promised_start, s.promised_end
                   FROM route_stops s
                   JOIN route_stop_orders o ON o.stop_id = s.id
-                  JOIN dispatch_candidates c ON c.order_id = o.order_id
+                  LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
                  WHERE s.route_id = ?
                  ORDER BY s.seq, o.order_id
                 """).setParameter(1, routeId).getResultList();
 
         Map<UUID, SnapshotBuilder> byStop = new LinkedHashMap<>();
         for (Object[] row : rows) {
+            if (row[8] == null) {
+                // 후보가 없다 — 빼면 발행된 개정에서 그 stop 이 사라진다(ADR-059 결정 3).
+                throw DispatchErrorCode.candidatesExpired(routeId, (UUID) row[7]);
+            }
             SnapshotBuilder builder = byStop.computeIfAbsent((UUID) row[0], id -> new SnapshotBuilder(
                     ((Number) row[1]).intValue(),
                     ((BigDecimal) row[2]).doubleValue(), ((BigDecimal) row[3]).doubleValue(),
