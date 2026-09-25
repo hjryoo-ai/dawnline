@@ -10,7 +10,7 @@ import com.dawnline.ops.adapter.out.persistence.JdbcReadModelViews;
 import com.dawnline.ops.adapter.out.persistence.JdbcRouteCounts;
 import com.dawnline.ops.adapter.out.persistence.JdbcRouteRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcWaveRows;
-import com.dawnline.ops.application.OnTimeRatioGauges;
+import com.dawnline.ops.application.KpiGauges;
 import com.dawnline.ops.application.OpsCommandService;
 import com.dawnline.ops.application.QuarantineQueryService;
 import com.dawnline.ops.application.ReadModelProjector;
@@ -125,9 +125,9 @@ public class OpsApplicationConfig {
      * @return 정시율 · 결과 수 · 빠진 수 · 갱신 나이 · 라우트 진행 — 한 갱신
      */
     @Bean
-    public OnTimeRatioGauges onTimeRatioGauges(DeliveryKpis kpis, RouteCounts routeCounts, MeterRegistry meters,
+    public KpiGauges kpiGauges(DeliveryKpis kpis, RouteCounts routeCounts, MeterRegistry meters,
             Clock clock) {
-        return new OnTimeRatioGauges(kpis, routeCounts, meters, clock);
+        return new KpiGauges(kpis, routeCounts, meters, clock);
     }
 
     /**

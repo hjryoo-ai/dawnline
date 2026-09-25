@@ -37,23 +37,23 @@ class MetricLabelValuesTest {
 
     @Test
     void 정시율_basis_와_빠진_결과의_reason() {
-        assertThat(DawnlineMetrics.DELIVERY_ON_TIME_RATIO.label(OnTimeRatioGauges.TAG_BASIS).values())
+        assertThat(DawnlineMetrics.DELIVERY_ON_TIME_RATIO.label(KpiGauges.TAG_BASIS).values())
                 .containsExactlyInAnyOrderElementsOf(
-                        Arrays.stream(OnTimeRatioGauges.Basis.values()).map(OnTimeRatioGauges.Basis::label).toList());
-        assertThat(DawnlineMetrics.KPI_EXCLUDED.label(OnTimeRatioGauges.TAG_REASON).values())
-                .containsExactly(OnTimeRatioGauges.PROMISE_UNKNOWN);
+                        Arrays.stream(KpiGauges.Basis.values()).map(KpiGauges.Basis::label).toList());
+        assertThat(DawnlineMetrics.KPI_EXCLUDED.label(KpiGauges.TAG_REASON).values())
+                .containsExactly(KpiGauges.PROMISE_UNKNOWN);
     }
 
     @Test
     void 결과_수의_outcome_은_배송_결과_전부다() {
-        assertThat(DawnlineMetrics.KPI_DELIVERY.label(OnTimeRatioGauges.TAG_OUTCOME).values())
+        assertThat(DawnlineMetrics.KPI_DELIVERY.label(KpiGauges.TAG_OUTCOME).values())
                 .containsExactlyInAnyOrderElementsOf(
-                        Arrays.stream(DeliveryOutcome.values()).map(OnTimeRatioGauges::outcomeLabel).toList());
+                        Arrays.stream(DeliveryOutcome.values()).map(KpiGauges::outcomeLabel).toList());
     }
 
     @Test
     void 라우트_status_는_진행_전부다() {
-        assertThat(DawnlineMetrics.ROUTES.label(OnTimeRatioGauges.TAG_STATUS).values())
+        assertThat(DawnlineMetrics.ROUTES.label(KpiGauges.TAG_STATUS).values())
                 .containsExactlyInAnyOrderElementsOf(
                         Arrays.stream(RouteProgress.values()).map(RouteProgress::label).toList());
     }

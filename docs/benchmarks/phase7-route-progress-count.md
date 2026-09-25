@@ -8,7 +8,7 @@ CLAUDE.md 불변규칙 11 에 따른 근거 자료다. 여기서 **인덱스를 
 §9.4 Delivery 의 「라우트 진행」에 대응하는 §9.1 행이 없어 `dawnline_routes{camp, status}` 를 더했다
 (2026-09-25, 7-1 · [ADR-060](../adr/ADR-060-metrics-come-from-the-table.md) 맥락 6). `rm_routes.status` 는 둘뿐이라
 「완료」는 판정이다 — 출발했고 그 라우트에 결과가 없는 주문(취소 제외)이 남지 않았다. 그 판정이 `rm_orders` 를
-라우트마다 찾는다. 부르는 곳은 `OnTimeRatioGauges.refreshNow` 하나이고 빈도는 **1분마다**다.
+라우트마다 찾는다. 부르는 곳은 `KpiGauges.refreshNow`(당시 `OnTimeRatioGauges`) 하나이고 빈도는 **1분마다**다.
 
 처음 판은 `EXISTS` 였고 비용을 「창이 라우트를 하루치로 묶으니 탐색도 하루치」라고 적었다 — **추정이었다.** 쟀더니
 틀렸다.

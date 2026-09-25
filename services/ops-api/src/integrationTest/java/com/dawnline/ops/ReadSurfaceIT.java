@@ -5,7 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.dawnline.ops.application.OnTimeRatioGauges;
+import com.dawnline.ops.application.KpiGauges;
 import com.dawnline.ops.application.port.in.Fact;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
 import java.time.Clock;
@@ -58,7 +58,7 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
     private Clock clock;
 
     @Autowired
-    private OnTimeRatioGauges gauges;
+    private KpiGauges gauges;
 
     @Autowired
     private ProjectFactUseCase projector;
@@ -71,7 +71,7 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
         // 게이지는 테스트가 부를 때만 센다 — 스케줄러가 끼어들면 「같은 창」의 비교가 흔들린다.
-        registry.add("dawnline.ops.kpi.on-time-initial-delay-ms", () -> "3600000");
+        registry.add("dawnline.ops.kpi.initial-delay-ms", () -> "3600000");
     }
 
     @AfterEach
@@ -118,7 +118,7 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
         order(CAMP, "DISPATCHED", "FAILED", delivered, delivered.plus(Duration.ofHours(1)));
         order(CAMP, "CANCELLED", "COMPLETED", delivered, delivered.plus(Duration.ofHours(1)));
         gauges.refreshNow();
-        double gauge = gauges.ratio(CAMP, OnTimeRatioGauges.Basis.PROMISED);
+        double gauge = gauges.ratio(CAMP, KpiGauges.Basis.PROMISED);
 
         assertThat(gauge).as("전제 — 게이지가 이 캠프를 셌다").isEqualTo(0.6);
         mockMvc.perform(viewer(get("/api/v1/kpi/delivery")))

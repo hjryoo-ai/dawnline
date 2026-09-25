@@ -17,7 +17,7 @@
 - **`DawnlineMetrics`** 는 「§9.1 표 전체」라고 적힌 11개 상수였고 **어느 서비스도 쓰지 않았다.**
   `DawnlineMetricsTest` 는 같은 11개를 손으로 옮긴 목록과 비교했다(7-0 A30). 근거: 관측(재현됨) — 표에 행을 하나 더해도 초록이었다.
 - 실제 이름은 여덟 곳의 점 표기 상수(`DispatchMetrics` · `MessagingMetrics` · `OrderMetrics` · `TrackingMetrics` ·
-  `FulfillmentMetrics` · `OnTimeRatioGauges` · `InternalToken` · 정리기 셋)에 흩어져 있었고, 서비스마다 `Counter.builder` ·
+  `FulfillmentMetrics` · `OnTimeRatioGauges`(지금 `KpiGauges`) · `InternalToken` · 정리기 셋)에 흩어져 있었고, 서비스마다 `Counter.builder` ·
   `Gauge.builder` · `registry.gauge` 를 직접 불렀다(45곳).
 - **라벨**은 표의 넷째 칸에 산문으로만 있었다.
 

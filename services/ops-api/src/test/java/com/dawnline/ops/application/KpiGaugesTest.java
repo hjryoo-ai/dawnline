@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.observability.DawnlineMetrics;
-import com.dawnline.ops.application.OnTimeRatioGauges.Basis;
+import com.dawnline.ops.application.KpiGauges.Basis;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.DeliveryKpis.CampDeliveries;
 import com.dawnline.ops.application.port.out.DeliveryKpis.DeliveryWindow;
@@ -27,7 +27,7 @@ import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
 
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
-class OnTimeRatioGaugesTest {
+class KpiGaugesTest {
 
     /** 창의 기준 — 정시가 아닌 시각이라 버킷을 자르는지가 보인다. */
     private static final Instant NOW = Instant.parse("2026-09-24T10:37:12Z");
@@ -37,7 +37,7 @@ class OnTimeRatioGaugesTest {
     private final FakeKpis kpis = new FakeKpis();
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final FakeRoutes routes = new FakeRoutes();
-    private final OnTimeRatioGauges gauges = new OnTimeRatioGauges(kpis, routes, registry, clock);
+    private final KpiGauges gauges = new KpiGauges(kpis, routes, registry, clock);
 
     @Test
     void 창은_지금_버킷을_포함한_UTC_정시_버킷_24개다() {

@@ -9,8 +9,8 @@ import com.dawnline.ops.adapter.in.messaging.ListenerTopics;
 import com.dawnline.ops.adapter.in.messaging.ProjectionListener;
 import com.dawnline.ops.adapter.in.messaging.ProjectionScenario;
 import com.dawnline.ops.adapter.in.messaging.ProjectionScenario.Event;
-import com.dawnline.ops.application.OnTimeRatioGauges;
-import com.dawnline.ops.application.OnTimeRatioGauges.Basis;
+import com.dawnline.ops.application.KpiGauges;
+import com.dawnline.ops.application.KpiGauges.Basis;
 import com.dawnline.ops.domain.DeliveryOutcome;
 import com.dawnline.ops.domain.RouteProgress;
 import java.time.Clock;
@@ -59,7 +59,7 @@ class KpiViewsIT extends OpsIntegrationTestBase {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
         // 기동 직후 스케줄 갱신이 이 검사의 refreshNow 와 섞이지 않게 — 검사가 직접 부른다.
-        registry.add("dawnline.ops.kpi.on-time-initial-delay-ms", () -> "3600000");
+        registry.add("dawnline.ops.kpi.initial-delay-ms", () -> "3600000");
     }
 
     @Autowired
@@ -69,7 +69,7 @@ class KpiViewsIT extends OpsIntegrationTestBase {
     private Clock clock;
 
     @Autowired
-    private OnTimeRatioGauges gauges;
+    private KpiGauges gauges;
 
     @Autowired
     private ProjectionListener listener;
@@ -171,7 +171,7 @@ class KpiViewsIT extends OpsIntegrationTestBase {
         Instant since = clock.instant().truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(23));
         Instant soon = clock.instant().plus(Duration.ofHours(1));
         gauges.refreshNow();
-        double unknownCampBefore = gauges.routes(OnTimeRatioGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN);
+        double unknownCampBefore = gauges.routes(KpiGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN);
 
         route(camp, 1, "ASSIGNED", soon);                                    // 출발 전
         UUID moving = route(camp, 1, "DEPARTED", soon);
@@ -193,7 +193,7 @@ class KpiViewsIT extends OpsIntegrationTestBase {
         assertThat(gauges.routes(key, RouteProgress.IN_PROGRESS)).isEqualTo(1.0);
         assertThat(gauges.routes(key, RouteProgress.COMPLETED)).as("창 밖의 완료는 세지 않는다").isEqualTo(1.0);
         assertThat(gauges.routes(key, RouteProgress.UNKNOWN)).isEqualTo(1.0);
-        assertThat(gauges.routes(OnTimeRatioGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN) - unknownCampBefore)
+        assertThat(gauges.routes(KpiGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN) - unknownCampBefore)
                 .as("캠프를 모르는 행도 빠지지 않는다").isEqualTo(1.0);
     }
 

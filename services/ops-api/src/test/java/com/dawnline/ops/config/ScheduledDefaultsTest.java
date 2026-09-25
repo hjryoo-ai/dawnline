@@ -2,7 +2,7 @@ package com.dawnline.ops.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.dawnline.ops.application.OnTimeRatioGauges;
+import com.dawnline.ops.application.KpiGauges;
 import com.dawnline.ops.application.ReadModelRetentionCleaner;
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -37,11 +37,11 @@ class ScheduledDefaultsTest {
     private static final Pattern PLACEHOLDER = Pattern.compile("^\\$\\{[^:}]+:([^}]+)}$");
 
     /** {@code @Scheduled} 를 가진 클래스 전부. */
-    private static final Class<?>[] OWNERS = {ReadModelRetentionCleaner.class, OnTimeRatioGauges.class};
+    private static final Class<?>[] OWNERS = {ReadModelRetentionCleaner.class, KpiGauges.class};
 
     /** 설정 레코드가 없는 스케줄과 그 이유. */
     private static final Map<String, String> WITHOUT_RECORD = Map.of(
-            "OnTimeRatioGauges.refresh",
+            "KpiGauges.refresh",
             "KPI 갱신 주기는 레코드 없이 플레이스홀더만 있다(Phase 6) — 대조할 둘째 자리가 없으니 어긋날 수도 없다");
 
     private record Schedule(Class<?> owner, String method, Function<OpsRetentionProperties, Long> interval,
