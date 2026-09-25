@@ -2823,6 +2823,10 @@ ADR-060 맥락 1) — §9.4 의 p95 알림이 읽을 것이 없었다.
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
 
+**메트릭의 경로는 Prometheus 스크레이프 하나다** (2026-09-25). OTel 스타터가 가져오는 OTLP 메트릭 레지스트리는 Boot 4.1 에서 기본으로
+켜지고, dispatch 로그가 매분 「Failed to publish metrics to OTLP receiver」를 남겼다(다섯 서비스가 같은 기본값이다) — 매분 찍히는
+오류는 진짜 오류를 가리는 소음이다. `management.otlp.metrics.export.enabled=false`(`observability-defaults.yml`, `ObservabilityResourcesTest`).
+
 **정시율을 tracking 이 아니라 ops-api 가 내는 이유**: `basis` 라벨은 <em>원래 약속</em>과
 <em>개정된 약속</em> 두 기준을 모두 알아야 성립한다(§8.1). tracking 은 `route.assigned` 가 준
 `promised_end` 하나만 갖고 있어 그것이 원래 것인지 개정된 것인지 구분하지 못한다. ops-api 는 모든
