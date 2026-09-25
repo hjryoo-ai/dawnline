@@ -500,7 +500,50 @@ public final class HexagonalArchitectureRules {
                 .allowEmptyShould(true);
     }
 
-    /** 한 서비스에 적용할 10개 규칙 전부. 규칙 10 은 서비스가 아니라 libs/common 에 건다. */
+    /** 규칙 12 가 보는 HTTP 클라이언트의 자리 — Spring 의 세 클라이언트(동기 · 반응형 · HTTP 인터페이스)와 JDK 의 둘. */
+    private static final String[] HTTP_CLIENT_PACKAGES = {
+            "org.springframework.web.client..",
+            "org.springframework.web.reactive.function.client..",
+            "org.springframework.web.service.invoker..",
+            "java.net.http.."};
+
+    /**
+     * 규칙 12 에서 <strong>빠지는</strong> 서비스와 그 이유 — 빼는 방식이다(CLAUDE.md 「집합을 도는 검사는 열거하지 않고 전체에서
+     * 뺀다」). 새 서비스는 이 표에 이유와 함께 적히기 전에는 규칙 안에 있다.
+     */
+    public static final Map<String, String> HTTP_CLIENT_OWNERS = Map.of(
+            "ops", "ops-api 의 위임이 이 규칙이 막는 바로 그 일이다 — 코어를 부르는 클라이언트가 커밋된 계약에서 생성된다"
+                    + "(ADR-052). 동기 호출은 ops-api → 코어 방향만이다(불변규칙 4)");
+
+    /**
+     * 규칙 12 — 코어는 HTTP 클라이언트에 의존하지 않는다(불변규칙 4, ADR-015 후속 정정 2026-09-25).
+     *
+     * <p>두 문장을 지킨다. 불변규칙 4 의 「코어 서비스 간 동기 호출 금지」 — 규칙 3 은 모노레포 안의 패키지 참조만 잡고 HTTP 로 부르는
+     * 것은 못 잡았다. 그리고 소비 측 경계표의 「HTTP — 해당 없음」 — 코어의 리스너가 외부 호출을 하지 않아서 그 행이 비어 있다. 이
+     * 규칙이 깨지는 날 그 칸이 실제 행이 되어야 한다.
+     *
+     * @param rootPackage 대상 루트 패키지({@code com.dawnline.dispatch} …)
+     * @return 규칙
+     */
+    public static ArchRule noOutboundHttp(String rootPackage) {
+        return ArchRuleDefinition.noClasses()
+                .that()
+                .resideInAPackage(rootPackage + "..")
+                .should()
+                .dependOnClassesThat()
+                .resideInAnyPackage(HTTP_CLIENT_PACKAGES)
+                .orShould()
+                .dependOnClassesThat()
+                .haveFullyQualifiedName("java.net.HttpURLConnection")
+                .because("코어의 동기 호출은 ops-api → 코어 방향뿐이다(불변규칙 4) — 그리고 소비 측 경계표의 HTTP 행이 "
+                        + "「해당 없음」인 근거가 이것이다(ADR-015 후속 정정)")
+                .allowEmptyShould(true);
+    }
+
+    /**
+     * 한 서비스에 적용할 규칙 전부 — 코어는 11개, {@link #HTTP_CLIENT_OWNERS} 의 서비스는 규칙 12 를 뺀 10개.
+     * 규칙 10 은 서비스가 아니라 libs/common 에 건다.
+     */
     public static List<ArchRule> allRulesFor(String service) {
         String owner = requireKnownService(service);
         List<ArchRule> rules = new ArrayList<>();
@@ -514,6 +557,9 @@ public final class HexagonalArchitectureRules {
         rules.add(apiVersionIsNotHardcodedInMappings(owner));
         rules.add(ERROR_SHAPE_COMES_FROM_ONE_PLACE);
         rules.add(metersRegisterThroughCatalogue(packageOf(owner)));
+        if (!HTTP_CLIENT_OWNERS.containsKey(owner)) {
+            rules.add(noOutboundHttp(packageOf(owner)));
+        }
         return List.copyOf(rules);
     }
 

@@ -3,7 +3,8 @@
 | 항목 | 내용 |
 |---|---|
 | 대상 | PostgreSQL — 로컬은 컨테이너 하나에 서비스별 데이터베이스 다섯(`dawnline_order` · `_fulfillment` · `_dispatch` · `_tracking` · `_ops`) |
-| 알림 | 전용 알림이 없다 — **`DawnlineOutboxLag` 가 먼저 운다**(릴레이가 판정 불가로 멈춘다). 뒤따르는 것: `DawnlineConsumerLag` · `DawnlineDlqNew` · `DawnlineKpiRefreshStale`(ops DB) |
+| 알림 | **`DawnlineOutboxLag` 가 먼저 운다**(릴레이가 판정 불가로 멈춘다). 30분이 넘으면 `DawnlineConsumerRetryStuck`(재시도 나이). 뒤따를 수 있는 것: `DawnlineKpiRefreshStale`(ops DB). `DawnlineDlqNew` 는 **울지 않는다** — DB 장애는 DLQ 로 가지 않는다(§3) |
+| 경계 | **일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다** — 틀린 자격 증명 · 지워진 표 · 틀린 판정. 소비자는 일시적 실패를 끝없이 재시도하므로 기다림에 끝이 없다. 끝을 정하는 것은 사람이고, 그 문턱이 `DawnlineConsumerRetryStuck` 의 30분이다([ADR-015 후속 정정](../adr/ADR-015-outbox-publish-side-quarantine.md)). `db_integrity` 가 반복되면 결정적일 가능성이 높다 — 데이터를 고치거나 그 레코드를 격리한다(사람이 거는 격리 경로는 아직 없다 — 필요해지면 [ADR-053](../adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md) 의 재검토로 연다) |
 | 관련 설계 | §7.1 · §8.4(「PostgreSQL 다운」 행) · §8.6(레디니스는 마이그레이션 완료만) · ADR-027 |
 
 **먼저 본다 — 메트릭** 어느 서비스가 DB 를 잃었나 — `prom 'dawnline_outbox_leader == -1'` 과 `prom 'max by (service) (hikaricp_connections_pending)'`.
@@ -20,7 +21,7 @@
 |---|---|
 | 그 서비스의 HTTP | 5xx. 레디니스는 마이그레이션 완료만 보므로 이미 뜬 인스턴스는 트래픽을 계속 받는다 |
 | 그 서비스의 발행 | **멈춘다** — 리더십 판정 불가(`-1`), 발행할 행도 못 읽는다. 쓰이지 않은 행은 없으므로 잃는 이벤트도 없다 |
-| 그 서비스의 소비 | 리스너가 커넥션을 기다리며 사실상 멈추고, **몇 건은 재시도 3회 뒤 DLQ** 로 간다 — 아래 3 |
+| 그 서비스의 소비 | **멈춘다** — 막힌 레코드를 끝없이 재시도하고 그 파티션의 뒤는 기다린다. DLQ 로는 가지 않는다 — 아래 3 |
 | 다른 서비스 | 계속된다(DB 가 서비스마다 다르다). 로컬은 컨테이너가 하나라 다섯이 함께 멈춘다 |
 
 ## 2. 복구
@@ -47,37 +48,44 @@ sql admin "SELECT datname, usename, state, count(*) FROM pg_stat_activity GROUP 
 웨이브 마감 스케줄러가 다음 주기에 밀린 마감을 한다(「웨이브 마감 실행 실패. 다음 주기에 다시 시도합니다」가 멈춘다) · `PLANNING` 에 남은
 계획은 10분 뒤 회수된다([RB-04](RB-04-plan-stall-and-rerun.md) §1) · 정리 배치는 다음 실행이 이어서 지운다.
 
-## 3. 장애 창에서 몇 건은 DLQ 로 간다 — 대부분은 브로커에서 기다린다
+## 3. 소비는 멈춰서 기다린다 — DLQ 로 가지 않는다
 
-리스너를 멈추는(`pause`) 코드는 없다 — §8.4 표의 「소비자 재시도 후 pause」는 구현과 다르다. 소비 중의 DB 예외는 일시적 오류로 분류되어
-백오프 3회(200 ms · 1 s · 5 s)를 재시도하고, 소진되면 그 레코드는 DLQ 로 간다(§4.6, `DawnlineErrorHandlers`). 그러나 **시도 한 번이 커넥션
-풀의 대기 시간(Hikari 기본 30초)을 다 쓴다** — 네 번의 시도가 레코드 하나에 약 2분이고, 그 동안 리스너 스레드는 그 레코드에 묶여 뒤의
-레코드를 읽지 않는다. 그래서 풀 대기가 사실상의 멈춤이 되고, DLQ 로 가는 것은 **장애 시간 ÷ 약 2분 × 막힌 리스너 스레드 수**만큼이다.
+소비 중의 DB 예외는 **일시적**이다(ADR-015 후속 정정의 경계표 — `db_connection` · `db_resource` · `db_transient` 행). 일시적 실패는 백오프
+(200 ms · 1 s · 5 s, 그 뒤 5초마다)로 **끝없이** 재시도하고, 그 파티션의 뒤는 기다린다. §8.4 가 「pause」라고 부르던 것이 이것이다 — 순서가
+지켜지고, DB 가 돌아오면 스스로 따라온다. 한 번의 시도는 커넥션 풀의 대기(Hikari 30초)를 다 쓰므로 재시도는 약 35초에 한 번이다.
 
-**관측(재현됨, 2026-09-25 로컬)** — fulfillment 계정의 로그인을 막고(`ALTER ROLE … NOLOGIN` + 세션 종료) 주문 200건을 넣었다. 5분 20초 동안:
-릴레이 리더 `-1`, 로그 「Connection is not available, request timed out after 30001ms」, DLQ 는 넣고 약 2분 뒤부터 두 건씩 **6건**. 로그인을
-돌려주자 30초 안에 나머지 **194건**이 `ok` 로 처리됐다(200 = 194 + 6). 6건은 아래 2 로 재처리했고 전부 `SUCCEEDED` · 원래 그룹 `ok` · 다른
-그룹 `replay_not_target` 이었다.
+**관측(재현됨, 2026-09-25 로컬 — `make chaos-db`)** — fulfillment 계정의 로그인을 막고 세션을 끊은 채 주문 **1,200**건, 6분 13초(12:32:26 → 12:38:39 UTC):
 
-그래서 DB 복구 뒤의 일은 **남은 몇 건의 재처리**다:
+| | 값 |
+|---|---|
+| DLQ | **0건**(`*.dlq` 끝 오프셋 합 36 → 36) |
+| 복구 뒤 | 30초 안에 전부 처리 — 1,200 = 후보 1,023 + 배차 불가 177, 빠진 주문 0(검증 표 V1) |
+| 재시도 | `dawnline_event_retry_total{reason=~"db_.*"}` 0 → 33 · `dawnline_event_retry_age_seconds` 최대 328초, 복구 뒤 0 |
+| 장애 중 운영자 커맨드 | 조기 마감 하나 → 504, 감사 `UNKNOWN`([RB-07](RB-07-audit-unknown.md) — 적용될 수 없었다: 아무도 그 DB 에 들어가지 못했다) |
 
-1. `prom 'sum by (consumer, eventType) (increase(dawnline_event_processed_total{outcome="dlq"}[1h]))'` — 장애 창의 DLQ 가 어느 그룹의 무엇인가.
-2. [RB-05](RB-05-dlq-and-outbox-quarantine.md) §2 — 원인(DB)은 이미 고쳤으므로 그대로 재처리한다. 재처리는 원래 그룹에게만 가고 멱등이다.
-3. **`order.placed` 는 24시간 안에 재처리한다** — 넘기면 `STALE_PLACED` 로 종결된다(RB-05 §2.2).
-4. **DLQ 로 간 건은 뒤의 건보다 늦게 처리된다** — 같은 주문의 `order.cancelled` 가 먼저 처리됐을 수 있다. 소비자의 역행 무시와 취소 선착
-   경로가 흡수한다(§4.6 · ADR-022). 「재처리했는데 상태가 그 이벤트의 것이 아니다」는 정상일 수 있다.
+**브로커의 그룹 랙과 클라이언트의 랙 지표는 다르다** — 같은 실행에서 `kafka-consumer-groups --describe` 는 파티션마다 약 100(합 약 1,200)을
+보였는데(`kafka_consumergroup_lag` — kafka-exporter 가 같은 값을 낸다, §11) 클라이언트 지표 `kafka_consumer_fetch_manager_records_lag` 의 합은 최대 500 이었다. 클라이언트 지표는 「브로커의 끝 − **가져온** 위치」라서, 이미
+가져왔지만 재시도에 막힌 레코드를 세지 않는다. **멈춘 소비를 보는 것은 랙이 아니라 재시도의 나이다.** 그룹의 실제 랙은 위의 명령으로 본다
+([RB-01](RB-01-kafka-recovery.md) §2.1).
 
-장애가 길수록 DLQ 몫이 늘고, 풀 대기 시간을 줄이면 같은 장애에서 DLQ 로 가는 건이 늘어난다 — 두 설정(백오프 · 풀 대기)이 함께 정하는 값이다.
+**두 알림 — 2차 실행(2026-09-25, `make chaos-db HOLD=1900`, 같은 1,200 건 · 33분 장애)**: 밀림 `DawnlineConsumerLag`(브로커 랙 — kafka-exporter
+1,200 · CLI 1,200 · 클라이언트 합 500)이 울렸고, 정지 `DawnlineConsumerRetryStuck` 이 재시도 나이 1,840초(30분 + 평가 간격)에 울렸다. 둘 다 실제
+Prometheus(`/api/v1/alerts`)에서 본 것이다. 복구 30초 안에 둘 다 꺼졌다 · DLQ 0 · 1,200 전부 처리 · 재시도 0 → 171. **읽는 법**: 밀림은 「쌓였다」를
+말하고 정지는 「풀리지 않는다」를 말한다 — 이 장애에서는 둘 다 맞지만, 정지를 말하는 것은 나이다.
 
-**이 절은 7-3 에서 바뀐다**(2026-09-25 결정, §8.4): DLQ 는 독약 메시지의 자리이지 장애의 자리가 아니다. 소비 측이 발행 측 분류기(ADR-015)를
-재사용해 **일시적 실패(DB 연결 · 타임아웃)는 끝없이 재시도**하고(파티션이 멈춘다 — 순서가 지켜진다) 결정적 실패만 DLQ 로 보낸다. 그 뒤로는
-DB 장애의 DLQ 가 0건이고, 복구 뒤의 일은 「기다렸다가 랙이 풀리는지 본다」 하나가 된다. 위의 재현이 그 카오스 검사의 초안이다.
+그래서 DB 복구 뒤의 일은 **기다렸다가 따라왔는지 보는 것** 하나다 — 아래 4. 재처리할 것이 없다.
+
+**그 전(7-5 의 재현)** — 같은 장애를 200건으로 냈을 때 6건이 DLQ 로 갔다(3회 재시도 뒤). 재처리하니 전부 `SUCCEEDED` 였다 — 독약이 아니었다.
+그 관측이 이 절을 바꿨다(§8.4 · ADR-015 후속 정정).
 
 ## 4. 확인
 
 - `dawnline_outbox_leader` 가 서비스마다 `1` 하나 · `dawnline_outbox_lag_seconds` 가 SLO 안(RB-01 §1.4).
 - `hikaricp_connections_pending` 이 0.
-- 장애 창의 DLQ 를 재처리했고 원래 그룹의 `outcome="ok"` 가 올랐다.
+- `dawnline_event_retry_age_seconds` 가 0 으로 돌아왔다 · 그룹의 랙이 풀렸다(`kafka-consumer-groups --describe`, RB-01 §2.1).
+- DLQ 가 늘지 않았다 — 늘었다면 그것은 결정적 실패다(RB-05).
+- **검증 표** — `make chaos-verify STATE=<기준 파일>` 이 카오스와 같은 표(V1–V7)를 낸다. 장애 전에 `tools/chaos/verify.sh baseline <파일>` 로
+  기준을 남겨 두었다면 복구 뒤 그 파일로 잰다.
 
 ## 참조
 

@@ -1,5 +1,6 @@
 package com.dawnline.tracking.adapter.in.messaging;
 
+import com.dawnline.messaging.kafka.NonRetryableEventException;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.AssignedStop;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.RouteAssignment;
 import java.time.Instant;
@@ -20,8 +21,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p><strong>운영 메모.</strong> {@code promisedWindow} 는 Phase 5-1a 에서 {@code required} 가
  * 됐다({@code contracts/events/README.md} §5 예외 표). 그 이전에 발행돼 개발 볼륨의 Kafka 에
- * 남아 있는 이벤트에는 이 필드가 없고, 그런 이벤트는 {@link #toAssignment()} 에서 멈춘다 —
- * 지어낸 창으로 채우면 at-risk 판정이 거짓 위에서 돌고 그 거짓은 아무 데서도 드러나지 않는다.
+ * 남아 있는 이벤트에는 이 필드가 없고, 그런 이벤트는 {@link #toAssignment()} 에서 거절돼 <strong>즉시 DLQ</strong> 로
+ * 간다(§4.6 「스키마 불일치」) — 지어낸 창으로 채우면 at-risk 판정이 거짓 위에서 돌고 그 거짓은 아무 데서도 드러나지 않는다.
+ * 거절은 {@link NonRetryableEventException} 이다. 처음에는 {@code IllegalStateException} 이었고 그때는 3회 뒤 DLQ 였다 —
+ * 소비 측 경계표(ADR-015 후속 정정 2026-09-25)에서 그 타입은 「그 밖 → 일시적」이라 <em>끝없는 재시도</em>가 된다.
+ * 재시도해도 필드가 생기지 않는 실패다.
  * 해결은 그 토픽을 재생성하거나 컨슈머 그룹을 {@code latest} 로 옮기는 것이다.
  *
  * @param routeId  라우트 id
@@ -81,13 +85,13 @@ public record RouteAssignedPayload(UUID routeId, int revision, UUID campId,
      * 그 반대보다 비싸다 (§6.10 {@code dawnline_cancel_too_late_total}).
      *
      * @return 명령
-     * @throws IllegalStateException 약속창 없는 stop 이 있으면 (위 운영 메모)
+     * @throws NonRetryableEventException 약속창 없는 stop 이나 계획 출발 시각 없는 라우트 (위 운영 메모)
      */
     public RouteAssignment toAssignment() {
         if (summary == null || summary.plannedDeparture() == null) {
             // 위 운영 메모와 같은 경우다. 출발 시각을 지어내면 「늦게 출발했다」가 거짓 위에서
             // 판정되고, 그 거짓은 at-risk 를 받은 쪽에서 구별할 수 없다.
-            throw new IllegalStateException("""
+            throw new NonRetryableEventException("""
                     계획 출발 시각 없는 라우트는 배송으로 만들 수 없습니다: routeId=%s. \
                     route.assigned.v1 의 summary.plannedDeparture 는 required 이므로(Phase 5-1b 계약), \
                     이 이벤트는 그 필드가 생기기 전에 발행된 것이다. \
@@ -101,7 +105,7 @@ public record RouteAssignedPayload(UUID routeId, int revision, UUID campId,
 
     private AssignedStop stopOf(StopPayload stop) {
         if (stop.promisedWindow() == null || stop.promisedWindow().end() == null) {
-            throw new IllegalStateException("""
+            throw new NonRetryableEventException("""
                     약속창 없는 stop 은 배송으로 만들 수 없습니다: routeId=%s seq=%d. \
                     route.assigned.v1 의 promisedWindow 는 required 이므로(Phase 5-1a 계약), \
                     이 이벤트는 그 필드가 생기기 전에 발행된 것이다. \

@@ -284,6 +284,26 @@ services:
         limits:
           memory: 256m
 
+  # 소비 그룹 랙 — 브로커 기준(커밋된 오프셋)(DESIGN.md §11, §9.4 DawnlineConsumerLag). 클라이언트의 records-lag 는
+  # 가져오지 못한 양이지 처리하지 못한 양이 아니다 — 재시도에 막힌 파티션을 작게 보인다(RB-02 §3 의 관측).
+  kafka-exporter:
+    image: ${KAFKA_EXPORTER_IMAGE}
+    container_name: dawnline-kafka-exporter
+    profiles: ["obs"]
+    restart: unless-stopped
+    command:
+      - --kafka.server=kafka:9092
+      # 그룹마다 파티션별 시계열을 낸다 — 합은 규칙이 한다.
+      - --group.filter=.*
+      - --topic.filter=^dawnline\..*
+    depends_on:
+      kafka:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+
   grafana:
     image: ${GRAFANA_IMAGE}
     container_name: dawnline-grafana

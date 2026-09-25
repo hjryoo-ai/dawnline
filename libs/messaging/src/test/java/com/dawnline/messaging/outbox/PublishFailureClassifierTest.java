@@ -3,7 +3,7 @@ package com.dawnline.messaging.outbox;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
-import com.dawnline.messaging.outbox.PublishFailureClassifier.Kind;
+import com.dawnline.messaging.FailureKind;
 import com.dawnline.messaging.outbox.PublishFailureClassifier.Phase;
 import java.io.IOException;
 import java.util.concurrent.CompletionException;
@@ -46,7 +46,7 @@ class PublishFailureClassifierTest {
     void 조립_단계는_무조건_결정적이다(RuntimeException failure) {
         // 이 단계는 네트워크도 브로커도 건드리지 않고 저장된 바이트만 읽는다.
         // 같은 행을 다시 읽으면 같은 예외가 나므로 재시도가 순수한 낭비다.
-        assertThat(classifier.classify(Phase.ASSEMBLY, failure)).isEqualTo(Kind.DETERMINISTIC);
+        assertThat(classifier.classify(Phase.ASSEMBLY, failure)).isEqualTo(FailureKind.DETERMINISTIC);
     }
 
     static Object[][] 재시도하면_풀리는_전송_예외() {
@@ -62,7 +62,7 @@ class PublishFailureClassifierTest {
     @ParameterizedTest
     @MethodSource("재시도하면_풀리는_전송_예외")
     void Kafka가_재시도_가능이라고_한_예외는_일시적이다(Throwable failure) {
-        assertThat(classifier.classify(Phase.DELIVERY, failure)).isEqualTo(Kind.TRANSIENT);
+        assertThat(classifier.classify(Phase.DELIVERY, failure)).isEqualTo(FailureKind.TRANSIENT);
     }
 
     static Object[][] 재시도해도_같은_전송_예외() {
@@ -86,7 +86,7 @@ class PublishFailureClassifierTest {
     void Kafka가_비재시도로_분류한_예외는_결정적이다(Throwable failure) {
         // 이 목록을 손으로 유지하지 않는 것이 요점이다 — 하나라도 빠뜨리면 그 예외를 낸 행이
         // 일시적으로 분류돼 뒤의 모든 이벤트를 영구히 막는다(ADR-015 가 없애려던 상태).
-        assertThat(classifier.classify(Phase.DELIVERY, failure)).isEqualTo(Kind.DETERMINISTIC);
+        assertThat(classifier.classify(Phase.DELIVERY, failure)).isEqualTo(FailureKind.DETERMINISTIC);
     }
 
     static Object[][] Kafka가_분류하지_않은_예외() {
@@ -101,7 +101,7 @@ class PublishFailureClassifierTest {
     @MethodSource("Kafka가_분류하지_않은_예외")
     void 판단_근거가_없으면_일시적이다(Throwable failure) {
         // ADR-015: 격리는 사람의 개입을 요구하므로 보수적인 쪽이 기본값이다.
-        assertThat(classifier.classify(Phase.DELIVERY, failure)).isEqualTo(Kind.TRANSIENT);
+        assertThat(classifier.classify(Phase.DELIVERY, failure)).isEqualTo(FailureKind.TRANSIENT);
     }
 
     @Test
@@ -110,30 +110,30 @@ class PublishFailureClassifierTest {
         // 같은 타입으로 보여 판정이 무의미해진다.
         assertThat(classifier.classify(Phase.DELIVERY,
                 new ExecutionException(new SerializationException("직렬화 실패"))))
-                .isEqualTo(Kind.DETERMINISTIC);
+                .isEqualTo(FailureKind.DETERMINISTIC);
         assertThat(classifier.classify(Phase.DELIVERY, new ExecutionException(new NetworkException("끊김"))))
-                .isEqualTo(Kind.TRANSIENT);
+                .isEqualTo(FailureKind.TRANSIENT);
     }
 
     @Test
     void CompletionException_래퍼도_벗긴다() {
         assertThat(classifier.classify(Phase.DELIVERY,
                 new CompletionException(new RecordTooLargeException("너무 큼"))))
-                .isEqualTo(Kind.DETERMINISTIC);
+                .isEqualTo(FailureKind.DETERMINISTIC);
     }
 
     @Test
     void 중첩된_래퍼도_끝까지_벗긴다() {
         assertThat(classifier.classify(Phase.DELIVERY,
                 new ExecutionException(new CompletionException(new SerializationException("직렬화 실패")))))
-                .isEqualTo(Kind.DETERMINISTIC);
+                .isEqualTo(FailureKind.DETERMINISTIC);
     }
 
     @Test
     void 원인이_없는_래퍼는_일시적이다() {
         // 벗길 것이 없으면 판단 근거도 없다 → 보수적으로 일시적.
         assertThat(classifier.classify(Phase.DELIVERY, new ExecutionException("원인 없음", null)))
-                .isEqualTo(Kind.TRANSIENT);
+                .isEqualTo(FailureKind.TRANSIENT);
     }
 
     @Test

@@ -8,6 +8,7 @@ import com.dawnline.messaging.contract.EventContracts;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.idempotency.ProcessedEventRepository;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.kafka.NonRetryableEventException;
 import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.Outcome;
@@ -116,15 +117,16 @@ class RouteAssignedListenerTest {
     }
 
     @Test
-    void 약속창이_없는_이벤트는_멈춘다() {
-        // 재시도 뒤 DLQ 로 간다(§4.6). 조용히 넘기면 창 없는 배송이 at-risk 판정 밖으로 사라진다.
+    void 약속창이_없는_이벤트는_즉시_DLQ_로_간다() {
+        // 스키마 불일치 — 재시도하지 않고 DLQ 로 간다(§4.6, ADR-015 후속 정정). 조용히 넘기면 창 없는 배송이 at-risk 판정
+        // 밖으로 사라지고, 「그 밖」의 예외로 던지면 끝없이 재시도하며 파티션을 세운다.
         String withoutWindow = example("route.assigned.v1.example.json")
                 .replaceAll(",\\s*\"promisedWindow\"\\s*:\\s*\\{[^}]*}", "");
 
         // 전제를 먼저 말한다 — 지우지 못했다면 이 테스트는 통과하면서 아무것도 검사하지 않는다.
         assertThat(withoutWindow).doesNotContain("promisedWindow");
         assertThatThrownBy(() -> listener.onRouteAssigned(record(withoutWindow)))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(NonRetryableEventException.class)
                 .hasMessageContaining("promisedWindow");
         assertThat(useCase.calls).isEmpty();
     }

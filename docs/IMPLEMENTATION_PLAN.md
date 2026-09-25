@@ -2038,7 +2038,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A12 | ADR-008 확정 · 4-3 병렬화 이월 · ADR-035 게이트 | Phase 4 대조표 3·7 · ADR-035 | `peak` 에서 예산이 물리고 잘림의 대가 ≥ 1% | peak-day 의 계획 시간·열화 사유 | 데이터 7-4 · 문서 7-6 |
 | A13 | ADR-004 한정 실행(`timefold` · `medium` 한 개, 선택) | ADR-004 결정 4 | 7-6 에 여유가 있을 때 · 공정성 셋 | 벤치마크 | 7-6 |
 | A14 | 쓰이지 않은 ADR 넷 — 005(Phase 2 예정) · 010(Phase 3 예정) · 011(Phase 7 예정) · 012(Phase 6 예정) | `docs/adr/README.md` · §16 | — (「001–012 확정」) | — | 7-6 |
-| A15 | 카오스 셋 + 검증 SQL · ADR-027 의 `chaos-redis` 기준(**발행이 멈추지 않고 지연도 오르지 않는다** — 후속 정정의 기준) | 7-3 · ADR-027 재검토 지점 | — | 검증 SQL 세 줄 · `outbox_lag` | 7-3 |
+| A15 | 카오스 셋 + 검증 SQL · ADR-027 의 `chaos-redis` 기준(**발행이 멈추지 않고 지연도 오르지 않는다** — 후속 정정의 기준) | 7-3 · ADR-027 재검토 지점 | — | 검증 SQL 세 줄 · `outbox_lag` | 7-3 — **7-3① 부분** (2026-09-26): 검증 표 V1–V7(`tools/chaos/verify.sh` — 세 줄에 셋을 더했다) · DB 장애 카오스(`make chaos-db`). `chaos-kafka` · `chaos-redis`(이 행의 기준) · `chaos-kill` 은 7-3② |
 | A16 | 리더 합이 **항상 1** — 인스턴스 둘 이상 · 열린 카운터 알림의 `unless … offset w` 가 인스턴스 라벨마다 판정한다(새로 뜬 인스턴스도 「새 시계열」) | ADR-027 · ADR-060 재검토 지점 | 인스턴스를 실제로 둘 이상 올릴 때 | `dawnline_outbox_leader` 의 인스턴스 합 · 인스턴스가 뜬 직후 첫 사건에서 열린 카운터 알림이 한 번 울리는가 | 7-4 |
 | A17 | `FOR SHARE` 의 multixact | ADR-025 | peak-day 버스트 | `pg_stat_slru` multixact · 락 대기 | 7-4 |
 | A18 | `cancel_too_late_total` ≠ 0 이면 창의 폭이 가정을 넘은 것 | ADR-026 | peak-day 에서 0 이 아니다 | 그 카운터 + order-service 의 `order.dispatched` 랙 | 7-4 |
@@ -2184,11 +2184,20 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
    소비 측 오류 처리기가 발행 측 분류기(ADR-015)를 재사용해 **일시적 실패(DB 연결 · 타임아웃)는 백오프로 끝없이 재시도**(파티션이
    멈춘다 — 순서가 지켜진다), **결정적 실패만 3회 뒤 DLQ**. 영구적인 「일시」 실패는 소비자 랙 알림이 잡는다. **DB 장애 카오스**를
    셋에 더한다 — 어설션은 「DLQ 0건, 복구 뒤 주문 전부 처리」이고 초안은 7-5 의 재현(RB-02 §3 — 200건 중 DLQ 6)이다.
+   **7-3① (2026-09-26)** — 소비 측 경계표([ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md), 정본은 `ConsumeFailure`, 행마다 음성 표본) ·
+   끝없는 재시도 + 카운터(`dawnline_event_retry_total{reason}`)와 나이(`dawnline_event_retry_age_seconds`) · ArchUnit 규칙 12(코어는 HTTP 클라이언트가
+   없다 — 경계표의 「HTTP — 해당 없음」) · 검증 표 V1–V7 과 `make chaos-db`. **신호가 둘로 정리됐다**: 밀림은 브로커 랙(kafka-exporter 의 그룹 · 토픽별 합 > 1,000),
+   정지는 재시도 나이(30분 — 「일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다」). 첫 실행이 **클라이언트 랙은 가져오지 못한 양이지 처리하지 못한
+   양이 아니다**를 관측으로 남겼다(1,200 건이 밀렸는데 `records_lag_max` 102 · 합 500). 결과: DLQ 0 · 1,200 전부 처리 · 재시도 0 → 33 · 나이 최대 328초 → 0.
+   **7-3②** — `chaos-kafka` · `chaos-redis` · `chaos-kill`(PLANNING 회수 — 정체 판정 90초로 줄여 돌리고 값을 출력한다) · A9 · RB-01 · 03 의 검증 절 ·
+   `workflow_dispatch` 로 넷을 돌려 검증 표를 아티팩트로 남기는 워크플로(PR 게이트에는 넣지 않는다).
 3b. **감사 해소는 칸이 아니라 행이다**(2026-09-25 결정) — 감사 행은 덧붙이지 고치지 않는다. `RESOLVE_AUDIT` 행 하나(대상 = `UNKNOWN`
    행 id, 결과, `reason` 필수, actor)를 ops-api `POST /audit/{id}/resolve` 로 남기고, `UNKNOWN` 행은 그대로 둔다. RB-07 §3 의
    「사건 기록에 남긴다」와 SQL `UPDATE` 가 이 행으로 바뀐다. ADR-052 재검토 지점 4(자동 해소)가 열리면 같은 행을 쓴다. **같은 PR 에
    코어의 커맨드 수신 로그 한 줄**(`auditId` 는 이미 MDC 에 있다 — INFO 한 줄) — 7-5 가 드러낸 「성공만 로그한다」를 닫아 RB-07 의
    흔적 경로를 되살린다. 7-4 앞 — peak-day 의 운영자 스크립트가 카오스로 생긴 `UNKNOWN` 을 닫는 경로까지 보여야 한다.
+   **실제 사례가 생겼다** (2026-09-25, 7-3① `make chaos-db`): fulfillment 의 DB 가 멈춘 동안 보낸 조기 마감 하나가 504 → 감사 `UNKNOWN`. 적용될 수 없었다(그 DB 에
+   아무도 들어가지 못했다) — 해소는 `FAILED` 이고 근거는 「그 시각 그 계정은 NOLOGIN 이었다」다. 인위 주입이 아니다.
 4a. **peak-day 의 전제**(A27) — 시나리오 넷(`normal-day` · `peak-day` · `overload-day` · `cold-heavy`, 부록 A), 함대 변형
    (`peak-day` 는 80% 기준이 정하는 함대 — D2), sim-runner 이미지, `make peak`. 부록 A 의 목록과 `scenarios.yml` 의
    어긋남도 여기서 맞춘다 — **고치는 것과 함께 검사가 산출물이다**: 진실은 `scenarios.yml` 이고 부록 A 는 그것을 비추는

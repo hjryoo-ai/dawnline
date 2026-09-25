@@ -168,6 +168,29 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙12_는_HTTP_클라이언트에_의존하는_코어를_잡는다() {
+        // Spring 의 RestClient 와 JDK 의 HttpClient — 둘 다 잡혀야 경계표의 「HTTP — 해당 없음」이 참으로 남는다.
+        assertThatThrownBy(() -> HexagonalArchitectureRules.noOutboundHttp(SAMPLES + ".bad").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("RemoteCallingAdapter")
+                .hasMessageContaining("org.springframework.web.client.RestClient")
+                .hasMessageContaining("java.net.http.HttpClient")
+                .hasMessageContaining("ADR-015");
+    }
+
+    @Test
+    void 규칙12_는_올바른_표본을_통과시킨다() {
+        HexagonalArchitectureRules.noOutboundHttp(SAMPLES + ".good").check(GOOD);
+    }
+
+    @Test
+    void 규칙12_에서_빠지는_것은_ops_하나이고_이유가_있다() {
+        // 빼는 방식이다 — 새 서비스는 이 표에 이유와 함께 적히기 전에는 규칙 안에 있다.
+        assertThat(HexagonalArchitectureRules.HTTP_CLIENT_OWNERS).containsOnlyKeys("ops");
+        assertThat(HexagonalArchitectureRules.HTTP_CLIENT_OWNERS.get("ops")).contains("ADR-052").contains("불변규칙 4");
+    }
+
+    @Test
     void 규칙6_은_올바른_표본을_통과시킨다() {
         HexagonalArchitectureRules.PUBLISHING_GOES_THROUGH_OUTBOX_ONLY.check(GOOD);
     }
@@ -194,7 +217,8 @@ class HexagonalArchitectureRulesTest {
     void 서비스별_규칙_전부를_만들_수_있고_대상이_없으면_통과한다(String service) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
-        assertThat(rules).hasSize(10);
+        // 코어는 11개, 규칙 12 에서 빠지는 서비스(ops — 위임 클라이언트)는 10개.
+        assertThat(rules).hasSize(HexagonalArchitectureRules.HTTP_CLIENT_OWNERS.containsKey(service) ? 10 : 11);
         // GOOD 표본에는 위반이 없으므로 전부 통과해야 한다. 규칙 3·4 는 이 표본에 대상이 0개이고,
         // allowEmptyShould(true) 덕분에 "대상 없음" 이 실패가 되지 않는다.
         // 그 둘의 탐지 능력은 위의 전용 테스트가 확인한다.

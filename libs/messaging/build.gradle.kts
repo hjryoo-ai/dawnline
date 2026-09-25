@@ -41,6 +41,9 @@ dependencies {
     testFixturesApi(libs.jackson.databind)
 
     testImplementation(libs.spring.boot.starter.test)
+    // 소비 측 경계표의 redis 행(ADR-015 후속 정정) — 본문은 Redis 를 참조하지 않고 패키지로 판정한다. 테스트는 실제 예외
+    // (RedisConnectionFailureException · Lettuce 의 시간 초과)로 그 판정을 본다.
+    testImplementation(libs.spring.boot.starter.data.redis)
     // 보존 표 파서(RetentionTable) — 모듈마다 같은 방식으로 §7.1 을 읽어야 대조가 같은 표를 본다(ADR-058).
     testImplementation(testFixtures(project(":libs:common")))
     // 컨트롤러 테스트 — 실제 WebMvc 자동 설정 위에서 서비스와 같은 어드바이스(libs/web)로 돈다.
@@ -95,5 +98,14 @@ tasks.named<Test>("test") {
 tasks.named<Test>("test") {
     inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
             .withPropertyName("retentionTable")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// -----------------------------------------------------------------------------
+// ConsumeFailureTableTest 가 ADR-015 의 소비 측 경계표를 읽는다(후속 정정 2026-09-25) — 같은 이유로 입력이다.
+// -----------------------------------------------------------------------------
+tasks.named<Test>("test") {
+    inputs.file(rootProject.layout.projectDirectory.file("docs/adr/ADR-015-outbox-publish-side-quarantine.md"))
+            .withPropertyName("consumeFailureTable")
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }

@@ -56,7 +56,7 @@ class ArchitectureTest {
     @ArchTest
     static void 헥사고날_규칙을_모두_지킨다(JavaClasses classes) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(SERVICE);
-        assertThat(rules).as("DESIGN.md §13 의 서비스 대상 ArchUnit 규칙 10개 (규칙 10 은 libs/common 에 건다)").hasSize(10);
+        assertThat(rules).as("DESIGN.md §13 의 서비스 대상 ArchUnit 규칙 10개 (규칙 10 은 libs/common 에 건다, 규칙 12 는 ops 가 빠진다 — HTTP_CLIENT_OWNERS)").hasSize(10);
         rules.forEach(rule -> rule.check(classes));
     }
 

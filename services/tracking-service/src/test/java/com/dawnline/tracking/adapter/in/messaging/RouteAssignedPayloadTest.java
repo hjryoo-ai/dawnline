@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.contract.EventContracts;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.kafka.ConsumeFailure;
+import com.dawnline.messaging.kafka.NonRetryableEventException;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.AssignedStop;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.RouteAssignment;
 import java.io.IOException;
@@ -103,7 +105,7 @@ class RouteAssignedPayloadTest {
     }
 
     @Test
-    void 약속창_없는_stop_은_지어내지_않고_멈춘다() {
+    void 약속창_없는_stop_은_지어내지_않고_즉시_DLQ_로_보낸다() {
         // Phase 5-1a 이전에 발행된 이벤트다. 창을 지어내면 at-risk 판정이 거짓 위에서 돌고,
         // 그 거짓은 이벤트를 받은 쪽에서 구별할 수 없다 (§5.4, contracts/events/README.md §5).
         RouteAssignedPayload payload = new RouteAssignedPayload(UUID.randomUUID(), 1,
@@ -112,13 +114,16 @@ class RouteAssignedPayloadTest {
                         Instant.parse("2026-08-29T15:41:00Z"), null, "PLANNED")));
 
         assertThatThrownBy(payload::toAssignment)
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(NonRetryableEventException.class)
                 .hasMessageContaining("promisedWindow")
-                .hasMessageContaining("latest");
+                .hasMessageContaining("latest")
+                .satisfies(failure -> assertThat(ConsumeFailure.of(failure))
+                        .as("재시도해도 필드가 생기지 않는다 — 즉시 DLQ(ADR-015 후속 정정)")
+                        .isEqualTo(ConsumeFailure.DESERIALIZATION));
     }
 
     @Test
-    void 계획_출발_시각이_없는_라우트도_지어내지_않고_멈춘다() {
+    void 계획_출발_시각이_없는_라우트도_지어내지_않고_즉시_DLQ_로_보낸다() {
         // 같은 부류다 (Phase 5-1b 계약). 출발 시각을 지어내면 「늦게 출발했다」가 거짓 위에서
         // 판정되고, at-risk 를 받은 dispatch 는 그 거짓을 구별할 수 없다.
         RouteAssignedPayload payload = new RouteAssignedPayload(UUID.randomUUID(), 1,
@@ -129,9 +134,12 @@ class RouteAssignedPayloadTest {
                         "PLANNED")));
 
         assertThatThrownBy(payload::toAssignment)
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(NonRetryableEventException.class)
                 .hasMessageContaining("plannedDeparture")
-                .hasMessageContaining("latest");
+                .hasMessageContaining("latest")
+                .satisfies(failure -> assertThat(ConsumeFailure.of(failure))
+                        .as("재시도해도 필드가 생기지 않는다 — 즉시 DLQ(ADR-015 후속 정정)")
+                        .isEqualTo(ConsumeFailure.DESERIALIZATION));
     }
 
     @Test

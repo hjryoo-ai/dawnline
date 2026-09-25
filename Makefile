@@ -32,13 +32,15 @@ COMPOSE_LEANP := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_LEAN_FILE) --env
 SERVICES      := order-service fulfillment-service dispatch-service tracking-service ops-api
 # ops-web 은 Buildpacks 가 아니라 Dockerfile 이미지다(ADR-057). 기존 .env 에 없으면 make env 가 예시에서 덧붙이는 키들.
 OPS_WEB_ENV_KEYS := NODE_IMAGE NGINX_IMAGE OPS_WEB_PORT
+# 관측 스택에 나중에 들어온 이미지 — 예전에 만든 .env 에 없으면 .env.example 에서 덧붙인다(ops-web 과 같은 방식).
+OBS_ENV_KEYS := KAFKA_EXPORTER_IMAGE
 
 # `make logs SERVICE=dispatch-service` 처럼 좁힐 수 있다.
 SERVICE       ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls obs-check \
-        topics psql redis-cli config demo peak chaos-kafka clean-volumes \
+        topics psql redis-cli config demo peak chaos-kafka chaos-db chaos-verify clean-volumes \
         k6-orders k6-rate-limit smoke token
 
 # -----------------------------------------------------------------------------
@@ -69,6 +71,9 @@ help:
 	@printf '  \033[1m시나리오\033[0m (tools/sim-runner)\n'
 	@printf '    make smoke          주문 200건 생성 [SCENARIO=smoke|tiny]   [Phase 1]\n\n'
 	@printf '    make demo           주문→편입→컷오프→wave.closed 검증  [Phase 2]\n\n'
+	@printf '  \033[1m카오스\033[0m (tools/chaos — 끝에 검증 표 V1–V7, 보고는 build/chaos/)\n'
+	@printf '    make chaos-db       서비스 하나의 DB 장애 → DLQ 0 · 전부 처리 [SERVICE=fulfillment HOLD=300]  [7-3]\n'
+	@printf '    make chaos-verify   검증 표만 — STATE=<baseline 파일> [VERIFY_ARGS=…]                    [7-3]\n\n'
 	@printf '  \033[1m시나리오\033[0m (아직 미구현 — 해당 Phase 에서 채운다)\n'
 	@printf '    make peak           피크 시나리오                [Phase 7]\n'
 	@printf '    make chaos-kafka    Kafka 중단→복구 검증          [Phase 7]\n\n'
@@ -98,6 +103,12 @@ env:
 	for key in $(OPS_WEB_ENV_KEYS); do \
 	if ! grep -q "^$$key=" $(ENV_FILE); then \
 	printf '\n# ops-web (make env 가 .env.example 에서 덧붙였다, ADR-057)\n%s\n' "$$(grep "^$$key=" $(ENV_EXAMPLE))" >> $(ENV_FILE); \
+	echo "덧붙임: $(ENV_FILE) 에 $$key (.env.example 의 값)"; \
+	fi; \
+	done; \
+	for key in $(OBS_ENV_KEYS); do \
+	if ! grep -q "^$$key=" $(ENV_FILE); then \
+	printf '\n# 관측 스택 (make env 가 .env.example 에서 덧붙였다, DESIGN.md §11)\n%s\n' "$$(grep "^$$key=" $(ENV_EXAMPLE))" >> $(ENV_FILE); \
 	echo "덧붙임: $(ENV_FILE) 에 $$key (.env.example 의 값)"; \
 	fi; \
 	done; \
@@ -314,6 +325,25 @@ chaos-kafka:
 	@echo "  Phase 7 에서 이 타깃은 kafka 중단 → 복구 → outbox 미발행 0건 검증까지 수행한다."
 	@echo ""
 	@exit 2
+
+# -----------------------------------------------------------------------------
+# 카오스 (DESIGN.md §13 「카오스」, tools/chaos). 끝에 검증 표 V1–V7 을 낸다 — 카오스 종류와 무관하게 같은 표이고 7-4 peak-day 도
+# 같은 표를 낸다. 보고는 build/chaos/ 에 남는다.
+#
+#   make chaos-db                       fulfillment 의 DB 를 5분 멈춘다(계정 NOLOGIN — 끝에서 반드시 되돌린다)
+#   make chaos-db SERVICE=dispatch HOLD=600
+#   make chaos-verify STATE=build/chaos/db.state VERIFY_ARGS='--expect-dlq 0'
+CHAOS_SCENARIO ?= ops-demo
+HOLD           ?= 300
+STATE          ?=
+VERIFY_ARGS    ?=
+
+chaos-db: env
+	@SERVICE=$(or $(SERVICE),fulfillment) SCENARIO=$(CHAOS_SCENARIO) HOLD=$(HOLD) bash tools/chaos/chaos-db.sh
+
+chaos-verify: env
+	@test -n "$(STATE)" || { echo "STATE=<verify.sh baseline 파일> 이 필요하다"; exit 2; }
+	@bash tools/chaos/verify.sh check $(STATE) $(VERIFY_ARGS)
 
 # -----------------------------------------------------------------------------
 # 데이터까지 지운다. 반드시 확인을 묻는다 (CLAUDE.md).

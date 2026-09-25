@@ -89,6 +89,20 @@ public final class DawnlineMetrics {
             "dawnline.event.stale", "순서 역전을 흡수하느라 무시한 이벤트 — 설계된 동작",
             open("consumer"), open("eventType"));
 
+    /**
+     * 재시도 경로에 든 실패한 배달 — 「몇 번 · 왜」(ADR-015 후속 정정). {@code reason} 은 소비 측 경계표의 행이고
+     * {@code ConsumeFailure.retryReasons()} 와 대조된다(libs/messaging 의 테스트).
+     */
+    public static final DawnlineMetric EVENT_RETRY = counter("dawnline_event_retry_total",
+            "dawnline.event.retry", "재시도 경로에 든 실패한 배달 — reason 은 소비 측 경계표의 행(ADR-015 후속 정정)",
+            open("consumer"), closed("reason", "redis", "db_connection", "db_resource", "db_transient", "db_integrity",
+                    "argument", "domain", "other"));
+
+    /** 지금 재시도 중인 레코드가 파티션을 막고 있는 시간 — 「얼마나 오래」(ADR-015 후속 정정). 재시도 중이 아니면 0. */
+    public static final DawnlineMetric EVENT_RETRY_AGE_SECONDS = gauge("dawnline_event_retry_age_seconds",
+            "dawnline.event.retry.age.seconds", "지금 재시도 중인 레코드가 파티션을 막고 있는 초, 파티션 중 최대 — 아니면 0",
+            open("consumer"));
+
     // --- fulfillment-service -------------------------------------------------
 
     /** 마감 시점의 편입 주문 수(ADR-025). */
@@ -255,7 +269,7 @@ public final class DawnlineMetrics {
     public static final List<DawnlineMetric> ALL = List.of(
             ORDERS_PLACED, IDEMPOTENT_REPLAYS, RATE_LIMIT_DECISIONS,
             OUTBOX_LAG_SECONDS, OUTBOX_UNPUBLISHED, OUTBOX_FAILED, OUTBOX_LEADER,
-            EVENT_PROCESSED, EVENT_REJECTED, EVENT_STALE,
+            EVENT_PROCESSED, EVENT_REJECTED, EVENT_STALE, EVENT_RETRY, EVENT_RETRY_AGE_SECONDS,
             WAVE_ORDERS, FC_FALLBACK, PROMISE_REVISED, GEO_INDEX_LOADED, GEO_LOOKUPS, FULFILLMENT_ORDERS_STUCK,
             PLAN_DURATION, PLAN_PERSIST, PLAN_COST, PLAN_UNASSIGNED, PLAN_DEGRADED, PLAN_BACKLOG_UNKNOWN,
             CANCEL_TOO_LATE, STATUS_AFTER_RELOCATE, REPLAN, AT_RISK_DEVIATION_MISMATCH, ROUTE_PLANS_STUCK,

@@ -38,7 +38,7 @@
 | 012 | CQRS 읽기 모델을 ops-api에 집중 | ⏳ Phase 6 예정 | — |
 | 013 | 컨테이너 이미지 = Spring Boot Buildpacks(`bootBuildImage`) | ✅ Accepted (2026-08-29) | [ADR-013](ADR-013-container-image-buildpacks.md) |
 | 014 | JDK 25 툴체인 자동 프로비저닝 (foojay-resolver) | ✅ Accepted (2026-08-29) | [ADR-014](ADR-014-jdk25-toolchain-auto-provisioning.md) |
-| 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | ✅ Accepted (2026-09-01) | [ADR-015](ADR-015-outbox-publish-side-quarantine.md) |
+| 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | ✅ Accepted (2026-09-01) + **후속 정정 둘** — 재큐 엔드포인트(2026-09-24) · **소비 측 경계표**(2026-09-25 — 일시적은 끝없이 재시도, 결정적만 DLQ) | [ADR-015](ADR-015-outbox-publish-side-quarantine.md) |
 | 016 | 레디니스에서 Kafka 브로커 연결 제외 | ✅ Accepted (2026-09-01) | [ADR-016](ADR-016-readiness-excludes-kafka.md) |
 | 017 | 주문 상태 머신이 순서 뒤바뀜을 흡수 (`PLANNED → DELIVERED` + 진행 단계 비교) | ✅ Accepted (2026-09-02) | [ADR-017](ADR-017-order-state-machine-absorbs-out-of-order-events.md) |
 | 018 | 멱등 잠금은 Redis 키(PX 30000), DB 에는 `DONE` 만 기록 | ✅ Accepted (2026-09-03) | [ADR-018](ADR-018-idempotency-lock-in-redis-record-in-db.md) |

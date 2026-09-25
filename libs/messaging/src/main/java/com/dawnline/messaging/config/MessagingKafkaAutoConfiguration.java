@@ -1,14 +1,19 @@
 package com.dawnline.messaging.config;
 
 import com.dawnline.messaging.Topics;
+import com.dawnline.messaging.kafka.ConsumerRetryObserver;
 import com.dawnline.messaging.kafka.DawnlineErrorHandlers;
+import com.dawnline.messaging.kafka.DeprecatedTopicMetricsFilter;
 import com.dawnline.messaging.kafka.DlqRecordRecoverer;
 import com.dawnline.messaging.kafka.ReplayTargetFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -19,6 +24,7 @@ import org.springframework.boot.kafka.autoconfigure.DefaultKafkaConsumerFactoryC
 import org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
@@ -65,18 +71,61 @@ public class MessagingKafkaAutoConfiguration {
     }
 
     /**
+     * 무한 재시도를 보이게 하는 관찰자 — 카운터 {@code dawnline_event_retry_total} 과 게이지
+     * {@code dawnline_event_retry_age_seconds} (§9.1, ADR-015 후속 정정 결정 4).
+     *
+     * <p>에러 핸들러의 재시도 관찰자이면서 <strong>Boot 의 리스너 컨테이너 팩토리가 {@code RecordInterceptor} 와
+     * {@code ConsumerAwareRebalanceListener} 로 집어 가는 빈</strong>이다 — 나이의 끝(성공 · 파티션이 떠남)을 에러 핸들러는 모른다.
+     * 서비스가 둘 중 하나를 따로 두면 Boot 는 {@code getIfUnique} 로 어느 쪽도 꽂지 않는다 — 그때는 합성해야 한다
+     * ({@link #dawnlineReplayTargetFilter} 와 같은 조건).
+     *
+     * @param meters      Micrometer 레지스트리
+     * @param properties  {@code dawnline.messaging.*}
+     * @param environment {@code spring.application.name} 조회용
+     * @param clocks      나이의 시계 — 서비스의 {@code Clock} 빈, 없으면 저장 정밀도 시계
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DlqRecordRecoverer.class)
+    public ConsumerRetryObserver dawnlineConsumerRetryObserver(ObjectProvider<MeterRegistry> meters,
+            DawnlineMessagingProperties properties, Environment environment, ObjectProvider<Clock> clocks) {
+        return new ConsumerRetryObserver(meters.getIfAvailable(SimpleMeterRegistry::new),
+                MessagingAutoConfiguration.resolveProducer(properties, environment),
+                clocks.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock));
+    }
+
+    /**
      * §4.6 의 재시도 → DLQ 핸들러. Boot 의 기본 리스너 컨테이너 팩토리가 이 빈을 집어 간다.
+     *
+     * <p>만들기 전에 백오프 상한과 폴 간격 상한의 관계를 본다({@link DawnlineErrorHandlers#requireBackOffWithinPollInterval}).
+     * 폴 간격은 컨슈머 팩토리의 설정이고({@code spring.kafka.consumer.properties.max.poll.interval.ms}), 없으면 Kafka 의 기본값이다.
+     * 리스너 하나가 {@code @KafkaListener(properties = …)} 로 덮은 값은 여기서 보이지 않는다.
      *
      * @param recoverer  DLQ 발행기
      * @param properties {@code dawnline.messaging.*}
+     * @param observer   재시도 관찰자
+     * @param consumers  컨슈머 팩토리 — 폴 간격을 읽는다
      */
     @Bean
     @ConditionalOnMissingBean(CommonErrorHandler.class)
     @ConditionalOnBean(DlqRecordRecoverer.class)
     public CommonErrorHandler dawnlineKafkaErrorHandler(DlqRecordRecoverer recoverer,
-            DawnlineMessagingProperties properties) {
-        return DawnlineErrorHandlers.retryThenDlq(recoverer, properties.retry());
+            DawnlineMessagingProperties properties, ConsumerRetryObserver observer,
+            ObjectProvider<ConsumerFactory<?, ?>> consumers) {
+        DawnlineErrorHandlers.requireBackOffWithinPollInterval(properties.retry(), maxPollInterval(consumers.getIfAvailable()));
+        return DawnlineErrorHandlers.retryThenDlq(recoverer, properties.retry(), observer);
     }
+
+    /** 컨슈머 팩토리의 {@code max.poll.interval.ms} — 없으면 Kafka 의 기본값(300초). 값은 숫자이거나 문자열이다. */
+    static Duration maxPollInterval(@Nullable ConsumerFactory<?, ?> consumers) {
+        Object value = consumers == null ? null
+                : consumers.getConfigurationProperties().get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
+        long millis = value == null ? DEFAULT_MAX_POLL_INTERVAL_MS : Long.parseLong(value.toString());
+        return Duration.ofMillis(millis);
+    }
+
+    /** Kafka 클라이언트의 {@code max.poll.interval.ms} 기본값 — {@code ConsumerConfig} 는 이것을 상수로 내놓지 않는다. */
+    private static final long DEFAULT_MAX_POLL_INTERVAL_MS = 300_000L;
 
     /**
      * 다른 그룹을 지목한 DLQ 재처리를 리스너 앞에서 건너뛴다 (§4.6, ADR-053). Boot 의 기본 리스너 컨테이너
@@ -92,6 +141,16 @@ public class MessagingKafkaAutoConfiguration {
     @ConditionalOnMissingBean(RecordFilterStrategy.class)
     public RecordFilterStrategy<Object, Object> dawnlineReplayTargetFilter(ObjectProvider<MeterRegistry> meters) {
         return new ReplayTargetFilter(meters.getIfAvailable(SimpleMeterRegistry::new));
+    }
+
+    /**
+     * Kafka 클라이언트가 폐기 예정 사본으로 한 번 더 내는 토픽 지표를 거른다(KIP-1109 — {@link DeprecatedTopicMetricsFilter}).
+     * Boot 가 {@code MeterFilter} 빈을 레지스트리에 건다. 거르지 않으면 파티션 랙의 합이 두 배가 된다(§9.1).
+     */
+    @Bean
+    @ConditionalOnMissingBean(DeprecatedTopicMetricsFilter.class)
+    public DeprecatedTopicMetricsFilter dawnlineDeprecatedTopicMetricsFilter() {
+        return new DeprecatedTopicMetricsFilter();
     }
 
     /**

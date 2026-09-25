@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.kafka.ConsumerRetryObserver;
 import com.dawnline.messaging.kafka.DlqRecordRecoverer;
 import com.dawnline.messaging.kafka.NonRetryableEventException;
 import com.dawnline.messaging.kafka.ReplayTargetFilter;
@@ -21,12 +22,15 @@ import org.springframework.boot.kafka.autoconfigure.DefaultKafkaConsumerFactoryC
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
+import org.springframework.kafka.listener.ConsumerAwareRebalanceListener;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.RecordInterceptor;
 import org.springframework.kafka.listener.adapter.RecordFilterStrategy;
 
 /**
@@ -80,7 +84,35 @@ class MessagingAutoConfigurationTest {
                     assertThat(context).hasSingleBean(CommonErrorHandler.class);
                     DefaultErrorHandler handler = (DefaultErrorHandler) context.getBean(CommonErrorHandler.class);
                     assertThat(handler.removeClassification(NonRetryableEventException.class)).isFalse();
+                    // 재시도 관찰자 — Boot 의 팩토리가 RecordInterceptor · ConsumerAwareRebalanceListener 로도 집어 간다.
+                    assertThat(context).hasSingleBean(ConsumerRetryObserver.class);
+                    assertThat(context.getBeanNamesForType(RecordInterceptor.class)).hasSize(1);
+                    assertThat(context.getBeanNamesForType(ConsumerAwareRebalanceListener.class)).hasSize(1);
                 });
+    }
+
+    @Test
+    void 백오프_상한이_컨슈머의_폴_간격보다_길면_기동하지_않는다() {
+        // 보존 기간의 순서 검증과 같은 형태 — 설정 실수를 기동에서 거부한다. 기본 백오프 상한은 5초다.
+        runner.withUserConfiguration(KafkaTemplateConfiguration.class)
+                .withPropertyValues("spring.application.name=order-service")
+                .withBean(ConsumerFactory.class, () -> new DefaultKafkaConsumerFactory<>(
+                        Map.of(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, "4000")))
+                .run(context -> assertThat(context).hasFailed().getFailure()
+                        .rootCause().hasMessageContaining("max.poll.interval.ms(PT4S)"));
+    }
+
+    @Test
+    void 폴_간격이_넉넉하면_그대로_뜨고_팩토리가_없으면_Kafka_의_기본값을_쓴다() {
+        runner.withUserConfiguration(KafkaTemplateConfiguration.class)
+                .withPropertyValues("spring.application.name=order-service")
+                .withBean(ConsumerFactory.class, () -> new DefaultKafkaConsumerFactory<>(
+                        Map.of(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 60_000)))
+                .run(context -> assertThat(context).hasNotFailed().hasSingleBean(CommonErrorHandler.class));
+        // 팩토리가 없을 때 쓰는 값은 Kafka 가 정한 기본값과 같아야 한다 — 손으로 적은 상수라 대조한다.
+        assertThat(MessagingKafkaAutoConfiguration.maxPollInterval(null).toMillis())
+                .isEqualTo(((Number) ConsumerConfig.configDef().defaultValues()
+                        .get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG)).longValue());
     }
 
     @Test
