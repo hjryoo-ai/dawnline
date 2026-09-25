@@ -64,7 +64,7 @@ sql admin "SELECT datname, usename, state, count(*) FROM pg_stat_activity GROUP 
 | 장애 중 운영자 커맨드 | 조기 마감 하나 → 504, 감사 `UNKNOWN`([RB-07](RB-07-audit-unknown.md) — 적용될 수 없었다: 아무도 그 DB 에 들어가지 못했다) |
 
 **브로커의 그룹 랙과 클라이언트의 랙 지표는 다르다** — 같은 실행에서 `kafka-consumer-groups --describe` 는 파티션마다 약 100(합 약 1,200)을
-보였는데 `kafka_consumer_fetch_manager_records_lag` 의 합은 최대 500 이었다. 클라이언트 지표는 「브로커의 끝 − **가져온** 위치」라서, 이미
+보였는데(`kafka_consumergroup_lag` — kafka-exporter 가 같은 값을 낸다, §11) 클라이언트 지표 `kafka_consumer_fetch_manager_records_lag` 의 합은 최대 500 이었다. 클라이언트 지표는 「브로커의 끝 − **가져온** 위치」라서, 이미
 가져왔지만 재시도에 막힌 레코드를 세지 않는다. **멈춘 소비를 보는 것은 랙이 아니라 재시도의 나이다.** 그룹의 실제 랙은 위의 명령으로 본다
 ([RB-01](RB-01-kafka-recovery.md) §2.1).
 

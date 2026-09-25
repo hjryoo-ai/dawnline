@@ -52,11 +52,16 @@ groups:
           runbook: RB-05
 
       - alert: DawnlineConsumerLag
-        expr: max by (service, client_id) (kafka_consumer_fetch_manager_records_lag_max) > 1000
+        # 밀림 — 브로커가 아는 랙(커밋된 오프셋 기준, kafka-exporter)의 그룹 · 토픽별 합(2026-09-26, 7-3). 그룹 이름이 서비스다.
+        # 처음 식은 클라이언트의 records-lag-max(컨슈머 하나의 파티션 중 최대)였다 — 클라이언트 랙은 가져오지 못한 양이지 처리하지
+        # 못한 양이 아니라서, 1,200 건이 밀린 DB 장애에서 102 였고 합으로 바꿔도 500 이었다(RB-02 §3). 정지의 신호는 이 알림이
+        # 아니라 재시도 나이다(DawnlineConsumerRetryStuck) — 정지 중에도 이 값은 오르지만 그것은 부수 신호다.
+        # >= 0 — exporter 는 그룹이 커밋한 적 없는 파티션을 -1 로 낸다(kafka-consumer-groups 의 「-」). 모름을 합에 섞지 않는다.
+        expr: sum by (consumergroup, topic) (kafka_consumergroup_lag >= 0) > 1000
         labels:
           severity: page
         annotations:
-          summary: "{{ $labels.service }} 의 소비자 랙이 1,000 을 넘었다"
+          summary: "{{ $labels.consumergroup }} 가 {{ $labels.topic }} 에서 1,000 건 넘게 밀렸다(브로커 기준)"
           runbook: RB-01
 
       - alert: DawnlineConsumerRetryStuck

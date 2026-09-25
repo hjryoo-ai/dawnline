@@ -40,8 +40,8 @@
     },
     {
       "type": "timeseries",
-      "title": "소비자 랙 (records-lag-max)",
-      "description": "1,000 이 알림 선이다(DawnlineConsumerLag · RB-01).",
+      "title": "소비 그룹 랙 (브로커 기준 — 알림이 보는 값)",
+      "description": "kafka-exporter 의 kafka_consumergroup_lag — 커밋된 오프셋 기준, 그룹 · 토픽별 합. 1,000 을 넘으면 DawnlineConsumerLag. -1(커밋 없는 파티션)은 뺀다.",
       "datasource": {
         "type": "prometheus",
         "uid": "dawnline-prometheus"
@@ -80,15 +80,69 @@
             "type": "prometheus",
             "uid": "dawnline-prometheus"
           },
-          "expr": "max by (service, client_id) (kafka_consumer_fetch_manager_records_lag_max)",
-          "legendFormat": "{{service}} {{client_id}}"
+          "expr": "sum by (consumergroup, topic) (kafka_consumergroup_lag >= 0)",
+          "legendFormat": "{{consumergroup}} · {{topic}}"
         }
       ],
       "id": 2,
       "gridPos": {
         "x": 0,
         "y": 1,
-        "w": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "클라이언트 랙 — 가져오지 못한 양(처리하지 못한 양이 아니다)",
+      "description": "kafka_consumer_fetch_manager_records_lag — 브로커의 끝 − 가져온 위치. 가져왔지만 재시도에 막힌 레코드를 세지 않는다(RB-02 §3). 대시보드용 — 알림은 왼쪽 패널의 값을 본다.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum by (service) (kafka_consumer_fetch_manager_records_lag)",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "id": 25,
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 8,
         "h": 8
       }
     },
@@ -144,9 +198,9 @@
       ],
       "id": 3,
       "gridPos": {
-        "x": 12,
+        "x": 16,
         "y": 1,
-        "w": 12,
+        "w": 8,
         "h": 8
       }
     },

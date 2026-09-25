@@ -7,7 +7,7 @@
 | 관련 설계 | §5.4(파티션) · §6.3 · §6.7 · §8.2 · §8.6 · 7-0 D1(콜드 스타트) |
 
 **먼저 본다 — 메트릭** 여유 셋 — `prom 'min(dawnline_shipment_partitions_ahead)'`(파티션, 2 아래면 1) ·
-`prom 'max by (service, client_id) (kafka_consumer_fetch_manager_records_lag_max)'`(지금 밀려 있는 것 — 피크를 밀린 채 시작하지 않는다) ·
+`prom 'sum by (consumergroup, topic) (kafka_consumergroup_lag >= 0)'`(지금 밀려 있는 것 — 브로커 기준. 피크를 밀린 채 시작하지 않는다) ·
 `prom 'histogram_quantile(0.95, sum by (le) (rate(dawnline_plan_duration_seconds_bucket[1d])))'`(평시 계획 p95 — 예산 30초에서 얼마나 남았나).
 
 명령의 `dc` · `prom` · `logs` · `sql` 은 [README](README.md) 의 공통 준비다.

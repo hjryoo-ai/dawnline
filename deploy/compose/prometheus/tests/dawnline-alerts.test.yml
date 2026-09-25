@@ -111,6 +111,70 @@ tests:
         alertname: DawnlineDlqNew
         exp_alerts: []
 
+  # --- 밀림: 브로커 랙의 그룹 · 토픽별 합(kafka-exporter) --------------------------------------------------------------
+  # 1,200 건이 12 파티션에 100 씩 — 처음 식(컨슈머 하나의 파티션 중 최대)으로는 100 이라 울리지 않던 모양이다(RB-02 §3).
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="0"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="1"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="2"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="3"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="4"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="5"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="6"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="7"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="8"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="9"}'
+        values: '0 100 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="10"}'
+        values: '0 1 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.order.placed.v1", partition="11"}'
+        values: '-1 -1 100'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.plan.failed.v1", partition="0"}'
+        values: '-1 -1 -1'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.plan.failed.v1", partition="1"}'
+        values: '-1 -1 -1'
+      - series: 'kafka_consumergroup_lag{consumergroup="fulfillment-service", topic="dawnline.plan.failed.v1", partition="2"}'
+        values: '-1 -1 -1'
+      # 다른 그룹 · 다른 토픽은 섞이지 않는다.
+      - series: 'kafka_consumergroup_lag{consumergroup="dispatch-service", topic="dawnline.order.placed.v1", partition="0"}'
+        values: '0 900 900'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: DawnlineConsumerLag
+        exp_alerts: []
+      # 1분: 파티션 열 개가 100 · 하나가 1 · 하나는 커밋 없음(-1) — 알려진 합 1,001 이라 운다. -1 을 합에 섞으면 정확히 1,000 이라
+      # 울리지 않는다 — >= 0 이 그 차이다(모름을 값으로 접지 않는다). 옆 토픽의 -1 셋은 토픽별 합이라 이 합에 들지 않는다.
+      - eval_time: 1m
+        alertname: DawnlineConsumerLag
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              consumergroup: fulfillment-service
+              topic: dawnline.order.placed.v1
+            exp_annotations:
+              summary: "fulfillment-service 가 dawnline.order.placed.v1 에서 1,000 건 넘게 밀렸다(브로커 기준)"
+              runbook: RB-01
+      - eval_time: 2m
+        alertname: DawnlineConsumerLag
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              consumergroup: fulfillment-service
+              topic: dawnline.order.placed.v1
+            exp_annotations:
+              summary: "fulfillment-service 가 dawnline.order.placed.v1 에서 1,000 건 넘게 밀렸다(브로커 기준)"
+              runbook: RB-01
+
   # --- 재시도 나이: 30분에서 운다 — 29분까지는 장애이고 그 뒤는 설정이다(ADR-015 후속 정정) -------------------------------
   - interval: 1m
     input_series:
@@ -143,8 +207,6 @@ tests:
         values: '5 45'
       - series: 'dawnline_outbox_failed{service="dispatch-service"}'
         values: '0 1'
-      - series: 'kafka_consumer_fetch_manager_records_lag_max{service="tracking-service", client_id="c-1"}'
-        values: '10 1500'
       - series: 'dawnline_delivery_on_time_ratio{camp="c1", basis="promised"}'
         values: '0.97 0.9'
       - series: 'dawnline_delivery_on_time_ratio{camp="c1", basis="revised"}'
@@ -179,19 +241,6 @@ tests:
             exp_annotations:
               summary: "dispatch-service 에 격리된 outbox 행이 있다"
               runbook: RB-05
-      - eval_time: 0m
-        alertname: DawnlineConsumerLag
-        exp_alerts: []
-      - eval_time: 1m
-        alertname: DawnlineConsumerLag
-        exp_alerts:
-          - exp_labels:
-              severity: page
-              service: tracking-service
-              client_id: c-1
-            exp_annotations:
-              summary: "tracking-service 의 소비자 랙이 1,000 을 넘었다"
-              runbook: RB-01
       # 원 약속만 본다 — 개정 약속은 참고값이다(§8.1).
       - eval_time: 0m
         alertname: DawnlineOnTimeRatioLow
