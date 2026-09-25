@@ -35,6 +35,7 @@ ops-api 는 감사 행을 `PENDING` 으로 **먼저** 커밋하고 코어를 부
 |---|---|---|
 | `CLOSE_WAVE` | 409 `wave-not-open`, `closeCause=MANUAL` | 앞의 요청이 적용됐다 — **같은 웨이브의 다른 `CLOSE_WAVE` 행이 없는지** 먼저 본다(아래 SQL). 없으면 `SUCCEEDED` |
 | | 409 `wave-not-open`, `closeCause=SCHEDULED` | 스케줄러가 먼저 닫았다 — 앞의 요청은 적용되지 않았다. `FAILED` |
+| | 409 `not-next-wave` | 대상은 열려 있고 더 이른 열린 웨이브가 있다 — 앞의 요청도 같은 판정으로 적용되지 않았다. `FAILED`. 닫을 웨이브를 다시 고른다(`earlierWaveId`) |
 | | 200 | 앞의 요청은 적용되지 않았고 **지금 적용됐다** — 새 행이 `SUCCEEDED`, 앞의 행은 `FAILED` |
 | `REQUEUE_OUTBOX` | 409 `not-quarantined`, `currentState` `PENDING` · `PUBLISHED` | 풀려 있다 — 앞의 요청이 적용됐다. `SUCCEEDED` |
 | | 200 | 앞의 요청은 적용되지 않았고 지금 적용됐다. 앞의 행은 `FAILED` |
