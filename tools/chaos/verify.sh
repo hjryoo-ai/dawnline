@@ -3,11 +3,17 @@
 # 검증 표 V1–V7 — 카오스 넷과 7-4 peak-day 가 같은 표를 낸다 (DESIGN.md §13 「카오스」, IMPLEMENTATION_PLAN 7-3)
 #
 #   verify.sh baseline <상태파일>                         기준을 남긴다 — 시각 T0 · DLQ 끝 오프셋
-#   verify.sh check <상태파일> [--kind 이름] [--wait 초] [--expect-orders N] [--expect-dlq N] [--out 파일]
+#   verify.sh check <상태파일> [--kind 이름] [--wait 초] [--expect-orders N] [--expect-dlq N]
+#                              [--expect-unserviceable 사유=N[,사유=N…]] [--out 파일]
 #
 # check 는 V1(유실)과 V7(outbox)이 맞을 때까지 --wait 초 동안 다시 잰다 — 장애 뒤 밀린 것이 빠지는 시간을 준다.
 # V1 은 전제를 먼저 말한다 — T0 이후 주문이 없으면 「빠진 주문 0」은 빈 집합끼리의 비교다(§13 축 10). --expect-orders 가 있으면
 # 그 수와 같아야 하고, 없으면 1 이상이어야 한다.
+# 배차 불가는 한 수로 더하지 않고 **사유별로** 기대값과 견준다 — 합 하나는 이유가 바뀐 회귀를 삼킨다(7-3① 의 1차 177 건은
+# 앞선 데모가 닫아 둔 웨이브 때문의 MAX_PUSHES_EXCEEDED 176 이었고, 합은 「빠진 주문 0」으로 그것을 통과시켰다). 사유의 기대:
+#   흐름 사유(STALE_PLACED · MAX_PUSHES_EXCEEDED) — 정상 실행에서 0. 고칠 수 없다
+#   OUT_OF_STOCK — 시드의 재고 예외(inventory_stock)와 주문 줄에서 파생한다. 수가 아니라 주문 집합이 같아야 한다
+#   그 밖의 데이터 사유(NO_ZONE_MATCH · NO_ELIGIBLE_FC …) — 0. 시나리오가 일부러 내면 --expect-unserviceable 로 적는다
 # 표는 카오스 종류와 무관하게 같다. 판정이 하나라도 ✗ 면 종료 코드 1.
 #
 # 어느 칸도 「결과가 없다」를 0 으로 접지 않는다 — 셀 수 없으면 「모름」이고 ✗ 다(§9.1 「없는 시계열은 0 으로 보인다」).
@@ -36,18 +42,27 @@ if [[ "$cmd" == baseline ]]; then
 fi
 [[ "$cmd" == check ]] || { echo "알 수 없는 명령: $cmd" >&2; exit 2; }
 
-kind=chaos; wait_s=0; expect_dlq=""; expect_orders=""; out=""
+kind=chaos; wait_s=0; expect_dlq=""; expect_orders=""; expect_unsv=""; out=""
+FLOW_REASONS="STALE_PLACED MAX_PUSHES_EXCEEDED"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --kind) kind=$2; shift 2 ;;
     --wait) wait_s=$2; shift 2 ;;
     --expect-dlq) expect_dlq=$2; shift 2 ;;
     --expect-orders) expect_orders=$2; shift 2 ;;
+    --expect-unserviceable) expect_unsv=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
     *) echo "알 수 없는 인자: $1" >&2; exit 2 ;;
   esac
 done
 . "$state"
+for pair in ${expect_unsv//,/ }; do
+  reason=${pair%%=*}
+  case " $FLOW_REASONS OUT_OF_STOCK " in
+    *" $reason "*) echo "--expect-unserviceable 로 $reason 의 기대를 바꿀 수 없다 — 흐름 사유는 0, OUT_OF_STOCK 은 시드에서 파생한다" >&2; exit 2 ;;
+  esac
+  [[ "$pair" == *=* && "${pair#*=}" =~ ^[0-9]+$ ]] || { echo "--expect-unserviceable 의 형식: 사유=N — $pair" >&2; exit 2; }
+done
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 # --- V1 유실 — 주문 = 후보 + 취소 + 배차 불가 -------------------------------------------------------------
@@ -68,6 +83,61 @@ v1() {
   n_cancel=$(wc -l < "$tmp/cancel" | tr -d ' ')
   n_unsv=$(wc -l < "$tmp/unsv" | tr -d ' ')
   n_missing=$(wc -l < "$tmp/missing" | tr -d ' ')
+  v1_reasons
+}
+
+# --- V1 의 배차 불가 — 사유별 -------------------------------------------------------------------------------
+# 줄마다 「사유|값|기대|판정」. 사유가 비어 있는 행은 「사유 없음」으로 따로 센다(모름 — ✗).
+v1_reasons() {
+  sqlv fulfillment "SELECT order_id || '|' || coalesce(unserviceable_reason, '(사유 없음)') FROM fulfillment_orders
+                     WHERE created_at >= '$t0' AND status = 'UNSERVICEABLE' ORDER BY 1" > "$tmp/unsv_reason_all"
+  awk -F'|' 'NR == FNR { keep[$1] = 1; next } keep[$1]' "$tmp/unsv" "$tmp/unsv_reason_all" > "$tmp/unsv_reason"
+
+  # OUT_OF_STOCK 의 기대 — 재고 스텁은 예외 행만 적고 차감하지 않는다(R__seed_fulfillment). 어느 FC 에서든 어떤 줄이 예외 행의
+  # 수량을 넘으면 그 FC 는 못 채운다. 모든 FC 가 못 채우는 주문이 기대 집합이다.
+  sqlv fulfillment "SELECT 'S|' || fc_id || '|' || sku || '|' || available_qty FROM inventory_stock
+                    UNION ALL SELECT 'F|' || id FROM fulfillment_centers" > "$tmp/stock"
+  local skus
+  skus=$(awk -F'|' '$1 == "S" { printf "%s'"'"'%s'"'"'", (n++ ? "," : ""), $3 }' "$tmp/stock")
+  : > "$tmp/lines"
+  [[ -n "$skus" ]] && sqlv order "SELECT i.order_id || '|' || i.sku || '|' || sum(i.qty) FROM order_items i JOIN orders o ON o.id = i.order_id
+                                   WHERE o.placed_at >= '$t0' AND i.sku IN ($skus) GROUP BY i.order_id, i.sku" > "$tmp/lines"
+  awk -F'|' '
+    FNR == NR { if ($1 == "S") avail[$2 "|" $3] = $4; else fcs[$2] = 1; next }
+    { need[$1 "|" $2] = $3; skus_of[$1] = skus_of[$1] " " $2 }
+    END {
+      for (o in skus_of) {
+        n = split(skus_of[o], s, " "); ok = 0
+        for (fc in fcs) {
+          fits = 1
+          for (i = 1; i <= n; i++) if ((fc "|" s[i]) in avail && need[o "|" s[i]] > avail[fc "|" s[i]]) fits = 0
+          if (fits) { ok = 1; break }
+        }
+        if (!ok) print o
+      }
+    }' "$tmp/stock" "$tmp/lines" | sort > "$tmp/oos_derived"
+  comm -23 "$tmp/oos_derived" "$tmp/c_or_x" > "$tmp/oos_expected"
+  awk -F'|' '$2 == "OUT_OF_STOCK" { print $1 }' "$tmp/unsv_reason" | sort > "$tmp/oos_actual"
+
+  local reasons r n expect verdict kind_of
+  reasons=$( { printf '%s\n' OUT_OF_STOCK $FLOW_REASONS; cut -d'|' -f2 "$tmp/unsv_reason";
+               for pair in ${expect_unsv//,/ }; do echo "${pair%%=*}"; done; } | awk 'NF && !seen[$0]++')
+  # 줄마다 「사유|종류|값|기대|판정」 — 표는 판정을 모은 뒤에 그린다(아래 「표」).
+  : > "$tmp/reason_rows"
+  while IFS= read -r r; do
+    n=$(awk -F'|' -v r="$r" '$2 == r' "$tmp/unsv_reason" | wc -l | tr -d ' ')
+    case " $FLOW_REASONS " in *" $r "*) kind_of="흐름"; expect=0 ;; *) kind_of="데이터"; expect=0 ;; esac
+    if [[ "$r" == OUT_OF_STOCK ]]; then
+      kind_of="시드 재고 예외"; expect=$(wc -l < "$tmp/oos_expected" | tr -d ' ')
+      if cmp -s "$tmp/oos_expected" "$tmp/oos_actual"; then verdict=ok; else verdict=bad; fi
+      expect="${expect} — 주문 줄 × inventory_stock 에서 파생 · 주문 집합이 같아야 한다"
+    else
+      for pair in ${expect_unsv//,/ }; do [[ "${pair%%=*}" == "$r" ]] && expect=${pair#*=}; done
+      [[ "$r" == "(사유 없음)" ]] && kind_of="모름"
+      verdict=$( [[ "$n" == "$expect" ]] && echo ok || echo bad)
+    fi
+    echo "$r|$kind_of|$n|$expect|$verdict" >> "$tmp/reason_rows"
+  done <<< "$reasons"
 }
 
 # --- V7 outbox — 미발행 · 격리가 남지 않았다 ----------------------------------------------------------------
@@ -138,6 +208,11 @@ r4=$( [[ -n "$v4" ]] && echo obs || echo bad)
 if [[ -z "$v5" ]]; then r5=bad; elif [[ -n "$expect_dlq" ]]; then r5=$(ok_if "$v5" "$expect_dlq"); else r5=obs; fi
 r6=$( [[ -n "$v6" ]] && echo obs || echo bad)
 r7=$( [[ "$v7_bad" == 0 ]] && echo ok || echo bad)
+reason_table=""; r1_reasons=ok
+while IFS='|' read -r r k n e v; do
+  [[ "$v" == ok ]] || r1_reasons=bad
+  reason_table+="| V1·사유 | 배차 불가 \`$r\` — $k | $n | $e | $(mark "$v") |"$'\n'
+done < "$tmp/reason_rows"
 
 table=$(cat <<TABLE
 ### 검증 표 — ${kind}
@@ -147,6 +222,7 @@ table=$(cat <<TABLE
 | # | 검사 | 값 | 기대 | 판정 |
 |---|---|---|---|---|
 | V1 | 유실 — 주문 = 후보 + 취소 + 배차 불가 | ${n_order} = ${n_cand} + ${n_cancel} + ${n_unsv} · **빠진 주문 ${n_missing}** | 전제 ${premise} · 빠진 주문 0 | $(mark "$r1") |
+${reason_table%$'\n'}
 | V2 | 라우트 stop 주문 중복 | ${v2:-모름} | 0 | $(mark "$r2") |
 | V3 | processed_events 중복 — 구조상 0, PK 를 본다 | ${v3_detail} | 다섯 DB 전부 \`event_id,consumer\` | $(mark "$r3") |
 | V4 | 감사 \`UNKNOWN\` (T0 이후) | ${v4:-모름} (커맨드: ${v4_actions:-없음}) | 관찰 — 만들지 않는다 | $(mark "$r4") |
@@ -156,7 +232,7 @@ table=$(cat <<TABLE
 TABLE
 )
 fail=0
-for r in "$r1" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7"; do [[ "$r" == bad ]] && fail=1; done
+for r in "$r1" "$r1_reasons" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7"; do [[ "$r" == bad ]] && fail=1; done
 echo "$table"
 [[ -n "$out" ]] && { echo "$table" >> "$out"; echo >> "$out"; }
 if [[ "$n_missing" != 0 && -s "$tmp/missing" ]]; then
