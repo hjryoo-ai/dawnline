@@ -63,6 +63,10 @@ tasks.named<Test>("test") {
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
             .withPropertyName("eventContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // RetentionTableDefaultsTest 가 §7.1 보존 표를 읽는다 (ADR-059 결정 7) — 문서만 고친 빌드도 대조를 다시 돌린다.
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+            .withPropertyName("retentionTable")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // -----------------------------------------------------------------------------

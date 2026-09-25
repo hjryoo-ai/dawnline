@@ -8,16 +8,75 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * {@code dawnline.dispatch.*} 설정 (DESIGN.md §6.6, §6.7).
  *
- * @param plan     계획 실행 설정
- * @param distance 거리 계산 설정
- * @param priority 후보 우선도 점수표
- * @param degrade  열화 모드 임계 (§6.7)
- * @param replan   부분 재계획 설정 (§6.8)
+ * @param plan      계획 실행 설정
+ * @param distance  거리 계산 설정
+ * @param priority  후보 우선도 점수표
+ * @param degrade   열화 모드 임계 (§6.7)
+ * @param replan    부분 재계획 설정 (§6.8)
+ * @param retention 보존 정리 (§7.1 보존 표, ADR-059)
  */
 @ConfigurationProperties(prefix = "dawnline.dispatch")
 public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance distance,
         @DefaultValue Priority priority, @DefaultValue Degrade degrade,
-        @DefaultValue Replan replan) {
+        @DefaultValue Replan replan, @DefaultValue Retention retention) {
+
+    /**
+     * 보존 정리 (DESIGN.md §7.1 「보존 표」, [ADR-059]). 기간은 여기 살고 표는 그것을 비춘다 —
+     * {@code RetentionTableDefaultsTest} 가 둘을 대조한다.
+     *
+     * <p>지우는 단위는 계획이다. 후보와 설명은 <strong>자기 나이가 아니라 그 계획의 {@code finished_at}</strong> 으로
+     * 지우고, 계획이 끝났을 때만 지운다(결정 3). 계획 계열 넷({@code route_plans} · {@code routes} ·
+     * {@code route_stops} · {@code route_stop_orders})이 키 하나인 이유는 한 트랜잭션에서 함께 지우기 때문이다 —
+     * 표마다 다른 기간은 표현할 수 없다.
+     *
+     * @param enabled                끄면 정리 빈이 없다(게이지도 없다 — ADR-058 결정 6)
+     * @param candidates             후보 — 계획이 끝난 뒤 30일
+     * @param explanations           설명 — 계획이 끝난 뒤 30일
+     * @param plans                  계획 계열 — 90일
+     * @param cap                    상한 — 종결과 무관하게 계열째, 그리고 계획 없는 웨이브의 후보. 정리이지 정책이 아니다
+     * @param maxPlansPerRun         한 실행에서 단계마다 지울 최대 계획 수 — 하루 40 계획의 다섯 배
+     * @param batchSize              계획 없는 웨이브의 후보를 한 트랜잭션에서 지울 최대 행 수
+     * @param maxBatchesPerRun       그 배치를 한 실행에서 반복할 최대 수
+     * @param cleanupIntervalMs      실행 간격 (일 1회)
+     * @param cleanupInitialDelayMs  초기 지연 — 다른 정리(1분 · 5분)와 어긋나게 15분
+     */
+    public record Retention(@DefaultValue("true") boolean enabled,
+            @DefaultValue("30d") Duration candidates,
+            @DefaultValue("30d") Duration explanations,
+            @DefaultValue("90d") Duration plans,
+            @DefaultValue("365d") Duration cap,
+            @DefaultValue("200") int maxPlansPerRun,
+            @DefaultValue("1000") int batchSize,
+            @DefaultValue("200") int maxBatchesPerRun,
+            @DefaultValue("86400000") long cleanupIntervalMs,
+            @DefaultValue("900000") long cleanupInitialDelayMs) {
+
+        public Retention {
+            requirePositive(candidates, "dawnline.dispatch.retention.candidates");
+            requirePositive(explanations, "dawnline.dispatch.retention.explanations");
+            requirePositive(plans, "dawnline.dispatch.retention.plans");
+            requirePositive(cap, "dawnline.dispatch.retention.cap");
+            // 계획 계열 삭제가 설명과 후보를 함께 지운다 — 둘이 계획보다 길면 그 기간은 거짓말이다.
+            // 설정이 조용히 무시되는 것보다 기동에서 거부하는 편이 낫다(ADR-023 의 정리기와 같다).
+            if (candidates.compareTo(plans) > 0 || explanations.compareTo(plans) > 0) {
+                throw new IllegalArgumentException("후보(%s) · 설명(%s) 보존이 계획 보존(%s)보다 길 수 없습니다 — 계획과 함께 지워집니다"
+                        .formatted(candidates, explanations, plans));
+            }
+            if (cap.compareTo(plans) < 0) {
+                throw new IllegalArgumentException("상한(%s)이 계획 보존(%s)보다 짧을 수 없습니다".formatted(cap, plans));
+            }
+            if (maxPlansPerRun < 1 || batchSize < 1 || maxBatchesPerRun < 1) {
+                throw new IllegalArgumentException(
+                        "dawnline.dispatch.retention 의 max-plans-per-run · batch-size · max-batches-per-run 은 1 이상이어야 합니다");
+            }
+        }
+
+        private static void requirePositive(Duration value, String name) {
+            if (value.isNegative() || value.isZero()) {
+                throw new IllegalArgumentException(name + " 은 양수여야 합니다: " + value);
+            }
+        }
+    }
 
     /**
      * 부분 재계획 (§6.8, [ADR-048]).
