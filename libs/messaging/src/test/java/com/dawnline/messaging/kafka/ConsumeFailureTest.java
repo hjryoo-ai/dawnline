@@ -7,6 +7,7 @@ import com.dawnline.common.error.DomainException;
 import com.dawnline.common.error.IllegalStateTransitionException;
 import com.dawnline.common.error.ValidationException;
 import com.dawnline.messaging.FailureKind;
+import com.dawnline.observability.DawnlineMetrics;
 import io.lettuce.core.RedisCommandTimeoutException;
 import java.sql.SQLRecoverableException;
 import java.sql.SQLTimeoutException;
@@ -161,6 +162,15 @@ class ConsumeFailureTest {
         void 재시도_사유는_즉시_DLQ_를_뺀_행_전부다() {
             assertThat(ConsumeFailure.retryReasons()).containsExactly(
                     "redis", "db_connection", "db_resource", "db_transient", "db_integrity", "argument", "domain", "other");
+        }
+
+        @Test
+        void 재시도_사유는_카탈로그의_닫힌_값과_같다() {
+            // ADR-060 결정 2 — 값이 enum 에서 오는 라벨은 그 enum 과 대조한다. 행이 느는 날 운영의 첫 등록이 아니라 빌드가 실패한다.
+            assertThat(DawnlineMetrics.EVENT_RETRY.labels())
+                    .filteredOn(label -> label.key().equals("reason"))
+                    .singleElement()
+                    .satisfies(label -> assertThat(label.values()).isEqualTo(ConsumeFailure.retryReasons()));
         }
     }
 

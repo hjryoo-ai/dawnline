@@ -313,6 +313,114 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "재시도 (소비자 · 사유) — 몇 번 · 왜",
+      "description": "재시도 경로에 든 실패한 배달. reason 은 소비 측 경계표의 행(ADR-015 후속 정정) — db_* · redis · other 가 오르면 그 파티션은 풀릴 때까지 멈춰 있다. 옆 패널이 얼마나 오래인지 말한다.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum by (consumer, reason) (increase(dawnline_event_retry_total[5m]))",
+          "legendFormat": "{{consumer}} · {{reason}}"
+        }
+      ],
+      "id": 23,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "재시도 나이 (소비자, 파티션 중 최대) — 얼마나 오래",
+      "description": "지금 재시도 중인 레코드가 파티션을 막고 있는 시간. 30분을 넘으면 DawnlineConsumerRetryStuck — 일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다(RB-01 · RB-02).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "max by (consumer) (dawnline_event_retry_age_seconds)",
+          "legendFormat": "{{consumer}}"
+        }
+      ],
+      "id": 24,
+      "gridPos": {
+        "x": 12,
+        "y": 17,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
       "type": "row",
       "title": "outbox",
       "collapsed": false,
@@ -320,7 +428,7 @@
       "id": 7,
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 25,
         "w": 24,
         "h": 1
       }
@@ -374,7 +482,7 @@
       "id": 8,
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 26,
         "w": 6,
         "h": 8
       }
@@ -428,7 +536,7 @@
       "id": 9,
       "gridPos": {
         "x": 6,
-        "y": 18,
+        "y": 26,
         "w": 6,
         "h": 8
       }
@@ -482,7 +590,7 @@
       "id": 10,
       "gridPos": {
         "x": 12,
-        "y": 18,
+        "y": 26,
         "w": 6,
         "h": 8
       }
@@ -535,7 +643,7 @@
       "id": 11,
       "gridPos": {
         "x": 18,
-        "y": 18,
+        "y": 26,
         "w": 6,
         "h": 8
       }
@@ -548,7 +656,7 @@
       "id": 12,
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 34,
         "w": 24,
         "h": 1
       }
@@ -611,7 +719,7 @@
       "id": 13,
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 35,
         "w": 12,
         "h": 8
       }
@@ -665,7 +773,7 @@
       "id": 14,
       "gridPos": {
         "x": 12,
-        "y": 27,
+        "y": 35,
         "w": 6,
         "h": 8
       }
@@ -719,7 +827,7 @@
       "id": 15,
       "gridPos": {
         "x": 18,
-        "y": 27,
+        "y": 35,
         "w": 6,
         "h": 8
       }
@@ -732,7 +840,7 @@
       "id": 16,
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 43,
         "w": 24,
         "h": 1
       }
@@ -786,7 +894,7 @@
       "id": 17,
       "gridPos": {
         "x": 0,
-        "y": 36,
+        "y": 44,
         "w": 12,
         "h": 8
       }
@@ -858,7 +966,7 @@
       "id": 18,
       "gridPos": {
         "x": 12,
-        "y": 36,
+        "y": 44,
         "w": 12,
         "h": 8
       }
@@ -871,7 +979,7 @@
       "id": 19,
       "gridPos": {
         "x": 0,
-        "y": 44,
+        "y": 52,
         "w": 24,
         "h": 1
       }
@@ -925,7 +1033,7 @@
       "id": 20,
       "gridPos": {
         "x": 0,
-        "y": 45,
+        "y": 53,
         "w": 8,
         "h": 8
       }
@@ -979,7 +1087,7 @@
       "id": 21,
       "gridPos": {
         "x": 8,
-        "y": 45,
+        "y": 53,
         "w": 8,
         "h": 8
       }
@@ -1042,7 +1150,7 @@
       "id": 22,
       "gridPos": {
         "x": 16,
-        "y": 45,
+        "y": 53,
         "w": 8,
         "h": 8
       }

@@ -1,11 +1,13 @@
 package com.dawnline.messaging.config;
 
 import com.dawnline.messaging.Topics;
+import com.dawnline.messaging.kafka.ConsumerRetryObserver;
 import com.dawnline.messaging.kafka.DawnlineErrorHandlers;
 import com.dawnline.messaging.kafka.DlqRecordRecoverer;
 import com.dawnline.messaging.kafka.ReplayTargetFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
@@ -65,17 +67,42 @@ public class MessagingKafkaAutoConfiguration {
     }
 
     /**
+     * 무한 재시도를 보이게 하는 관찰자 — 카운터 {@code dawnline_event_retry_total} 과 게이지
+     * {@code dawnline_event_retry_age_seconds} (§9.1, ADR-015 후속 정정 결정 4).
+     *
+     * <p>에러 핸들러의 재시도 관찰자이면서 <strong>Boot 의 리스너 컨테이너 팩토리가 {@code RecordInterceptor} 와
+     * {@code ConsumerAwareRebalanceListener} 로 집어 가는 빈</strong>이다 — 나이의 끝(성공 · 파티션이 떠남)을 에러 핸들러는 모른다.
+     * 서비스가 둘 중 하나를 따로 두면 Boot 는 {@code getIfUnique} 로 어느 쪽도 꽂지 않는다 — 그때는 합성해야 한다
+     * ({@link #dawnlineReplayTargetFilter} 와 같은 조건).
+     *
+     * @param meters      Micrometer 레지스트리
+     * @param properties  {@code dawnline.messaging.*}
+     * @param environment {@code spring.application.name} 조회용
+     * @param clocks      나이의 시계 — 서비스의 {@code Clock} 빈, 없으면 저장 정밀도 시계
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DlqRecordRecoverer.class)
+    public ConsumerRetryObserver dawnlineConsumerRetryObserver(ObjectProvider<MeterRegistry> meters,
+            DawnlineMessagingProperties properties, Environment environment, ObjectProvider<Clock> clocks) {
+        return new ConsumerRetryObserver(meters.getIfAvailable(SimpleMeterRegistry::new),
+                MessagingAutoConfiguration.resolveProducer(properties, environment),
+                clocks.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock));
+    }
+
+    /**
      * §4.6 의 재시도 → DLQ 핸들러. Boot 의 기본 리스너 컨테이너 팩토리가 이 빈을 집어 간다.
      *
      * @param recoverer  DLQ 발행기
      * @param properties {@code dawnline.messaging.*}
+     * @param observer   재시도 관찰자
      */
     @Bean
     @ConditionalOnMissingBean(CommonErrorHandler.class)
     @ConditionalOnBean(DlqRecordRecoverer.class)
     public CommonErrorHandler dawnlineKafkaErrorHandler(DlqRecordRecoverer recoverer,
-            DawnlineMessagingProperties properties) {
-        return DawnlineErrorHandlers.retryThenDlq(recoverer, properties.retry());
+            DawnlineMessagingProperties properties, ConsumerRetryObserver observer) {
+        return DawnlineErrorHandlers.retryThenDlq(recoverer, properties.retry(), observer);
     }
 
     /**
