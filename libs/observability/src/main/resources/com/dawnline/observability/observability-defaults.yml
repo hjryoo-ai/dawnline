@@ -51,6 +51,15 @@ management:
         # 버킷이 실제로 나오는지는 Compose 스모크가 데모 뒤의 Prometheus 에서 확인한다.
         http.server.requests: true
 
+  # 메트릭의 경로는 Prometheus 스크레이프 하나다(§9.4). OTLP 메트릭 내보내기는 Boot 4.1 에서 레지스트리가 클래스패스에
+  # 있으면 기본으로 켜지고(OTel 스타터가 가져온다), dispatch 로그가 매분 「Failed to publish metrics to OTLP
+  # receiver」를 남겼다 — 매분 찍히는 오류는 진짜 오류를 가리는 소음이다(2026-09-25, 7-5 런북을 쓰며 관측).
+  # 키는 spring-boot-micrometer-metrics 4.1.1 의 메타데이터에서 확인했다(deprecation 없음).
+  otlp:
+    metrics:
+      export:
+        enabled: false
+
   tracing:
     sampling:
       # 데모·포트폴리오 환경이라 전량 샘플링이 기본이다.

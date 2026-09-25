@@ -61,6 +61,17 @@ public class JpaWaveRepository implements WaveRepository {
             """;
 
     /**
+     * 순서를 건너뛰는 조기 마감의 판정 (ADR-054 후속). {@code status} 는 리터럴이다(CLAUDE.md 「부분 인덱스의 술어
+     * 컬럼은 쿼리에서 리터럴로」) — 이 조회가 그 인덱스에 기대지는 않지만 같은 모양으로 둔다.
+     */
+    private static final String FIND_EARLIEST_OPEN_BEFORE_SQL = """
+            SELECT * FROM waves
+             WHERE status = 'OPEN' AND camp_id = :campId AND service_tier = :serviceTier AND cutoff_at < :cutoffAt
+             ORDER BY cutoff_at
+             LIMIT 1
+            """;
+
+    /**
      * 보존 만료 삭제 (ADR-023 결정 3 — 90일).
      *
      * <p>{@code NOT EXISTS} 로 참조 행이 없는 것만 지운다. ADR-023 은 두 보존 기간(30일·90일) 때문에
@@ -164,6 +175,20 @@ public class JpaWaveRepository implements WaveRepository {
             waves.add(row.toDomain());
         }
         return List.copyOf(waves);
+    }
+
+    @Override
+    public Optional<Wave> findEarliestOpenBefore(UUID campId, ServiceTier serviceTier, Instant cutoffAt) {
+        Objects.requireNonNull(campId, "campId");
+        Objects.requireNonNull(serviceTier, "serviceTier");
+        Objects.requireNonNull(cutoffAt, "cutoffAt");
+        @SuppressWarnings("unchecked")
+        List<WaveEntity> rows = entityManager.createNativeQuery(FIND_EARLIEST_OPEN_BEFORE_SQL, WaveEntity.class)
+                .setParameter("campId", campId)
+                .setParameter("serviceTier", serviceTier.name())
+                .setParameter("cutoffAt", cutoffAt)
+                .getResultList();
+        return rows.stream().findFirst().map(WaveEntity::toDomain);
     }
 
     @Override

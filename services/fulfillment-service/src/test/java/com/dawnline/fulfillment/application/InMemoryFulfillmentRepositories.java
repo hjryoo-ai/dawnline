@@ -10,10 +10,12 @@ import com.dawnline.fulfillment.domain.FulfillmentOrder;
 import com.dawnline.fulfillment.domain.FulfillmentOrderStatus;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
+import com.dawnline.fulfillment.domain.WaveStatus;
 import com.dawnline.fulfillment.domain.Zone;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -106,6 +108,14 @@ final class InMemoryFulfillmentRepositories {
                         .filter(wave -> wave.isDueForClosing(cutoffAtOrBefore, java.time.Duration.ZERO))
                         .limit(limit)
                         .toList();
+            }
+
+            @Override
+            public Optional<Wave> findEarliestOpenBefore(UUID campId, ServiceTier tier, Instant cutoffAt) {
+                return wavesById.values().stream()
+                        .filter(wave -> wave.campId().equals(campId) && wave.serviceTier() == tier
+                                && wave.status() == WaveStatus.OPEN && wave.cutoffAt().isBefore(cutoffAt))
+                        .min(Comparator.comparing(Wave::cutoffAt));
             }
 
             @Override

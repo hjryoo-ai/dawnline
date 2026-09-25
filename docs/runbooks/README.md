@@ -156,7 +156,9 @@ sql fulfillment "SELECT cutoff_at, status, close_cause FROM waves
                     AND cutoff_at > now() ORDER BY cutoff_at LIMIT 6"
 ```
 
-  더 이른 OPEN 웨이브가 있는데 뒤의 것을 닫으려 한다면 거의 확실히 실수다 — 그 자리를 코드가 막을지(409)는 ADR-063 재검토 지점이 판단한다.
+  **차례는 코드가 지킨다** — 더 이른 열린 웨이브가 있는데 뒤의 것을 누르면 409 `not-next-wave` 가 그 웨이브(`earlierWaveId`)를
+  말하고 아무것도 닫지 않는다(ADR-054 후속). 코드가 막지 않는 것은 **거리**다 — 가장 이른 열린 웨이브가 며칠 뒤여도 닫힌다. 그래서 위의
+  질의로 닫힌 웨이브가 몇 개 앞에 서 있는지를 누르기 전에 본다.
 
 ---
 

@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,7 +48,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <p>둘을 본다.
  * <ol>
- *   <li><strong>표면</strong>: 200 · 400 · 404 · 409, 저장된 {@code close_cause}, outbox 의 {@code wave.closed}.</li>
+ *   <li><strong>표면</strong>: 200 · 400 · 404 · 409({@code wave-not-open} · {@code not-next-wave}), 저장된
+ *       {@code close_cause}, outbox 의 {@code wave.closed}.</li>
  *   <li><strong>대가</strong>: 컷오프 전에 닫힌 뒤 같은 {@code cutoffAt} 으로 온 주문은 다음 웨이브로 가고
  *       {@code promiseRevised} 이며 {@code cause="manual"} 로 세어진다. ADR-054 「맥락」의 관측 근거가 이것이다.</li>
  * </ol>
@@ -55,6 +57,11 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>{@code wave.closed} 가 <em>브로커까지</em> 가는 것은 {@code WaveLifecycleIT} 가 본다 — 본문이 스케줄러와
  * 같은 코드이고, 여기서 릴레이를 켜면 그 IT 와 리더를 다툰다(CLAUDE.md 「공유 자원을 쓰는 IT 는 자기 자리에서
  * 켜고 끈다」). 여기서는 outbox 행까지만 본다.
+ *
+ * <p><strong>표면의 테스트는 자기 캠프를 만들고 지운다</strong>(2026-09-25, ADR-054 후속). 조기 마감은 그 캠프 · 티어의
+ * 가장 이른 열린 웨이브에만 된다 — 시드된 캠프에 웨이브를 열면 다른 IT(같은 컨테이너를 쓴다)가 남긴 더 이른 열린
+ * 웨이브 뒤에 설 수 있고, 그러면 결과가 실행 순서에 달린다. 대가의 테스트는 편입 경로(시드된 권역)가 필요해 시드된
+ * 캠프를 쓰고, 그 전제를 첫 어설션으로 말한다.
  */
 @SpringBootTest(classes = FulfillmentApplication.class)
 @AutoConfigureMockMvc
@@ -104,6 +111,9 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
     /** 이 클래스가 outbox 에 행을 남긴 애그리거트 — 웨이브와 주문. */
     private final List<UUID> aggregates = new ArrayList<>();
 
+    /** 이 테스트가 만든 캠프 — 끝나면 그 웨이브와 함께 지운다. */
+    private final List<UUID> fixtureCamps = new ArrayList<>();
+
     /**
      * 남긴 outbox 행을 지운다.
      *
@@ -115,19 +125,26 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
      */
     @AfterEach
     void 남긴_outbox_행을_지운다() {
-        if (aggregates.isEmpty()) {
-            return;
+        if (!aggregates.isEmpty()) {
+            tx().executeWithoutResult(status -> entityManager
+                    .createNativeQuery("DELETE FROM outbox_events WHERE aggregate_id IN (?1)")
+                    .setParameter(1, aggregates).executeUpdate());
         }
-        tx().executeWithoutResult(status -> entityManager
-                .createNativeQuery("DELETE FROM outbox_events WHERE aggregate_id IN (?1)")
-                .setParameter(1, aggregates).executeUpdate());
+        if (!fixtureCamps.isEmpty()) {
+            tx().executeWithoutResult(status -> {
+                entityManager.createNativeQuery("DELETE FROM waves WHERE camp_id IN (?1)")
+                        .setParameter(1, fixtureCamps).executeUpdate();
+                entityManager.createNativeQuery("DELETE FROM camps WHERE id IN (?1)")
+                        .setParameter(1, fixtureCamps).executeUpdate();
+            });
+        }
     }
 
     // --- 표면 -----------------------------------------------------------------
 
     @Test
     void 컷오프_전에_닫으면_200_이고_MANUAL_로_저장되고_wave_closed_가_outbox_에_들어간다() throws Exception {
-        UUID waveId = openWave(SEEDED_CAMP, futureCutoff());
+        UUID waveId = openWave(fixtureCamp(), futureCutoff());
 
         close(waveId, "물량 조기 소진")
                 .andExpect(status().isOk())
@@ -145,7 +162,7 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
 
     @Test
     void 다시_누르면_409_wave_not_open_이고_누가_닫았는지_말하며_두_번째는_적용되지_않는다() throws Exception {
-        UUID waveId = openWave(SEEDED_CAMP, futureCutoff());
+        UUID waveId = openWave(fixtureCamp(), futureCutoff());
         close(waveId, "첫 요청").andExpect(status().isOk());
 
         close(waveId, "응답을 못 받아 다시 누름")
@@ -159,8 +176,32 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
     }
 
     @Test
+    void 더_이른_열린_웨이브가_있으면_409_not_next_wave_이고_닫혀야_다음_것을_닫는다() throws Exception {
+        // ADR-054 후속 — 차례를 건너뛰는 조기 마감. 실제 DB 에서 판정 질의(캠프 · 티어 · 이른 컷오프 · 'OPEN')를 본다.
+        UUID camp = fixtureCamp();
+        Instant cutoffAt = futureCutoff();
+        UUID earlier = openWave(camp, cutoffAt);
+        UUID later = openWave(camp, cutoffAt.plus(Duration.ofDays(1)));
+        UUID otherTier = openWave(camp, cutoffAt.minus(Duration.ofHours(1)), "DAWN");
+
+        close(later, "내일 것을 닫으려 했다")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("not-next-wave"))
+                .andExpect(jsonPath("$.earlierWaveId").value(earlier.toString()));
+        assertThat(single("SELECT status, close_cause FROM waves WHERE id = ?1", later))
+                .as("적용되지 않았다").containsExactly("OPEN", null);
+        assertThat(count("SELECT count(*) FROM outbox_events WHERE aggregate_id = ?1", later)).isZero();
+
+        // 앞의 것을 닫으면 차례가 온다 — 다른 티어의 더 이른 웨이브(otherTier)는 차례에 들지 않는다.
+        close(earlier, "오늘 것").andExpect(status().isOk());
+        close(later, "그다음 것").andExpect(status().isOk());
+        assertThat(single("SELECT status, close_cause FROM waves WHERE id = ?1", otherTier))
+                .containsExactly("OPEN", null);
+    }
+
+    @Test
     void 이유가_없으면_400_이고_웨이브는_열린_채다() throws Exception {
-        UUID waveId = openWave(SEEDED_CAMP, futureCutoff());
+        UUID waveId = openWave(fixtureCamp(), futureCutoff());
 
         mvc.perform(post("/api/v1/waves/{waveId}/close", waveId)
                         .header(InternalToken.HEADER, InternalTokens.TEST_TOKEN)
@@ -183,7 +224,7 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
     void DB_가_원인_없는_마감과_마감_없는_원인을_거절한다() {
         // V3 의 CHECK — 「언제 닫혔나」와 「누가 닫았나」는 함께 있거나 함께 없다. 도메인도 같은 문장을
         // 갖지만(Wave 생성자) 그것은 읽는 시점이고, 이것은 쓰는 시점이다.
-        UUID waveId = openWave(SEEDED_CAMP, futureCutoff());
+        UUID waveId = openWave(fixtureCamp(), futureCutoff());
 
         assertThatThrownBy(() -> tx().executeWithoutResult(status -> entityManager.createNativeQuery(
                         "UPDATE waves SET status = 'CLOSED', closed_at = now() WHERE id = ?1")
@@ -199,7 +240,9 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
 
     @Test
     void 닫힌_뒤_같은_컷오프로_온_주문은_다음_웨이브로_가고_manual_로_개정된다() throws Exception {
-        Instant cutoffAt = futureCutoff();
+        // 시드된 캠프다 — 다른 IT 가 남긴 열린 웨이브(대개 지금 + 1시간)보다 이른 컷오프를 쓴다. 아래 「전제」가 그것을 본다.
+        Instant cutoffAt = clock.instant().plus(Duration.ofMinutes(20))
+                .plusMillis(Ids.newId().getLeastSignificantBits() & 0xFFFFF).truncatedTo(ChronoUnit.MICROS);
         String geohash7 = anyZoneGeohash5() + "bc";
 
         // 닫기 전 — 약속받은 웨이브에 그대로 들어간다.
@@ -211,6 +254,11 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
         assertThat(before.revised()).as("전제 — 닫기 전에는 개정이 없다").isFalse();
         UUID waveId = before.waveId().orElseThrow();
         aggregates.add(waveId);
+        assertThat(count("""
+                        SELECT count(*) FROM waves e JOIN waves w ON w.id = ?1
+                         WHERE e.camp_id = w.camp_id AND e.service_tier = w.service_tier AND e.status = 'OPEN'
+                           AND e.cutoff_at < w.cutoff_at""", waveId))
+                .as("전제 — 이 캠프 · 티어에 더 이른 열린 웨이브가 없다(있으면 조기 마감이 not-next-wave 다)").isZero();
         String campCode = referenceData.findCamp(before.campId().orElseThrow()).orElseThrow().code();
         double manualBefore = revised(campCode, "manual");
         double scheduledBefore = revised(campCode, "scheduled");
@@ -254,12 +302,32 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
     }
 
     private UUID openWave(UUID campId, Instant cutoffAt) {
+        return openWave(campId, cutoffAt, "SAME_DAY");
+    }
+
+    private UUID openWave(UUID campId, Instant cutoffAt, String tier) {
         UUID id = Ids.newId();
         tx().executeWithoutResult(status -> entityManager.createNativeQuery("""
                         INSERT INTO waves (id, camp_id, service_tier, cutoff_at, status, order_count, version)
-                        VALUES (?1, ?2, 'SAME_DAY', ?3, 'OPEN', 0, 0)""")
-                .setParameter(1, id).setParameter(2, campId).setParameter(3, cutoffAt).executeUpdate());
+                        VALUES (?1, ?2, ?4, ?3, 'OPEN', 0, 0)""")
+                .setParameter(1, id).setParameter(2, campId).setParameter(3, cutoffAt).setParameter(4, tier)
+                .executeUpdate());
         aggregates.add(id);
+        return id;
+    }
+
+    /**
+     * 이 테스트만의 캠프 — 시드된 캠프의 FC · 좌표를 빌린다({@code wave.closed} 가 캠프 좌표를 싣는다). 코드는 16자
+     * 안에서 매번 다르다. {@link #남긴_outbox_행을_지운다} 가 그 웨이브와 함께 지운다.
+     */
+    private UUID fixtureCamp() {
+        UUID id = Ids.newId();
+        String code = "IT-" + Long.toHexString(id.getLeastSignificantBits()).substring(0, 12).toUpperCase(Locale.ROOT);
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery("""
+                        INSERT INTO camps (id, code, fc_id, name, lat, lng, active)
+                        SELECT ?1, ?2, fc_id, 'IT 픽스처', lat, lng, true FROM camps WHERE id = ?3""")
+                .setParameter(1, id).setParameter(2, code).setParameter(3, SEEDED_CAMP).executeUpdate());
+        fixtureCamps.add(id);
         return id;
     }
 

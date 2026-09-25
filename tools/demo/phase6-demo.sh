@@ -113,12 +113,16 @@ printf '  %-50s %s\n' "접수된 주문" "$placed"
 oids="$(sed "s/.*/'&'/" "$WORK/order-ids.txt" | paste -sd, -)"
 await "편입된 주문 (fulfillment)" "$placed" "fq \"SELECT count(*) FROM fulfillment_orders WHERE order_id IN ($oids)\""
 
-# 이번 실행의 주문이 가장 많이 든 OPEN 웨이브 — 운영자가 닫을 웨이브다.
+# 이번 실행의 주문이 가장 많이 든 OPEN 웨이브 — 운영자가 닫을 웨이브다. 그 캠프 · 티어의 가장 이른 열린 웨이브여야 한다 —
+# 앞의 것이 열려 있으면 조기 마감은 409 not-next-wave 다(ADR-054 후속). 데모는 차례를 지키는 운영자를 보여 준다.
 pick="$(fq "SELECT w.id || '|' || w.camp_id || '|' || count(*) FROM waves w
               JOIN fulfillment_orders o ON o.wave_id = w.id AND o.order_id IN ($oids)
-             WHERE w.status = 'OPEN' GROUP BY w.id, w.camp_id ORDER BY count(*) DESC, w.id LIMIT 1")"
+             WHERE w.status = 'OPEN'
+               AND NOT EXISTS (SELECT 1 FROM waves e WHERE e.camp_id = w.camp_id AND e.service_tier = w.service_tier
+                                                      AND e.status = 'OPEN' AND e.cutoff_at < w.cutoff_at)
+             GROUP BY w.id, w.camp_id ORDER BY count(*) DESC, w.id LIMIT 1")"
 WAVE="${pick%%|*}"; rest="${pick#*|}"; CAMP="${rest%%|*}"; wave_orders="${rest#*|}"
-[ -n "$WAVE" ] || fail "이번 실행의 주문이 든 OPEN 웨이브가 없다."
+[ -n "$WAVE" ] || fail "이번 실행의 주문이 든 OPEN 웨이브 중 그 캠프 · 티어의 가장 이른 것이 없다."
 cutoff="$(fq "SELECT to_char(cutoff_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM waves WHERE id = '$WAVE'")"
 printf '  %-50s %s (캠프 %s · 주문 %s · 컷오프 %s)\n' "닫을 웨이브" "$WAVE" "$(fq "SELECT code FROM camps WHERE id = '$CAMP'")" "$wave_orders" "$cutoff"
 

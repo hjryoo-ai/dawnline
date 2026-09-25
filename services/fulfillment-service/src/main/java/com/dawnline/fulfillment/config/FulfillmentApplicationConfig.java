@@ -191,13 +191,14 @@ public class FulfillmentApplicationConfig {
      * 운영자 조기 마감 (ADR-054). Redis 락을 받지 않는다 — 정확성은 {@code FOR UPDATE} 와 상태 전이가 지킨다.
      *
      * @param closing            마감 본문
+     * @param waves              차례 판정 — 더 이른 열린 웨이브(ADR-054 후속)
      * @param transactionManager 요청마다 트랜잭션을 연다
      * @param metrics            웨이브 편입량 게이지
      */
     @Bean
-    public CloseWaveUseCase closeWaveUseCase(WaveClosing closing, PlatformTransactionManager transactionManager,
-            FulfillmentMetrics metrics) {
-        return new CloseWaveService(closing, transactionManager, metrics);
+    public CloseWaveUseCase closeWaveUseCase(WaveClosing closing, WaveRepository waves,
+            PlatformTransactionManager transactionManager, FulfillmentMetrics metrics) {
+        return new CloseWaveService(closing, waves, transactionManager, metrics);
     }
 
     /**

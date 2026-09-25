@@ -151,7 +151,8 @@ public class OpsCommandController {
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "404", description = "코어의 거절 그대로 — 없는 웨이브",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
-            @ApiResponse(responseCode = "409", description = "코어의 거절 그대로 — `wave-not-open`. `closeCause` 가 `MANUAL` 이면 앞의 요청이 적용됐다(RB-07)",
+            @ApiResponse(responseCode = "409", description = "코어의 거절 그대로 — `wave-not-open`(`closeCause` 가 `MANUAL` 이면 앞의 요청이 적용됐다, RB-07) "
+                    + "또는 `not-next-wave`(같은 캠프 · 티어에 더 이른 열린 웨이브가 있다 — `earlierWaveId`)",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "502", description = "`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의 5xx — 감사 `UNKNOWN`)",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),

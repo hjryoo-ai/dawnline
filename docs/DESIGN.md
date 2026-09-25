@@ -762,7 +762,7 @@ OPEN ──(cutoff 도달, 락 획득)──▶ CLOSING ──(wave.closed 발�
 앞의 세 상태는 이 서비스가 스스로 옮기므로 건너뜀은 여전히 예외다.
 - 웨이브는 (campId, tier, cutoffAt)당 1개. 주문 편입 시 없으면 생성(`INSERT … ON CONFLICT DO NOTHING` 후 재조회).
 - 컷오프 스케줄러: 매 30초 `cutoff_at <= now() - grace AND status='OPEN'` 조회 → 웨이브별 Redis 락 `lock:wave:{id}` (SET NX PX 60000, Lua 언락) → **`SELECT … FOR UPDATE`** → `CLOSING` 전이 + `wave.closed` outbox. 락 실패는 다른 인스턴스가 처리 중이라는 뜻이므로 스킵.
-- **운영자 조기 마감**(2026-09-24, [ADR-054](adr/ADR-054-early-wave-close-is-an-operator-cutoff.md)): `POST /api/v1/waves/{waveId}/close` `{reason}` — **컷오프 전에도 닫는다.** 마감 본문은 스케줄러와 같은 코드(`WaveClosing`)이고 원인만 다르게 넘긴다. Redis 락은 잡지 않는다 — 중복 마감을 막는 것은 `FOR UPDATE` 와 상태 전이다. **대가**: order-service 는 닫힌 웨이브를 모르므로 컷오프까지 그 창을 계속 약속하고, 그 동안 접수된 주문은 아래 개정 경로로 다음 웨이브에 들어간다 — 약속을 받자마자 개정된다. 그래서 `reason` 이 필수(공백 불가 · 200자)이고, 마감 원인을 `waves.close_cause`(`SCHEDULED`/`MANUAL`)에 **저장한다** — `closedAt < cutoffAt + grace` 로 파생하면 grace 설정값을 바꾸는 날 과거 판정이 움직인다. 응답은 200 `WaveView` · 404 · 409 `wave-not-open`(`currentState`·`closeCause`·`closedAt` — 감사 `UNKNOWN` 을 다시 눌러 닫는 근거, RB-07). fulfillment 의 REST 표면은 이것 하나이고 문서는 `contracts/openapi/fulfillment-service.yaml`(§11).
+- **운영자 조기 마감**(2026-09-24, [ADR-054](adr/ADR-054-early-wave-close-is-an-operator-cutoff.md)): `POST /api/v1/waves/{waveId}/close` `{reason}` — **컷오프 전에도 닫는다.** 마감 본문은 스케줄러와 같은 코드(`WaveClosing`)이고 원인만 다르게 넘긴다. Redis 락은 잡지 않는다 — 중복 마감을 막는 것은 `FOR UPDATE` 와 상태 전이다. **대가**: order-service 는 닫힌 웨이브를 모르므로 컷오프까지 그 창을 계속 약속하고, 그 동안 접수된 주문은 아래 개정 경로로 다음 웨이브에 들어간다 — 약속을 받자마자 개정된다. 그래서 `reason` 이 필수(공백 불가 · 200자)이고, 마감 원인을 `waves.close_cause`(`SCHEDULED`/`MANUAL`)에 **저장한다** — `closedAt < cutoffAt + grace` 로 파생하면 grace 설정값을 바꾸는 날 과거 판정이 움직인다. 응답은 200 `WaveView` · 404 · 409 `wave-not-open`(`currentState`·`closeCause`·`closedAt` — 감사 `UNKNOWN` 을 다시 눌러 닫는 근거, RB-07) · 409 `not-next-wave`. **차례를 건너뛰지 않는다**(2026-09-25, ADR-054 후속): 대상이 열려 있고 같은 캠프 · 티어에 더 이른 컷오프의 열린 웨이브가 있으면 아무것도 하지 않고 그 웨이브(`earlierWaveId` · `earlierCutoffAt`)를 말한다 — 앞의 것이 열려 있는데 뒤의 것을 닫는 것은 거의 확실히 실수다. 대상이 이미 닫혀 있으면 이 판정을 하지 않는다(다시 누른 사람은 늘 `wave-not-open` 을 받는다). fulfillment 의 REST 표면은 이것 하나이고 문서는 `contracts/openapi/fulfillment-service.yaml`(§11).
 - 컷오프 이후 도착한 같은 티어 주문은 **다음 웨이브**로 편입. `CLOSING/CLOSED` 웨이브에는 편입 불가 — **편입이 웨이브 행을 `SELECT … FOR SHARE` 로 잡고 상태를 확인한 뒤 INSERT** 하므로, 그 트랜잭션이 끝나기 전에는 마감이 끼어들 수 없다([ADR-025](adr/ADR-025-wave-admission-share-lock.md)). 공유 락끼리는 막지 않아 같은 웨이브로 몰리는 편입은 병렬이다.
 - **`waves.order_count` 는 편입마다 증감하지 않는다.** 마감 시 `SELECT count(*) FROM fulfillment_orders WHERE wave_id = ? AND status='PLANNED'` 로 한 번 센다(ADR-025). 그래서 취소가 카운트를 건드리는 분기가 없고, 카운터 드리프트도 구조적으로 불가능하다. 진행 중 웨이브의 편입량은 §9.1 의 `dawnline_wave_orders` 게이지가 같은 집계로 본다.
 
@@ -2674,7 +2674,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | 컴포넌트 장애 | 증상 | 자동 대응 | 수동 대응 (런북) |
 |---|---|---|---|
 | Kafka 브로커 다운 | outbox 미발행 누적 | 릴레이 재시도, 주문 API 정상 | RB-01: 브로커 복구 후 outbox 지연 해소 확인 |
-| PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패, **릴레이 발행 중단**(리더십 판정 불가 — 발행할 행도 못 읽으므로 같은 사건이다, ADR-027 정정) | 트래픽 차단(프로브), 소비자 재시도 후 pause — **(2026-09-25, 7-5 정정) `pause` 는 구현되지 않았다**: 재시도 3회 뒤 DLQ 이고, 멈춤처럼 보이는 것은 커넥션 풀의 대기(30초 × 네 번 — 레코드 하나에 약 2분)가 리스너 스레드를 묶기 때문이다. 5분 20초 장애에서 200건 중 6건이 DLQ, 194건은 복구 뒤 처리(근거: 관측(재현됨) — RB-02 §3). 표의 문장과 구현 중 어느 쪽으로 맞출지는 결정 필요 | RB-02 |
+| PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패, **릴레이 발행 중단**(리더십 판정 불가 — 발행할 행도 못 읽으므로 같은 사건이다, ADR-027 정정) | 트래픽 차단(프로브), 소비자 재시도 후 pause — **(2026-09-25, 7-5 정정) `pause` 는 구현되지 않았다**: 재시도 3회 뒤 DLQ 이고, 멈춤처럼 보이는 것은 커넥션 풀의 대기(30초 × 네 번 — 레코드 하나에 약 2분)가 리스너 스레드를 묶기 때문이다. 5분 20초 장애에서 200건 중 6건이 DLQ, 194건은 복구 뒤 처리(근거: 관측(재현됨) — RB-02 §3). **결정(2026-09-25): 구현을 원칙에 맞춘다** — DLQ 는 독약 메시지의 자리이지 장애의 자리가 아니다. 소비 측 오류 처리기가 발행 측 분류기(ADR-015)를 재사용해 **일시적 실패(DB 연결 · 타임아웃)는 백오프로 끝없이 재시도**(= 파티션이 멈춘다 — 이 칸이 「pause」라 부르던 것, 장애 중에는 순서를 지키는 원하는 성질이다), **결정적 실패만 3회 뒤 DLQ**. 영구적인 「일시」 실패(틀린 자격 증명)는 소비자 랙 알림이 잡는다. 7-3 의 DB 장애 카오스가 「DLQ 0건, 복구 뒤 전부 처리」로 본다 | RB-02 |
 | Redis 다운 | 성능 저하, 락 폴백 | 폴백 경로(§7.2) | RB-03: 복구 후 geo 재적재 확인 |
 | dispatch 계획 중 크래시 | plan `PLANNING` 정체 | 10분 후 자동 재실행 | RB-04: 강제 재실행 |
 | 독약 메시지 (소비 측) | 소비자 반복 실패 | 3회 후 DLQ | RB-05: 원인 수정 후 replay |
@@ -2731,6 +2731,12 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 미리 알 수 있는 시계열은 0 을 내보내라고 적는 것이 근거의 전부였다). 그래서 **알림이 걸린 카운터는 라벨 값이 유한하면
 기동 때 0 으로 미리 등록한다** — `dawnline_internal_token_rejected_total{reason}` 가 첫 자리다(ADR-055 「추가」).
 라벨 값이 열린 집합이면(캠프) 미리 등록할 수 없고, 그때는 알림 식이 부재를 다룬다.
+**이웃 — 있는 시계열이 다른 것의 최솟값에 가려진다** (2026-09-25, 7-5). 부재만 가려지는 것이 아니다. 집계 식이 라벨을 **덜** 남기면
+서로 다른 대상의 시계열이 한 줄로 접히고, 멈춘 것은 멀쩡한 것의 값 뒤에 선다. `DawnlineRetentionStalled` 가 `min by (table)` 이었을 때
+`outbox_events` · `processed_events` 는 다섯 서비스의 DB 에 하나씩 있는 **다른 표**였는데 라벨 값은 같았다 — 한 서비스의 정리가
+멈춰도 다른 넷의 성공이 최솟값이 되어 울리지 않았다(근거: 관측(재현됨) — promtool 음성 표본 `got: []`, §9.4 행). 「없는 시계열은 0」은
+식이 **아무것도 보지 못한** 경우이고, 이것은 식이 **다른 것을 본** 경우다. 규칙: 집계의 `by` 는 **같은 대상을 가리키는 라벨의 조합**
+까지 남긴다 — 이름이 같다는 것은 같은 대상이라는 뜻이 아니다.
 **이 원칙이 적힌 날 지키지 않던 알림 셋**(§9.4, 2026-09-24): 둘은 같은 날 닫았다 —
 `dawnline_rate_limit_decisions_total{outcome}` 은 판정 셋을(`RedisRateLimiter`), `dawnline_ops_commands_total{action,result}` 은
 커맨드 전부 × 결과 넷을(`PENDING` 제외) 기동 때 0 으로 등록한다. 커맨드 목록 `OpsCommand.ACTIONS` 는 sealed 의 허용 하위
@@ -2816,6 +2822,10 @@ ADR-060 맥락 1) — §9.4 의 p95 알림이 읽을 것이 없었다.
 | `dawnline_route_plans_stuck` | gauge | dispatch | 라벨 없음 — `COALESCE(finished_at, started_at)` 가 **30일**을 넘겼는데 **종결이 아닌** 계획 수([ADR-059](adr/ADR-059-dispatch-retention-is-per-plan.md) 결정 4). 종결은 「발행·실패 ∧ 그 계획의 모든 stop 종결」이다. 그 계획의 후보·설명은 30일 단계가 건너뛰어 남는다 — 임계가 계열의 90일이 아니라 30일인 이유는 **걸린 것이 처음 붙잡히는 자리**가 거기라서다. 30일 단계가 다룬 계획(종결)의 여집합이다. `dawnline_fulfillment_orders_stuck` 과 같은 모양이다: 정리 배치가 돌 때 세고, 세기 전과 세기에 실패한 동안은 `NaN`. 상한은 365일(그때 계열째 지운다). 0 이 아니면 볼 곳은 둘이다 — 계획 상태가 끝나지 않았으면 RB-04, stop 이 끝나지 않았으면 `delivery.status` 의 DLQ(RB-05). 계획 없는 웨이브의 후보는 따로 세지 않는다 — 같은 주문을 `dawnline_fulfillment_orders_stuck` 이 센다 |
 
 Kafka 소비자 랙·프로듀서 지표는 Spring Kafka 기본 지표 사용.
+
+**메트릭의 경로는 Prometheus 스크레이프 하나다** (2026-09-25). OTel 스타터가 가져오는 OTLP 메트릭 레지스트리는 Boot 4.1 에서 기본으로
+켜지고, dispatch 로그가 매분 「Failed to publish metrics to OTLP receiver」를 남겼다(다섯 서비스가 같은 기본값이다) — 매분 찍히는
+오류는 진짜 오류를 가리는 소음이다. `management.otlp.metrics.export.enabled=false`(`observability-defaults.yml`, `ObservabilityResourcesTest`).
 
 **정시율을 tracking 이 아니라 ops-api 가 내는 이유**: `basis` 라벨은 <em>원래 약속</em>과
 <em>개정된 약속</em> 두 기준을 모두 알아야 성립한다(§8.1). tracking 은 `route.assigned` 가 준

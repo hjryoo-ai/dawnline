@@ -8,11 +8,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Map;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.junit.jupiter.api.Test;
 import org.w3c.dom.Document;
+import org.yaml.snakeyaml.Yaml;
 
 /**
  * 라이브러리가 제공하는 설정 리소스가 실제로 로드 가능한 상태인지 지키는 테스트.
@@ -58,8 +60,30 @@ class ObservabilityResourcesTest {
 
         // Boot 4.1 경로: management.opentelemetry.tracing.export.otlp.*
         assertThat(lines).contains("  opentelemetry:");
-        // Boot 3 경로 management.otlp.tracing.* 는 4.1 에서 deprecation level=error 다.
-        assertThat(lines).doesNotContain("  otlp:");
+        // Boot 3 경로 management.otlp.tracing.* 는 4.1 에서 deprecation level=error 다. 처음 판은 `  otlp:` 줄 자체를
+        // 막았는데, management.otlp.metrics.* 는 4.1 에서도 유효한 경로라(아래) 그 경로 하나만 막는다.
+        Map<String, Object> otlp = section(management(), "otlp");
+        assertThat(otlp).as("management.otlp.tracing.* — Boot 3 경로").doesNotContainKey("tracing");
+    }
+
+    @Test
+    void 기본프로퍼티조각_OTLP_메트릭_내보내기를_끈다() throws Exception {
+        // 메트릭은 Prometheus 스크레이프로만 간다(§9.4). 켜 두면 컬렉터가 받지 않는 내보내기가 매분 오류를 남긴다.
+        Map<String, Object> export = section(section(section(management(), "otlp"), "metrics"), "export");
+        assertThat(export).containsEntry("enabled", false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> management() throws Exception {
+        Map<String, Object> root = new Yaml().load(read(DEFAULTS));
+        return (Map<String, Object>) root.get("management");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> section(Map<String, Object> parent, String key) {
+        Object child = parent.get(key);
+        assertThat(child).as("키 %s 가 없다", key).isInstanceOf(Map.class);
+        return (Map<String, Object>) child;
     }
 
     @Test
