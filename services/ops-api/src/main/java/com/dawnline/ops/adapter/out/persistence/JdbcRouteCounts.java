@@ -16,10 +16,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 적는다({@code JdbcRouteRows.RECOUNT_SQL}). 그래서 이 질의는 {@code rm_routes} 하나만 읽는다.
  *
  * <h2>끝나지 않은 일에는 창이 없다</h2>
- * 앞의 술어(끝나지 않은 것 — 진행 중과 계획을 모르는 행)는 창과 무관하게 들고, 뒤의 술어(창)는 나머지(출발 전 ·
- * 완료)만 거른다. 출발한 지 30시간 된 라우트가 아직 끝나지 않았다면 운영자가 가장 먼저 볼 라우트다. 계획을 모르는 행은
- * {@code completed_at} 이 언제나 {@code NULL} 이고 {@code status} 가 {@code NULL} 이거나 {@code DEPARTED} 라서 앞의 술어에
- * 든다.
+ * 앞의 술어(끝나지 않은 것 — 출발 전 · 진행 중 · 계획을 모르는 행)는 창과 무관하게 들고, 뒤의 술어(창)는 나머지(완료 ·
+ * void)만 거른다. 출발한 지 30시간 된 라우트가 아직 끝나지 않았다면 운영자가 가장 먼저 볼 라우트다. 출발 전도 같다 —
+ * 계획 출발을 한참 넘기고도 떠나지 않은 라우트는 끝나지 않은 일이다. 재계획이 비운 라우트는 {@code assigned} 가 아니라
+ * void 라서 거기 쌓이지 않는다. 계획을 모르는 행은 {@code completed_at} · {@code live_count} 가 언제나 {@code NULL} 이라
+ * (다시 세지 않는다) 앞의 술어에 든다.
  *
  * <h2>인덱스가 없다 — 그리고 {@code rm_orders} 를 읽지 않는다</h2>
  * 보존 90일 11만 행에서 순차 스캔 한 번이 5–8 ms 다. 끝나지 않은 라우트의 부분 인덱스는 창 쪽이 순차 스캔이라 값을 하지
@@ -33,13 +34,14 @@ public class JdbcRouteCounts implements RouteCounts {
     public static final String COUNT_SQL = """
             SELECT camp_id,
                    CASE WHEN revision IS NULL OR status IS NULL THEN 'UNKNOWN'
+                        WHEN live_count = 0 THEN 'VOID'
                         WHEN status = 'ASSIGNED' THEN 'ASSIGNED'
                         WHEN completed_at IS NULL THEN 'IN_PROGRESS'
                         ELSE 'COMPLETED'
                    END AS progress,
                    count(*) AS routes
               FROM rm_routes
-             WHERE (completed_at IS NULL AND status IS DISTINCT FROM 'ASSIGNED')
+             WHERE (completed_at IS NULL AND live_count IS DISTINCT FROM 0)
                 OR planned_departure >= ?
              GROUP BY 1, 2
             """;

@@ -40,18 +40,21 @@ public class JdbcRouteRows implements RouteRows {
     /**
      * 계획이 도착한 라우트만 센다 — 소속을 모르는 동안의 0 은 부재를 값으로 적는 것이다.
      *
-     * <p>세 칸을 한 번의 탐색으로 낸다. {@code completed_at} 은 결과 없는 비취소 주문이 남았으면 {@code NULL}, 아니면 마지막
-     * 결과 시각이고, 결과가 하나도 없으면(빈 라우트 · 전부 취소) 계획 출발이다 — 전부 사실이라 처리 순서를 타지 않는다
-     * (ADR-061). 주문이 없으면 집계가 한 행({@code bool_or} 는 {@code NULL})을 내므로 {@code ELSE} 로 간다.
+     * <p>네 칸을 한 번의 탐색으로 낸다(ADR-061). {@code live_count} 는 비취소 주문 수이고 0 이면 그 라우트는 void 다.
+     * {@code completed_at} 은 비취소 주문이 있고 그중 결과 없는 것이 남지 않았을 때의 마지막 결과 시각이고, 아니면
+     * {@code NULL} 이다 — void 에 시각을 만들지 않는다. 전부 사실이라 처리 순서를 타지 않는다. 주문이 없으면 집계가 한 행
+     * ({@code count(*)} 는 0)을 내므로 void 로 간다.
      */
     static final String RECOUNT_SQL = """
             UPDATE rm_routes r
-               SET (completed_count, failed_count, completed_at) = (
+               SET (completed_count, failed_count, live_count, completed_at) = (
                      SELECT count(*) FILTER (WHERE o.delivery_outcome = 'COMPLETED'),
                             count(*) FILTER (WHERE o.delivery_outcome = 'FAILED'),
-                            CASE WHEN bool_or(o.delivery_outcome IS NULL
-                                              AND o.order_status IS DISTINCT FROM 'CANCELLED') THEN NULL
-                                 ELSE COALESCE(max(COALESCE(o.delivered_at, o.failed_at)), r.planned_departure)
+                            count(*) FILTER (WHERE o.order_status IS DISTINCT FROM 'CANCELLED'),
+                            CASE WHEN count(*) FILTER (WHERE o.order_status IS DISTINCT FROM 'CANCELLED') = 0
+                                      OR bool_or(o.delivery_outcome IS NULL
+                                                 AND o.order_status IS DISTINCT FROM 'CANCELLED') THEN NULL
+                                 ELSE max(COALESCE(o.delivered_at, o.failed_at))
                             END
                        FROM rm_orders o
                       WHERE o.route_id = r.route_id)

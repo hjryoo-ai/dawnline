@@ -140,8 +140,8 @@ public class ReadModelProjector implements ProjectFactUseCase {
     }
 
     /**
-     * 취소된 주문은 라우트의 「남은 주문」에서 빠진다 — 그 라우트의 완료({@code completed_at})가 바뀔 수 있으므로 다시
-     * 센다(ADR-061). 라우트의 칸은 쓰지 않는다. 주문의 지금 라우트를 알아야 하므로 주문을 먼저 잠근다(잠금 순서 그대로).
+     * 취소된 주문은 라우트의 「남은 주문」에서 빠진다 — 그 라우트의 완료({@code completed_at})와 void({@code live_count})가
+     * 바뀔 수 있으므로 다시 센다(ADR-061). 라우트의 칸은 쓰지 않는다. 주문의 지금 라우트를 알아야 하므로 주문을 먼저 잠근다(잠금 순서 그대로).
      * 라우트를 아직 모르면 셀 것이 없다 — 뒤에 오는 {@code route.assigned} 가 이 취소를 보고 센다.
      */
     private int orderCancelled(UUID orderId) {

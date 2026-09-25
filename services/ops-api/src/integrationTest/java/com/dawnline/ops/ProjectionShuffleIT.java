@@ -65,7 +65,7 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
     static final Map<String, Set<String>> AGGREGATES = Map.of(
             "rm_orders", Set.of(),
             "rm_waves", Set.of("order_count"),
-            "rm_routes", Set.of("completed_count", "failed_count", "completed_at"));
+            "rm_routes", Set.of("completed_count", "failed_count", "live_count", "completed_at"));
 
     /**
      * 칸 대조에서 빼는 표와 그 이유. 비어 있는 것이 정상이다 — V1 의 {@code rm_kpi_hourly} 가 여기
@@ -169,13 +169,17 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
         assertThat(onTime(scenario.o2)).containsExactly(false, false);
         assertThat(jdbc.queryForObject("SELECT route_id FROM rm_orders WHERE order_id = ?", UUID.class, scenario.o2))
                 .as("재계획이 옮긴 주문의 라우트").isEqualTo(scenario.r2);
-        assertThat(jdbc.queryForMap("SELECT completed_count, failed_count, revision, status FROM rm_routes WHERE route_id = ?",
+        assertThat(jdbc.queryForMap(
+                "SELECT completed_count, failed_count, live_count, revision, status FROM rm_routes WHERE route_id = ?",
                 scenario.r2))
                 .containsEntry("completed_count", 2).containsEntry("failed_count", 1)
+                .as("O4 는 취소됐다 — 배송됐어도 남은 주문이 아니다").containsEntry("live_count", 2)
                 .containsEntry("revision", 2).containsEntry("status", "DEPARTED");
         // 완료는 쓰기 때 판정한다(ADR-061) — R1 에 남은 O6 은 취소됐으니 마지막 결과는 O1 의 배송, R2 는 O2 의 실패다.
         assertThat(completedAt(scenario.r1)).as("R1 — O6 의 취소가 끝을 가른다").isEqualTo(scenario.o1Delivered);
         assertThat(completedAt(scenario.r2)).as("R2").isEqualTo(scenario.o2Failed);
+        assertThat(jdbc.queryForObject("SELECT live_count FROM rm_routes WHERE route_id = ?", Integer.class, scenario.r1))
+                .as("R1 — O6 은 취소됐다").isEqualTo(1);
         assertThat(jdbc.queryForMap("SELECT status, order_count, route_count FROM rm_waves WHERE wave_id = ?",
                 scenario.waveId))
                 .containsEntry("status", "PLANNED").containsEntry("order_count", 5).containsEntry("route_count", 2);

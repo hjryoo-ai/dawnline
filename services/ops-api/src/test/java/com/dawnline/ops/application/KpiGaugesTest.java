@@ -182,7 +182,7 @@ class KpiGaugesTest {
     }
 
     @Test
-    void 캠프를_처음_볼_때_진행_넷을_등록한다_라우트_단위가_아니다() {
+    void 캠프를_처음_볼_때_진행_다섯을_등록한다_라우트_단위가_아니다() {
         routes.rows.add(new CampRoutes(CAMP, RouteProgress.COMPLETED, 1));
         gauges.refreshNow();
         gauges.refreshNow();
@@ -190,7 +190,7 @@ class KpiGaugesTest {
         assertThat(registry.find(DawnlineMetrics.ROUTES.meterName()).gauges())
                 .extracting(g -> g.getId().getTag("camp") + " " + g.getId().getTag("status"))
                 .containsExactlyInAnyOrder(CAMP + " assigned", CAMP + " in_progress", CAMP + " completed",
-                        CAMP + " unknown");
+                        CAMP + " void", CAMP + " unknown");
     }
 
     @Test

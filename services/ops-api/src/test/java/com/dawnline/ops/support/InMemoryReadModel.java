@@ -145,7 +145,11 @@ public final class InMemoryReadModel {
                 }
                 route.put("completed_count", countOrders(routeId, "COMPLETED"));
                 route.put("failed_count", countOrders(routeId, "FAILED"));
-                Instant completedAt = completedAt(routeId, (Instant) route.get("planned_departure"));
+                List<Map<String, Object>> live = orders.values().stream()
+                        .filter(o -> routeId.equals(o.get("route_id")) && !"CANCELLED".equals(o.get("order_status")))
+                        .toList();
+                route.put("live_count", (long) live.size());
+                Instant completedAt = completedAt(routeId, live);
                 if (completedAt == null) {
                     route.remove("completed_at");
                 } else {
@@ -154,21 +158,20 @@ public final class InMemoryReadModel {
             }
         }
 
-        /** {@code JdbcRouteRows.RECOUNT_SQL} 의 {@code completed_at} — 남은 비취소 주문이 있으면 없다(ADR-061). */
-        private @Nullable Instant completedAt(UUID routeId, @Nullable Instant plannedDeparture) {
-            List<Map<String, Object>> onRoute = orders.values().stream()
-                    .filter(o -> routeId.equals(o.get("route_id")))
-                    .toList();
-            boolean pending = onRoute.stream().anyMatch(o -> o.get("delivery_outcome") == null
-                    && !"CANCELLED".equals(o.get("order_status")));
-            if (pending) {
+        /**
+         * {@code JdbcRouteRows.RECOUNT_SQL} 의 {@code completed_at} — 비취소 주문이 없거나(void) 그중 결과 없는 것이
+         * 남았으면 없다(ADR-061). 시각은 그 라우트의 모든 주문에서 마지막 결과다.
+         */
+        private @Nullable Instant completedAt(UUID routeId, List<Map<String, Object>> live) {
+            if (live.isEmpty() || live.stream().anyMatch(o -> o.get("delivery_outcome") == null)) {
                 return null;
             }
-            return onRoute.stream()
+            return orders.values().stream()
+                    .filter(o -> routeId.equals(o.get("route_id")))
                     .map(o -> (Instant) (o.get("delivered_at") != null ? o.get("delivered_at") : o.get("failed_at")))
                     .filter(Objects::nonNull)
                     .max(Comparator.naturalOrder())
-                    .orElse(plannedDeparture);
+                    .orElse(null);
         }
 
         private long countOrders(UUID routeId, String outcome) {
