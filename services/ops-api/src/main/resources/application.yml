@@ -53,8 +53,8 @@ spring:
   #     기동이 깨진다(jar 를 열어 확인).
 
   # @Scheduled 작업 6개가 이 풀을 쓴다: OutboxRelay 의 폴링(100ms)·메트릭(5s)·outbox 정리(1h),
-  # ProcessedEventCleaner 의 processed_events 정리(24h, §4.4 보존 14일), 정시율 게이지
-  # 갱신(1분, OnTimeRatioGauges — peak 30일 규모에서 한 번에 ~40 ms 라 자리를 오래 잡지 않는다),
+  # ProcessedEventCleaner 의 processed_events 정리(24h, §4.4 보존 14일), KPI 게이지
+  # 갱신(1분, KpiGauges — peak 30일 규모에서 한 번에 ~40 ms 라 자리를 오래 잡지 않는다),
   # ReadModelRetentionCleaner 의 rm_* 정리(24h, ADR-058).
   # Boot 기본값 1이면 Kafka 장애로 폴링이 막히는 동안 메트릭 갱신이 함께 멈춰,
   # 그 장애를 알려 줄 유일한 지표(outbox 지연·격리 게이지)가 바로 그때 낡는다.

@@ -96,7 +96,7 @@ class ProjectionShuffleTest {
                 .doesNotContainKeys("camp_id", "wave_id", "route_id", "delivery_outcome");
         assertThat(model.wave(scenario.waveId))
                 .containsEntry("status", "PLANNED")
-                .containsEntry("order_count", 4L)
+                .containsEntry("order_count", 5L)
                 .containsEntry("plan_id", scenario.planId)
                 .containsEntry("route_count", 2);
         assertThat(model.route(scenario.r1))
@@ -106,12 +106,21 @@ class ProjectionShuffleTest {
                 .containsEntry("completed_count", 1L)
                 .containsEntry("failed_count", 0L)
                 .containsEntry("at_risk", true)
-                .containsEntry("stop_count", 1);
+                .containsEntry("stop_count", 2)
+                .containsEntry("live_count", 1L)
+                // 남은 O6 은 취소됐다 — 마지막 결과는 O1 의 배송이다(ADR-061).
+                .containsEntry("completed_at", scenario.o1Delivered);
         assertThat(model.route(scenario.r2))
                 .containsEntry("revision", 2)
                 .containsEntry("completed_count", 2L)
                 .containsEntry("failed_count", 1L)
-                .containsEntry("stop_count", 3);
+                .containsEntry("stop_count", 3)
+                .containsEntry("live_count", 2L)   // O4 는 취소됐다 — 배송됐어도 남은 주문이 아니다
+                .containsEntry("completed_at", scenario.o2Failed);
+        assertThat(model.order(scenario.o6))
+                .containsEntry("order_status", "CANCELLED")
+                .containsEntry("route_id", scenario.r1)
+                .doesNotContainKey("delivery_outcome");
     }
 
     @Test

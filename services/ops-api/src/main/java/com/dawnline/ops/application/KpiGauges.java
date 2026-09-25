@@ -27,9 +27,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
- * {@code dawnline_delivery_on_time_ratio{camp, basis}} — 정시율 두 값을 따로 낸다 (DESIGN.md §9.1 · §8.1).
- * 그리고 그 값이 정직한지를 말하는 둘을 함께 낸다: 정시율에서 빠진 수({@code dawnline_kpi_excluded})와
- * 마지막 성공한 갱신의 나이({@code dawnline_kpi_refresh_age_seconds}).
+ * ops-api 의 KPI 게이지 — 1분 갱신 한 번이 세 계열을 함께 낸다 (DESIGN.md §9.1 · §8.1): 정시율
+ * {@code dawnline_delivery_on_time_ratio{camp, basis}}, 결과 수 {@code dawnline_kpi_delivery{camp, outcome}},
+ * 라우트 진행 {@code dawnline_routes{camp, status}}. 그리고 그 값이 정직한지를 말하는 둘을 함께 낸다: 정시율에서
+ * 빠진 수({@code dawnline_kpi_excluded})와 마지막 성공한 갱신의 나이({@code dawnline_kpi_refresh_age_seconds}).
+ *
+ * <p>이 클래스의 이름은 {@code OnTimeRatioGauges} 였다(Phase 6). 7-1 이 결과 수와 라우트 진행을 더한 뒤로 그 이름은
+ * 이 클래스가 내는 것의 셋 중 하나만 말했다 — 문서가 거짓인 것과 같은 부류라 이름을 바꿨다. 갱신 주기 설정 키도
+ * {@code dawnline.ops.kpi.refresh-ms} · {@code initial-delay-ms} 로 같이 바꿨다({@code on-time-} 접두를 뗐다).
  *
  * <h2>창은 현재 버킷 포함 UTC 정시 버킷 24개다</h2>
  * 「직전 24시간」이 아니다 — {@code kpi_delivery_hourly} 의 행 24개의 합이고, 현재 버킷은 늘 부분이라
@@ -61,14 +66,16 @@ import org.springframework.scheduling.annotation.Scheduled;
  * {@code dawnline_kpi_delivery{camp, outcome}} 은 정시율의 분모를 둘로 편 것이다 — 같은 창 · 같은 스냅숏에서 읽으므로
  * 「대시보드의 24행과 게이지가 다를 수 없다」가 여기도 성립한다. 창에 결과가 없는 캠프는 {@code NaN} 이 아니라 0 이다:
  * 0/0 은 정의되지 않지만 「결과 0 건」은 참인 셈이다. {@code dawnline_routes{camp, status}} 는 {@code rm_routes} 를
- * 진행으로 센 집계다({@link RouteCounts}). 캠프를 모르는 행은 {@code camp="unknown"} 이다. 한 갱신이 셋을 함께 내고 함께
+ * 진행으로 센 집계다({@link RouteCounts}) — 끝나지 않은 라우트(출발 전 · 진행 중 · 모름)는 창 없이, 완료 · void 는 같은
+ * 창으로(ADR-061).
+ * 캠프를 모르는 행은 {@code camp="unknown"} 이다. 한 갱신이 셋을 함께 내고 함께
  * 실패한다 — 성공 시각이 하나라서 {@code dawnline_kpi_refresh_age_seconds} 가 셋 모두의 알림이다.
  *
  * <h2>미터는 캠프를 처음 볼 때 등록한다</h2>
  * 캠프 목록은 ops 의 사실이 아니다(fulfillment 의 표다). 창에 처음 나타난 캠프의 두 계열을 그때
  * 등록하고, 사라져도 지우지 않는다 — 그 뒤로는 {@code NaN} 을 말한다.
  */
-public class OnTimeRatioGauges {
+public class KpiGauges {
 
     static final String TAG_CAMP = "camp";
     static final String TAG_BASIS = "basis";
@@ -98,7 +105,7 @@ public class OnTimeRatioGauges {
         }
     }
 
-    private static final Logger log = LoggerFactory.getLogger(OnTimeRatioGauges.class);
+    private static final Logger log = LoggerFactory.getLogger(KpiGauges.class);
 
     private final DeliveryKpis kpis;
     private final RouteCounts routeCounts;
@@ -121,23 +128,23 @@ public class OnTimeRatioGauges {
      * @param registry    미터 레지스트리
      * @param clock       창의 기준 시각 (불변규칙 12)
      */
-    public OnTimeRatioGauges(DeliveryKpis kpis, RouteCounts routeCounts, MeterRegistry registry, Clock clock) {
+    public KpiGauges(DeliveryKpis kpis, RouteCounts routeCounts, MeterRegistry registry, Clock clock) {
         this.kpis = Objects.requireNonNull(kpis, "kpis");
         this.routeCounts = Objects.requireNonNull(routeCounts, "routeCounts");
         this.registry = Objects.requireNonNull(registry, "registry");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.lastSuccess = clock.instant();
-        DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_EXCLUDED, this, OnTimeRatioGauges::excludedPromiseUnknown,
+        DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_EXCLUDED, this, KpiGauges::excludedPromiseUnknown,
                 TAG_REASON, PROMISE_UNKNOWN);
-        DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_REFRESH_AGE, this, OnTimeRatioGauges::refreshAgeSeconds);
+        DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_REFRESH_AGE, this, KpiGauges::refreshAgeSeconds);
     }
 
     /**
      * 1분마다 다시 센다. 실패하면 이 갱신이 내는 값 전부를 {@code NaN} 으로 두고 다음 실행을 기다린다 — 정시율은
      * 정확성이 아니라 관측이라 재시도할 이유가 없고, 틀린 값을 남기는 것보다 모름을 남기는 편이 낫다.
      */
-    @Scheduled(fixedDelayString = "${dawnline.ops.kpi.on-time-refresh-ms:60000}",
-            initialDelayString = "${dawnline.ops.kpi.on-time-initial-delay-ms:0}")
+    @Scheduled(fixedDelayString = "${dawnline.ops.kpi.refresh-ms:60000}",
+            initialDelayString = "${dawnline.ops.kpi.initial-delay-ms:0}")
     public void refresh() {
         try {
             refreshNow();

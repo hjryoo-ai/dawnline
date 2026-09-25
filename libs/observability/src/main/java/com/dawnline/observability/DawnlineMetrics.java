@@ -218,7 +218,7 @@ public final class DawnlineMetrics {
     /** {@code rm_routes} 의 진행 집계 — 라우트 단위가 아니다(routeId 는 열린 라벨). */
     public static final DawnlineMetric ROUTES = gauge("dawnline_routes",
             "dawnline.routes", "캠프 · 진행별 라우트 수 — KPI 와 같은 갱신, 갱신 실패 중 NaN",
-            open("camp"), closed("status", "assigned", "in_progress", "completed", "unknown"));
+            open("camp"), closed("status", "assigned", "in_progress", "completed", "void", "unknown"));
 
     /** 운영자 커맨드의 결과 — 커밋한 뒤에 센다. */
     public static final DawnlineMetric OPS_COMMANDS = counter("dawnline_ops_commands_total",

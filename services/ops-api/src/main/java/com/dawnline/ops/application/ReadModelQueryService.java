@@ -23,7 +23,7 @@ import org.slf4j.LoggerFactory;
 /**
  * 읽기 모델 조회 (DESIGN.md §5.5 「조회」). 감사도 카운터도 없다 — 조회는 커맨드가 아니다.
  *
- * <p>KPI 는 게이지({@link OnTimeRatioGauges})와 같은 세 조각을 쓴다: 창({@link DeliveryKpis#currentBuckets}),
+ * <p>KPI 는 게이지({@link KpiGauges})와 같은 세 조각을 쓴다: 창({@link DeliveryKpis#currentBuckets}),
  * 뷰({@link DeliveryKpis#window}), 식({@link CampDeliveries#onTimeRatio}). 같은 사실을 두 경로로 세면 언젠가 갈리고,
  * 갈린 날 어느 쪽을 믿을지 모른다 — 「대시보드의 24행과 게이지가 다를 수 없다」를 API 까지 넓힌 것이다.
  */

@@ -91,7 +91,7 @@ class OpsCommandIT extends OpsIntegrationTestBase {
     static void wiring(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
-        registry.add("dawnline.ops.kpi.on-time-initial-delay-ms", () -> "3600000");
+        registry.add("dawnline.ops.kpi.initial-delay-ms", () -> "3600000");
         registry.add("spring.http.serviceclient.dispatch.base-url", () -> "http://127.0.0.1:" + CORE.getAddress().getPort());
         registry.add("spring.http.serviceclient.order.base-url", () -> CLOSED_PORT_URL);
         // 같은 가짜 코어를 접두어로 나눈다 — outbox 경로는 코어 넷이 같아서 어느 그룹으로 갔는지를 접두어가 말한다.

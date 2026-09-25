@@ -16,9 +16,10 @@ import org.jspecify.annotations.Nullable;
 public interface RouteCounts {
 
     /**
-     * 계획 출발이 {@code since} 이후인 라우트와, 계획이 아직 오지 않은 라우트 전부를 센다. 없는 조합은 결과에 없다.
+     * 끝나지 않은 라우트(출발 전 · 진행 중 · 계획을 모름)는 창 없이 전부, 완료와 void 는 계획 출발이 {@code since} 이후인
+     * 것만 센다(ADR-061 — 끝나지 않은 일에는 창이 없다). 없는 조합은 결과에 없다.
      *
-     * @param since KPI 창의 첫 버킷 — 정시율과 같은 창
+     * @param since KPI 창의 첫 버킷 — 정시율과 같은 창. 완료 · void 의 수를 묶는다
      * @return 캠프 · 진행별 수
      */
     List<CampRoutes> count(Instant since);

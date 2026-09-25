@@ -22,12 +22,14 @@ import tools.jackson.databind.node.ObjectNode;
  * 보는 모양은 상상한 것이 아니라 계약에 적힌 것이다. 식별자와 시각만 이 클래스가 정한다.
  *
  * <h2>무엇이 들어 있나</h2>
- * 웨이브 W 에 주문 다섯, 라우트 둘. 순서 역전이 결과를 바꿀 수 있는 자리를 일부러 다 넣었다:
+ * 웨이브 W 에 주문 여섯, 라우트 둘. 순서 역전이 결과를 바꿀 수 있는 자리를 일부러 다 넣었다:
  * <ul>
  *   <li>O2 — 약속이 개정되고(원 약속 ≠ 개정 약속), 재계획이 R1 에서 R2 로 옮기고, 두 라우트의
  *       at-risk 가 둘 다 이 주문의 ETA 를 말하고, 끝내 배송에 실패한다.</li>
  *   <li>O4 — 계획 뒤에 취소됐는데 배송됐다. 「취소됐는데 배송됨」의 예외 목록 행이다(§5.5).</li>
  *   <li>O5 — 배차 불가. 캠프·웨이브 칸이 끝까지 비어 있어야 한다.</li>
+ *   <li>O6 — R1 에 배정된 뒤 출발 전에 취소되고 배송되지 않는다. R1 의 완료({@code completed_at})는 이 취소가 가른다 —
+ *       취소가 맨 끝에 오면 그 취소의 재집계 말고는 R1 을 끝났다고 말할 사실이 없다(ADR-061).</li>
  *   <li>W — 계획이 한 번 실패했다가 성공한다.</li>
  *   <li>R1·R2 — 개정 두 번, 출발, at-risk.</li>
  * </ul>
@@ -65,6 +67,7 @@ public final class ProjectionScenario {
     public final UUID o3 = Ids.newId();
     public final UUID o4 = Ids.newId();
     public final UUID o5 = Ids.newId();
+    public final UUID o6 = Ids.newId();
 
     /** 다섯 주문의 접수 시각 — 접수 축 KPI 의 버킷 하나(BASE 의 정시)에 모두 든다. */
     public final Instant placedAt = at(0);
@@ -100,7 +103,7 @@ public final class ProjectionScenario {
 
     /** 이 시나리오가 만드는 행의 키 전부 — IT 가 자기 행만 읽고 지운다. */
     public List<UUID> keys() {
-        return List.of(campId, waveId, r1, r2, o1, o2, o3, o4, o5);
+        return List.of(campId, waveId, r1, r2, o1, o2, o3, o4, o5, o6);
     }
 
     /** 인과 순서 — 기준 행을 만드는 순서다(ADR-051 결정 6 의 1). */
@@ -113,13 +116,14 @@ public final class ProjectionScenario {
     }
 
     private void build() {
-        for (UUID order : List.of(o1, o2, o3, o4, o5)) {
+        for (UUID order : List.of(o1, o2, o3, o4, o5, o6)) {
             orderPlaced(order);
         }
         fulfillmentPlanned(o1, promisedEnd, false);
         fulfillmentPlanned(o2, revisedEnd, true);
         fulfillmentPlanned(o3, promisedEnd, false);
         fulfillmentPlanned(o4, promisedEnd, false);
+        fulfillmentPlanned(o6, promisedEnd, false);
         unserviceable(o5);
         orderCancelled(o4);
         waveClosed();
@@ -128,11 +132,13 @@ public final class ProjectionScenario {
         // 계획이 PUBLISHED 에 닿는 한 트랜잭션 — 같은 발행 시각이다(ADR-024).
         Instant published = at(150);
         planCompleted();
-        routeAssigned(r1, 1, published, List.of(List.of(o1), List.of(o2)), List.of(at(190), at(230)));
+        routeAssigned(r1, 1, published, List.of(List.of(o1), List.of(o2), List.of(o6)),
+                List.of(at(190), at(230), at(240)));
         routeAssigned(r2, 1, published, List.of(List.of(o3), List.of(o4)), List.of(at(250), at(265)));
-        for (UUID order : List.of(o1, o2, o3, o4)) {
-            orderDispatched(order, order.equals(o1) || order.equals(o2) ? r1 : r2);
+        for (UUID order : List.of(o1, o2, o3, o4, o6)) {
+            orderDispatched(order, order.equals(o3) || order.equals(o4) ? r2 : r1);
         }
+        orderCancelled(o6);
 
         routeDeparted(r1, r1Departed);
         routeDeparted(r2, at(186));
@@ -141,7 +147,7 @@ public final class ProjectionScenario {
 
         // 재계획 — O2 를 R1 에서 R2 로 옮긴다. 두 라우트가 같은 트랜잭션에서 개정된다(§6.8 3단계의 3).
         Instant replanned = replanPublished;
-        routeAssigned(r1, 2, replanned, List.of(List.of(o1)), List.of(at(190)));
+        routeAssigned(r1, 2, replanned, List.of(List.of(o1), List.of(o6)), List.of(at(190), at(240)));
         routeAssigned(r2, 2, replanned, List.of(List.of(o3), List.of(o4), List.of(o2)),
                 List.of(at(250), at(265), o2ArrivalOnR2));
         atRisk(r2, r2AtRiskDetected, List.of(new Eta(List.of(o3), at(258)), new Eta(List.of(o4), at(268)),
@@ -241,7 +247,7 @@ public final class ProjectionScenario {
         ObjectNode e = example("wave.closed.v1.example.json");
         ObjectNode p = (ObjectNode) e.get("payload");
         p.put("waveId", waveId.toString()).put("campId", campId.toString())
-                .put("serviceTier", "SAME_DAY").put("cutoffAt", at(120).toString()).put("orderCount", 4);
+                .put("serviceTier", "SAME_DAY").put("cutoffAt", at(120).toString()).put("orderCount", 5);
         add(e, campId, "wave.closed");
     }
 
@@ -255,7 +261,7 @@ public final class ProjectionScenario {
     private void planCompleted() {
         ObjectNode e = example("plan.completed.v1.example.json");
         ((ObjectNode) e.get("payload")).put("planId", planId.toString()).put("waveId", waveId.toString())
-                .put("campId", campId.toString()).put("routeCount", 2).put("assignedCount", 4)
+                .put("campId", campId.toString()).put("routeCount", 2).put("assignedCount", 5)
                 .put("unassignedCount", 0).put("totalCostKrw", 43000L).put("planDurationMs", 1200);
         add(e, waveId, "plan.completed");
     }
@@ -341,6 +347,7 @@ public final class ProjectionScenario {
         if (id.equals(o1)) return "O1";
         if (id.equals(o2)) return "O2";
         if (id.equals(o3)) return "O3";
+        if (id.equals(o6)) return "O6";
         if (id.equals(o4)) return "O4";
         if (id.equals(o5)) return "O5";
         if (id.equals(r1)) return "R1";

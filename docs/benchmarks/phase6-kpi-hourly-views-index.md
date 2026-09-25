@@ -12,7 +12,7 @@ KPI 시간 버킷이 증감 표(`rm_kpi_hourly`)에서 `rm_orders` 위의 뷰 �
 |---|---|---|
 | `SELECT * FROM kpi_delivery_hourly WHERE camp_id = ? AND bucket_hour >= ? AND bucket_hour < ?` (24 버킷) | 캠프 대시보드(묶음 C) | 화면 갱신마다 |
 | `SELECT * FROM kpi_intake_hourly WHERE camp_id = ? AND bucket_hour >= ? AND bucket_hour < ?` (24 버킷) | 캠프 대시보드(묶음 C) | 화면 갱신마다 |
-| `JdbcDeliveryKpis.SUM_BY_CAMP_SQL` — 전 캠프(캠프 없는 행 포함), 24 버킷 합 | `OnTimeRatioGauges` | 1분마다 |
+| `JdbcDeliveryKpis.SUM_BY_CAMP_SQL` — 전 캠프(캠프 없는 행 포함), 24 버킷 합 | `KpiGauges`(당시 `OnTimeRatioGauges`) | 1분마다 |
 
 ## 측정 환경
 

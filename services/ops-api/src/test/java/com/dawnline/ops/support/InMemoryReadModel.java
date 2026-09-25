@@ -13,6 +13,7 @@ import com.dawnline.ops.domain.RouteStatus;
 import com.dawnline.ops.domain.WaveStatus;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -144,7 +145,33 @@ public final class InMemoryReadModel {
                 }
                 route.put("completed_count", countOrders(routeId, "COMPLETED"));
                 route.put("failed_count", countOrders(routeId, "FAILED"));
+                List<Map<String, Object>> live = orders.values().stream()
+                        .filter(o -> routeId.equals(o.get("route_id")) && !"CANCELLED".equals(o.get("order_status")))
+                        .toList();
+                route.put("live_count", (long) live.size());
+                Instant completedAt = completedAt(routeId, live);
+                if (completedAt == null) {
+                    route.remove("completed_at");
+                } else {
+                    route.put("completed_at", completedAt);
+                }
             }
+        }
+
+        /**
+         * {@code JdbcRouteRows.RECOUNT_SQL} 의 {@code completed_at} — 비취소 주문이 없거나(void) 그중 결과 없는 것이
+         * 남았으면 없다(ADR-061). 시각은 그 라우트의 모든 주문에서 마지막 결과다.
+         */
+        private @Nullable Instant completedAt(UUID routeId, List<Map<String, Object>> live) {
+            if (live.isEmpty() || live.stream().anyMatch(o -> o.get("delivery_outcome") == null)) {
+                return null;
+            }
+            return orders.values().stream()
+                    .filter(o -> routeId.equals(o.get("route_id")))
+                    .map(o -> (Instant) (o.get("delivered_at") != null ? o.get("delivered_at") : o.get("failed_at")))
+                    .filter(Objects::nonNull)
+                    .max(Comparator.naturalOrder())
+                    .orElse(null);
         }
 
         private long countOrders(UUID routeId, String outcome) {

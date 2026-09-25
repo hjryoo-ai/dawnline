@@ -77,7 +77,7 @@ class ReadModelQueryServiceTest {
     void KPI_는_게이지와_같은_창과_같은_식이다() {
         // 「대시보드의 24행과 게이지가 다를 수 없다」를 API 까지 — 같은 포트·같은 창·같은 식에서 두 수를 뽑아 대조한다.
         kpis.rows.add(new CampDeliveries(CAMP, 90, 10, 81, 88, 7));
-        OnTimeRatioGauges gauges = new OnTimeRatioGauges(kpis, since -> List.of(), new SimpleMeterRegistry(), clock);
+        KpiGauges gauges = new KpiGauges(kpis, since -> List.of(), new SimpleMeterRegistry(), clock);
         gauges.refreshNow();
         Instant gaugeFirst = kpis.first;
 
@@ -86,9 +86,9 @@ class ReadModelQueryServiceTest {
         assertThat(kpi.firstBucket()).isEqualTo(gaugeFirst).isEqualTo(Instant.parse("2026-09-23T11:00:00Z"));
         assertThat(kpi.lastBucket()).isEqualTo(Instant.parse("2026-09-24T10:00:00Z"));
         CampKpi camp = kpi.camps().getFirst();
-        assertThat(camp.onTimeRatioPromised()).isEqualTo(gauges.ratio(CAMP, OnTimeRatioGauges.Basis.PROMISED))
+        assertThat(camp.onTimeRatioPromised()).isEqualTo(gauges.ratio(CAMP, KpiGauges.Basis.PROMISED))
                 .isEqualTo(0.81);
-        assertThat(camp.onTimeRatioRevised()).isEqualTo(gauges.ratio(CAMP, OnTimeRatioGauges.Basis.REVISED))
+        assertThat(camp.onTimeRatioRevised()).isEqualTo(gauges.ratio(CAMP, KpiGauges.Basis.REVISED))
                 .isEqualTo(0.88);
         assertThat(camp.revised()).isEqualTo(7);
     }

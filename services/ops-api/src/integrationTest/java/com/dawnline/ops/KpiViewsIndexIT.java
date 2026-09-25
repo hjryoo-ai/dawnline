@@ -57,7 +57,7 @@ class KpiViewsIndexIT extends OpsIntegrationTestBase {
     static void noBroker(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
-        registry.add("dawnline.ops.kpi.on-time-initial-delay-ms", () -> "3600000");
+        registry.add("dawnline.ops.kpi.initial-delay-ms", () -> "3600000");
     }
 
     @Autowired

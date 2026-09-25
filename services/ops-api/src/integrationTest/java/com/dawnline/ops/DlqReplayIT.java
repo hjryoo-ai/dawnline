@@ -119,7 +119,7 @@ class DlqReplayIT extends OpsIntegrationTestBase {
     static void broker(DynamicPropertyRegistry registry) {
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
-        registry.add("dawnline.ops.kpi.on-time-initial-delay-ms", () -> "3600000");
+        registry.add("dawnline.ops.kpi.initial-delay-ms", () -> "3600000");
     }
 
     private final HttpClient http = HttpClient.newHttpClient();

@@ -51,7 +51,7 @@ class ReadModelRetentionIndexIT extends OpsIntegrationTestBase {
     static void 공유_자원을_끈다(DynamicPropertyRegistry registry) {
         registry.add("dawnline.messaging.outbox.enabled", () -> "false");
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
-        registry.add("dawnline.ops.kpi.on-time-initial-delay-ms", () -> "3600000");
+        registry.add("dawnline.ops.kpi.initial-delay-ms", () -> "3600000");
         registry.add("dawnline.ops.retention.cleanup-initial-delay-ms", () -> "3600000");
     }
 
