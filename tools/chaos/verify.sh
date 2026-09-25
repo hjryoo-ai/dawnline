@@ -124,8 +124,9 @@ v6=$(sqlv ops "SELECT count(*) FROM rm_orders o WHERE o.updated_at < now() - int
                  AND o.delivery_outcome IS NULL")
 
 # --- 표 -----------------------------------------------------------------------------------------------------
-fail=0
-mark() { if [[ "$1" == ok ]]; then echo "✅"; elif [[ "$1" == obs ]]; then echo "관찰"; else fail=1; echo "✗"; fi; }
+# 판정은 표를 그리기 전에 모은다 — mark 는 $(…) 안에서 불리므로(서브셸) 거기서 세운 변수는 밖에 남지 않는다. 처음 판이 그래서
+# ✗ 가 있어도 종료 코드 0 이었다(2026-09-25 chaos-db 첫 실행).
+mark() { if [[ "$1" == ok ]]; then echo "✅"; elif [[ "$1" == obs ]]; then echo "관찰"; else echo "✗"; fi; }
 ok_if() { [[ "$1" == "$2" ]] && echo ok || echo bad; }
 
 if [[ -n "$expect_orders" ]]; then premise_ok=$([[ "$n_order" == "$expect_orders" ]] && echo 1 || echo 0); premise="주문 ${expect_orders}"
@@ -154,6 +155,8 @@ table=$(cat <<TABLE
 | V7 | outbox 미발행 / 격리 | ${v7_detail} | 전부 0/0 | $(mark "$r7") |
 TABLE
 )
+fail=0
+for r in "$r1" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7"; do [[ "$r" == bad ]] && fail=1; done
 echo "$table"
 [[ -n "$out" ]] && { echo "$table" >> "$out"; echo >> "$out"; }
 if [[ "$n_missing" != 0 && -s "$tmp/missing" ]]; then

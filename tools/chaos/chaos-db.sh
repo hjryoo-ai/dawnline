@@ -114,18 +114,16 @@ verified=$?
 retries_after=$(retry_sum); retries_after=${retries_after:-0}
 age_after=$(promv "max(dawnline_event_retry_age_seconds{service=\"$APP\"})")
 
+# 판정은 파이프 밖에서 — `{ …; } | tee` 의 블록은 서브셸이라 거기서 세운 fail 이 밖에 남지 않는다(첫 실행에서 ✗ 가 있는데 0 으로 끝났다).
 fail=0
-check() { if [[ "$2" == ok ]]; then echo "- ✅ $1"; else echo "- ✗ $1"; fail=1; fi; }
-{
-  echo
-  echo "### chaos-db 판정"
-  echo
-  check "검증 표(DLQ 0 · 전부 처리 포함)" "$([[ $verified == 0 ]] && echo ok)"
-  check "장애 중의 검증 표는 빠진 주문을 봤다 — 검사가 유실을 볼 수 있다" "$([[ $during != 0 ]] && echo ok)"
-  check "재시도 카운터(db_*)가 올랐다: ${retries_before} → ${retries_after}" "$(awk -v a="$retries_before" -v b="$retries_after" 'BEGIN { if (b > a) print "ok" }')"
-  check "재시도 나이가 올랐다(최대 ${max_age}s)" "$([[ $max_age -gt 60 ]] && echo ok)"
-  check "재시도 나이가 0 으로 돌아왔다(${age_after:-모름})" "$([[ "${age_after:-x}" == 0 ]] && echo ok)"
-  echo "- 관찰: \`DawnlineConsumerLag\` 가 장애 중 firing 에 닿았나 — ${lag_fired:-아니다}"
-} | tee -a "$REPORT"
+verdicts=""
+check() { if [[ "$2" == ok ]]; then verdicts+="- ✅ $1"$'\n'; else verdicts+="- ✗ $1"$'\n'; fail=1; fi; }
+check "검증 표(DLQ 0 · 전부 처리 포함)" "$([[ $verified == 0 ]] && echo ok)"
+check "장애 중의 검증 표는 빠진 주문을 봤다 — 검사가 유실을 볼 수 있다" "$([[ $during != 0 ]] && echo ok)"
+check "재시도 카운터(db_*)가 올랐다: ${retries_before} → ${retries_after}" "$(awk -v a="$retries_before" -v b="$retries_after" 'BEGIN { if (b > a) print "ok" }')"
+check "재시도 나이가 올랐다(최대 ${max_age}s)" "$([[ $max_age -gt 60 ]] && echo ok)"
+check "재시도 나이가 0 으로 돌아왔다(${age_after:-모름})" "$([[ "${age_after:-x}" == 0 ]] && echo ok)"
+verdicts+="- 관찰: \`DawnlineConsumerLag\` 가 장애 중 firing 에 닿았나 — ${lag_fired:-아니다}"$'\n'
+printf '\n### chaos-db 판정\n\n%s' "$verdicts" | tee -a "$REPORT"
 say "보고 — $REPORT"
 exit $fail
