@@ -140,8 +140,10 @@ groups:
 
       - alert: DawnlineRetentionStalled
         # 여러 인스턴스가 같은 표를 정리한다 — 하나라도 성공했으면 표는 정리되고 있다(min).
-        expr: min by (table) (dawnline_retention_last_success_age_seconds) > 172800
+        # service 로도 가른다: outbox_events · processed_events 는 다섯 서비스의 DB 에 하나씩 있어 table 라벨만으로는 다른 표를
+        # 하나로 접는다 — 한 서비스의 정리가 멈춰도 다른 서비스의 성공이 min 이 된다(7-5, promtool 음성 표본).
+        expr: min by (service, table) (dawnline_retention_last_success_age_seconds) > 172800
         labels:
           severity: ticket
         annotations:
-          summary: "{{ $labels.table }} 의 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"
+          summary: "{{ $labels.service }} 의 {{ $labels.table }} 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"

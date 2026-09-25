@@ -6,6 +6,9 @@
 | 알림 | `DLQ 신규 > 0`, `dawnline_outbox_failed > 0` (DESIGN.md §9.4) |
 | 관련 설계 | §4.6(재시도/DLQ, 발행 측 실패, DLQ 재처리), §5.1(outbox DDL), ADR-015, ADR-053 |
 
+**먼저 본다 — 메트릭** 어느 쪽이 울렸나 — `max by (service) (dawnline_outbox_failed)`(발행 측, 1) 와
+`sum by (consumer, eventType) (dawnline_event_processed_total{outcome="dlq"})`(소비 측, 2). 표본 명령은 [README](README.md) 의 공통 준비다.
+
 이 런북은 **두 개의 다른 장애**를 다룬다. 먼저 어느 쪽인지 가른다.
 
 | 알림 | 어디서 막혔나 | 이벤트의 현재 위치 |

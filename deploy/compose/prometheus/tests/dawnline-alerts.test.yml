@@ -303,9 +303,9 @@ tests:
   # --- 보존 — 인스턴스 하나라도 성공했으면 정리되고 있다 ---------------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'dawnline_retention_last_success_age_seconds{table="shipments", instance="a"}'
+      - series: 'dawnline_retention_last_success_age_seconds{service="tracking-service", table="shipments", instance="a"}'
         values: '200000 200000'
-      - series: 'dawnline_retention_last_success_age_seconds{table="shipments", instance="b"}'
+      - series: 'dawnline_retention_last_success_age_seconds{service="tracking-service", table="shipments", instance="b"}'
         values: '100 200000'
     alert_rule_test:
       - eval_time: 0m
@@ -316,6 +316,27 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: ticket
+              service: tracking-service
               table: shipments
             exp_annotations:
-              summary: "shipments 의 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"
+              summary: "tracking-service 의 shipments 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"
+
+  # --- 보존 — 같은 이름의 표가 서비스마다 따로 있다 (7-5) -------------------------------------------------------
+  # outbox_events · processed_events 는 다섯 서비스의 DB 에 하나씩 있다. 한 서비스의 정리가 멈춰도 다른 서비스가 같은 라벨
+  # (table="outbox_events")로 성공하고 있으면 min by (table) 은 그 성공을 고른다 — 멈춘 쪽이 알림 밖에 남는다.
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_retention_last_success_age_seconds{service="order-service", table="outbox_events", instance="o"}'
+        values: '100 100'
+      - series: 'dawnline_retention_last_success_age_seconds{service="dispatch-service", table="outbox_events", instance="d"}'
+        values: '200000 200000'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DawnlineRetentionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: dispatch-service
+              table: outbox_events
+            exp_annotations:
+              summary: "dispatch-service 의 outbox_events 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"

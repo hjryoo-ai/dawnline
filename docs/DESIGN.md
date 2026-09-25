@@ -2674,7 +2674,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | 컴포넌트 장애 | 증상 | 자동 대응 | 수동 대응 (런북) |
 |---|---|---|---|
 | Kafka 브로커 다운 | outbox 미발행 누적 | 릴레이 재시도, 주문 API 정상 | RB-01: 브로커 복구 후 outbox 지연 해소 확인 |
-| PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패, **릴레이 발행 중단**(리더십 판정 불가 — 발행할 행도 못 읽으므로 같은 사건이다, ADR-027 정정) | 트래픽 차단(프로브), 소비자 재시도 후 pause | RB-02 |
+| PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패, **릴레이 발행 중단**(리더십 판정 불가 — 발행할 행도 못 읽으므로 같은 사건이다, ADR-027 정정) | 트래픽 차단(프로브), 소비자 재시도 후 pause — **(2026-09-25, 7-5 정정) `pause` 는 구현되지 않았다**: 재시도 3회 뒤 DLQ 이고, 멈춤처럼 보이는 것은 커넥션 풀의 대기(30초 × 네 번 — 레코드 하나에 약 2분)가 리스너 스레드를 묶기 때문이다. 5분 20초 장애에서 200건 중 6건이 DLQ, 194건은 복구 뒤 처리(근거: 관측(재현됨) — RB-02 §3). 표의 문장과 구현 중 어느 쪽으로 맞출지는 결정 필요 | RB-02 |
 | Redis 다운 | 성능 저하, 락 폴백 | 폴백 경로(§7.2) | RB-03: 복구 후 geo 재적재 확인 |
 | dispatch 계획 중 크래시 | plan `PLANNING` 정체 | 10분 후 자동 재실행 | RB-04: 강제 재실행 |
 | 독약 메시지 (소비 측) | 소비자 반복 실패 | 3회 후 DLQ | RB-05: 원인 수정 후 replay |
@@ -2866,7 +2866,9 @@ PRODUCER → CONSUMER 쌍뿐이다** — 발행 스팬(템플릿 관측)의 id �
 CI 에서 흔들렸다 — `dispatch→tracking` 만 빠졌는데 같은 실행의 TraceQL 검사(4)는 tracking 을 봤다. 소비자가 여럿인 토픽에서
 발행 스팬 하나는 한 소비자와만 짝지어지는 것으로 보인다(근거: 추정 — 로컬에서 `route.assigned` 를 함께 받는 `dispatch→ops-api` 는
 1,056, `dispatch→tracking` 은 8 이었다. Tempo 의 짝짓기 코드는 읽지 않았다). 그러면 어느 간선이 서는지는 소비 스팬의 도착 순서에
-달렸으므로 「넷을 덮는다」는 검사할 성질이 아니다. 로컬 실측(2026-09-25): 코어 간선
+달렸으므로 「넷을 덮는다」는 검사할 성질이 아니다. **그래프는 존재 증명이지 완전성 증명이 아니다** — 이 추정이 참이면 팬아웃
+토픽에서 그래프는 구조적으로 한 소비자만 보이므로, 간선 하나가 없다는 것만으로는 그 경계가 끊겼다고 말할 수 없다. 그 질문의 답은 TraceQL(4)이다
+(런북 [README](runbooks/README.md) 2.1). 로컬 실측(2026-09-25): 코어 간선
 여섯 — `order→fulfillment` · `fulfillment→dispatch` · `dispatch→tracking` 의 사슬과 되돌아오는 `fulfillment→order` ·
 `dispatch→order` · `dispatch→fulfillment`. `ops-api` 로 가는 간선(프로젝션 소비)과 `ops-api→` 의 HTTP 간선(위임)도 있지만
 코어 밖이다. **음성 표본 — 다섯 서비스의 템플릿 관측만 끈다**(`SPRING_KAFKA_TEMPLATE_OBSERVATION_ENABLED=false`): 코어 간선이
@@ -2942,7 +2944,7 @@ id 를 붙여 diff 를 뜻 없이 키운다. 그래서 대조는 파일이 아�
 | `DawnlinePartitionsAheadLow` | `dawnline_shipment_partitions_ahead` < 2 | `shipment_events` 파티션 생성이 멈췄다 — 하루 뒤면 기사 스캔의 INSERT 가 `no partition ... found for row` 로 실패한다(§5.4). RB-06 |
 | `DawnlineInternalTokenRejected` | `dawnline_internal_token_rejected_total` 증가 — 닫힌 카운터, 미리 등록 | ops-api 를 거치지 않는 누군가가 코어의 운영자 쓰기를 두드렸다 — 그 커맨드는 거부됐지만, 누가 왜 코어 포트를 직접 부르는지는 사람이 본다. `reason=mismatch` 가 계속되면 서비스 사이의 토큰이 어긋난 것일 수 있다 — ops-api 의 위임이 전부 401 로 실패하고 있다(ADR-055) |
 | `DawnlineOpsCommandUnknown` | `dawnline_ops_commands_total{result="UNKNOWN"}` 증가, **`action="DLQ_REPLAY"` 제외** — 닫힌 카운터, 미리 등록 | 운영자 커맨드가 코어에 적용됐는지 모른다 — 사람이 `auditId` 로 코어 로그를 보고 닫는다(RB-07). 재처리는 멱등이라 그대로 다시 누르는 것이 해소다(RB-05) — 그래서 뺀다 |
-| `DawnlineRetentionStalled` | `min by (table) (dawnline_retention_last_success_age_seconds)` > 2일 | 그 표의 정리가 어느 인스턴스에서도 두 번 연속 성공하지 못했다 — 정리는 예외를 삼키므로 이 값이 아니면 표가 자라는 것을 아무도 모른다. `min` 인 이유는 여러 인스턴스가 같은 표를 정리해서, 하나라도 성공했으면 표는 정리되고 있기 때문이다. 2일은 일 1회 정리가 한 번 빠진 뒤의 여유다(ADR-058) |
+| `DawnlineRetentionStalled` | `min by (service, table) (dawnline_retention_last_success_age_seconds)` > 2일 | 그 표의 정리가 어느 인스턴스에서도 두 번 연속 성공하지 못했다 — 정리는 예외를 삼키므로 이 값이 아니면 표가 자라는 것을 아무도 모른다. `min` 인 이유는 여러 인스턴스가 같은 표를 정리해서, 하나라도 성공했으면 표는 정리되고 있기 때문이다. 2일은 일 1회 정리가 한 번 빠진 뒤의 여유다(ADR-058). **`service` 로도 가른다**(2026-09-25, 7-5 — 런북을 쓰며 찾았다): `outbox_events` · `processed_events` 는 다섯 서비스의 DB 에 하나씩 있어 `table` 라벨이 **다른 표를 하나로 접는다** — 처음 식(`min by (table)`)은 한 서비스의 정리가 멈춰도 다른 서비스의 성공을 최솟값으로 골라 울리지 않았다(근거: 관측(재현됨) — promtool 단위 테스트에 두 서비스의 같은 이름 표를 넣은 음성 표본이 `got: []`). 같은 것을 가리키는 것은 라벨 하나가 아니라 **라벨의 조합**이다 |
 
 `dawnline_rm_orders_stuck` 에는 알림을 걸지 않는다 — 결손의 **추세**를 보는 값이라 패널이다(`Platform`). 같은 이유로
 `dawnline_fulfillment_orders_stuck` · `dawnline_route_plans_stuck` 도 패널이다(0 이 아니면 볼 곳은 §9.1 의 각 행).
@@ -2950,6 +2952,20 @@ id 를 붙여 diff 를 뜻 없이 키운다. 그래서 대조는 파일이 아�
 ### 9.5 런북 (`docs/runbooks/RB-0x.md`)
 
 RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6 — 재처리의 `UNKNOWN`·오래된 `PENDING` 은 다시 누른다, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md)) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검) · RB-07 감사 `UNKNOWN`·오래된 `PENDING` 해소(§5.5 — 코어 로그·트레이스에서 그 행의 `auditId` 를 찾아 적용 흔적이 있으면 `SUCCEEDED`, 요청이 닿은 흔적이 없으면 `FAILED` 로 사람이 닫는다. **조기 마감과 재큐는 다시 누르기가 먼저다**(2026-09-24): 두 코어 커맨드는 이미 적용된 상태에서 409 로 **지금 위치**를 말한다 — 마감은 `wave-not-open` 의 `closeCause`(`MANUAL` 이면 앞의 요청이 적용됐다 — 같은 웨이브의 다른 `CLOSE_WAVE` 행이 없는지 `audit_logs` 로 확인한다, `SCHEDULED` 면 스케줄러가 먼저 닫았고 앞의 요청은 적용되지 않았다)와 `closedAt`, 재큐는 `not-quarantined` 의 `currentState`(`PENDING`·`PUBLISHED` 면 풀려 있다). 다시 누른 요청은 새 감사 행(`REJECTED`)으로 남고, 앞의 `UNKNOWN` 행은 그 본문을 근거로 사람이 닫는다. 흔적으로도 못 가리면 코어의 현재 상태(웨이브·라우트·주문)를 보고 닫고, 무엇을 근거로 닫았는지 남긴다. 이 일을 코드로 옮기는 것 — ops-api 가 코어 상태를 다시 읽어 닫기 — 은 `UNKNOWN` 이 실제로 쌓이면 연다, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 재검토 지점 4).
+
+**알림 14 × 대응 — `docs/runbooks/README.md`** (2026-09-25, 7-5). 알림 하나에 행 하나: **먼저 본다**(원인을 가르는 첫 질문 — 그 자리가
+**메트릭 · 로그 · SQL** 중 무엇인지가 칸의 첫 단어다) · 갈래 · 대응 · 절차(RB 이거나 `—` — `—` 면 그 행이 절차 전부이고 규칙에 `runbook`
+주석이 없다). RB 가 없는 알림이 여섯이다(정시율 · KPI 둘 · 늦은 취소 · 내부 토큰 · 보존) — 대응이 한 행에 들어가는 것들이다. 같은 문서에
+**알림 밖 절차 셋**: 트레이스가 끊겼다(§9.2 — 서비스 그래프와 TraceQL 이 다른 것을 본다는 것이 갈래다) · `dawnline_routes{status="in_progress"}` 가
+줄지 않는다(ADR-061 — 끝나지 않은 일에는 창이 없어 알림이 없다) · 조기 마감을 거듭한 날의 미제공(`MAX_PUSHES_EXCEEDED`, ADR-063 — 사유별
+카운터가 없다). **모든 절차의 첫 줄은 「먼저 본다 — 메트릭 · 로그 · SQL」이다** — 장애 중에 읽는 문서라 첫 질문이 흐려지면 문서 전체가 흐려진다.
+`RunbooksConsistencyTest`(`libs/observability`)가 표의 알림 집합을 규칙 파일과, 「절차」 칸을 규칙의 `runbook` 주석과, RB 파일 목록을 이 절과
+**빼는 방식으로** 대조하고 첫 줄의 모양을 본다 — 알림이 늘었는데 행이 없으면 그 알림은 대응 없이 울린다. 런북은 카오스(7-3)와 peak-day(7-4)보다
+먼저 썼다 — 두 실행이 절차를 처음 밟는 자리이고, 검증 SQL 과 콜드 스타트의 실측은 그때 해당 RB 에 옮긴다.
+**정정 (2026-09-25, 7-5) — 위 RB-07 의 「요청이 닿은 흔적이 없으면 `FAILED`」** 는 흔적의 부재를 근거로 읽는다. 코어는 커맨드의 **성공만**
+INFO 로 남기고(`RUN_PLAN` 은 그것도 없다) 4xx 거절은 줄을 남기지 않으므로, `auditId` 를 싣는 줄이 없다는 것은 닿지 않았다는 증거가 아니다 —
+**줄이 있으면 적용, 없으면 코어의 현재 상태가 근거다**(근거: 관측 — 로컬에서 발행된 웨이브에 `RUN_PLAN` 을 보냈다: 200 `ALREADY_PUBLISHED`,
+감사 `SUCCEEDED`, dispatch 로그에 그 `auditId` 가 0줄). RB-07 §2 가 커맨드마다 성공의 줄을 적는다.
 
 ---
 
