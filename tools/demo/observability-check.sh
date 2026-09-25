@@ -11,10 +11,13 @@
 #      결과 트레이스들의 service.name 합집합에 코어 넷(order · fulfillment · dispatch · tracking)이 있다.
 #      주문과 계획은 두 트레이스이고 이 질의가 둘을 함께 돌려준다 — 「이 웨이브의 일이 네 서비스를 지나 한 질의로
 #      찾아진다」가 §9.2 의 요구 그대로다. 서비스 이름으로 검색해 트레이스를 하나씩 여는 것은 그 뜻이 아니다.
-#   5. 서비스 그래프 (§9.2) — Tempo metrics_generator 가 remote-write 한 traces_service_graph_request_total 에서
-#      코어 넷 사이의 간선(client → server)만 골라, 그 양 끝의 합집합이 코어 넷이다. 4 와 독립된 둘째 증거다: 전파가
-#      서비스 경계를 넘는다는 것을 트레이스 검색이 아니라 **메트릭**이 말한다. 코어 사이에는 동기 호출이 없으므로
-#      (불변 규칙 4) 그 간선은 Kafka 의 PRODUCER → CONSUMER 쌍뿐이다 — 발행 스팬의 id 가 소비 스팬의 부모일 때만 생긴다.
+#   5. 서비스 그래프 (§9.2) — Tempo metrics_generator 가 remote-write 한 traces_service_graph_request_total 에
+#      코어 넷 사이의 간선(client → server)이 하나라도 있다. 4 와 독립된 둘째 증거다: 전파가 서비스 경계를 넘는다는 것을
+#      트레이스 검색이 아니라 **메트릭**이 말한다. 코어 사이에는 동기 호출이 없으므로(불변 규칙 4) 그 간선은 Kafka 의
+#      PRODUCER → CONSUMER 쌍뿐이다 — 발행 스팬의 id 가 소비 스팬의 부모일 때만 생긴다.
+#      「간선의 양 끝이 코어 넷을 덮는다」로 조였다가 되돌렸다(2026-09-25, #72 의 CI): 소비자가 여럿인 토픽에서
+#      발행 스팬 하나는 한 소비자와만 짝지어지는 것으로 보이고(추정), dispatch→tracking 은 route.assigned 를 함께 받는
+#      ops-api 와의 경합에서 이긴 때만 나온다. 4 가 같은 실행에서 tracking 을 봤다 — 결손이 아니라 짝짓기의 우연이다.
 #
 # 3 이 따로 있는 이유: dawnline_* 이름은 단위 테스트가 §9.1 과 대조하지만(DashboardsConsistencyTest), 플랫폼 지표는
 # 대조할 표가 없다 — 이름이 틀리면 패널이 조용히 비어 있다. 버킷도 같다: 계획 시간의 버킷은 속성 파일의 키가 미터 이름과
@@ -138,8 +141,7 @@ def core_edge_is_scraped():
     edges = sorted((r["metric"].get("client", ""), r["metric"].get("server", ""),
                     r["metric"].get("connection_type", "")) for r in result)
     core = [e for e in edges if e[0] in CORE and e[1] in CORE and e[0] != e[1]]
-    reached = {end for c, s, _ in core for end in (c, s)}
-    shown = ", ".join(f"{c}→{s}" + (f"({t})" if t else "") for c, s, t in core) or "없음"
-    return CORE <= reached, f"코어 간선 {shown} · 빠진 것 {sorted(CORE - reached)}"
-until("서비스 그래프의 코어 간선이 코어 넷을 잇는다", core_edge_is_scraped)
+    shown = ", ".join(f"{c}→{s}" + (f"({t})" if t else "") for c, s, t in edges) or "없음"
+    return bool(core), f"코어 사이 간선 없음 · 간선 {shown}"
+until("서비스 그래프에 코어 사이 간선이 긁힌다", core_edge_is_scraped)
 PY

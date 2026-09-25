@@ -2862,11 +2862,15 @@ connection_type}`). Grafana 의 Tempo 데이터소스가 그것을 `serviceMap` 
 PRODUCER → CONSUMER 쌍뿐이다** — 발행 스팬(템플릿 관측)의 id 가 소비 스팬의 부모일 때만 생긴다. 그래서 이 간선은 위 TraceQL
 검사와 **독립된 증거**다: 트레이스가 이어진다는 것을 트레이스 검색이 아니라 메트릭이 말한다. Tempo 2.9 가 메시징 쌍을
 간선으로 만든다는 것은 실측으로 확인했다(`connection_type="messaging_system"`). 시각화를 위해 스팬 종류를 바꾸지 않는다.
-`make obs-check` 5 가 코어 사이 간선만 골라 **그 양 끝의 합집합이 코어 넷인지** 본다. 로컬 실측(2026-09-25): 코어 간선
+`make obs-check` 5 는 **코어 사이 간선이 하나라도** 긁히는지 본다. 처음 판은 「그 양 끝의 합집합이 코어 넷」으로 조였고 #72 의
+CI 에서 흔들렸다 — `dispatch→tracking` 만 빠졌는데 같은 실행의 TraceQL 검사(4)는 tracking 을 봤다. 소비자가 여럿인 토픽에서
+발행 스팬 하나는 한 소비자와만 짝지어지는 것으로 보인다(근거: 추정 — 로컬에서 `route.assigned` 를 함께 받는 `dispatch→ops-api` 는
+1,056, `dispatch→tracking` 은 8 이었다. Tempo 의 짝짓기 코드는 읽지 않았다). 그러면 어느 간선이 서는지는 소비 스팬의 도착 순서에
+달렸으므로 「넷을 덮는다」는 검사할 성질이 아니다. 로컬 실측(2026-09-25): 코어 간선
 여섯 — `order→fulfillment` · `fulfillment→dispatch` · `dispatch→tracking` 의 사슬과 되돌아오는 `fulfillment→order` ·
 `dispatch→order` · `dispatch→fulfillment`. `ops-api` 로 가는 간선(프로젝션 소비)과 `ops-api→` 의 HTTP 간선(위임)도 있지만
 코어 밖이다. **음성 표본 — 다섯 서비스의 템플릿 관측만 끈다**(`SPRING_KAFKA_TEMPLATE_OBSERVATION_ENABLED=false`): 코어 간선이
-0 이 되어 5 가 빨갛다(「코어 간선 없음」). 같은 구간의 트레이스는 **이어진 채였다** — 웨이브 하나에 15개, 모두 서비스 셋
+0 이 되어 5 가 빨갛다(「코어 사이 간선 없음」). 같은 구간의 트레이스는 **이어진 채였다** — 웨이브 하나에 15개, 모두 서비스 셋
 이상을 지났고 PRODUCER 스팬은 0개였다. 템플릿 관측이 없으면 릴레이가 저장된 `traceparent` 를 그대로 헤더로 보내므로 소비
 스팬의 부모는 쓰기 스팬이 되고, 쌍을 이룰 발행 스팬이 없다. **두 검사는 서로 다른 것을 본다**: 4 는 컨텍스트가 건너갔는가,
 5 는 경계에 발행 · 소비 스팬의 쌍이 섰는가(그래서 릴레이 지연이 보이는가 — ADR-062 기각 A 의 그 스팬이다).
