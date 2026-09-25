@@ -2039,7 +2039,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A13 | ADR-004 한정 실행(`timefold` · `medium` 한 개, 선택) | ADR-004 결정 4 | 7-6 에 여유가 있을 때 · 공정성 셋 | 벤치마크 | 7-6 |
 | A14 | 쓰이지 않은 ADR 넷 — 005(Phase 2 예정) · 010(Phase 3 예정) · 011(Phase 7 예정) · 012(Phase 6 예정) | `docs/adr/README.md` · §16 | — (「001–012 확정」) | — | 7-6 |
 | A15 | 카오스 셋 + 검증 SQL · ADR-027 의 `chaos-redis` 기준(**발행이 멈추지 않고 지연도 오르지 않는다** — 후속 정정의 기준) | 7-3 · ADR-027 재검토 지점 | — | 검증 SQL 세 줄 · `outbox_lag` | 7-3 |
-| A16 | 리더 합이 **항상 1** — 인스턴스 둘 이상 | ADR-027 | 인스턴스를 실제로 둘 이상 올릴 때 | `dawnline_outbox_leader` 의 인스턴스 합 | 7-4 |
+| A16 | 리더 합이 **항상 1** — 인스턴스 둘 이상 · 열린 카운터 알림의 `unless … offset w` 가 인스턴스 라벨마다 판정한다(새로 뜬 인스턴스도 「새 시계열」) | ADR-027 · ADR-060 재검토 지점 | 인스턴스를 실제로 둘 이상 올릴 때 | `dawnline_outbox_leader` 의 인스턴스 합 · 인스턴스가 뜬 직후 첫 사건에서 열린 카운터 알림이 한 번 울리는가 | 7-4 |
 | A17 | `FOR SHARE` 의 multixact | ADR-025 | peak-day 버스트 | `pg_stat_slru` multixact · 락 대기 | 7-4 |
 | A18 | `cancel_too_late_total` ≠ 0 이면 창의 폭이 가정을 넘은 것 | ADR-026 | peak-day 에서 0 이 아니다 | 그 카운터 + order-service 의 `order.dispatched` 랙 | 7-4 |
 | A19 | `UNKNOWN` 자동 해소 | ADR-052 재검토 지점 4 | `UNKNOWN` 이 사람이 따라가기 어려운 빈도 | `dawnline_ops_commands_total{result="UNKNOWN"}` — peak-day 에서는 구조적으로 0 이다. **카오스 중의 커맨드가 낸다**(D3, 인위 주입 없음) | 7-3 |
