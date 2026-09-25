@@ -21,16 +21,23 @@
   `Gauge.builder` · `registry.gauge` 를 직접 불렀다(45곳).
 - **라벨**은 표의 넷째 칸에 산문으로만 있었다.
 
-대조가 없는 동안 갈라진 것이 넷이다. 넷 다 이 ADR 의 대조 검사가 처음 돌 때 빨갛게 나왔다(근거는 각 줄).
+대조가 없는 동안 갈라진 것이 다섯이다. 넷은 이 ADR 의 검사가 처음 돌 때 빨갛게 나왔고, 하나는 대시보드를 그리려고 서비스를 긁다가 나왔다(근거는 각 줄).
 
 1. **히스토그램이 켜져 있지 않았다.** `management.metrics.distribution.percentiles-histogram` 의 키가 Prometheus 이름
    (`dawnline_plan_duration_seconds`)이었는데, Spring 의 `PropertiesMeterFilter` 는 **미터 이름**(`dawnline.plan.duration`)의
    접두사로 맞춘다. 근거: 관측(재현됨) — 같은 타이머를 두 키로 등록해 긁었더니 앞의 키에서는 `_bucket` 이 없고 뒤의 키에서는
    있었다. §9.4 의 「계획 시간 p95 > 45s」 알림이 읽을 버킷이 없었다. `ObservabilityResourcesTest` 는 YAML 에 그 **문자열이
    있는가**를 봤다.
-2. **§9.1 이 값 둘을 모른다.** `dawnline_ops_commands_total{action}` 의 표는 넷을 적었는데 코드는 여섯이다(`CLOSE_WAVE` ·
-   `REQUEUE_OUTBOX` — ADR-054 와 ADR-015 후속 정정이 더했다). `dawnline_promise_revised_total{cause}` 는 표에 둘이 있고, 코드는
-   불변식이 깨졌을 때 셋째 값 `unknown` 을 낸다. 근거: 관측(재현됨) — 카탈로그 ↔ §9.1 대조가 두 행을 빨갛게 냈다.
+2. **§9.1 이 닫힌 라벨의 값을 모른다 — 다섯 자리.** 근거는 둘로 갈린다.
+   - 카탈로그 ↔ §9.1 대조가 빨갛게 냈다(근거: 관측(재현됨)).
+     - `dawnline_ops_commands_total{action}` 의 표는 넷을 적었는데 코드는 여섯이다(`CLOSE_WAVE` · `REQUEUE_OUTBOX` — ADR-054 와
+       ADR-015 후속 정정이 더했다).
+     - `dawnline_promise_revised_total{cause}` 는 표에 둘이 있고, 코드는 불변식이 깨졌을 때 셋째 값 `unknown` 을 낸다.
+   - 카탈로그를 처음 쓸 때 표의 산문만 보고 적은 값이 틀렸고, **등록 헬퍼의 값 검사가 테스트에서 실패해** 드러났다
+     (근거: 관측(재현됨)). 대조가 막으려던 바로 그 갈라짐을 이번에는 사람이 만들었고, 헬퍼가 잡았다.
+     - fulfillment 의 `ServiceTier` 에는 `NEXT_DAY` 가 있다.
+     - `dawnline_geo_lookups_total{index}` 는 GEO 둘이 아니라 `fc` · `zone`(권역 캐시) · `wave_lock`(웨이브 락)이다 — 이름과
+       달리 fulfillment 의 Redis 폴백 셋이 함께 쓰는 카운터다.
 3. **라벨이 열린 카운터에 건 알림이 부재를 다루지 않았다.** `dawnline_event_processed_total{outcome="dlq"}`(§9.4 「DLQ 신규
    > 0」)는 `consumer`·`eventType` 이 열린 집합이라 미리 등록할 수 없다. §9.1 「짝」이 적은 `cancel_too_late{camp}` 와 같은
    모양인데, 그 문단은 하나만 알고 있었다. 근거: 추정 — 규칙 식이 아직 없었으므로 틀린 식이 돈 적은 없다. 결정 3 의 검사가
@@ -40,6 +47,10 @@
    **테스트의 우회**다. 운영에서도 같은 결함이 가능하다. 스프링 빈은 컨텍스트가 강하게 잡지만, 람다나 임시 객체를 대상으로
    등록한 게이지는 GC 뒤 조용히 `NaN` 이 된다. fulfillment · ops-api 의 같은 모양 테스트는 「세기 전에는 `NaN`」을 검사하는데,
    그 `NaN` 은 정리기가 GC 돼도 나오는 값이다. 대상이 사라져도 검사가 통과한다(§13 축 10 의 변종).
+5. **HTTP 버킷도 없었다.** §9.4 의 Order Intake 는 주문 API p99 를 그리는데, 서비스를 긁어 보니 `http_server_requests_seconds`
+   에 `_bucket` 이 없었다(근거: 관측(재현됨) — order-service 컨텍스트의 `/actuator/prometheus`). 맥락 1 과 같은 부류다 —
+   그리는 쪽이 읽을 것이 있는지를 아무도 긁어 보지 않았다. 카탈로그 밖의 Spring 미터라서 헬퍼가 켤 수 없고, 속성 파일에서
+   **미터 이름**(`http.server.requests`)으로 켠다. 버킷이 실제로 있는지는 Compose 스모크(`make obs-check`)가 본다.
 
 ---
 
