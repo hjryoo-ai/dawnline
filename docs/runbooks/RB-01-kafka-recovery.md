@@ -1,0 +1,118 @@
+# RB-01 — Kafka 복구: 발행이 멈췄다 · 소비가 밀린다
+
+| 항목 | 내용 |
+|---|---|
+| 대상 | 발행 측(outbox 릴레이 → 브로커) · 소비 측(브로커 → 리스너) |
+| 알림 | `DawnlineOutboxLag`(리더가 `1` 인 경우) · `DawnlineConsumerLag` ([README](README.md) 1) |
+| 관련 설계 | §4.4(outbox · 릴레이 리더십) · §4.6(재시도 · DLQ) · §6.7(랙이 부르는 FAST) · §8.4 · ADR-016 · ADR-027 |
+
+**먼저 본다 — 메트릭** 어느 쪽이 막혔나: `max by (service) (dawnline_outbox_lag_seconds)`(발행) 와 `max by (service, client_id) (kafka_consumer_fetch_manager_records_lag_max)`(소비).
+발행이 막혔으면 1, 소비가 밀렸으면 2. 브로커가 죽으면 둘 다 오른다 — 1 이 먼저다(소비는 브로커가 돌아오면 저절로 따라온다).
+
+명령의 `dc` · `prom` · `logs` · `sql` 은 [README](README.md) 의 공통 준비다.
+
+---
+
+## 1. 발행이 멈췄다 — `DawnlineOutboxLag`
+
+**브로커가 죽어도 쓰기는 계속된다** — 주문 API 는 주문과 outbox 행을 한 트랜잭션에 쓰고 201 을 돌려준다(§8.4, 레디니스에 브로커가 없다 — ADR-016). 쌓이는 것은
+`outbox_events` 의 미발행 행이고, 복구되면 릴레이가 순서대로 비운다. **급한 것은 브로커 복구 하나다.**
+
+### 1.1 리더가 있는가
+
+```bash
+prom 'dawnline_outbox_leader'
+```
+
+| 그 서비스의 값 | 뜻 | 갈 곳 |
+|---|---|---|
+| `1` 이 하나 | 리더가 발행하는데 브로커가 받지 않는다 | 1.2 |
+| `-1` | 리더십을 판정할 수 없다 — DB 세션을 잃었다. 발행할 행도 못 읽으므로 같은 사건이다(ADR-027 정정) | [RB-02](RB-02-database-outage.md) |
+| 전부 `0` | 아무도 리더가 아니다 — 락을 **이 서비스의 릴레이가 아닌 세션**이 쥐었다 | 1.3 |
+
+### 1.2 브로커
+
+```bash
+dc ps kafka                                  # 상태
+make topics                                  # 목록이 나오면 브로커는 받는다
+logs order-service 10m | grep 'outbox 발행 실패(일시적'   # 릴레이가 본 예외 — 서비스는 알림의 service
+```
+
+브로커가 멈췄으면 다시 띄운다. 볼륨(`dawnline_kafka-data`)은 그대로다 — **`down -v` 를 쓰지 않는다.**
+
+```bash
+dc up -d kafka
+```
+
+돌아오면 **손으로 할 일이 없다.** 릴레이는 100 ms 마다 폴링하고, 일시적 실패로 멈춘 배치의 나머지는 다음 폴링에서 다시 보낸다(「outbox 발행이
+중단됐습니다. 남은 행은 다음 폴링에서 재발행합니다」). 그래서 **같은 이벤트가 두 번 나갈 수 있다** — 소비자의 `processed_events` 가 흡수한다
+(불변규칙 2). `dup` 이 잠시 오르는 것은 정상이다.
+
+### 1.3 리더가 없다 — 락을 누가 쥐었나
+
+릴레이 리더십은 서비스 DB 의 advisory lock 이다(`classid` = `1145132878`, ASCII `DAWN`). 쥔 세션을 본다:
+
+```bash
+sql order "SELECT a.pid, a.application_name, a.client_addr, a.backend_start, a.state
+             FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+            WHERE l.locktype = 'advisory' AND l.granted AND l.classid = 1145132878"
+```
+
+살아 있는 인스턴스의 세션이 아니면(끝난 테스트 · 남은 도구 연결) 그 세션을 끝낸다 — 세션이 끝나면 서버가 락을 즉시 푼다(TTL 없음):
+
+```bash
+sql order "SELECT pg_terminate_backend(<pid>)"
+```
+
+**살아 있는 인스턴스의 세션을 끝내지 않는다** — 그 인스턴스는 다음 폴링에 다시 쥐고, 그 사이 두 리더가 생길 창은 없지만 원인은 그대로다.
+
+### 1.4 확인
+
+- `dawnline_outbox_lag_seconds` 가 SLO(p95 2초, §8.1) 안으로 내려오고 `dawnline_outbox_unpublished` 가 0 으로 간다.
+- 소비 쪽이 따라온다 — 2.3 의 확인.
+
+---
+
+## 2. 소비가 밀린다 — `DawnlineConsumerLag`
+
+**먼저 본다 — 메트릭** 그 서비스의 처리율 — 멈췄나, 느린가:
+
+```bash
+prom 'sum by (consumer, outcome) (rate(dawnline_event_processed_total{service="<service>"}[5m]))'
+```
+
+### 2.1 처리율이 0 — 멈췄다
+
+| 볼 것 | 뜻 | 대응 |
+|---|---|---|
+| 서비스 로그에 DB 예외 · `hikaricp_connections_pending` > 0 | 리스너가 DB 를 기다린다 | [RB-02](RB-02-database-outage.md) — 리스너는 커넥션을 기다리며 멈춰 있고, **몇 건은 재시도 3회 뒤 DLQ 로 간다**(RB-02 §3) |
+| 같은 오프셋에서 재시도 로그가 반복된다 | 한 레코드가 재시도 중이다 | 기다린다 — 백오프 200 ms · 1 s · 5 s 뒤 DLQ 로 가고 파티션이 풀린다(§4.6). 그 뒤는 [RB-05](RB-05-dlq-and-outbox-quarantine.md) §2 |
+| 그룹의 멤버가 계속 바뀐다 | 리밸런스가 반복된다 | 인스턴스가 재기동을 반복하는지 본다(`dc ps` — OOM · 헬스체크). `max.poll.records=100` 한 배치의 처리가 `max.poll.interval.ms` 를 넘으면 그룹에서 빠진다 |
+
+그룹의 파티션별 랙과 멤버:
+
+```bash
+dc exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --describe --group <order-service|fulfillment-service|dispatch-service|tracking-service|ops-api>
+```
+
+### 2.2 처리율이 있는데 랙이 는다 — 유입이 처리를 넘는다
+
+피크다. 확장 경로는 §8.2 — 인스턴스를 늘리되 **파티션 수(12)가 상한**이다. 사전 점검은 [RB-06](RB-06-peak-readiness.md).
+
+- **dispatch 의 랙은 계획을 FAST 로 보낸다** — 설계된 동작이다(§6.7). `dawnline_plan_degraded_total{reason="LAG"}` 가 그 수이고 그 계획들의
+  비용이 오른다. 랙이 풀리면 다음 계획부터 FULL 로 돌아온다(래치가 아니다, ADR-034).
+- **ops-api 의 랙은 대시보드와 KPI 만 늦춘다** — 코어의 정확성과 무관하다. 길어지면 `DawnlineKpiPromiseUnknown` 이 뒤따른다.
+- **order-service 의 랙은 취소 경합을 넓힌다** — `DawnlineCancelTooLate` 가 뒤따를 수 있다.
+
+### 2.3 확인
+
+- `kafka_consumer_fetch_manager_records_lag_max` 가 1,000 아래로 내려온다.
+- 처리율의 `dlq` 가 0 이다. 0 이 아니면 그 레코드는 [RB-05](RB-05-dlq-and-outbox-quarantine.md) §2 로 간다.
+- **검증 SQL** — 브로커 중단 뒤 불변식(주문 수 = 후보 수 + 취소 수 · 라우트 stop 주문 중복 0 · `processed_events` 중복 0)은 카오스
+  스크립트(`make chaos-kafka`, 7-3)가 자동으로 돌리고, 그 문장을 이 절에 옮긴다. 이 런북은 그 스크립트보다 먼저 썼다.
+
+## 참조
+
+- `docs/DESIGN.md` §4.4 · §4.6 · §6.7 · §8.2 · §8.4
+- `libs/messaging/.../OutboxRelay.java` · `AdvisoryLockRelayLeadership.java` · `DawnlineErrorHandlers.java`
