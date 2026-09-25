@@ -29,6 +29,10 @@ dependencies {
 
     // §9.1 표 파서 — 서비스의 IT 가 「알림 걸린 닫힌 카운터가 기동 때 있다」를 같은 방식으로 읽는다(ADR-060 결정 3).
     testFixturesApi(libs.micrometer.core)
+    // AlertedCountersContract 는 IT 가 구현하는 인터페이스라 기본 메서드에 @Test 가 붙는다(InternalTokenSurfaceContract 와 같다).
+    testFixturesApi(libs.junit.jupiter)
+    testFixturesApi(libs.assertj.core)
+    testFixturesImplementation(libs.snakeyaml)
 
     // PrometheusRulesIT — 실제 Prometheus 컨테이너가 테스트의 Micrometer 레지스트리를 긁는다(§9.1 「짝」의 재현).
     integrationTestImplementation(libs.testcontainers.junit.jupiter)

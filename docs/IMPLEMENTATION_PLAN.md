@@ -2116,9 +2116,8 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 | `deploy/compose/docker-compose.yml` | 1 | A6 |
 | `deploy/compose/grafana/provisioning/dashboards/dashboards.yml` | 1 | A6 |
 | `deploy/compose/grafana/provisioning/datasources/datasources.yml` | 1 | A21 |
-| `deploy/compose/prometheus/prometheus.yml` | 2 | A6 |
 | `deploy/compose/tempo/tempo.yml` | 1 | A21 |
-| `docs/DESIGN.md` | 12 | A1 · A2 · A5 · A7 · A8 · A13 · A14 · A26 · D2 · D7 |
+| `docs/DESIGN.md` | 11 | A1 · A2 · A8 · A13 · A14 · A26 · D2 · D7 |
 | `docs/IMPLEMENTATION_PLAN.md` | 20 | A1 · A2 · A3 · A4 · A5 · A9 · A10 · A11 · A12 · A13 · C · D5 · D7 |
 | `docs/adr/ADR-004-compare-against-the-boundary-not-another-solver.md` | 5 | A4 · A13 · C |
 | `docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md` | 3 | A3 |

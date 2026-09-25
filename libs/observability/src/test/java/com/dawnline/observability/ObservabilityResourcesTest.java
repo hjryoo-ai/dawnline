@@ -72,7 +72,10 @@ class ObservabilityResourcesTest {
         assertThat(yaml).contains("console: \"logstash\"");
         // 히스토그램 버킷은 카탈로그의 타입이 켠다(DawnlineMeters, ADR-060). 속성 파일의 키는 미터 이름과 따로 적히는
         // 둘째 원천이고, 실제로 갈라져 있었다 — 키가 Prometheus 이름이라 버킷이 한 번도 생기지 않았다.
-        assertThat(yaml).doesNotContain("percentiles-histogram").doesNotContain("percentiles:");
+        // 여기 남는 키는 카탈로그 밖의 Spring 미터뿐이다 — 그 키는 미터 이름(점 표기)이어야 버킷이 붙는다.
+        assertThat(yaml).doesNotContainPattern("(?m)^\\s+dawnline[._].*:\\s*true")
+                .contains("http.server.requests: true")
+                .doesNotContain("http_server_requests");
     }
 
     @Test

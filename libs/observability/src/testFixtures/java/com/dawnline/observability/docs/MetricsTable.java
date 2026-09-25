@@ -1,5 +1,6 @@
 package com.dawnline.observability.docs;
 
+import com.dawnline.observability.DawnlineMetric;
 import com.dawnline.observability.DawnlineMetric.Label;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -8,7 +9,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,7 +36,7 @@ public final class MetricsTable {
     static final String ALERTS_HEADER = "| 알림 | 조건 | 뜻 · 볼 곳 |";
 
     /** 첫 칸 — 백틱으로 감싼 이름. */
-    private static final Pattern NAME = Pattern.compile("^`([a-z_:][a-z0-9_:]*)`$");
+    private static final Pattern NAME = Pattern.compile("^`([A-Za-z_:][A-Za-z0-9_:]*)`$");
 
     /** 라벨 하나 — {@code key} 또는 {@code key(값들)}. */
     private static final Pattern LABEL = Pattern.compile("^([A-Za-z_][A-Za-z0-9_]*)(?:\\((.*)\\))?$", Pattern.DOTALL);
@@ -80,6 +83,56 @@ public final class MetricsTable {
             alerts.add(new Alert(name(cells.get(0)), cells.get(1)));
         }
         return List.copyOf(alerts);
+    }
+
+    /** 「emit 주체」 칸의 서비스 이름. */
+    public static final List<String> SERVICES = List.of("order", "fulfillment", "dispatch", "tracking", "ops-api");
+
+    /**
+     * 「emit 주체」 칸이 부르는 서비스들. 모르는 말이면 실패한다 — 대상이 조용히 비지 않게.
+     *
+     * @param emit 칸 그대로
+     * @return 서비스 이름들
+     */
+    public static List<String> emitters(String emit) {
+        String plain = emit.replace("**", "").replace("`", "");
+        if (plain.startsWith("전 서비스") || plain.startsWith("전 소비자") || plain.startsWith("정리를 가진 전 서비스")) {
+            return SERVICES;
+        }
+        if (plain.startsWith("코어 넷")) {
+            return SERVICES.subList(0, 4);
+        }
+        List<String> named = new ArrayList<>();
+        for (String part : plain.split(",")) {
+            String name = part.strip();
+            if (!SERVICES.contains(name)) {
+                throw new IllegalStateException("「emit 주체」 칸을 읽을 수 없다: \"" + name + "\" ← " + emit);
+            }
+            named.add(name);
+        }
+        return named;
+    }
+
+    /**
+     * 규칙 파일이 참조하는 카운터 가운데 라벨이 전부 닫혔고 이 서비스가 내는 것 — 기동 때 0 으로 있어야 한다(ADR-060 결정 3).
+     *
+     * @param emitter 「emit 주체」 칸의 서비스 이름
+     * @return 카탈로그 항목들
+     */
+    public static List<DawnlineMetric> alertedClosedCountersEmittedBy(String emitter) {
+        Set<String> alerted = new LinkedHashSet<>();
+        AlertRules.rules().forEach(rule -> alerted.addAll(AlertRules.dawnlineNames(rule.expr())));
+        List<DawnlineMetric> result = new ArrayList<>();
+        for (Row row : rows()) {
+            if (!alerted.contains(row.name()) || !emitters(row.emit()).contains(emitter)) {
+                continue;
+            }
+            AlertRules.catalogued(row.name())
+                    .filter(metric -> metric.type() == DawnlineMetric.Type.COUNTER)
+                    .filter(metric -> !metric.hasOpenLabel())
+                    .ifPresent(result::add);
+        }
+        return List.copyOf(result);
     }
 
     /**

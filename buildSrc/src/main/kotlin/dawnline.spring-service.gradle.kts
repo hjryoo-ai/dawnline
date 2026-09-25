@@ -55,6 +55,27 @@ tasks.named<Test>("integrationTest") {
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
+// -----------------------------------------------------------------------------
+// 알림 걸린 닫힌 카운터는 기동 때 조합 전부가 있다 (DESIGN.md §9.1 「짝」, ADR-060 결정 3).
+//
+// 각 서비스의 OpenApiContractIT 가 libs/observability 의 AlertedCountersContract 를 구현한다. 대상은 사람이 적지 않고
+// 규칙 파일 · §9.1(카탈로그의 라벨 칸 · 「emit 주체」)에서 뽑으므로, 그 둘을 입력으로 선언한다 — 규칙이나 표만 바꾼
+// 실행에서 integrationTest 가 UP-TO-DATE 로 건너뛰면 새 대상이 검사 밖에 남는다. 서비스마다가 아니라 여기에 두는 이유는
+// 위 OpenAPI 입력과 같다.
+// -----------------------------------------------------------------------------
+dependencies {
+    add("integrationTestImplementation", testFixtures(project(":libs:observability")))
+}
+
+tasks.named<Test>("integrationTest") {
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+        .withPropertyName("metricsTable")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.layout.projectDirectory.dir("deploy/compose/prometheus/rules"))
+        .withPropertyName("alertRules")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 // 라이브러리가 아니라 애플리케이션이므로 plain jar 는 만들지 않는다.
 tasks.named<Jar>("jar") {
     enabled = false
