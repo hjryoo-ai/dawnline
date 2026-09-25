@@ -17,6 +17,8 @@ dependencies {
     implementation(libs.spring.boot.starter)
     implementation(libs.spring.boot.starter.data.jpa)
     implementation(libs.micrometer.core)
+    // 미터는 카탈로그 항목으로, 헬퍼 한 곳에서만 등록한다(ADR-060, ArchUnit 규칙 11).
+    implementation(project(":libs:observability"))
     compileOnly(libs.spring.boot.starter.actuator)
 
     // outbox 격리 조회·재큐 엔드포인트 (DESIGN.md §4.6, ADR-015 후속 정정). compileOnly 인 이유: 웹이 없는

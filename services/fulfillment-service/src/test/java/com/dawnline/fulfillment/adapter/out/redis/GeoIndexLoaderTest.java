@@ -14,6 +14,7 @@ import com.dawnline.fulfillment.domain.Camp;
 import com.dawnline.fulfillment.domain.FulfillmentCenter;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Zone;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Collection;
 import java.util.List;
@@ -131,7 +132,7 @@ class GeoIndexLoaderTest {
     }
 
     private double gauge(String index) {
-        return registry.get(GeoMetrics.LOADED_GAUGE).tag("index", index).gauge().value();
+        return registry.get(DawnlineMetrics.GEO_INDEX_LOADED.meterName()).tag("index", index).gauge().value();
     }
 
     /** 참조 데이터 스텁. */

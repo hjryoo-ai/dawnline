@@ -2,8 +2,9 @@
 # Grafana 대시보드 프로바이더 (DESIGN.md §9.4)
 #
 # 대시보드 JSON 4종(Order Intake / Waves & Plans / Delivery / Platform)은
-# **Phase 7 산출물**이다. 지금은 프로바이더만 등록해 두고, JSON 을
-# deploy/compose/grafana/dashboards/ 에 넣으면 재기동 없이 30초 안에 잡힌다.
+# deploy/compose/grafana/dashboards/ 에 있고 재기동 없이 30초 안에 잡힌다.
+# 프로비저닝 전용이다 — UI 에서 저장하지 않는다(allowUiUpdates 는 탐색용 편집을 막지 않을 뿐,
+# 저장한 결과는 커밋 대상이 아니다. deploy/compose/README.md).
 # =============================================================================
 apiVersion: 1
 

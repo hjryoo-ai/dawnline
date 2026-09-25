@@ -1,9 +1,9 @@
 package com.dawnline.messaging.outbox;
 
 import com.dawnline.messaging.MessagingMetrics;
-import io.micrometer.core.instrument.Gauge;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Tags;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -40,27 +40,16 @@ public class OutboxMetrics {
      */
     public OutboxMetrics(MeterRegistry registry, String service) {
         Objects.requireNonNull(registry, "registry");
-        Tags tags = Tags.of(MessagingMetrics.TAG_SERVICE, Objects.requireNonNull(service, "service"));
-
-        Gauge.builder(MessagingMetrics.OUTBOX_UNPUBLISHED, unpublished, AtomicLong::doubleValue)
-                .description("아직 Kafka 로 발행되지 않은 outbox 행 수")
-                .tags(tags)
-                .register(registry);
-
-        Gauge.builder(MessagingMetrics.OUTBOX_LAG_SECONDS, lagMillis, millis -> millis.doubleValue() / 1000.0)
-                .description("가장 오래된 미발행 outbox 행이 만들어진 뒤 흐른 시간(초)")
-                .tags(tags)
-                .register(registry);
-
-        Gauge.builder(MessagingMetrics.OUTBOX_FAILED, failed, AtomicLong::doubleValue)
-                .description("결정적 실패로 격리된 outbox 행 수. 0 이 아니면 사람이 봐야 한다(RB-05).")
-                .tags(tags)
-                .register(registry);
-
-        Gauge.builder(MessagingMetrics.OUTBOX_LEADER, leader, AtomicLong::doubleValue)
-                .description("릴레이 리더십. 1 리더 · 0 팔로워(정상) · -1 판정 불가(DB 세션 장애).")
-                .tags(tags)
-                .register(registry);
+        String serviceName = Objects.requireNonNull(service, "service");
+        // 상태(AtomicLong)는 이 객체가 들고, 헬퍼가 강한 참조로 등록한다(ADR-060) — 이 객체가 GC 돼도 게이지는 살아 있다.
+        DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_UNPUBLISHED, unpublished, AtomicLong::doubleValue,
+                MessagingMetrics.TAG_SERVICE, serviceName);
+        DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_LAG_SECONDS, lagMillis,
+                millis -> millis.doubleValue() / 1000.0, MessagingMetrics.TAG_SERVICE, serviceName);
+        DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_FAILED, failed, AtomicLong::doubleValue,
+                MessagingMetrics.TAG_SERVICE, serviceName);
+        DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_LEADER, leader, AtomicLong::doubleValue,
+                MessagingMetrics.TAG_SERVICE, serviceName);
     }
 
     /**

@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import com.dawnline.common.Ids;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.common.error.ValidationException;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase.OrderScan;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase.ScanCommand;
 import com.dawnline.tracking.application.port.in.RecordScanUseCase.ScanResult;
@@ -300,7 +301,7 @@ class RecordScanServiceTest {
 
     private double scanAfterCancelCount() {
         try {
-            return meters.get(TrackingMetrics.SCAN_AFTER_CANCEL).counter().count();
+            return meters.get(DawnlineMetrics.SCAN_AFTER_CANCEL.meterName()).counter().count();
         } catch (MeterNotFoundException e) {
             return 0.0;
         }
@@ -529,7 +530,7 @@ class RecordScanServiceTest {
 
     private double relocateCount() {
         try {
-            return meters.get(TrackingMetrics.SCAN_AFTER_RELOCATE).counter().count();
+            return meters.get(DawnlineMetrics.SCAN_AFTER_RELOCATE.meterName()).counter().count();
         } catch (MeterNotFoundException e) {
             return 0.0;
         }

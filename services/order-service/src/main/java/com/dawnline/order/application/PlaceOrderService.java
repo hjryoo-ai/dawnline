@@ -1,12 +1,14 @@
 package com.dawnline.order.application;
 
 import com.dawnline.common.GeoPoint;
-import com.dawnline.order.OrderMetrics;
 import com.dawnline.common.Ids;
 import com.dawnline.common.error.CommonErrorCode;
 import com.dawnline.common.error.ConflictException;
 import com.dawnline.common.error.DomainException;
 import com.dawnline.common.error.ValidationException;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
+import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.application.port.in.OrderAccepted;
 import com.dawnline.order.application.port.in.PlaceOrderCommand;
 import com.dawnline.order.application.port.in.PlaceOrderResult;
@@ -21,7 +23,6 @@ import com.dawnline.order.domain.DeliveryPromise;
 import com.dawnline.order.domain.Order;
 import com.dawnline.order.domain.ServiceTier;
 import com.dawnline.order.domain.TierEligibility;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -201,10 +202,8 @@ public class PlaceOrderService implements PlaceOrderUseCase {
      * 재시도 패턴이 주문량 지표를 부풀린다.
      */
     private void countPlaced(OrderAccepted accepted) {
-        Counter.builder(OrderMetrics.ORDERS_PLACED)
-                .description("접수된 주문 수 (§9.1)")
-                .tag(OrderMetrics.TAG_TIER, accepted.serviceTier().name())
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.ORDERS_PLACED,
+                OrderMetrics.TAG_TIER, accepted.serviceTier().name())
                 .increment();
     }
 
@@ -213,10 +212,8 @@ public class PlaceOrderService implements PlaceOrderUseCase {
      * 재시도를 퍼붓고 있다" 를 구분할 수 있다.
      */
     private void countReplay(OrderAccepted response) {
-        Counter.builder(OrderMetrics.IDEMPOTENT_REPLAYS)
-                .description("멱등 재생 횟수 — 저장된 응답을 다시 준 횟수 (§9.1)")
-                .tag(OrderMetrics.TAG_TIER, response.serviceTier().name())
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.IDEMPOTENT_REPLAYS,
+                OrderMetrics.TAG_TIER, response.serviceTier().name())
                 .increment();
     }
 

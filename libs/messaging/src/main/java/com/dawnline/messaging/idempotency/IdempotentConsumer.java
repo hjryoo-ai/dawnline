@@ -2,7 +2,8 @@ package com.dawnline.messaging.idempotency;
 
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.MessagingMetrics;
-import io.micrometer.core.instrument.Counter;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Objects;
@@ -137,12 +138,10 @@ public class IdempotentConsumer {
             // **세 라벨을 여기서만 붙이면 안 된다.** Prometheus 는 같은 이름의 미터가 같은 라벨
             // 키 집합을 갖기를 요구하므로(ADR-022 에서 jar 로 확인), 이 카운터를 직접 올리는
             // 리스너들도 같은 셋을 써야 한다. 한쪽만 고치면 다른 쪽 등록이 실패한다.
-            Counter.builder(MessagingMetrics.EVENT_REJECTED)
-                    .description("비즈니스 규칙 위반으로 무시한 이벤트 (DLQ 아님)")
-                    .tag(MessagingMetrics.TAG_CONSUMER, consumer)
-                    .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
-                    .tag(MessagingMetrics.TAG_REASON, e.reason())
-                    .register(meters)
+            DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_REJECTED,
+                    MessagingMetrics.TAG_CONSUMER, consumer,
+                    MessagingMetrics.TAG_EVENT_TYPE, eventType,
+                    MessagingMetrics.TAG_REASON, e.reason())
                     .increment();
             return ConsumeOutcome.REJECTED;
         }
@@ -150,12 +149,10 @@ public class IdempotentConsumer {
     }
 
     private void count(String consumer, String eventType, ConsumeOutcome outcome) {
-        Counter.builder(MessagingMetrics.EVENT_PROCESSED)
-                .description("이벤트 소비 결과")
-                .tag(MessagingMetrics.TAG_CONSUMER, consumer)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
-                .tag(MessagingMetrics.TAG_OUTCOME, outcome.tag())
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_PROCESSED,
+                MessagingMetrics.TAG_CONSUMER, consumer,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType,
+                MessagingMetrics.TAG_OUTCOME, outcome.tag())
                 .increment();
     }
 }

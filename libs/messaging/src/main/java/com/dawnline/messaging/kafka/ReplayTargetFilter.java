@@ -2,7 +2,8 @@ package com.dawnline.messaging.kafka;
 
 import com.dawnline.messaging.EventHeaders;
 import com.dawnline.messaging.MessagingMetrics;
-import io.micrometer.core.instrument.Counter;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
@@ -84,12 +85,10 @@ public class ReplayTargetFilter implements RecordFilterStrategy<Object, Object> 
             return false;
         }
         String eventType = header(record, EventHeaders.EVENT_TYPE);
-        Counter.builder(MessagingMetrics.EVENT_PROCESSED)
-                .description("이벤트 소비 결과")
-                .tag(MessagingMetrics.TAG_CONSUMER, group)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType == null ? MessagingMetrics.UNKNOWN : eventType)
-                .tag(MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_REPLAY_NOT_TARGET)
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_PROCESSED,
+                MessagingMetrics.TAG_CONSUMER, group,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType == null ? MessagingMetrics.UNKNOWN : eventType,
+                MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_REPLAY_NOT_TARGET)
                 .increment();
         log.debug("다른 그룹의 재처리라 건너뛴다 — 지목된 그룹={}, topic={}, partition={}, offset={}",
                 target, record.topic(), record.partition(), record.offset());

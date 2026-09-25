@@ -10,10 +10,10 @@ import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TierSchedule;
 import com.dawnline.common.TimeWindow;
-import com.dawnline.fulfillment.application.FulfillmentMetrics;
 import com.dawnline.fulfillment.application.port.in.PlacedOrderSnapshot;
 import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.web.internal.InternalToken;
 import com.dawnline.web.internal.InternalTokens;
 import io.micrometer.core.instrument.Counter;
@@ -280,7 +280,7 @@ class WaveEarlyCloseIT extends FulfillmentIntegrationTestBase {
     }
 
     private double revised(String campCode, String cause) {
-        Counter counter = meters.find(FulfillmentMetrics.PROMISE_REVISED)
+        Counter counter = meters.find(DawnlineMetrics.PROMISE_REVISED.meterName())
                 .tag("camp", campCode).tag("tier", "SAME_DAY").tag("cause", cause).counter();
         return counter == null ? 0 : counter.count();
     }

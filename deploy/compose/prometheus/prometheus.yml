@@ -4,8 +4,9 @@
 # 코어 서비스 5개의 Micrometer Prometheus 엔드포인트를 긁는다.
 # 컨테이너 안에서는 모든 서비스가 8080 을 쓴다(호스트 포트만 서로 다르다).
 #
-# 알림 규칙(§9.4: outbox 지연 > 30s, DLQ 신규 > 0, consumer lag > 1000 …)은
-# Phase 7 산출물이라 여기서는 rule_files 를 비워 둔다.
+# 알림 규칙은 ./rules/dawnline-alerts.yml 이다(§9.4 알림 표 — AlertRulesConsistencyTest 가 대조한다, ADR-060).
+# 식의 동작은 ./tests/ 의 promtool 단위 테스트가 보고, PrometheusRulesIT 가 컨테이너에서 돌린다.
+# Alertmanager 는 두지 않는다 — 알림은 Prometheus 의 /alerts 와 Grafana 에서 본다(로컬 스택의 범위).
 # =============================================================================
 
 global:
@@ -16,8 +17,8 @@ global:
     env: local
     stack: dawnline
 
-# Phase 7 에서 ./prometheus/rules/*.yml 을 추가하고 여기에 연결한다.
-rule_files: []
+rule_files:
+  - /etc/prometheus/rules/*.yml
 
 scrape_configs:
   - job_name: prometheus

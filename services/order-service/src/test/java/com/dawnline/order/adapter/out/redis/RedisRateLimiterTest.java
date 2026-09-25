@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.dawnline.common.Ids;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.application.port.out.RateLimiter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -64,7 +65,7 @@ class RedisRateLimiterTest {
     }
 
     private double count(String outcome) {
-        var counter = meters.find(OrderMetrics.RATE_LIMIT_DECISIONS)
+        var counter = meters.find(DawnlineMetrics.RATE_LIMIT_DECISIONS.meterName())
                 .tag(OrderMetrics.TAG_OUTCOME, outcome).counter();
         return counter == null ? 0 : counter.count();
     }
@@ -74,7 +75,7 @@ class RedisRateLimiterTest {
         // §9.1 「없는 시계열은 0 으로 보인다」 — 첫 우회에서 bypassed 가 1 로 태어나면 increase() 가 그것을 못 읽고,
         // §9.4 의 알림이 첫 Redis 장애를 놓친다.
         for (RateLimiter.Outcome outcome : RateLimiter.Outcome.values()) {
-            var counter = meters.find(OrderMetrics.RATE_LIMIT_DECISIONS)
+            var counter = meters.find(DawnlineMetrics.RATE_LIMIT_DECISIONS.meterName())
                     .tag(OrderMetrics.TAG_OUTCOME, outcome.name().toLowerCase(java.util.Locale.ROOT)).counter();
             assertThat(counter).as(outcome.name()).isNotNull();
             assertThat(counter.count()).isZero();

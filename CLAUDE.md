@@ -15,7 +15,7 @@
 - Java 25 LTS (Temurin), Gradle 9.x Kotlin DSL, 멀티모듈 모노레포
 - Spring Boot 4.1.x (Spring Framework 7, Spring Kafka 4.1, Spring Security 7.1, Hibernate ORM 7 — BOM 관리)
 - Apache Kafka 4.3.x (KRaft), PostgreSQL 18, Redis 8.x, Flyway
-- 테스트: JUnit(BOM), AssertJ, Testcontainers, ArchUnit, WireMock, k6
+- 테스트: JUnit(BOM), AssertJ, Testcontainers, ArchUnit, WireMock, k6, SnakeYAML(Prometheus 규칙 파일을 구조로 읽는 대조 검사 — Boot BOM, 테스트 전용)
 - 관측성: Micrometer + OpenTelemetry → Prometheus / Grafana / Tempo
 - 프론트(ops-web): React 19 + Vite + TypeScript + Leaflet, 테스트는 Vitest + Testing Library(jsdom). Node 는 `.nvmrc`(24 LTS)
 - ops-web 클라이언트: 타입은 **커밋된 `contracts/openapi/ops-api.yaml`** 에서 `openapi-typescript` 로 빌드 때 생성하고(커밋하지 않는다),
@@ -106,6 +106,12 @@ cd apps/ops-web && npm ci && npm test   # ops-web 타입 검사 + 컴포넌트 �
 - **폴백 테스트는 전제를 첫 어설션으로 스스로 말한다.** "의존성 없이도 성립한다" 를 보는 테스트는 그 의존성이 <em>실제로 불가하다</em>는 것을 먼저 확인한다(`@BeforeEach` 또는 첫 줄). 전제가 조용히 무너지면 테스트는 계속 통과하면서 아무것도 검사하지 않는다 — 이 저장소에서 세 번 있었다: `PlaceOrderIT` 의 주소 고정, `OrderApiIT` 의 `tryLock`→`UNAVAILABLE` 확인, 그리고 `GeoFallbackIT` 가 살아 있는 Redis 를 보고 통과한 일(2026-09-05). 표준은 `OrderApiIT` 의 형태다.
 - **픽스처는 되돌리지 말고 만들고 지운다 — 지우기는 되돌리기와 달리 「무엇을 덮는가」를 묻지 않는다.** 공유 시드 행을 고치고 `@AfterEach` 로 복원하는 형태는 *순차 실행에 기대는 장치*다. `DispatchAdminIT` 이 그렇게 고치던 행은 `camp_id IS NULL` 인 **전역** 룰이었다 — 2026-09-18 에 전제 어설션이 `but was: null` 로 잡았고, 그것은 **되돌림이 한 번 어긋났을 때의 반경이 전 캠프**였다는 뜻이다. 자기 픽스처 행을 만들면 반경이 자기 행 하나이고 정리는 `DELETE` 하나로 끝난다. 복원 SQL 은 「어떤 컬럼을 덮는가」를 매번 다시 맞춰야 하지만 삭제는 그 질문이 없다.
 - **카운터는 커밋 뒤에 센다 — 그리고 테스트가 그 순서를 본다.** 미터 레지스트리는 트랜잭션을 모른다. 유스케이스 안에서 먼저 올리면 롤백된 작업의 숫자가 그대로 남고, **그 차이는 장애 때 가장 커진다** — 지표가 가장 많이 읽히는 순간에 가장 많이 틀린다. 틀리는 방향도 나쁘다: 「취소 뒤 스캔이 늘었다」는 알림이 사실은 적재 실패였다는 것을 대시보드는 말해 주지 않는다. 순서는 읽어서 보이지 않으므로 **테스트가 그 순서를 어설션한다** — 커밋(또는 적재)을 실패시키고 카운터가 0인지 본다(`PlaceOrderServiceTest.커밋에_실패하면_세지_않는다`, `RecordScanServiceTest.사건_적재가_실패하면_카운터를_올리지_않는다`).
+- **미터는 카탈로그로 등록하고, 게이지는 강한 참조로 잡는다.** 이름·타입·라벨은 `docs/DESIGN.md` §9.1 표 → `DawnlineMetrics`
+  카탈로그 → `DawnlineMeters` 헬퍼 한 길로만 지난다(ArchUnit 규칙 11, ADR-060). 헬퍼가 등록 때 타입·라벨 키·닫힌 값을
+  대조한다. Micrometer 는 게이지의 상태 객체를 **약한 참조**로 들어서, 대상이 GC 되면 게이지가 조용히 `NaN` 을 낸다.
+  이 저장소에서 `NaN` 은 「모름」의 값이라, 그 결함이 「모름」을 보는 검사를 대상 없이 통과시켰다(2026-09-25, `docs/DESIGN.md`
+  §13 축 10). 그래서 헬퍼가 `strongReference(true)` 로 등록한다. **알림이 걸린 카운터는 라벨이 닫혔으면 기동 때 미리 등록하고,
+  열렸으면 규칙 식이 부재를 다룬다** — 어느 쪽인지는 카탈로그의 라벨 칸이 말한다.
 - **공유 자원(릴레이·락·스케줄러)을 쓰는 IT 는 자기 자리에서 켜고 끈다 — 기반 클래스는 그 속성에 의견을 갖지 않는다.** 기반의 기본값은 하위 클래스가 말하지 않는 **조용한 전제**가 되고, `@DynamicPropertySource` 둘의 적용 순서는 보장되지 않아 하위 클래스가 그것을 뒤집지도 못한다(`FulfillmentIntegrationTestBase` 가 그래서 의견을 버렸다). 그리고 자원이 하나뿐이면(outbox 릴레이의 advisory lock) 켜 둔 IT 들이 서로를 조용히 막는다 — `GeoFallbackIT` 가 발행을 보지도 않으면서 리더를 가져가고 있었다(2026-09-18, Phase 5-0).
 - 커밋: Conventional Commits (`feat(dispatch): …`, `test(order): …`, `docs(adr): …`). 한 커밋은 한 관심사.
 - PR 템플릿의 체크리스트(설계서 반영, 계약 갱신, 테스트, 메트릭, 런북)를 채운다.

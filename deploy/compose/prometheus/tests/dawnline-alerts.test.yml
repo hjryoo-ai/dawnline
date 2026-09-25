@@ -1,0 +1,321 @@
+# =============================================================================
+# promtool 단위 테스트 — ../rules/dawnline-alerts.yml (DESIGN.md §9.4, ADR-060)
+#
+# PrometheusRulesIT 가 .env.example 의 PROMETHEUS_IMAGE 로 `promtool test rules` 를 돌린다. 알림마다 울리는 경우와 울리지
+# 않는 경우를 하나씩 둔다 — 울리는 경우만 있으면 「늘 울리는 식」도 통과한다.
+#
+# 첫 묶음이 §9.1 「짝」의 재현이다: 1 로 태어난 시계열의 첫 증가를 increase() 가 0 으로 읽는다. 같은 모양을 PrometheusRulesIT
+# 가 실제 Micrometer 레지스트리를 긁어 한 번 더 본다(이쪽은 표본을 손으로 적었고, 그쪽은 스크레이프가 만든다).
+# =============================================================================
+
+rule_files:
+  - ../rules/dawnline-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --- 재현: 1 로 태어난 시계열 대 미리 등록한 시계열 -------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # 처음 셀 때 만들어진 카운터 — 5분 동안 시계열이 없다가 1 로 태어난다(열린 라벨 camp).
+      - series: 'dawnline_cancel_too_late_total{camp="c1"}'
+        values: '_x5 1x14 2x5'
+      # 기동 때 0 으로 미리 등록한 카운터 — 같은 순간에 1 이 된다(닫힌 라벨 reason).
+      - series: 'dawnline_internal_token_rejected_total{reason="missing", service="order-service"}'
+        values: '0x5 1x20'
+    promql_expr_test:
+      # 첫 증가를 읽지 못한다 — 태어난 뒤의 표본이 전부 1 이다.
+      - expr: increase(dawnline_cancel_too_late_total[10m])
+        eval_time: 8m
+        exp_samples:
+          - labels: '{camp="c1"}'
+            value: 0
+      # 미리 등록한 쪽은 같은 순간의 증가를 읽는다.
+      - expr: increase(dawnline_internal_token_rejected_total[10m]) > bool 0
+        eval_time: 8m
+        exp_samples:
+          - labels: '{reason="missing", service="order-service"}'
+            value: 1
+    alert_rule_test:
+      # 규칙의 식은 부재를 다룬다 — 뒤의 절(unless … offset)이 태어난 시계열을 잡는다.
+      - eval_time: 8m
+        alertname: DawnlineCancelTooLate
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              camp: c1
+            exp_annotations:
+              summary: "캠프 c1 에서 배송이 끝난 주문에 취소가 도착했다 — 사람이 처리한다(자동 보상 없음)"
+      # 창을 지나면 조용하다 — 10분 전에도 있었고 그 뒤로 늘지 않았다.
+      - eval_time: 18m
+        alertname: DawnlineCancelTooLate
+        exp_alerts: []
+      # 다시 늘면 앞의 절(increase)이 읽는다.
+      - eval_time: 21m
+        alertname: DawnlineCancelTooLate
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              camp: c1
+            exp_annotations:
+              summary: "캠프 c1 에서 배송이 끝난 주문에 취소가 도착했다 — 사람이 처리한다(자동 보상 없음)"
+      - eval_time: 8m
+        alertname: DawnlineInternalTokenRejected
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              reason: missing
+              service: order-service
+            exp_annotations:
+              summary: "order-service 의 운영자 쓰기가 내부 토큰 없이 · 틀린 토큰으로 호출됐다 (missing)"
+      - eval_time: 3m
+        alertname: DawnlineInternalTokenRejected
+        exp_alerts: []
+
+  # --- 재기동: 같은 라벨이 다시 태어나면 앞의 절이 리셋을 증가로 센다 --------------------------------------------------
+  - interval: 1m
+    input_series:
+      # 3 까지 셌다가 재기동 — 몇 분 비고 1 로 다시 태어난다. 10분 전에도 있었으므로 뒤의 절은 빠진다.
+      - series: 'dawnline_cancel_too_late_total{camp="c1"}'
+        values: '3x10 _x2 1x5'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DawnlineCancelTooLate
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              camp: c1
+            exp_annotations:
+              summary: "캠프 c1 에서 배송이 끝난 주문에 취소가 도착했다 — 사람이 처리한다(자동 보상 없음)"
+
+  # --- DLQ: 열린 카운터(consumer · eventType) ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_event_processed_total{consumer="dispatch", eventType="wave.closed", outcome="dlq"}'
+        values: '_x3 1x20'
+      - series: 'dawnline_event_processed_total{consumer="dispatch", eventType="wave.closed", outcome="ok"}'
+        values: '0+5x23'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DawnlineDlqNew
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              consumer: dispatch
+              eventType: wave.closed
+              outcome: dlq
+            exp_annotations:
+              summary: "dispatch 가 wave.closed 를 DLQ 로 보냈다"
+              runbook: RB-05
+      - eval_time: 16m
+        alertname: DawnlineDlqNew
+        exp_alerts: []
+
+  # --- 게이지 임계 -------------------------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_outbox_lag_seconds{service="order-service"}'
+        values: '5 45'
+      - series: 'dawnline_outbox_failed{service="dispatch-service"}'
+        values: '0 1'
+      - series: 'kafka_consumer_fetch_manager_records_lag_max{service="tracking-service", client_id="c-1"}'
+        values: '10 1500'
+      - series: 'dawnline_delivery_on_time_ratio{camp="c1", basis="promised"}'
+        values: '0.97 0.9'
+      - series: 'dawnline_delivery_on_time_ratio{camp="c1", basis="revised"}'
+        values: '0.9 0.9'
+      - series: 'dawnline_kpi_refresh_age_seconds{service="ops-api"}'
+        values: '60 400'
+      - series: 'dawnline_shipment_partitions_ahead{service="tracking-service"}'
+        values: '3 1'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: DawnlineOutboxLag
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DawnlineOutboxLag
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: order-service
+            exp_annotations:
+              summary: "order-service 의 가장 오래된 미발행 outbox 행이 30초를 넘었다"
+              description: "릴레이가 멈췄거나 브로커가 받지 않는다 — 왜인지는 dawnline_outbox_leader(0 · -1)가 말한다."
+              runbook: RB-01
+      - eval_time: 0m
+        alertname: DawnlineOutboxFailed
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DawnlineOutboxFailed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: dispatch-service
+            exp_annotations:
+              summary: "dispatch-service 에 격리된 outbox 행이 있다"
+              runbook: RB-05
+      - eval_time: 0m
+        alertname: DawnlineConsumerLag
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DawnlineConsumerLag
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: tracking-service
+              client_id: c-1
+            exp_annotations:
+              summary: "tracking-service 의 소비자 랙이 1,000 을 넘었다"
+              runbook: RB-01
+      # 원 약속만 본다 — 개정 약속은 참고값이다(§8.1).
+      - eval_time: 0m
+        alertname: DawnlineOnTimeRatioLow
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DawnlineOnTimeRatioLow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              camp: c1
+              basis: promised
+            exp_annotations:
+              summary: "캠프 c1 의 정시율(원 약속)이 95% 아래다"
+      - eval_time: 0m
+        alertname: DawnlineKpiRefreshStale
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DawnlineKpiRefreshStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "KPI 갱신이 5분 넘게 성공하지 못했다 — 그 동안 정시율은 NaN 이라 정시율 알림이 울리지 않는다"
+      - eval_time: 0m
+        alertname: DawnlinePartitionsAheadLow
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DawnlinePartitionsAheadLow
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "shipment_events 파티션 생성이 멈췄다 — 하루 뒤 기사 스캔 INSERT 가 실패한다"
+              runbook: RB-06
+
+  # --- 정시율이 NaN 이면 울리지 않는다 — 그래서 갱신 나이 알림이 따로 있다 -------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_delivery_on_time_ratio{camp="c1", basis="promised"}'
+        values: 'NaN NaN'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DawnlineOnTimeRatioLow
+        exp_alerts: []
+
+  # --- 30분 지속 -------------------------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_kpi_excluded{reason="promise_unknown", service="ops-api"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: DawnlineKpiPromiseUnknown
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: DawnlineKpiPromiseUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: "약속을 모르는 결과가 30분째 정시율에서 빠지고 있다 — fulfillment.planned 가 오지 않는다"
+
+  # --- 닫힌 카운터(미리 등록) --------------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_rate_limit_decisions_total{outcome="bypassed", service="order-service"}'
+        values: '0x5 1x5'
+      - series: 'dawnline_rate_limit_decisions_total{outcome="allowed", service="order-service"}'
+        values: '0+10x10'
+      - series: 'dawnline_ops_commands_total{action="RUN_PLAN", result="UNKNOWN", service="ops-api"}'
+        values: '0x5 1x5'
+      - series: 'dawnline_ops_commands_total{action="DLQ_REPLAY", result="UNKNOWN", service="ops-api"}'
+        values: '0x5 1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DawnlineRateLimitBypassed
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: DawnlineRateLimitBypassed
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              outcome: bypassed
+              service: order-service
+            exp_annotations:
+              summary: "Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단"
+              runbook: RB-03
+      # 재처리의 UNKNOWN 은 뺀다 — 다시 누르는 것이 해소다(RB-05).
+      - eval_time: 8m
+        alertname: DawnlineOpsCommandUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              action: RUN_PLAN
+              result: UNKNOWN
+              service: ops-api
+            exp_annotations:
+              summary: "운영자 커맨드 RUN_PLAN 가 코어에 적용됐는지 모른다 — auditId 로 코어 로그를 본다"
+              runbook: RB-07
+
+  # --- 계획 시간 p95 — 버킷에서 ------------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # 느린 계획: 관측이 전부 (30, 60] 에 있다 — p95 는 58.5초.
+      - series: 'dawnline_plan_duration_seconds_bucket{le="30", mode="FULL", strategy="s", termination="converged"}'
+        values: '0x60'
+      - series: 'dawnline_plan_duration_seconds_bucket{le="60", mode="FULL", strategy="s", termination="converged"}'
+        values: '0+1x60'
+      - series: 'dawnline_plan_duration_seconds_bucket{le="+Inf", mode="FULL", strategy="s", termination="converged"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DawnlinePlanDurationP95
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "계획 시간 p95 가 45초를 넘었다 (SLO 30초)"
+              runbook: RB-04
+  - interval: 1m
+    input_series:
+      # 빠른 계획: 관측이 전부 30초 안이다.
+      - series: 'dawnline_plan_duration_seconds_bucket{le="30", mode="FULL", strategy="s", termination="converged"}'
+        values: '0+1x60'
+      - series: 'dawnline_plan_duration_seconds_bucket{le="60", mode="FULL", strategy="s", termination="converged"}'
+        values: '0+1x60'
+      - series: 'dawnline_plan_duration_seconds_bucket{le="+Inf", mode="FULL", strategy="s", termination="converged"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DawnlinePlanDurationP95
+        exp_alerts: []
+
+  # --- 보존 — 인스턴스 하나라도 성공했으면 정리되고 있다 ---------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_retention_last_success_age_seconds{table="shipments", instance="a"}'
+        values: '200000 200000'
+      - series: 'dawnline_retention_last_success_age_seconds{table="shipments", instance="b"}'
+        values: '100 200000'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: DawnlineRetentionStalled
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DawnlineRetentionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              table: shipments
+            exp_annotations:
+              summary: "shipments 의 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"

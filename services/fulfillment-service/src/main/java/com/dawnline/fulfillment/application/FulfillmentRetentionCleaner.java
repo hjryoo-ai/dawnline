@@ -3,7 +3,8 @@ package com.dawnline.fulfillment.application;
 import com.dawnline.fulfillment.application.port.out.FulfillmentOrderRepository;
 import com.dawnline.fulfillment.application.port.out.WaveRepository;
 import com.dawnline.messaging.retention.RetentionAges;
-import io.micrometer.core.instrument.Gauge;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -55,9 +56,6 @@ import org.springframework.transaction.support.TransactionTemplate;
  * (ADR-058 결정 6). 주문 쪽이 실패하면 웨이브 쪽은 돌지 않으므로 두 표의 나이가 함께 자란다 — 순서가 그렇다.
  */
 public class FulfillmentRetentionCleaner {
-
-    /** §9.1 — Prometheus 에서 {@code dawnline_fulfillment_orders_stuck}. */
-    public static final String STUCK = "dawnline.fulfillment.orders.stuck";
 
     private static final Logger log = LoggerFactory.getLogger(FulfillmentRetentionCleaner.class);
 
@@ -118,9 +116,9 @@ public class FulfillmentRetentionCleaner {
         Objects.requireNonNull(ages, "ages");
         this.orderAge = ages.table("fulfillment_orders");
         this.waveAge = ages.table("waves");
-        Gauge.builder(STUCK, this, FulfillmentRetentionCleaner::stuckOrders)
-                .description("보존 기간을 넘겼는데 웨이브가 아직 계획되지 않은 fulfillment_orders 행 수. 모르면 NaN (ADR-058).")
-                .register(Objects.requireNonNull(meters, "meters"));
+        // 헬퍼가 강한 참조로 잡는다 — 이 정리기가 컨텍스트 밖에서 만들어져도(테스트) 게이지가 GC 로 NaN 이 되지 않는다.
+        // 「세기 전 · 실패 중 NaN」이 뜻하는 것은 모름 하나뿐이어야 한다(ADR-060, §13 축 10).
+        DawnlineMeters.gauge(Objects.requireNonNull(meters, "meters"), DawnlineMetrics.FULFILLMENT_ORDERS_STUCK, this, FulfillmentRetentionCleaner::stuckOrders);
     }
 
     /**

@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.application.TrackingMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
@@ -60,7 +61,7 @@ class RedisAtRiskCooldownTest {
         when(values.setIfAbsent(eq(key()), anyString(), eq(WINDOW))).thenReturn(false);
 
         assertThat(cooldown.tryStart(ROUTE)).isFalse();
-        assertThat(registry.find(TrackingMetrics.COOLDOWN_BYPASSED).counter().count())
+        assertThat(registry.find(DawnlineMetrics.AT_RISK_COOLDOWN_BYPASSED.meterName()).counter().count())
                 .as("정상적인 건너뜀은 폴백이 아니다")
                 .isZero();
     }
@@ -73,7 +74,7 @@ class RedisAtRiskCooldownTest {
         assertThat(cooldown.tryStart(ROUTE))
                 .as("건너뛰면 Redis 장애가 곧 위험 감지 중단이 된다 (§7.2)")
                 .isTrue();
-        assertThat(registry.find(TrackingMetrics.COOLDOWN_BYPASSED).counter().count())
+        assertThat(registry.find(DawnlineMetrics.AT_RISK_COOLDOWN_BYPASSED.meterName()).counter().count())
                 .as("폴백은 조용히 일어나면 안 된다 — 「알림이 늘었다」가 Redis 장애일 수 있다")
                 .isEqualTo(1.0);
     }

@@ -40,17 +40,16 @@ management:
     tags:
       # §9.1 의 service 라벨. 모든 미터에 공통으로 붙는다.
       service: "${spring.application.name:unknown}"
+    # 히스토그램 버킷은 여기서 켜지 않는다(ADR-060). 카탈로그의 타입이 histogram 이면 등록 헬퍼(DawnlineMeters)가
+    # publishPercentileHistogram() 으로 켠다. 여기에 있던 percentiles-histogram 키는 Prometheus 이름
+    # (dawnline_plan_duration_seconds)이었는데 Spring 은 미터 이름(dawnline.plan.duration)의 접두사로 맞춘다 — 버킷이
+    # 한 번도 생기지 않았다(근거: 관측(재현됨)). p95 는 버킷에서 histogram_quantile 로 계산한다(§9.4).
     distribution:
-      # dawnline_plan_duration_seconds 는 §9.1 에서 histogram 이다.
-      # 이름 접두사 매칭이므로 계획 타이머에만 히스토그램 버킷이 생긴다.
       percentiles-histogram:
-        dawnline_plan_duration_seconds: true
-      # p95 는 §8.1 SLO 판정에 직접 쓰인다. (타입: Map<String, Double[]>)
-      percentiles:
-        dawnline_plan_duration_seconds:
-          - 0.5
-          - 0.95
-          - 0.99
+        # Spring 이 내는 HTTP 미터 — 카탈로그 밖이라 헬퍼가 켤 수 없어 여기서 켠다. Order Intake 의 p99(§9.4)가 이 버킷을
+        # 읽는다. 키는 Prometheus 이름(http_server_requests_seconds)이 아니라 **미터 이름**이다 — 위의 교훈이 그것이다.
+        # 버킷이 실제로 나오는지는 Compose 스모크가 데모 뒤의 Prometheus 에서 확인한다.
+        http.server.requests: true
 
   tracing:
     sampling:

@@ -16,6 +16,11 @@ dependencies {
     add("implementation", libs.findLibrary("spring-boot-starter").get())
     add("implementation", libs.findLibrary("spring-boot-starter-actuator").get())
     add("implementation", libs.findLibrary("micrometer-registry-prometheus").get())
+    // 트레이싱(Micrometer Tracing → OTLP, DESIGN.md §9.2). libs/observability 에서 옮겨 왔다 — 그 모듈은 이제
+    // libs/messaging · libs/web 이 참조하고(ADR-060), 웹이 아닌 소비자(sim-runner)에게 OTel 스택을 끌고 가면 안 된다.
+    // Boot 4 모듈화 주의: 트레이싱 자동설정은 spring-boot-micrometer-tracing-opentelemetry / spring-boot-opentelemetry 에
+    // 있고, 이 스타터가 그것들과 bridge-otel · exporter-otlp 를 한 번에 가져온다. 빼면 MDC 의 traceId 도 OTLP 도 없다.
+    add("implementation", libs.findLibrary("spring-boot-starter-opentelemetry").get())
 
     add("testImplementation", libs.findLibrary("spring-boot-starter-test").get())
     add("integrationTestImplementation", libs.findLibrary("spring-boot-starter-test").get())
@@ -47,6 +52,27 @@ dependencies {
 tasks.named<Test>("integrationTest") {
     inputs.files(rootProject.layout.projectDirectory.file("contracts/openapi/${project.name}.yaml"))
         .withPropertyName("openApiContract")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// -----------------------------------------------------------------------------
+// 알림 걸린 닫힌 카운터는 기동 때 조합 전부가 있다 (DESIGN.md §9.1 「짝」, ADR-060 결정 3).
+//
+// 각 서비스의 OpenApiContractIT 가 libs/observability 의 AlertedCountersContract 를 구현한다. 대상은 사람이 적지 않고
+// 규칙 파일 · §9.1(카탈로그의 라벨 칸 · 「emit 주체」)에서 뽑으므로, 그 둘을 입력으로 선언한다 — 규칙이나 표만 바꾼
+// 실행에서 integrationTest 가 UP-TO-DATE 로 건너뛰면 새 대상이 검사 밖에 남는다. 서비스마다가 아니라 여기에 두는 이유는
+// 위 OpenAPI 입력과 같다.
+// -----------------------------------------------------------------------------
+dependencies {
+    add("integrationTestImplementation", testFixtures(project(":libs:observability")))
+}
+
+tasks.named<Test>("integrationTest") {
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+        .withPropertyName("metricsTable")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.layout.projectDirectory.dir("deploy/compose/prometheus/rules"))
+        .withPropertyName("alertRules")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.fulfillment.application.port.out.FcDistances;
 import com.dawnline.fulfillment.domain.Camp;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.List;
 import java.util.Map;
@@ -124,9 +125,9 @@ class RedisFcDistancesTest {
     }
 
     private double counter(String outcome) {
-        return registry.find(GeoMetrics.LOOKUPS_COUNTER).tag("index", "fc").tag("outcome", outcome)
+        return registry.find(DawnlineMetrics.GEO_LOOKUPS.meterName()).tag("index", "fc").tag("outcome", outcome)
                 .counter() == null ? 0
-                : registry.get(GeoMetrics.LOOKUPS_COUNTER).tag("index", "fc").tag("outcome", outcome)
+                : registry.get(DawnlineMetrics.GEO_LOOKUPS.meterName()).tag("index", "fc").tag("outcome", outcome)
                         .counter().count();
     }
 }

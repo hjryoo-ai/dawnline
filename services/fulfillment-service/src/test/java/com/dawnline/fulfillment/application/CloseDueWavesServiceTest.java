@@ -13,6 +13,7 @@ import com.dawnline.fulfillment.domain.UnserviceableReason;
 import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.WaveStatus;
+import com.dawnline.observability.DawnlineMetrics;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -190,7 +191,7 @@ class CloseDueWavesServiceTest {
 
         assertThat(events.closed).isEmpty();
         assertThat(lock.released).as("실패해도 락은 놓는다").isEqualTo(1);
-        assertThat(registry.find(FulfillmentMetrics.WAVE_ORDERS).gauge())
+        assertThat(registry.find(DawnlineMetrics.WAVE_ORDERS.meterName()).gauge())
                 .as("커밋되지 않은 마감의 편입량을 게이지에 남기지 않는다 — 카운터는 커밋 뒤에 센다").isNull();
     }
 
@@ -201,7 +202,7 @@ class CloseDueWavesServiceTest {
 
         service(CUTOFF.plus(GRACE)).closeDue();
 
-        assertThat(registry.get(FulfillmentMetrics.WAVE_ORDERS)
+        assertThat(registry.get(DawnlineMetrics.WAVE_ORDERS.meterName())
                 .tag("camp", "CAMP-TEST").tag("tier", "SAME_DAY").gauge().value()).isEqualTo(1);
     }
 

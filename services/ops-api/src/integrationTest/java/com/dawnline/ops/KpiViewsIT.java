@@ -11,6 +11,8 @@ import com.dawnline.ops.adapter.in.messaging.ProjectionScenario;
 import com.dawnline.ops.adapter.in.messaging.ProjectionScenario.Event;
 import com.dawnline.ops.application.OnTimeRatioGauges;
 import com.dawnline.ops.application.OnTimeRatioGauges.Basis;
+import com.dawnline.ops.domain.DeliveryOutcome;
+import com.dawnline.ops.domain.RouteProgress;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -73,11 +75,13 @@ class KpiViewsIT extends OpsIntegrationTestBase {
     private ProjectionListener listener;
 
     private final UUID camp = Ids.newId();
+    private final List<UUID> routeIds = new ArrayList<>();
     private final ProjectionScenario scenario = new ProjectionScenario(EventContracts.load());
 
     @AfterEach
     void wipe() {
         jdbc.update("DELETE FROM rm_orders WHERE camp_id = ? OR customer_id = ?", camp, MARKER);
+        routeIds.forEach(id -> jdbc.update("DELETE FROM rm_routes WHERE route_id = ?", id));
         new ReadModelTables(jdbc).delete(scenario.keys());
         List<UUID> eventIds = new ArrayList<>();
         scenario.causalOrder().forEach(event -> eventIds.add(event.eventId()));
@@ -144,6 +148,56 @@ class KpiViewsIT extends OpsIntegrationTestBase {
     }
 
     @Test
+    void 결과_수는_정시율의_분모를_편_것이다() {
+        Instant hour = clock.instant().truncatedTo(ChronoUnit.HOURS);
+        Instant end = hour.plus(Duration.ofMinutes(50));
+        order("COMPLETED", "DISPATCHED", end, end, hour.plusSeconds(60), null);
+        order("COMPLETED", "DISPATCHED", hour, end, hour.plusSeconds(120), null);
+        order("FAILED", "DISPATCHED", end, end, null, hour.plusSeconds(180));
+        order("FAILED", "DISPATCHED", end, end, null, hour.minus(Duration.ofHours(24)).plusSeconds(1)); // 창 밖
+
+        gauges.refreshNow();
+
+        double completed = gauges.deliveries(camp, DeliveryOutcome.COMPLETED);
+        double failed = gauges.deliveries(camp, DeliveryOutcome.FAILED);
+        assertThat(completed).isEqualTo(2.0);
+        assertThat(failed).isEqualTo(1.0);
+        assertThat(gauges.ratio(camp, Basis.PROMISED)).as("같은 스냅숏 — 정시 1 건의 분모가 결과 수의 합이다")
+                .isEqualTo(1.0 / (completed + failed));
+    }
+
+    @Test
+    void 라우트_진행은_사실에서_판정하고_계획이_없는_행은_창_없이_센다() {
+        Instant since = clock.instant().truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(23));
+        Instant soon = clock.instant().plus(Duration.ofHours(1));
+        gauges.refreshNow();
+        double unknownCampBefore = gauges.routes(OnTimeRatioGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN);
+
+        route(camp, 1, "ASSIGNED", soon);                                    // 출발 전
+        UUID moving = route(camp, 1, "DEPARTED", soon);
+        routed(moving, "COMPLETED", "DISPATCHED");
+        routed(moving, null, "DISPATCHED");                                   // 결과가 남았다
+        UUID done = route(camp, 2, "DEPARTED", soon);
+        routed(done, "COMPLETED", "DISPATCHED");
+        routed(done, "FAILED", "DISPATCHED");
+        routed(done, null, "CANCELLED");                                      // 취소는 기다리지 않는다
+        UUID earlier = route(camp, 1, "DEPARTED", since.minus(Duration.ofMinutes(1)));   // 창 밖 — 세지 않는다
+        routed(earlier, "COMPLETED", "DISPATCHED");
+        route(camp, null, "DEPARTED", null);                                  // 계획이 아직 — 출발은 알지만 완료는 모른다
+        route(null, null, "DEPARTED", null);                                  // delivery.status 가 먼저 — 캠프도 모른다
+
+        gauges.refreshNow();
+
+        String key = camp.toString();
+        assertThat(gauges.routes(key, RouteProgress.ASSIGNED)).isEqualTo(1.0);
+        assertThat(gauges.routes(key, RouteProgress.IN_PROGRESS)).isEqualTo(1.0);
+        assertThat(gauges.routes(key, RouteProgress.COMPLETED)).as("창 밖의 완료는 세지 않는다").isEqualTo(1.0);
+        assertThat(gauges.routes(key, RouteProgress.UNKNOWN)).isEqualTo(1.0);
+        assertThat(gauges.routes(OnTimeRatioGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN) - unknownCampBefore)
+                .as("캠프를 모르는 행도 빠지지 않는다").isEqualTo(1.0);
+    }
+
+    @Test
     void 접수_축의_배차_불가는_캠프가_없는_행에만_있다() {
         placed(camp, "DISPATCHED");
         placed(camp, "PLANNED");
@@ -207,6 +261,23 @@ class KpiViewsIT extends OpsIntegrationTestBase {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
                 """, Ids.newId(), MARKER, status, outcome, campId, utc(promisedOriginal), utc(promisedRevised),
                 utc(deliveredAt), utc(failedAt));
+    }
+
+    private UUID route(@Nullable UUID campId, @Nullable Integer revision, String status,
+            @Nullable Instant plannedDeparture) {
+        UUID routeId = Ids.newId();
+        routeIds.add(routeId);
+        jdbc.update("INSERT INTO rm_routes (route_id, camp_id, revision, status, planned_departure, updated_at) "
+                + "VALUES (?, ?, ?, ?, ?, now())", routeId, campId, revision, status, utc(plannedDeparture));
+        return routeId;
+    }
+
+    private void routed(UUID routeId, @Nullable String outcome, String status) {
+        Instant at = clock.instant();
+        jdbc.update("INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, camp_id, route_id, "
+                        + "delivered_at, failed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())",
+                Ids.newId(), MARKER, status, outcome, camp, routeId,
+                utc("COMPLETED".equals(outcome) ? at : null), utc("FAILED".equals(outcome) ? at : null));
     }
 
     private void placed(@Nullable UUID campId, String status) {

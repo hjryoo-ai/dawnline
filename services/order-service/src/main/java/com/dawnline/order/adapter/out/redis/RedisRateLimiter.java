@@ -1,5 +1,7 @@
 package com.dawnline.order.adapter.out.redis;
 
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.application.port.out.RateLimiter;
 import io.micrometer.core.instrument.Counter;
@@ -142,9 +144,7 @@ public class RedisRateLimiter implements RateLimiter {
     }
 
     private Counter decisionCounter(Outcome outcome) {
-        return Counter.builder(OrderMetrics.RATE_LIMIT_DECISIONS)
-                .description("고객별 레이트 리밋 판정 (§7.2)")
-                .tag(OrderMetrics.TAG_OUTCOME, outcome.name().toLowerCase(java.util.Locale.ROOT))
-                .register(meters);
+        return DawnlineMeters.counter(meters, DawnlineMetrics.RATE_LIMIT_DECISIONS,
+                OrderMetrics.TAG_OUTCOME, outcome.name().toLowerCase(java.util.Locale.ROOT));
     }
 }

@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.fulfillment.adapter.out.redis.GeoIndexLoader;
-import com.dawnline.fulfillment.adapter.out.redis.GeoMetrics;
 import com.dawnline.fulfillment.application.FcCandidateAssembler;
 import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import com.dawnline.fulfillment.domain.Camp;
@@ -15,6 +14,7 @@ import com.dawnline.fulfillment.domain.OrderLine;
 import com.dawnline.fulfillment.domain.OrderToPlan;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Zone;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.search.MeterNotFoundException;
 import java.time.Clock;
@@ -212,12 +212,12 @@ class GeoFallbackIT extends FulfillmentIntegrationTestBase {
     }
 
     private double gauge(String index) {
-        return meterRegistry.get(GeoMetrics.LOADED_GAUGE).tag("index", index).gauge().value();
+        return meterRegistry.get(DawnlineMetrics.GEO_INDEX_LOADED.meterName()).tag("index", index).gauge().value();
     }
 
     private double counter(String index, String outcome) {
         try {
-            return meterRegistry.get(GeoMetrics.LOOKUPS_COUNTER)
+            return meterRegistry.get(DawnlineMetrics.GEO_LOOKUPS.meterName())
                     .tag("index", index).tag("outcome", outcome).counter().count();
         } catch (MeterNotFoundException e) {
             return 0;

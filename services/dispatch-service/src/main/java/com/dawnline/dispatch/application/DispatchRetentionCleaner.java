@@ -4,7 +4,8 @@ import com.dawnline.dispatch.application.port.out.DispatchRetention;
 import com.dawnline.dispatch.application.port.out.DispatchRetention.PlanRef;
 import com.dawnline.dispatch.application.port.out.DispatchRetention.PlanRows;
 import com.dawnline.messaging.retention.RetentionAges;
-import io.micrometer.core.instrument.Gauge;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -47,9 +48,6 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 단위가 계획이라 한 실행의 성공이 여섯 표의 성공이다. 어느 단계든 실패하면 여섯이 함께 자란다.
  */
 public class DispatchRetentionCleaner {
-
-    /** §9.1 — Prometheus 에서 {@code dawnline_route_plans_stuck}. */
-    public static final String STUCK = "dawnline.route.plans.stuck";
 
     private static final Logger log = LoggerFactory.getLogger(DispatchRetentionCleaner.class);
 
@@ -106,9 +104,9 @@ public class DispatchRetentionCleaner {
         this.ages = List.of(ages.table("dispatch_candidates"), ages.table("plan_explanations"),
                 ages.table("route_plans"), ages.table("routes"), ages.table("route_stops"),
                 ages.table("route_stop_orders"));
-        Gauge.builder(STUCK, this, DispatchRetentionCleaner::stuckPlans)
-                .description("보존의 첫 임계(30일)를 넘겼는데 끝나지 않은 계획 수. 모르면 NaN (ADR-059).")
-                .register(Objects.requireNonNull(meters, "meters"));
+        // 헬퍼가 강한 참조로 잡는다 — 이 정리기가 컨텍스트 밖에서 만들어져도(테스트) 게이지가 GC 로 NaN 이 되지 않는다.
+        // 「세기 전 · 실패 중 NaN」이 뜻하는 것은 모름 하나뿐이어야 한다(ADR-060, §13 축 10).
+        DawnlineMeters.gauge(Objects.requireNonNull(meters, "meters"), DawnlineMetrics.ROUTE_PLANS_STUCK, this, DispatchRetentionCleaner::stuckPlans);
     }
 
     /**

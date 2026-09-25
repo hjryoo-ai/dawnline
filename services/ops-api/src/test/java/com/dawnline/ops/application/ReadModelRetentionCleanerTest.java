@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.messaging.retention.ManualClock;
 import com.dawnline.messaging.retention.RetentionAges;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.port.out.ReadModelRetention;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
@@ -83,7 +84,7 @@ class ReadModelRetentionCleanerTest {
     void 걸린_행_게이지는_세기_전에는_NaN_이다() {
         cleaner(1000, 10);
 
-        assertThat(meters.get(ReadModelRetentionCleaner.STUCK).gauge().value())
+        assertThat(meters.get(DawnlineMetrics.RM_ORDERS_STUCK.meterName()).gauge().value())
                 .as("0 은 「걸린 것이 없다」는 주장이다 — 아직 세지 않았다")
                 .isNaN();
     }
@@ -95,7 +96,7 @@ class ReadModelRetentionCleanerTest {
 
         cleaner.deleteExpired();
 
-        assertThat(meters.get(ReadModelRetentionCleaner.STUCK).gauge().value()).isEqualTo(7.0);
+        assertThat(meters.get(DawnlineMetrics.RM_ORDERS_STUCK.meterName()).gauge().value()).isEqualTo(7.0);
     }
 
     @Test
@@ -108,7 +109,7 @@ class ReadModelRetentionCleanerTest {
 
         cleaner.cleanupExpired();
 
-        assertThat(meters.get(ReadModelRetentionCleaner.STUCK).gauge().value())
+        assertThat(meters.get(DawnlineMetrics.RM_ORDERS_STUCK.meterName()).gauge().value())
                 .as("멈춘 값은 건강해 보인다 — 모르면 NaN")
                 .isNaN();
         assertThat(ages.table("rm_orders").ageSeconds()).as("주문 단계는 끝까지 돌았다").isZero();

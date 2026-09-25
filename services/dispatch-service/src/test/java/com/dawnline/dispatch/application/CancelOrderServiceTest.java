@@ -16,6 +16,7 @@ import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
@@ -198,7 +199,7 @@ class CancelOrderServiceTest {
         assertThat(candidates.findById(published.middleOrderId()).orElseThrow().status())
                 .isEqualTo(CandidateStatus.PENDING);
         assertThat(events.revised).isEmpty();
-        assertThat(registry.counter(DispatchMetrics.CANCEL_TOO_LATE, "camp", CAMP_ID.toString())
+        assertThat(registry.counter(DawnlineMetrics.CANCEL_TOO_LATE.meterName(), "camp", CAMP_ID.toString())
                 .count()).isEqualTo(1.0d);
     }
 

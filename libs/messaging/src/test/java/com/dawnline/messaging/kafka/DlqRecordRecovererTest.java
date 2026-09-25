@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.messaging.EventHeaders;
 import com.dawnline.messaging.MessagingMetrics;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
@@ -40,7 +41,7 @@ class DlqRecordRecovererTest {
     }
 
     private double counter(String eventType) {
-        return meters.get(MessagingMetrics.EVENT_PROCESSED)
+        return meters.get(DawnlineMetrics.EVENT_PROCESSED.meterName())
                 .tag(MessagingMetrics.TAG_CONSUMER, "order-service")
                 .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
                 .tag(MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_DLQ)

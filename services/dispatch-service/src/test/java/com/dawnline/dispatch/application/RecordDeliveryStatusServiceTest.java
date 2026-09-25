@@ -11,6 +11,7 @@ import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.messaging.MessagingMetrics;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
@@ -303,7 +304,7 @@ class RecordDeliveryStatusServiceTest {
                 RouteStopStatus.COMPLETED));
 
         assertThat(routes.row(route.routeId(), 2).status).isEqualTo(RouteStopStatus.CANCELLED);
-        assertThat(registry.counter(DispatchMetrics.SCAN_AFTER_CANCEL).count()).isEqualTo(1.0d);
+        assertThat(registry.counter(DawnlineMetrics.SCAN_AFTER_CANCEL.meterName()).count()).isEqualTo(1.0d);
         assertThat(staleCount()).as("취소는 철 지난 것과 다른 사건이다 — 섞으면 창을 못 잰다")
                 .isZero();
     }
@@ -335,7 +336,7 @@ class RecordDeliveryStatusServiceTest {
                 .isInstanceOf(IllegalStateException.class);
 
         assertThat(staleCount()).isZero();
-        assertThat(registry.counter(DispatchMetrics.SCAN_AFTER_CANCEL).count()).isZero();
+        assertThat(registry.counter(DawnlineMetrics.SCAN_AFTER_CANCEL.meterName()).count()).isZero();
         assertThat(relocateCount()).isZero();
     }
 
@@ -357,11 +358,11 @@ class RecordDeliveryStatusServiceTest {
     // ------------------------------------------------------------ 픽스처
 
     private double relocateCount() {
-        return registry.counter(DispatchMetrics.STATUS_AFTER_RELOCATE).count();
+        return registry.counter(DawnlineMetrics.STATUS_AFTER_RELOCATE.meterName()).count();
     }
 
     private double staleCount() {
-        return registry.counter(MessagingMetrics.EVENT_STALE,
+        return registry.counter(DawnlineMetrics.EVENT_STALE.meterName(),
                 MessagingMetrics.TAG_CONSUMER, DispatchMetrics.DELIVERY_STATUS_CONSUMER,
                 MessagingMetrics.TAG_EVENT_TYPE, DispatchMetrics.DELIVERY_STATUS_EVENT_TYPE)
                 .count();

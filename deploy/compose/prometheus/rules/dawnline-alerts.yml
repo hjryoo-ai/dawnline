@@ -1,0 +1,147 @@
+# =============================================================================
+# Dawnline 알림 규칙 (DESIGN.md §9.4 알림 표, ADR-060)
+#
+# 이 파일의 알림 이름 집합은 §9.4 의 표와 같다 — AlertRulesConsistencyTest 가 양방향으로 대조한다.
+# 식의 동작은 ../tests/dawnline-alerts.test.yml 의 promtool 단위 테스트가 본다(PrometheusRulesIT 가 컨테이너에서 돌린다).
+#
+# ## 열린 카운터에 거는 알림은 부재를 다룬다 (ADR-060 결정 3)
+# 라벨 값이 열린 집합인 카운터(§9.1 라벨 칸에 괄호가 없는 라벨 — camp · consumer · eventType)는 미리 등록할 수 없어서,
+# 첫 사건에서 시계열이 1 로 태어난다. increase() 는 앞 표본이 없어 그 첫 증가를 0 으로 읽는다 — 가장 중요한 첫 번째를
+# 놓친다(근거: 관측(재현됨), PrometheusRulesIT). 그래서 식이 둘이다:
+#
+#     increase(x[w]) > 0                  ← 이미 있던 시계열의 증가(재기동의 카운터 리셋 포함)
+#     or (x unless x offset w)            ← 창 w 전에는 없던 시계열 — 1 로 태어난 첫 증가
+#
+# 닫힌 카운터(값을 코드가 전부 안다)는 기동 때 0 으로 미리 등록하므로 앞의 절 하나로 충분하다.
+# 어느 쪽인지는 카탈로그(DawnlineMetrics)의 라벨 칸이 말하고, AlertRulesConsistencyTest 가 그 칸으로 판정한다.
+#
+# 창(w)은 10분이다 — 스크레이프 10초 · 평가 15초에서 한 사건이 알림이 되기에 넉넉하고, 사람이 보기 전에 풀리지 않는다.
+# 초기값 두 개(KPI)는 peak-day 에서 다시 본다(§9.4, 7-0 A8).
+# =============================================================================
+
+groups:
+  - name: dawnline
+    rules:
+      - alert: DawnlineOutboxLag
+        expr: max by (service) (dawnline_outbox_lag_seconds) > 30
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }} 의 가장 오래된 미발행 outbox 행이 30초를 넘었다"
+          description: "릴레이가 멈췄거나 브로커가 받지 않는다 — 왜인지는 dawnline_outbox_leader(0 · -1)가 말한다."
+          runbook: RB-01
+
+      - alert: DawnlineOutboxFailed
+        expr: max by (service) (dawnline_outbox_failed) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }} 에 격리된 outbox 행이 있다"
+          runbook: RB-05
+
+      - alert: DawnlineDlqNew
+        # 열린 카운터(consumer · eventType) — 부재를 다루는 식.
+        expr: |
+          increase(dawnline_event_processed_total{outcome="dlq"}[10m]) > 0
+            or
+          (dawnline_event_processed_total{outcome="dlq"} unless dawnline_event_processed_total{outcome="dlq"} offset 10m)
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.consumer }} 가 {{ $labels.eventType }} 를 DLQ 로 보냈다"
+          runbook: RB-05
+
+      - alert: DawnlineConsumerLag
+        expr: max by (service, client_id) (kafka_consumer_fetch_manager_records_lag_max) > 1000
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }} 의 소비자 랙이 1,000 을 넘었다"
+          runbook: RB-01
+
+      - alert: DawnlinePlanDurationP95
+        # 계획은 한 시간에 몇 번이라 창을 1시간으로 둔다 — 15분 창은 대부분 비어 있어 아무 말도 하지 않는다.
+        expr: histogram_quantile(0.95, sum by (le) (rate(dawnline_plan_duration_seconds_bucket[1h]))) > 45
+        labels:
+          severity: page
+        annotations:
+          summary: "계획 시간 p95 가 45초를 넘었다 (SLO 30초)"
+          runbook: RB-04
+
+      - alert: DawnlineOnTimeRatioLow
+        # 갱신이 죽으면 NaN 이고 NaN 에는 울리지 않는다 — DawnlineKpiRefreshStale 이 그 자리다.
+        expr: dawnline_delivery_on_time_ratio{basis="promised"} < 0.95
+        labels:
+          severity: ticket
+        annotations:
+          summary: "캠프 {{ $labels.camp }} 의 정시율(원 약속)이 95% 아래다"
+
+      - alert: DawnlineKpiRefreshStale
+        # 초기값 — peak-day 에서 재검토(7-0 A8).
+        expr: max(dawnline_kpi_refresh_age_seconds) > 300
+        labels:
+          severity: page
+        annotations:
+          summary: "KPI 갱신이 5분 넘게 성공하지 못했다 — 그 동안 정시율은 NaN 이라 정시율 알림이 울리지 않는다"
+
+      - alert: DawnlineKpiPromiseUnknown
+        # 초기값 — peak-day 에서 재검토(7-0 A8).
+        expr: max(dawnline_kpi_excluded{reason="promise_unknown"}) > 0
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "약속을 모르는 결과가 30분째 정시율에서 빠지고 있다 — fulfillment.planned 가 오지 않는다"
+
+      - alert: DawnlineRateLimitBypassed
+        # 닫힌 카운터 — order-service 가 판정 셋을 기동 때 0 으로 등록한다.
+        expr: increase(dawnline_rate_limit_decisions_total{outcome="bypassed"}[10m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "Redis 장애로 레이트 리밋이 꺼졌다 — 무인증 API 의 유일한 남용 방지 수단"
+          runbook: RB-03
+
+      - alert: DawnlineCancelTooLate
+        # 열린 카운터(camp) — 부재를 다루는 식.
+        expr: |
+          increase(dawnline_cancel_too_late_total[10m]) > 0
+            or
+          (dawnline_cancel_too_late_total unless dawnline_cancel_too_late_total offset 10m)
+        labels:
+          severity: ticket
+        annotations:
+          summary: "캠프 {{ $labels.camp }} 에서 배송이 끝난 주문에 취소가 도착했다 — 사람이 처리한다(자동 보상 없음)"
+
+      - alert: DawnlinePartitionsAheadLow
+        expr: min(dawnline_shipment_partitions_ahead) < 2
+        labels:
+          severity: page
+        annotations:
+          summary: "shipment_events 파티션 생성이 멈췄다 — 하루 뒤 기사 스캔 INSERT 가 실패한다"
+          runbook: RB-06
+
+      - alert: DawnlineInternalTokenRejected
+        # 닫힌 카운터 — 코어 넷이 missing · mismatch 를 기동 때 0 으로 등록한다.
+        expr: increase(dawnline_internal_token_rejected_total[10m]) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }} 의 운영자 쓰기가 내부 토큰 없이 · 틀린 토큰으로 호출됐다 ({{ $labels.reason }})"
+
+      - alert: DawnlineOpsCommandUnknown
+        # 닫힌 카운터 — ops-api 가 커맨드 전부 × 결과 넷을 기동 때 0 으로 등록한다. 재처리는 다시 누르는 것이 해소라 뺀다.
+        expr: increase(dawnline_ops_commands_total{result="UNKNOWN", action!="DLQ_REPLAY"}[10m]) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "운영자 커맨드 {{ $labels.action }} 가 코어에 적용됐는지 모른다 — auditId 로 코어 로그를 본다"
+          runbook: RB-07
+
+      - alert: DawnlineRetentionStalled
+        # 여러 인스턴스가 같은 표를 정리한다 — 하나라도 성공했으면 표는 정리되고 있다(min).
+        expr: min by (table) (dawnline_retention_last_success_age_seconds) > 172800
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.table }} 의 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"

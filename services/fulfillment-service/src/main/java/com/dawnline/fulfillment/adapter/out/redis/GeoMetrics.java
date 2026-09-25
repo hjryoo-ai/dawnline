@@ -1,5 +1,7 @@
 package com.dawnline.fulfillment.adapter.out.redis;
 
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Map;
@@ -27,12 +29,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class GeoMetrics {
 
-    /** 적재 상태 게이지 이름. */
-    public static final String LOADED_GAUGE = "dawnline_geo_index_loaded";
-
-    /** 조회 결과 카운터 이름. */
-    public static final String LOOKUPS_COUNTER = "dawnline_geo_lookups_total";
-
     private final MeterRegistry registry;
     private final Map<String, AtomicInteger> loaded = new ConcurrentHashMap<>();
 
@@ -50,8 +46,12 @@ public class GeoMetrics {
      * @param success 적재에 성공했는가
      */
     public void indexLoaded(String index, boolean success) {
-        loaded.computeIfAbsent(index, key -> registry.gauge(LOADED_GAUGE,
-                        io.micrometer.core.instrument.Tags.of("index", key), new AtomicInteger()))
+        loaded.computeIfAbsent(index, key -> {
+                    AtomicInteger slot = new AtomicInteger();
+                    DawnlineMeters.gauge(registry, DawnlineMetrics.GEO_INDEX_LOADED, slot, AtomicInteger::doubleValue,
+                            "index", key);
+                    return slot;
+                })
                 .set(success ? 1 : 0);
     }
 
@@ -77,9 +77,6 @@ public class GeoMetrics {
     }
 
     private Counter counter(String index, String outcome) {
-        return Counter.builder(LOOKUPS_COUNTER)
-                .tag("index", index)
-                .tag("outcome", outcome)
-                .register(registry);
+        return DawnlineMeters.counter(registry, DawnlineMetrics.GEO_LOOKUPS, "index", index, "outcome", outcome);
     }
 }

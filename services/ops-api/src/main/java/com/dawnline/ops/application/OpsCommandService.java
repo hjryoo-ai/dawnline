@@ -3,6 +3,8 @@ package com.dawnline.ops.application;
 import com.dawnline.common.Ids;
 import com.dawnline.common.error.CommonErrorCode;
 import com.dawnline.common.error.DomainException;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.observability.MdcKeys;
 import com.dawnline.observability.MdcScope;
 import com.dawnline.ops.application.port.in.OpsCommand;
@@ -37,9 +39,6 @@ import org.slf4j.LoggerFactory;
 public class OpsCommandService implements RunOpsCommandUseCase {
 
     private static final Logger log = LoggerFactory.getLogger(OpsCommandService.class);
-
-    /** §9.1 {@code dawnline_ops_commands_total}. */
-    static final String COMMANDS = "dawnline.ops.commands";
 
     private final AuditLog audit;
     private final CoreCommands core;
@@ -78,11 +77,7 @@ public class OpsCommandService implements RunOpsCommandUseCase {
 
     /** 같은 이름·태그·설명으로 등록한다 — 미리 등록한 것과 세는 것이 한 시계열이어야 한다. */
     static Counter commandCounter(MeterRegistry registry, String action, AuditResult result) {
-        return Counter.builder(COMMANDS)
-                .description("운영자 커맨드 — 감사 행의 결과를 커밋한 뒤에 센다 (DESIGN.md §9.1)")
-                .tag("action", action)
-                .tag("result", result.name())
-                .register(registry);
+        return DawnlineMeters.counter(registry, DawnlineMetrics.OPS_COMMANDS, "action", action, "result", result.name());
     }
 
     @Override

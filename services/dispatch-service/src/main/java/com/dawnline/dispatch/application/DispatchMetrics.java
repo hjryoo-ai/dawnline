@@ -5,9 +5,11 @@ import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.messaging.MessagingMetrics;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetric;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
@@ -18,9 +20,13 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * §9.1 의 계획·취소 메트릭.
  *
- * <h2>게이지 값을 직접 들고 있는 이유</h2>
- * {@code registry.gauge} 는 재등록 시 기존 미터를 돌려주고 대상을 <strong>약한 참조</strong>로
- * 든다. 값을 들고 있지 않으면 게이지가 조용히 {@code NaN} 이 된다 — fulfillment 에서 겪었다.
+ * <p>이름 · 타입 · 라벨은 카탈로그({@link DawnlineMetrics})에 있고 등록은 {@link DawnlineMeters} 가 한다(ADR-060).
+ * 각 값의 뜻은 §9.1 의 행과 아래 메서드에 있다.
+ *
+ * <h2>게이지 값을 캠프마다 들고 있는 이유</h2>
+ * 같은 이름 · 태그로 게이지를 다시 등록하면 레지스트리는 기존 미터를 돌려주고 새 상태 객체를 쓰지 않는다. 그래서
+ * 캠프마다 상태를 하나씩 들고 값을 바꾼다. 상태는 헬퍼가 강한 참조로 잡는다 — 약한 참조였을 때 fulfillment 에서
+ * 게이지가 조용히 {@code NaN} 이 된 적이 있다.
  *
  * <h2>{@code camp} 라벨이 코드가 아니라 id 인 이유</h2>
  * fulfillment 의 같은 이름 라벨은 캠프 <em>코드</em>({@code CAMP-SEO-N})를 쓴다. dispatch 는
@@ -30,97 +36,11 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class DispatchMetrics {
 
-    /** 계획 소요 시간 (§6.7 목표 p95 ≤ 30초). */
-    public static final String PLAN_DURATION = "dawnline.plan.duration";
-
-    /**
-     * 계획 결과 영속화 시간 (§6.7 목표 5,000건 ≤ 3초, ADR-029).
-     *
-     * <p>{@link #PLAN_DURATION} 과 <strong>한 쌍</strong>이다. 둘을 나눠 두는 것이 ADR-029 의
-     * 요점이다 — 한 수치였을 때 30초 예산의 75% 를 ORM 이 쓰고 있는 것이 보이지 않았다.
-     */
-    public static final String PLAN_PERSIST = "dawnline.plan.persist";
-
-    /** 계획 총비용. */
-    public static final String PLAN_COST = "dawnline.plan.cost.krw";
-
-    /** 미배정 주문 수 (§6.7 목표 ≤ 0.5%). */
-    public static final String PLAN_UNASSIGNED = "dawnline.plan.unassigned";
-
-    /**
-     * <strong>열화</strong>로 돈 계획 수 (§6.7, ADR-034). 라벨 {@code camp}, {@code reason}.
-     *
-     * <p>운영자가 {@code mode=FAST} 를 지정한 계획은 <strong>세지 않는다</strong> — 사람이 고른
-     * 것은 시스템이 밀려서 포기한 것이 아니다. 섞으면 이 값이 "성수기에 무엇을 포기했나" 가
-     * 아니라 "누가 FAST 를 몇 번 썼나" 가 된다.
-     */
-    public static final String PLAN_DEGRADED = "dawnline.plan.degraded";
-
-    /**
-     * 랙을 <strong>모른 채</strong> 내린 자동 모드 판단의 수 (§6.7 첫 조건, ADR-034).
-     *
-     * <p>모름은 0 이 아니다. 이 값이 오르는 동안 열화 판단은 조건 <em>둘 중 하나만</em> 보고
-     * 있고, 그 사실이 어디에도 안 보이면 "랙 조건이 한 번도 발화하지 않았다" 가 건강의 증거처럼
-     * 읽힌다 — {@code dawnline_geo_lookups_total{outcome=bypassed}} 와 같은 어휘다.
-     * <strong>폴백은 조용히 일어나면 안 된다.</strong>
-     *
-     * <p>정상적으로 오르는 경로도 있다: 운영자 재실행과 정체 회수는 레코드에서 오지 않으므로
-     * 볼 파티션이 없다. 그래서 0 이어야 하는 값이 아니라 <em>비율</em>을 보는 값이다.
-     */
-    public static final String PLAN_BACKLOG_UNKNOWN = "dawnline.plan.backlog.unknown";
-
-    /** 배송이 끝난 뒤 도착해 거부한 취소 (§6.10, §9.4 알림). */
-    public static final String CANCEL_TOO_LATE = "dawnline.cancel.too_late";
-
-    /**
-     * {@code CANCELLED} 인 stop 에 도착해 <strong>무시한</strong> {@code delivery.status}
-     * (§9.1, [ADR-047](../../../../../../../../docs/adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md)).
-     *
-     * <p>tracking 의 같은 이름과 <strong>한 쌍</strong>이고 자리({@code job})로 갈린다. 저쪽은
-     * 「취소된 배송이 스캔됐다」이고 이쪽은 <strong>「계획에서 뺀 지점에 배송이 일어났다」</strong>다 —
-     * 개정이 tracking 에 닿기 전에는 이쪽만 오른다. <em>둘이 갈리는 것이 정보다.</em>
-     */
-    public static final String SCAN_AFTER_CANCEL = "dawnline.scan.after.cancel";
-
-    /**
-     * 이벤트가 말한 라우트가 아니라 <strong>다른 라우트</strong>의 stop 에 적용한
-     * {@code delivery.status} (§9.1, ADR-047 결정 2).
-     *
-     * <p>재계획이 주문을 옮기는 동안 기사가 옛 라우트에서 배송을 끝낸 경우다. 이것을 stale 과
-     * 같이 세면 안 되는 이유가 둘이다 — <strong>버리지 않고 적용했다</strong>는 점에서 다르고,
-     * 이 값이 §6.8 <strong>경합 창의 크기</strong>라는 점에서 다르다. 오르면 볼 곳은 dispatch 가
-     * 아니라 {@code delivery.status} 컨슈머 랙과 재계획 빈도다.
-     */
-    public static final String STATUS_AFTER_RELOCATE = "dawnline.status.after.relocate";
-
-    /**
-     * §6.8 부분 재계획이 {@code delivery.at-risk} 하나를 받고 <strong>무엇을 했는가</strong>
-     * (§9.1, [ADR-048] 결정 5). 라벨 {@code outcome} 다섯 갈래.
-     *
-     * <p>다섯을 한 카운터의 라벨로 두는 이유는 <strong>합이 곧 트리거 수</strong>여야 하기
-     * 때문이다 — 나누면 「받았는데 아무 갈래에도 안 들어간 것」이 보이지 않는다. 실패를 DLQ 로
-     * 보내지 않으므로 이 라벨이 그 자리를 대신한다: {@code no-candidate}·{@code no-gain} 은
-     * 재시도로 달라지지 않는 <em>결과</em>이고, DLQ 는 「처리하지 못했다」의 자리다(§4.6).
-     */
-    public static final String REPLAN = "dawnline.replan";
-
-    /**
-     * dispatch 가 자기 {@code route_stops.actual_at} 으로 계산한 편차와 {@code delivery.at-risk}
-     * 페이로드의 {@code deviationSeconds} 가 <strong>허용 오차를 넘게 갈린</strong> 횟수
-     * (§9.1, [ADR-048] 결정 2).
-     *
-     * <p>페이로드는 입력이 아니라 <strong>대조값</strong>이다. 이 값이 오른다는 것은 tracking 과
-     * dispatch 가 같은 라우트를 다르게 보고 있다는 뜻이고, 원인은 {@code delivery.status} 컨슈머
-     * 랙 · 개정이 한쪽에만 닿음 · 기사 단말의 밀린 스캔 중 하나다. 셋을 이 카운터 혼자 가르지는
-     * 못하지만 <em>갈린다는 사실 자체가 먼저 필요하다.</em>
-     */
-    public static final String AT_RISK_DEVIATION_MISMATCH = "dawnline.at_risk.deviation.mismatch";
-
-    /** {@link #REPLAN} 의 라벨 이름. */
+    /** {@code dawnline_replan_total} 의 라벨 이름. */
     public static final String TAG_OUTCOME = "outcome";
 
     /**
-     * {@link #PLAN_DURATION} 의 태그 — 계획이 <strong>어떻게 끝났나</strong>(§6.7, §6.9 재현 조건).
+     * {@code dawnline_plan_duration_seconds} 의 태그 — 계획이 <strong>어떻게 끝났나</strong>(§6.7, §6.9 재현 조건).
      * {@link #TERMINATION_CONVERGED} 면 할 일을 다 하고 끝났고 같은 입력이면 같은 결과다.
      * {@link #TERMINATION_DEADLINE} 이면 마감(§6.7)에 잘려 하지 못한 일이 있다 — 그 결과는 그날의
      * 기계 속도에 달렸다([ADR-036]). 시간은 러너를 따라 흔들리지만 이 값은 흔들리지 않는다.
@@ -178,14 +98,11 @@ public class DispatchMetrics {
      * 정보이므로 <strong>버리지도 않고 입력으로 쓰지도 않는다</strong> — 센다.
      */
     public void atRiskDeviationMismatch() {
-        registry.counter(AT_RISK_DEVIATION_MISMATCH).increment();
+        DawnlineMeters.counter(registry, DawnlineMetrics.AT_RISK_DEVIATION_MISMATCH).increment();
     }
 
     private Counter replanCounter(ReplanRouteUseCase.Outcome outcome) {
-        return Counter.builder(REPLAN)
-                .description("§6.8 부분 재계획의 결과 (ADR-048)")
-                .tag(TAG_OUTCOME, outcome.label())
-                .register(registry);
+        return DawnlineMeters.counter(registry, DawnlineMetrics.REPLAN, TAG_OUTCOME, outcome.label());
     }
 
     /**
@@ -199,26 +116,25 @@ public class DispatchMetrics {
         String strategy = plan.strategy().orElse("unknown");
         PlanMode mode = plan.mode().orElse(PlanMode.FULL);
 
-        Timer.builder(PLAN_DURATION)
-                .description("계획 소요 시간 (DESIGN.md §6.7)")
-                .tag("strategy", strategy)
-                .tag("mode", mode.name())
-                .tag(TAG_TERMINATION, budgetExhausted ? TERMINATION_DEADLINE : TERMINATION_CONVERGED)
-                .register(registry)
+        DawnlineMeters.timer(registry, DawnlineMetrics.PLAN_DURATION,
+                "strategy", strategy,
+                "mode", mode.name(),
+                TAG_TERMINATION, budgetExhausted ? TERMINATION_DEADLINE : TERMINATION_CONVERGED)
                 .record(Duration.ofMillis(plan.planDurationMs().orElse(0)));
 
-        gauge(costByCamp, PLAN_COST, plan.campId(), plan.totalCost().map(c -> c.krw()).orElse(0L));
-        gauge(unassignedByCamp, PLAN_UNASSIGNED, plan.campId(),
+        gauge(costByCamp, DawnlineMetrics.PLAN_COST, plan.campId(), plan.totalCost().map(c -> c.krw()).orElse(0L));
+        gauge(unassignedByCamp, DawnlineMetrics.PLAN_UNASSIGNED, plan.campId(),
                 plan.unassignedCount().orElse(0).longValue());
 
         PlanModeReason reason = plan.modeReason().orElse(PlanModeReason.NONE);
         if (reason.isDegraded()) {
             // 열화가 보이지 않으면 "성수기에도 정시" 를 위해 무엇을 포기했는지 아무도 모른다.
-            registry.counter(PLAN_DEGRADED, "camp", plan.campId().toString(),
-                    "reason", reason.name()).increment();
+            DawnlineMeters.counter(registry, DawnlineMetrics.PLAN_DEGRADED,
+                    "camp", plan.campId().toString(), "reason", reason.name()).increment();
         }
         if (reason == PlanModeReason.LAG_UNKNOWN) {
-            registry.counter(PLAN_BACKLOG_UNKNOWN, "camp", plan.campId().toString()).increment();
+            DawnlineMeters.counter(registry, DawnlineMetrics.PLAN_BACKLOG_UNKNOWN, "camp", plan.campId().toString())
+                    .increment();
         }
     }
 
@@ -235,10 +151,7 @@ public class DispatchMetrics {
     public void planPersisted(UUID campId, Duration elapsed) {
         Objects.requireNonNull(campId, "campId");
         Objects.requireNonNull(elapsed, "elapsed");
-        Timer.builder(PLAN_PERSIST)
-                .description("계획 결과 영속화 시간 (DESIGN.md §6.7, ADR-029)")
-                .tag("camp", campId.toString())
-                .register(registry)
+        DawnlineMeters.timer(registry, DawnlineMetrics.PLAN_PERSIST, "camp", campId.toString())
                 .record(elapsed);
     }
 
@@ -254,7 +167,7 @@ public class DispatchMetrics {
      */
     public void cancelTooLate(UUID campId) {
         Objects.requireNonNull(campId, "campId");
-        registry.counter(CANCEL_TOO_LATE, "camp", campId.toString()).increment();
+        DawnlineMeters.counter(registry, DawnlineMetrics.CANCEL_TOO_LATE, "camp", campId.toString()).increment();
     }
 
     /**
@@ -274,10 +187,9 @@ public class DispatchMetrics {
         if (count <= 0) {
             return;
         }
-        Counter.builder(MessagingMetrics.EVENT_STALE)
-                .tag(MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, DELIVERY_STATUS_EVENT_TYPE)
-                .register(registry)
+        DawnlineMeters.counter(registry, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, DELIVERY_STATUS_EVENT_TYPE)
                 .increment(count);
     }
 
@@ -292,7 +204,7 @@ public class DispatchMetrics {
         if (count <= 0) {
             return;
         }
-        registry.counter(SCAN_AFTER_CANCEL).increment(count);
+        DawnlineMeters.counter(registry, DawnlineMetrics.SCAN_AFTER_CANCEL).increment(count);
     }
 
     /**
@@ -307,7 +219,7 @@ public class DispatchMetrics {
         if (count <= 0) {
             return;
         }
-        registry.counter(STATUS_AFTER_RELOCATE).increment(count);
+        DawnlineMeters.counter(registry, DawnlineMetrics.STATUS_AFTER_RELOCATE).increment(count);
     }
 
     /**
@@ -318,19 +230,17 @@ public class DispatchMetrics {
      * 하는 상황이다 — 새 값을 내는 발행자가 배포됐다는 뜻이다.
      */
     public void deliveryStatusUnknown() {
-        Counter.builder(MessagingMetrics.EVENT_REJECTED)
-                .tag(MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, DELIVERY_STATUS_EVENT_TYPE)
-                .tag(MessagingMetrics.TAG_REASON, DELIVERY_STATUS_UNKNOWN_REASON)
-                .register(registry)
+        DawnlineMeters.counter(registry, DawnlineMetrics.EVENT_REJECTED,
+                MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, DELIVERY_STATUS_EVENT_TYPE,
+                MessagingMetrics.TAG_REASON, DELIVERY_STATUS_UNKNOWN_REASON)
                 .increment();
     }
 
-    private void gauge(Map<UUID, AtomicLong> holder, String name, UUID campId, long value) {
+    private void gauge(Map<UUID, AtomicLong> holder, DawnlineMetric metric, UUID campId, long value) {
         holder.computeIfAbsent(campId, camp -> {
             AtomicLong slot = new AtomicLong();
-            registry.gauge(name, io.micrometer.core.instrument.Tags.of("camp", camp.toString()),
-                    slot, AtomicLong::doubleValue);
+            DawnlineMeters.gauge(registry, metric, slot, AtomicLong::doubleValue, "camp", camp.toString());
             return slot;
         }).set(value);
     }

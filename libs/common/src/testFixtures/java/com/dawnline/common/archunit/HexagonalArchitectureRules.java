@@ -426,7 +426,81 @@ public final class HexagonalArchitectureRules {
         };
     }
 
-    /** 한 서비스에 적용할 9개 규칙 전부. 규칙 10 은 서비스가 아니라 libs/common 에 건다. */
+    /**
+     * 규칙 11 이 허용하는 유일한 자리 — 등록 헬퍼({@code DawnlineMeters})의 패키지.
+     *
+     * <p><strong>문자열</strong>인 이유는 규칙 9 와 같다 — {@code libs/observability} 가 {@code libs/common} 에 의존하므로
+     * 반대 방향의 타입 참조는 성립하지 않는다. 문자열 링크는 끊어져도 조용하므로 {@code libs/observability} 의
+     * {@code MeterRegistrationRuleTest} 가 이 값을 헬퍼의 실제 패키지와 대조한다.
+     */
+    public static final String METER_HELPER_PACKAGE = "com.dawnline.observability";
+
+    /** Micrometer 의 미터 빌더 — {@code builder(...)} 를 부르는 것이 곧 등록이다. */
+    private static final Set<String> METER_BUILDERS = Set.of(
+            "io.micrometer.core.instrument.Counter",
+            "io.micrometer.core.instrument.Gauge",
+            "io.micrometer.core.instrument.Timer",
+            "io.micrometer.core.instrument.DistributionSummary",
+            "io.micrometer.core.instrument.LongTaskTimer",
+            "io.micrometer.core.instrument.FunctionCounter",
+            "io.micrometer.core.instrument.FunctionTimer",
+            "io.micrometer.core.instrument.TimeGauge",
+            "io.micrometer.core.instrument.MultiGauge");
+
+    private static final String METER_REGISTRY = "io.micrometer.core.instrument.MeterRegistry";
+
+    /** 전역 레지스트리의 정적 등록 — 같은 부류다. */
+    private static final String GLOBAL_METRICS = "io.micrometer.core.instrument.Metrics";
+
+    /** 레지스트리가 이름을 받아 미터를 만드는 메서드. {@code get}·{@code find} 는 읽기라 허용한다. */
+    private static final Set<String> REGISTRY_REGISTRATIONS =
+            Set.of("counter", "timer", "gauge", "summary", "gaugeCollectionSize", "gaugeMapSize", "more");
+
+    /** 규칙 11 이 금지하는 호출 — 헬퍼를 지나지 않고 미터를 만드는 것. */
+    public static final DescribedPredicate<com.tngtech.archunit.core.domain.JavaMethodCall>
+            METER_REGISTRATION_CALL = new DescribedPredicate<>(
+                    "Micrometer 로 미터를 직접 등록하는 호출(Counter.builder · registry.gauge 등)") {
+                @Override
+                public boolean test(com.tngtech.archunit.core.domain.JavaMethodCall call) {
+                    JavaClass owner = call.getTargetOwner();
+                    String name = call.getName();
+                    if (METER_BUILDERS.contains(owner.getFullName())) {
+                        return name.equals("builder");
+                    }
+                    if (GLOBAL_METRICS.equals(owner.getFullName())) {
+                        return REGISTRY_REGISTRATIONS.contains(name);
+                    }
+                    return REGISTRY_REGISTRATIONS.contains(name) && owner.isAssignableTo(METER_REGISTRY);
+                }
+            };
+
+    /**
+     * 규칙 11 — 미터는 {@code DawnlineMeters} 로만 등록한다([ADR-060] 결정 2).
+     *
+     * <p>헬퍼가 등록 때 §9.1 의 카탈로그와 타입 · 라벨 키 · 닫힌 값을 대조하고, {@code histogram} 에 버킷을 켜고, 게이지를
+     * 강한 참조로 잡는다. 헬퍼를 지나지 않은 등록은 그 셋이 전부 풀린다 — 이름이 표의 대조 밖에 생기고, 게이지는 약한
+     * 참조로 돌아가 대상이 GC 되면 조용히 {@code NaN} 을 낸다(§13 축 10 의 변종).
+     *
+     * <p>서비스에는 {@link #allRulesFor(String)} 가 건다. {@code libs/messaging} · {@code libs/web} 은 서비스가 아니라서
+     * 각자의 테스트가 자기 패키지에 이 규칙을 건다.
+     *
+     * @param rootPackage 대상 루트 패키지({@code com.dawnline.dispatch} · {@code com.dawnline.messaging} …)
+     * @return 규칙
+     */
+    public static ArchRule metersRegisterThroughCatalogue(String rootPackage) {
+        return ArchRuleDefinition.noClasses()
+                .that()
+                .resideInAPackage(rootPackage + "..")
+                .and()
+                .resideOutsideOfPackage(METER_HELPER_PACKAGE + "..")
+                .should()
+                .callMethodWhere(ArchPredicates.are(METER_REGISTRATION_CALL))
+                .because("미터는 §9.1 의 카탈로그 항목으로, DawnlineMeters 한 곳에서 등록한다 (ADR-060 결정 2) — "
+                        + "헬퍼를 지나지 않으면 이름 · 라벨의 대조와 게이지의 강한 참조가 풀린다")
+                .allowEmptyShould(true);
+    }
+
+    /** 한 서비스에 적용할 10개 규칙 전부. 규칙 10 은 서비스가 아니라 libs/common 에 건다. */
     public static List<ArchRule> allRulesFor(String service) {
         String owner = requireKnownService(service);
         List<ArchRule> rules = new ArrayList<>();
@@ -439,6 +513,7 @@ public final class HexagonalArchitectureRules {
         rules.add(clocksAreInjected(owner));
         rules.add(apiVersionIsNotHardcodedInMappings(owner));
         rules.add(ERROR_SHAPE_COMES_FROM_ONE_PLACE);
+        rules.add(metersRegisterThroughCatalogue(packageOf(owner)));
         return List.copyOf(rules);
     }
 

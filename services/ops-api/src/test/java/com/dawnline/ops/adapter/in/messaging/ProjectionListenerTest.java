@@ -7,6 +7,7 @@ import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.contract.EventContracts;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.port.in.Fact;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase.Projection;
@@ -125,7 +126,7 @@ class ProjectionListenerTest {
     }
 
     private double stale() {
-        Counter counter = meters.find(MessagingMetrics.EVENT_STALE)
+        Counter counter = meters.find(DawnlineMetrics.EVENT_STALE.meterName())
                 .tag(MessagingMetrics.TAG_CONSUMER, ProjectionListener.CONSUMER).counter();
         return counter == null ? 0.0 : counter.count();
     }

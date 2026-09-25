@@ -9,6 +9,7 @@ import com.dawnline.dispatch.application.port.out.DispatchRetention.PlanRows;
 import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.retention.ManualClock;
 import com.dawnline.messaging.retention.RetentionAges;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -45,19 +46,16 @@ class DispatchRetentionCleanerTest {
     }
 
     /**
-     * 마지막으로 만든 정리기 — 붙잡아 둔다. 게이지는 상태 객체를 약한 참조로 잡으므로(Micrometer) 아무도 들고 있지
-     * 않으면 GC 뒤에 {@code NaN} 이다 — 그러면 「NaN 이다」를 보는 검사가 아무것도 검사하지 않는다.
+     * 정리기를 붙잡아 두지 않는다 — 게이지의 상태는 등록 헬퍼가 강한 참조로 잡는다(ADR-060). 7-0c 에서는 여기서 필드로
+     * 붙잡았는데, 그것은 테스트의 우회였고 운영의 같은 결함을 남겼다(§13 축 10 의 변종).
      */
-    private DispatchRetentionCleaner cleaner;
-
     private DispatchRetentionCleaner cleaner(Duration candidates, Duration explanations, int maxPlans) {
-        cleaner = new DispatchRetentionCleaner(retention, transactions, CLOCK, candidates, explanations,
+        return new DispatchRetentionCleaner(retention, transactions, CLOCK, candidates, explanations,
                 Duration.ofDays(90), Duration.ofDays(365), maxPlans, 1000, 10, ages, meters);
-        return cleaner;
     }
 
     private double stuckGauge() {
-        return meters.get(DispatchRetentionCleaner.STUCK).gauge().value();
+        return meters.get(DawnlineMetrics.ROUTE_PLANS_STUCK.meterName()).gauge().value();
     }
 
     @Test
@@ -189,7 +187,7 @@ class DispatchRetentionCleanerTest {
         cleaner();
 
         // ages.table(x) 는 없으면 등록하므로 등록의 증거가 못 된다 — 레지스트리에서 찾는다.
-        assertThat(ageMeters.find(MessagingMetrics.RETENTION_LAST_SUCCESS_AGE).gauges())
+        assertThat(ageMeters.find(DawnlineMetrics.RETENTION_LAST_SUCCESS_AGE.meterName()).gauges())
                 .extracting(gauge -> gauge.getId().getTag(MessagingMetrics.TAG_TABLE))
                 .containsExactlyInAnyOrderElementsOf(tables());
     }

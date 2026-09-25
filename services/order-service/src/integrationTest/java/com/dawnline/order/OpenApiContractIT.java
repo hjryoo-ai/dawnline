@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.openapi.OpenApiResponses;
+import com.dawnline.observability.docs.AlertedCountersContract;
 import com.dawnline.web.internal.InternalTokenSurfaceContract;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -36,7 +37,24 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest(classes = OrderApplication.class)
 @AutoConfigureMockMvc
 @DisplayName("OpenApiContractIT — 문서가 코드와 어긋나지 않는다")
-class OpenApiContractIT extends OrderIntegrationTestBase implements InternalTokenSurfaceContract {
+class OpenApiContractIT extends OrderIntegrationTestBase implements InternalTokenSurfaceContract, AlertedCountersContract {
+
+    /**
+     * 기동한 레지스트리 — 알림 걸린 닫힌 카운터의 조합이 기동 때 전부 있는지를 이 컨텍스트에서 본다
+     * ({@link AlertedCountersContract}, ADR-060 결정 3). 컨텍스트를 새로 띄우지 않으려고 이 IT 에 둔다.
+     */
+    @Autowired
+    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
+
+    @Override
+    public io.micrometer.core.instrument.MeterRegistry meterRegistry() {
+        return meterRegistry;
+    }
+
+    @Override
+    public String emitter() {
+        return "order";
+    }
 
     /** 저장소에 커밋되는 문서. */
     private static final Path CONTRACT = Path.of("../../contracts/openapi/order-service.yaml");

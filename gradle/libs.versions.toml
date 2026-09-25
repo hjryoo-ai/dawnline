@@ -77,6 +77,9 @@ resilience4j-spring-boot4 = { module = "io.github.resilience4j:resilience4j-spri
 
 # --- 직렬화: Boot 4 기본 Jackson 은 3.x 이고 패키지가 tools.jackson.* 다 ---
 jackson-databind = { module = "tools.jackson.core:jackson-databind" }
+# 테스트 전용 — Prometheus 규칙 파일을 구조로 읽는다(AlertRulesConsistencyTest, ADR-060). 버전은 Boot BOM.
+# 이미 spring-boot-starter 가 전이로 싣는 것을 테스트가 이름으로 선언한다 — 전이에 기대는 import 는 조용히 끊긴다.
+snakeyaml = { module = "org.yaml:snakeyaml" }
 
 # --- 널 가능성 ---
 jspecify = { module = "org.jspecify:jspecify" }

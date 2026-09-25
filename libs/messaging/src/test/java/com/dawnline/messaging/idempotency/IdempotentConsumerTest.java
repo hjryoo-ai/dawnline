@@ -9,6 +9,7 @@ import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.support.InMemoryProcessedEventRepository;
 import com.dawnline.messaging.support.MutableClock;
 import com.dawnline.messaging.support.TestTransactionManager;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
@@ -85,7 +86,7 @@ class IdempotentConsumerTest {
         assertThat(transactionManager.commits()).isEqualTo(1);
         assertThat(transactionManager.rollbacks()).isZero();
         assertThat(counter(MessagingMetrics.OUTCOME_REJECTED)).isEqualTo(1.0);
-        assertThat(meters.get(MessagingMetrics.EVENT_REJECTED)
+        assertThat(meters.get(DawnlineMetrics.EVENT_REJECTED.meterName())
                 .tag(MessagingMetrics.TAG_REASON, "ORDER_ALREADY_DISPATCHED")
                 .counter().count()).isEqualTo(1.0);
     }
@@ -135,7 +136,7 @@ class IdempotentConsumerTest {
     }
 
     private double counter(String outcome) {
-        return meters.get(MessagingMetrics.EVENT_PROCESSED)
+        return meters.get(DawnlineMetrics.EVENT_PROCESSED.meterName())
                 .tag(MessagingMetrics.TAG_OUTCOME, outcome)
                 .counter().count();
     }

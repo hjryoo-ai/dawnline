@@ -17,6 +17,7 @@ import com.dawnline.dispatch.domain.optimizer.Explanation;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.rule.TimeWindowPenaltyRule;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -228,7 +229,7 @@ class ReplanRouteServiceTest {
     }
 
     private double mismatchCount() {
-        return registry.counter(DispatchMetrics.AT_RISK_DEVIATION_MISMATCH).count();
+        return registry.counter(DawnlineMetrics.AT_RISK_DEVIATION_MISMATCH.meterName()).count();
     }
 
     private static ReplanCommand command(Fixture fixture, Duration deviation) {

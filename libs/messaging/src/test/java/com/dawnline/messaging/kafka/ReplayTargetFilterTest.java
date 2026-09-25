@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.messaging.EventHeaders;
 import com.dawnline.messaging.MessagingMetrics;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -46,7 +47,7 @@ class ReplayTargetFilterTest {
         assertThat(filter("ops-api").filter(record("fulfillment-service"))).isTrue();
 
         assertThat(notTarget("ops-api")).isEqualTo(1.0);
-        assertThat(meters.find(MessagingMetrics.EVENT_PROCESSED)
+        assertThat(meters.find(DawnlineMetrics.EVENT_PROCESSED.meterName())
                 .tag(MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_DUP).counter())
                 .as("dup 과 섞지 않는다 — 「이미 처리했다」와 「내 일이 아니다」는 다른 사실이다").isNull();
     }
@@ -72,7 +73,7 @@ class ReplayTargetFilterTest {
     }
 
     private double notTarget(String consumer) {
-        Counter counter = meters.find(MessagingMetrics.EVENT_PROCESSED)
+        Counter counter = meters.find(DawnlineMetrics.EVENT_PROCESSED.meterName())
                 .tag(MessagingMetrics.TAG_CONSUMER, consumer)
                 .tag(MessagingMetrics.TAG_EVENT_TYPE, "order.placed")
                 .tag(MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_REPLAY_NOT_TARGET)

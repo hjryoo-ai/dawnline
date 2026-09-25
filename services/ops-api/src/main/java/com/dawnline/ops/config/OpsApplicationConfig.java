@@ -7,6 +7,7 @@ import com.dawnline.ops.adapter.out.persistence.JdbcAuditLog;
 import com.dawnline.ops.adapter.out.persistence.JdbcDeliveryKpis;
 import com.dawnline.ops.adapter.out.persistence.JdbcOrderRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcReadModelViews;
+import com.dawnline.ops.adapter.out.persistence.JdbcRouteCounts;
 import com.dawnline.ops.adapter.out.persistence.JdbcRouteRows;
 import com.dawnline.ops.adapter.out.persistence.JdbcWaveRows;
 import com.dawnline.ops.application.OnTimeRatioGauges;
@@ -24,6 +25,7 @@ import com.dawnline.ops.application.port.out.CoreQueries;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.OrderRows;
 import com.dawnline.ops.application.port.out.ReadModelViews;
+import com.dawnline.ops.application.port.out.RouteCounts;
 import com.dawnline.ops.application.port.out.RouteRows;
 import com.dawnline.ops.application.port.out.WaveRows;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -116,14 +118,25 @@ public class OpsApplicationConfig {
     }
 
     /**
-     * @param kpis   배송 축 KPI
-     * @param meters Micrometer 레지스트리
-     * @param clock  창의 기준 시각 (불변규칙 12)
-     * @return {@code dawnline_delivery_on_time_ratio} 두 계열
+     * @param kpis        배송 축 KPI
+     * @param routeCounts 라우트 진행 집계
+     * @param meters      Micrometer 레지스트리
+     * @param clock       창의 기준 시각 (불변규칙 12)
+     * @return 정시율 · 결과 수 · 빠진 수 · 갱신 나이 · 라우트 진행 — 한 갱신
      */
     @Bean
-    public OnTimeRatioGauges onTimeRatioGauges(DeliveryKpis kpis, MeterRegistry meters, Clock clock) {
-        return new OnTimeRatioGauges(kpis, meters, clock);
+    public OnTimeRatioGauges onTimeRatioGauges(DeliveryKpis kpis, RouteCounts routeCounts, MeterRegistry meters,
+            Clock clock) {
+        return new OnTimeRatioGauges(kpis, routeCounts, meters, clock);
+    }
+
+    /**
+     * @param jdbc JDBC 템플릿
+     * @return {@code dawnline_routes} 의 집계
+     */
+    @Bean
+    public RouteCounts routeCounts(JdbcTemplate jdbc) {
+        return new JdbcRouteCounts(jdbc);
     }
 
     // --- 운영자 커맨드 (§5.5 「커맨드 위임」, ADR-052) ------------------------------

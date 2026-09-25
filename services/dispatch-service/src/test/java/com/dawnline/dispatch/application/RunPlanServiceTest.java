@@ -20,6 +20,7 @@ import com.dawnline.dispatch.domain.optimizer.rule.DispatchRules;
 import com.dawnline.dispatch.domain.optimizer.rule.RuleDefinition;
 import com.dawnline.dispatch.domain.optimizer.rule.RuleSeverity;
 import com.dawnline.dispatch.domain.optimizer.rule.RuleType;
+import com.dawnline.observability.DawnlineMetrics;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -162,7 +163,7 @@ class RunPlanServiceTest {
     }
 
     private static long terminations(io.micrometer.core.instrument.MeterRegistry registry, String termination) {
-        io.micrometer.core.instrument.Timer timer = registry.find(DispatchMetrics.PLAN_DURATION)
+        io.micrometer.core.instrument.Timer timer = registry.find(DawnlineMetrics.PLAN_DURATION.meterName())
                 .tag(DispatchMetrics.TAG_TERMINATION, termination).timer();
         return timer == null ? 0 : timer.count();
     }
