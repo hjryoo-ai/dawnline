@@ -2740,6 +2740,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 멈춰도 다른 넷의 성공이 최솟값이 되어 울리지 않았다(근거: 관측(재현됨) — promtool 음성 표본 `got: []`, §9.4 행). 「없는 시계열은 0」은
 식이 **아무것도 보지 못한** 경우이고, 이것은 식이 **다른 것을 본** 경우다. 규칙: 집계의 `by` 는 **같은 대상을 가리키는 라벨의 조합**
 까지 남긴다 — 이름이 같다는 것은 같은 대상이라는 뜻이 아니다.
+**변종 — 같은 것이 둘로 보인다** (2026-09-25, 7-3). 반대 방향도 있다: 하나의 대상이 시계열 둘이면 합이 두 배가 된다. Kafka 클라이언트 4.x 는 토픽 이름에 점이 있으면 파티션 · 토픽 지표를 점을 밑줄로 바꾼 **폐기 예정 사본**과 함께 낸다(KIP-1109 — `FetchMetricsManager.shouldReportDeprecatedMetric`). 이 저장소의 토픽은 전부 점이 있어서 `kafka_consumer_fetch_manager_records_lag` 가 파티션마다 `dawnline.order.placed.v1` 과 `dawnline_order_placed_v1` 둘이었다(근거: 관측(재현됨) — 서비스마다 시계열 수가 정확히 두 배). 등록 경로가 둘인 것이 아니라 클라이언트가 일부러 둘을 낸다. `libs/messaging` 의 `DeprecatedTopicMetricsFilter`(MeterFilter)가 점 없는 `topic` 태그의 Kafka 지표를 거른다 — 그 기준은 「우리 토픽에는 점이 있다」에 기대고, 테스트가 그 전제를 먼저 말한다.
 **이 원칙이 적힌 날 지키지 않던 알림 셋**(§9.4, 2026-09-24): 둘은 같은 날 닫았다 —
 `dawnline_rate_limit_decisions_total{outcome}` 은 판정 셋을(`RedisRateLimiter`), `dawnline_ops_commands_total{action,result}` 은
 커맨드 전부 × 결과 넷을(`PENDING` 제외) 기동 때 0 으로 등록한다. 커맨드 목록 `OpsCommand.ACTIONS` 는 sealed 의 허용 하위

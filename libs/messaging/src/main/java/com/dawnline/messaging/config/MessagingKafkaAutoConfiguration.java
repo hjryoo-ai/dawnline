@@ -3,6 +3,7 @@ package com.dawnline.messaging.config;
 import com.dawnline.messaging.Topics;
 import com.dawnline.messaging.kafka.ConsumerRetryObserver;
 import com.dawnline.messaging.kafka.DawnlineErrorHandlers;
+import com.dawnline.messaging.kafka.DeprecatedTopicMetricsFilter;
 import com.dawnline.messaging.kafka.DlqRecordRecoverer;
 import com.dawnline.messaging.kafka.ReplayTargetFilter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -119,6 +120,16 @@ public class MessagingKafkaAutoConfiguration {
     @ConditionalOnMissingBean(RecordFilterStrategy.class)
     public RecordFilterStrategy<Object, Object> dawnlineReplayTargetFilter(ObjectProvider<MeterRegistry> meters) {
         return new ReplayTargetFilter(meters.getIfAvailable(SimpleMeterRegistry::new));
+    }
+
+    /**
+     * Kafka 클라이언트가 폐기 예정 사본으로 한 번 더 내는 토픽 지표를 거른다(KIP-1109 — {@link DeprecatedTopicMetricsFilter}).
+     * Boot 가 {@code MeterFilter} 빈을 레지스트리에 건다. 거르지 않으면 파티션 랙의 합이 두 배가 된다(§9.1).
+     */
+    @Bean
+    @ConditionalOnMissingBean(DeprecatedTopicMetricsFilter.class)
+    public DeprecatedTopicMetricsFilter dawnlineDeprecatedTopicMetricsFilter() {
+        return new DeprecatedTopicMetricsFilter();
     }
 
     /**
