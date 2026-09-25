@@ -59,11 +59,13 @@ public class PlanOrderService implements PlanOrderUseCase {
     /**
      * 한 주문이 밀릴 수 있는 최대 웨이브 수.
      *
-     * <p>실제로는 한 번이면 끝난다 — 다음 웨이브는 아직 열려 있다. 상한을 두는 이유는 시계나
-     * 시드가 어긋났을 때 이 루프가 <em>영원히</em> 도는 것을 막기 위해서다. 상한에 걸리면
-     * {@code STALE_PLACED} 로 끝낸다 — 그것이 "이 주문을 오늘 일로 볼 수 없다" 의 뜻이다.
+     * <p>상한을 두는 이유는 시계나 시드가 어긋났을 때 이 루프가 <em>영원히</em> 도는 것을 막기 위해서다.
+     * 스케줄러만 웨이브를 닫던 때는 한 번이면 끝났다 — 다음 웨이브는 아직 열려 있었다. <strong>운영자가 컷오프
+     * 전에도 닫게 된 뒤로(ADR-054) 이 상한은 운영의 결과로 닿는다</strong>: 같은 캠프 · 티어의 웨이브 넷(원래 것과
+     * 밀린 셋)이 모두 닫혀 있으면 주문은 {@link UnserviceableReason#MAX_PUSHES_EXCEEDED} 로 끝난다. 그 사유는
+     * {@code STALE_PLACED} 와 다르다 — 이벤트가 늦게 온 것이 아니라 받을 웨이브가 없다(ADR-063).
      */
-    private static final int MAX_WAVE_PUSHES = 3;
+    static final int MAX_WAVE_PUSHES = 3;
 
     private final ReferenceData referenceData;
     private final FcCandidateAssembler candidates;
@@ -139,18 +141,30 @@ public class PlanOrderService implements PlanOrderUseCase {
         };
     }
 
-    /** 웨이브에 편입하고 {@code fulfillment.planned} 를 낸다. */
+    /** 웨이브를 찾아 편입하거나, 찾지 못한 까닭을 사유로 달아 끝낸다. */
     private PlanOutcome admit(PlacedOrderSnapshot snapshot, UUID placedEventId, Camp camp, Zone zone,
             FcSelectionResult.Selected selected) {
 
         ServiceTier tier = ServiceTier.valueOf(snapshot.serviceTier());
-        Optional<Admission> admitted = openWaveFor(camp, tier, snapshot.cutoffAt());
-        if (admitted.isEmpty()) {
-            // 밀 수 있는 웨이브를 못 찾았다 = 이 주문을 오늘 일로 볼 수 없다.
-            return reject(snapshot, placedEventId, UnserviceableReason.STALE_PLACED, camp.id());
-        }
+        return switch (openWaveFor(camp, tier, snapshot.cutoffAt())) {
+            case Admission admitted -> admitTo(admitted, snapshot, placedEventId, camp, zone, selected, tier);
+            case WaveSearch.Stale stale ->
+                    reject(snapshot, placedEventId, UnserviceableReason.STALE_PLACED, camp.id());
+            case WaveSearch.Exhausted exhausted -> {
+                // 받을 웨이브가 없다 — 늦게 온 것이 아니다. 사유가 그것을 말해야 운영자가 자기가 닫은 웨이브들의
+                // 결과로 읽는다(ADR-063). 로그는 원래 웨이브를 누가 닫았는지를 싣는다 — 약속을 깬 것은 그 사실이다.
+                log.warn("웨이브를 {}번 밀어도 열린 웨이브를 찾지 못했습니다. camp={} tier={} cutoffAt={} 원래_웨이브_마감={}",
+                        MAX_WAVE_PUSHES, camp.code(), tier, snapshot.cutoffAt(), exhausted.pushedBy());
+                yield reject(snapshot, placedEventId, UnserviceableReason.MAX_PUSHES_EXCEEDED, camp.id());
+            }
+        };
+    }
 
-        Wave wave = admitted.get().wave();
+    /** 찾은 웨이브에 편입하고 {@code fulfillment.planned} 를 낸다. */
+    private PlanOutcome admitTo(Admission admitted, PlacedOrderSnapshot snapshot, UUID placedEventId, Camp camp,
+            Zone zone, FcSelectionResult.Selected selected, ServiceTier tier) {
+
+        Wave wave = admitted.wave();
         boolean revised = !wave.cutoffAt().equals(snapshot.cutoffAt());
         TimeWindow window = revised
                 ? schedule.windowFor(snapshot.serviceTier(), wave.cutoffAt())
@@ -174,7 +188,7 @@ public class PlanOrderService implements PlanOrderUseCase {
         // 않는다 — 다만 메트릭은 트랜잭션에 참여하지 않으므로 롤백 시 카운터만 남는다.
         // 그 편차는 관측값의 성격상 받아들인다(정확성이 아니라 추세를 보는 값이다).
         if (revised) {
-            metrics.promiseRevised(camp.code(), tier, admitted.get().pushedBy());
+            metrics.promiseRevised(camp.code(), tier, admitted.pushedBy());
         }
         if (selected.fallbackReason() != null) {
             metrics.fcFallback(camp.code(), selected.fallbackReason());
@@ -191,28 +205,42 @@ public class PlanOrderService implements PlanOrderUseCase {
      * <p>민 원인은 <strong>첫 번째로 거절한 웨이브</strong>(주문의 원래 컷오프)의 {@code close_cause} 다 —
      * 약속을 깬 것은 그 웨이브가 닫혀 있었다는 사실이고, 그 뒤에 또 밀렸다면 그것은 같은 사건의 연장이다.
      */
-    private Optional<Admission> openWaveFor(Camp camp, ServiceTier tier, Instant cutoffAt) {
+    private WaveSearch openWaveFor(Camp camp, ServiceTier tier, Instant cutoffAt) {
         Instant target = cutoffAt;
         @Nullable WaveCloseCause pushedBy = null;
         for (int push = 0; push <= MAX_WAVE_PUSHES; push++) {
             if (selection.isStale(target)) {
                 // 컷오프가 상한을 넘겼다. 다음 웨이브를 찾아 봐야 유령 배송이다 (ADR-020 후속 정정).
-                return Optional.empty();
+                return new WaveSearch.Stale();
             }
             Wave wave = findOrCreate(camp, tier, target);
             // FOR SHARE — 이 트랜잭션이 끝날 때까지 이 웨이브는 마감될 수 없다 (ADR-025).
             Optional<Wave> locked = waves.findByIdForShare(wave.id());
             if (locked.isPresent() && locked.get().acceptsOrders()) {
-                return Optional.of(new Admission(locked.get(), pushedBy));
+                return new Admission(locked.get(), pushedBy);
             }
             if (push == 0 && locked.isPresent()) {
                 pushedBy = locked.get().closeCause();
             }
             target = schedule.nextCutoffAfter(tier.name(), target);
         }
-        log.warn("웨이브를 {}번 밀어도 열린 웨이브를 찾지 못했습니다. camp={} tier={} cutoffAt={}",
-                MAX_WAVE_PUSHES, camp.code(), tier, cutoffAt);
-        return Optional.empty();
+        return new WaveSearch.Exhausted(pushedBy);
+    }
+
+    /** 웨이브 찾기의 세 끝 — 둘은 배차 불가지만 사유가 다르다(ADR-063). */
+    private sealed interface WaveSearch permits Admission, WaveSearch.Stale, WaveSearch.Exhausted {
+
+        /** 컷오프가 24시간을 넘겼다 — 이벤트가 늦게 왔다. */
+        record Stale() implements WaveSearch {
+        }
+
+        /**
+         * 원래 웨이브와 밀린 {@value PlanOrderService#MAX_WAVE_PUSHES} 개가 모두 닫혀 있다 — 받을 웨이브가 없다.
+         *
+         * @param pushedBy 원래 컷오프 웨이브의 {@code close_cause}
+         */
+        record Exhausted(@Nullable WaveCloseCause pushedBy) implements WaveSearch {
+        }
     }
 
     /**
@@ -221,7 +249,7 @@ public class PlanOrderService implements PlanOrderUseCase {
      * @param wave     열린 웨이브
      * @param pushedBy 원래 컷오프 웨이브의 {@code close_cause} — 밀리지 않았으면 {@code null}
      */
-    private record Admission(Wave wave, @Nullable WaveCloseCause pushedBy) {
+    private record Admission(Wave wave, @Nullable WaveCloseCause pushedBy) implements WaveSearch {
     }
 
     private Wave findOrCreate(Camp camp, ServiceTier tier, Instant cutoffAt) {

@@ -136,12 +136,12 @@ class ApplyFulfillmentPlanServiceTest {
 
     @Test
     void 계획된_주문도_배차_불가로_종결될_수_있다() {
-        // 개정 경로에서 다음 웨이브를 찾다 STALE_PLACED 가 되는 경우가 그렇다.
+        // 개정 경로에서 받을 웨이브를 찾지 못한 경우가 그렇다(ADR-063 — 그전에는 STALE_PLACED 로 나갔다).
         Order order = saved(OrderStatus.PLANNED);
 
-        assertThat(service.unserviceable(order.id(), "STALE_PLACED", AT))
+        assertThat(service.unserviceable(order.id(), "MAX_PUSHES_EXCEEDED", AT))
                 .isEqualTo(PlanApplication.APPLIED);
-        assertThat(orders.get(order.id()).failureReason()).contains("STALE_PLACED");
+        assertThat(orders.get(order.id()).failureReason()).contains("MAX_PUSHES_EXCEEDED");
     }
 
     @Test
