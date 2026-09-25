@@ -57,6 +57,8 @@
    두 행을 더했다: `dawnline_kpi_delivery{camp, outcome}`(정시율과 같은 스냅숏의 결과 수)와 `dawnline_routes{camp, status}`
    (`rm_routes` 의 진행 집계 — 라우트 단위가 아니다, `routeId` 는 열린 라벨이다). 둘 다 표 → 카탈로그 → 헬퍼를 지나고,
    나머지(등록 · 라벨 값 · 패널)는 대조 검사가 요구했다.
+   `dawnline_routes` 의 범위(처음에는 전부 KPI 창 안)는 같은 날 [ADR-061](ADR-061-unfinished-work-has-no-window.md) 이
+   고쳤다 — 끝나지 않은 라우트에는 창이 없다.
 
 맥락 1 과 5 는 한 모양이다 — **알림과 패널이 존재하지 않는 시계열을 보고 있었다**(§13 축 12). 맥락 2 는 카탈로그가 라벨
 집합을 넷째 칸으로 드는 이유가 첫 실행에서 증명된 사례다.
