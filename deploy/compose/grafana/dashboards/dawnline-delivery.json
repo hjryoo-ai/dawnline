@@ -330,18 +330,132 @@
       }
     },
     {
-      "type": "text",
-      "title": "실패 · 라우트 진행",
-      "options": {
-        "mode": "markdown",
-        "content": "**메트릭이 아니다.** §9.4 가 이 대시보드에 적은 「실패 · 라우트 진행」은 §9.1 에 대응하는 메트릭이 없다 — 그 사실은 ops-api 의 읽기 모델(`rm_orders` · `rm_routes`)이 들고 있고, ops-web 대시보드가 그것을 그린다. 여기서 볼 수 있는 가장 가까운 값은 위의 정시율(분모가 완료 + 실패)이다."
-      },
+      "type": "row",
+      "title": "결과 · 라우트 진행",
+      "collapsed": false,
+      "panels": [],
       "id": 8,
       "gridPos": {
         "x": 0,
         "y": 18,
         "w": 24,
-        "h": 4
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "결과 수 (캠프 · 완료/실패, 쌓음)",
+      "description": "정시율과 같은 창 · 같은 스냅숏의 결과 수 — 정시율의 분모를 둘로 편 것이라 합이 분모다(§9.1). 창에 결과가 없는 캠프는 0, 갱신이 죽으면 NaN(선이 끊긴다 — KPI 갱신 나이가 그 자리다).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum by (camp, outcome) (dawnline_kpi_delivery)",
+          "legendFormat": "{{camp}} {{outcome}}"
+        }
+      ],
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "라우트 진행 (캠프 · 상태, 쌓음)",
+      "description": "rm_routes 를 진행으로 센 집계 — 출발 전 · 진행 중 · 완료 · 모름(계획이 아직). 범위는 계획 출발이 정시율 창의 첫 버킷 이후인 라우트와 모름 전부다. 라우트 단위 진행은 ops-web 지도의 몫이다(routeId 는 열린 라벨 — §9.1).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum by (camp, status) (dawnline_routes)",
+          "legendFormat": "{{camp}} {{status}}"
+        }
+      ],
+      "id": 10,
+      "gridPos": {
+        "x": 12,
+        "y": 19,
+        "w": 12,
+        "h": 8
       }
     }
   ]
