@@ -77,7 +77,7 @@ class ReadModelQueryServiceTest {
     void KPI_는_게이지와_같은_창과_같은_식이다() {
         // 「대시보드의 24행과 게이지가 다를 수 없다」를 API 까지 — 같은 포트·같은 창·같은 식에서 두 수를 뽑아 대조한다.
         kpis.rows.add(new CampDeliveries(CAMP, 90, 10, 81, 88, 7));
-        OnTimeRatioGauges gauges = new OnTimeRatioGauges(kpis, new SimpleMeterRegistry(), clock);
+        OnTimeRatioGauges gauges = new OnTimeRatioGauges(kpis, since -> List.of(), new SimpleMeterRegistry(), clock);
         gauges.refreshNow();
         Instant gaugeFirst = kpis.first;
 

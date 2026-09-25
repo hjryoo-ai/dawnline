@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.port.in.OpsCommand;
 import com.dawnline.ops.domain.AuditResult;
+import com.dawnline.ops.domain.DeliveryOutcome;
+import com.dawnline.ops.domain.RouteProgress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -40,5 +42,19 @@ class MetricLabelValuesTest {
                         Arrays.stream(OnTimeRatioGauges.Basis.values()).map(OnTimeRatioGauges.Basis::label).toList());
         assertThat(DawnlineMetrics.KPI_EXCLUDED.label(OnTimeRatioGauges.TAG_REASON).values())
                 .containsExactly(OnTimeRatioGauges.PROMISE_UNKNOWN);
+    }
+
+    @Test
+    void 결과_수의_outcome_은_배송_결과_전부다() {
+        assertThat(DawnlineMetrics.KPI_DELIVERY.label(OnTimeRatioGauges.TAG_OUTCOME).values())
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.stream(DeliveryOutcome.values()).map(OnTimeRatioGauges::outcomeLabel).toList());
+    }
+
+    @Test
+    void 라우트_status_는_진행_전부다() {
+        assertThat(DawnlineMetrics.ROUTES.label(OnTimeRatioGauges.TAG_STATUS).values())
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.stream(RouteProgress.values()).map(RouteProgress::label).toList());
     }
 }

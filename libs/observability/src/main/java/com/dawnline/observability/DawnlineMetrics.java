@@ -210,6 +210,16 @@ public final class DawnlineMetrics {
             "dawnline.kpi.excluded", "정시율에서 빠진 결과 — 약속(또는 캠프)을 아직 모르는 완료 · 실패",
             closed("reason", "promise_unknown"));
 
+    /** 정시율과 같은 창 · 같은 스냅숏의 결과 수 — 정시율의 분모를 둘로 편 것(§5.5). */
+    public static final DawnlineMetric KPI_DELIVERY = gauge("dawnline_kpi_delivery",
+            "dawnline.kpi.delivery", "정시율과 같은 창의 결과 수 — 결과가 없는 캠프는 0, 갱신 실패 중 NaN",
+            open("camp"), closed("outcome", "completed", "failed"));
+
+    /** {@code rm_routes} 의 진행 집계 — 라우트 단위가 아니다(routeId 는 열린 라벨). */
+    public static final DawnlineMetric ROUTES = gauge("dawnline_routes",
+            "dawnline.routes", "캠프 · 진행별 라우트 수 — KPI 와 같은 갱신, 갱신 실패 중 NaN",
+            open("camp"), closed("status", "assigned", "in_progress", "completed", "unknown"));
+
     /** 운영자 커맨드의 결과 — 커밋한 뒤에 센다. */
     public static final DawnlineMetric OPS_COMMANDS = counter("dawnline_ops_commands_total",
             "dawnline.ops.commands", "운영자 커맨드 — 감사 행의 결과를 커밋한 뒤에 센다",
@@ -250,7 +260,7 @@ public final class DawnlineMetrics {
             PLAN_DURATION, PLAN_PERSIST, PLAN_COST, PLAN_UNASSIGNED, PLAN_DEGRADED, PLAN_BACKLOG_UNKNOWN,
             CANCEL_TOO_LATE, STATUS_AFTER_RELOCATE, REPLAN, AT_RISK_DEVIATION_MISMATCH, ROUTE_PLANS_STUCK,
             AT_RISK, AT_RISK_COOLDOWN_BYPASSED, SCAN_AFTER_CANCEL, SCAN_AFTER_RELOCATE, SHIPMENT_PARTITIONS_AHEAD,
-            DELIVERY_ON_TIME_RATIO, KPI_EXCLUDED, OPS_COMMANDS, KPI_REFRESH_AGE, RM_ORDERS_STUCK,
+            DELIVERY_ON_TIME_RATIO, KPI_EXCLUDED, KPI_DELIVERY, ROUTES, OPS_COMMANDS, KPI_REFRESH_AGE, RM_ORDERS_STUCK,
             INTERNAL_TOKEN_REJECTED,
             RETENTION_LAST_SUCCESS_AGE);
 
