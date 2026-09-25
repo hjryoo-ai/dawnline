@@ -68,6 +68,10 @@ postgresql          = { module = "org.postgresql:postgresql" }
 micrometer-core             = { module = "io.micrometer:micrometer-core" }
 # outbox 의 traceparent 제공자(libs/messaging, compileOnly) — 서비스에는 spring-boot-starter-opentelemetry 가 이미 싣는다(§9.2)
 micrometer-tracing          = { module = "io.micrometer:micrometer-tracing" }
+# MdcScope 가 id 를 현재 스팬에도 단다(libs/observability, compileOnly) · 그 검사는 SDK 로 스팬을 만든다(테스트 전용).
+# 둘 다 서비스에는 spring-boot-starter-opentelemetry 가 이미 싣는다(§9.3, ADR-062 결정 4)
+opentelemetry-api           = { module = "io.opentelemetry:opentelemetry-api" }
+opentelemetry-sdk           = { module = "io.opentelemetry:opentelemetry-sdk" }
 micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
 logback-classic             = { module = "ch.qos.logback:logback-classic" }
 

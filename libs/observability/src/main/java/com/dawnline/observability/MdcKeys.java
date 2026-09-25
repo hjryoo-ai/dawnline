@@ -1,6 +1,7 @@
 package com.dawnline.observability;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 구조화 로그의 MDC 키 (DESIGN.md §9.3).
@@ -82,4 +83,40 @@ public final class MdcKeys {
      */
     public static final List<String> MANAGED = List.of(
             SERVICE, EVENT_ID, ORDER_ID, WAVE_ID, ROUTE_ID, AUDIT_ID);
+
+    /** 스팬 속성 이름의 접두 — {@link #spanAttribute}. */
+    public static final String SPAN_ATTRIBUTE_PREFIX = "dawnline.";
+
+    /**
+     * {@link #MANAGED} 중 스팬 속성으로 <strong>달지 않는</strong> 키와 그 이유 (§9.3, ADR-062 결정 4). 스팬에 다는 키는
+     * 여기서 빼서 정한다({@link #SPAN_ATTRIBUTE_KEYS}) — 새 MDC 키는 이유를 적어 빼지 않는 한 스팬에도 달린다.
+     */
+    public static final Map<String, String> NOT_SPAN_ATTRIBUTES = Map.of(
+            SERVICE, "스팬에는 리소스 속성 service.name 이 이미 있다 — 같은 값을 두 이름으로 싣지 않는다");
+
+    /** {@link MdcScope} 가 MDC 와 함께 현재 스팬에도 다는 키 — {@link #MANAGED} 에서 {@link #NOT_SPAN_ATTRIBUTES} 를 뺀 것. */
+    public static final List<String> SPAN_ATTRIBUTE_KEYS = MANAGED.stream()
+            .filter(key -> !NOT_SPAN_ATTRIBUTES.containsKey(key))
+            .toList();
+
+    /**
+     * MDC 키의 스팬 속성 이름 — {@code dawnline.} + snake_case({@code waveId} → {@code dawnline.wave_id}).
+     *
+     * <p>두 이름을 따로 적지 않고 규칙으로 낸다. 로그와 트레이스가 같은 id 를 다른 이름으로 부르기 시작하면 「이 로그의
+     * 웨이브를 트레이스에서 찾는다」가 번역이 된다. TraceQL 로는 {@code { span.dawnline.wave_id = "…" }}.
+     *
+     * @param mdcKey MDC 키(카멜케이스)
+     * @return 스팬 속성 이름
+     */
+    public static String spanAttribute(String mdcKey) {
+        StringBuilder name = new StringBuilder(SPAN_ATTRIBUTE_PREFIX);
+        for (char c : mdcKey.toCharArray()) {
+            if (Character.isUpperCase(c)) {
+                name.append('_').append(Character.toLowerCase(c));
+            } else {
+                name.append(c);
+            }
+        }
+        return name.toString();
+    }
 }

@@ -16,8 +16,13 @@ dependencies {
     implementation(libs.spring.boot.starter)
     compileOnly(libs.spring.boot.starter.web) // MdcFilter(서블릿 필터), jakarta.servlet
     implementation(libs.logback.classic)
+    // MdcScope 가 MDC 에 넣는 id 를 현재 스팬에도 단다(§9.3, ADR-062 결정 4). compileOnly 인 이유: 트레이싱이 없는 소비자
+    // (sim-runner)도 MdcScope 를 쓴다 — API 가 클래스패스에 없으면 스팬 쪽은 조용히 건너뛰고 MDC 는 그대로다.
+    compileOnly(libs.opentelemetry.api)
 
     testImplementation(libs.spring.boot.starter.test)
+    // MdcScopeSpanTest — SDK 로 실제 스팬을 열고 MdcScope 가 단 속성을 읽는다.
+    testImplementation(libs.opentelemetry.sdk)
     testImplementation(libs.spring.boot.starter.web)
     // 카탈로그의 Micrometer 이름이 Prometheus 에서 표의 이름이 되는지 레지스트리로 확인한다(DawnlineMetricsTest).
     testImplementation(libs.micrometer.registry.prometheus)
