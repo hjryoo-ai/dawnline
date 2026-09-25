@@ -903,7 +903,7 @@ REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assign
   코어 서비스 간 동기 호출을 금지한다 — 그래서 **계획을 촉발하는 이벤트가 싣는다**(`order.placed` 의
   `cutoffAt` 과 같은 논리). `camp.registered` 같은 참조 데이터 동기화 이벤트를 두지 않는 이유는
   10행짜리 데이터를 위해 초기 적재·갱신·순서라는 수명주기를 통째로 들여오게 되기 때문이다.
-  좌표는 `route_plans.depot_lat/lng` 에 저장한다 — 정체 회수·운영자 재실행·§6.8 부분 재계획은
+  좌표는 `route_plans.depot_lat/lng` 에 저장한다 — 운영자 재실행·§6.8 부분 재계획은
   `wave.closed` 를 다시 받지 않는다.
 - **캠프 코드도 같은 스냅샷으로 들어온다**(2026-09-24, Phase 6 묶음 C). 첫 소비자는 ops-web 의 대시보드다 — 운영자는
   캠프를 UUID 가 아니라 `CAMP-SEO-C` 로 부른다. 좌표와 같은 논리다: 캠프는 fulfillment 의 참조 데이터이고
@@ -916,7 +916,7 @@ REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assign
   나눠 넣으면 "완료라는데 라우트가 없다" 가 생긴다. 재실행이 성공하면 `plan.completed` 가 다시
   나가고, 그것이 웨이브를 `PLAN_FAILED → PLANNED` 로 되돌리는 유일한 경로다.
 - `route_plans.wave_id`는 UNIQUE. `wave.closed`가 중복 도착해도 두 번째는 기존 plan을 발견하고 종료(멱등).
-- 계획 중 인스턴스가 죽으면 `PLANNING` 상태로 남는다. 스타트업/스케줄러가 `PLANNING`이고 `started_at`이 10분 경과한 plan을 `REQUESTED`로 되돌려 재실행한다. 결과 쓰기는 plan 단위 트랜잭션이므로 부분 결과가 발행되지 않는다.
+- **계획 하나는 트랜잭션 하나다**(2026-09-26 정정, [ADR-024](adr/ADR-024-plan-completed-event.md) 후속 정정). `wave.closed` 의 멱등 소비 트랜잭션 안에서 계획 열기(`REQUESTED`) · `PLANNING` 전이 · 결과 쓰기 · 세 이벤트가 함께 커밋되고, 커밋은 `PUBLISHED` 나 `FAILED` 로만 일어난다. 그래서 **계획 중 인스턴스가 죽으면 아무것도 남지 않는다** — 트랜잭션이 롤백되고 커밋되지 않은 오프셋이 `wave.closed` 를 다시 전달해 재기동 즉시 다시 계획한다. 부분 결과가 발행되지 않는다. `PLANNING` 은 트랜잭션 안의 상태라 다른 세션에는 보이지 않는다 — 계획 중인 웨이브는 `route_plans` 에 행이 없다. 이전 판은 「`PLANNING` 으로 남고 10분 뒤 스케줄러가 회수한다」고 적었고 그 스케줄러가 있었지만, 커밋된 `PLANNING` 이 생기는 경로가 없었다(근거: 관측(재현됨) — 결과 쓰기에서 세운 계획을 `SIGKILL` 로 죽여도 행 0, 재기동 26초 뒤 `PUBLISHED`). 지웠다.
 - **`PLANNING` 중에 도착한 `order.cancelled` 는 계획을 멈추지 않는다.** 계획은 시작 시점 스냅샷으로
   끝까지 돌고, `PUBLISHED` 직전 재검증(§6.5 6단계)이 후보 상태를 다시 읽어 취소된 것을 stop 에서
   뺀다 — 그래야 이 경합 창이 `revision` 하나를 쓰지 않고 닫힌다
@@ -2197,7 +2197,7 @@ public interface DispatchStrategy {
   - **FAST 가 생략하는 것은 §6.5 5단계 하나다.** 재삽입은 개선이 아니라 값싼 탐욕이라 FAST 에서도 돈다([ADR-028](adr/ADR-028-unassigned-policy.md)). 1~4단계는 계획이 *존재하기* 위한 단계라 생략할 수 있는 것이 아니다. **전략 이름은 바뀌지 않는다** — 이름은 「무엇을 쓰려 했는가」(§6.6), 모드는 「무엇을 포기했는가」(§6.7)이고, 접으면 `dawnline_plan_duration_seconds` 의 두 라벨이 같은 말을 두 번 한다.
   - **조건 둘은 중복이 아니라 역할 분담이다.** 랙은 **선행**(웨이브가 몰린 순간 보인다), 직전 계획 시간은 **후행**(한 계획이 이미 늦은 뒤에 보인다). 랙 조건이 없으면 §8.2 의 버스트를 놓친다. 진동은 **아랫단에만** 있고(계수 0.5 의 계획이 예산의 64% 로 끝나 임계 아래로 내려온다) 진폭이 +1.35% 라 평균 +0.78% 다 — 그 진동이 평균 계획 시간을 4,898 → 4,053 ms 로 사 온다. 윗단(FAST)은 랙이 남아 있는 동안 유지되므로 진동하지 않는다. 히스테리시스 임계를 따로 두지 않는 이유가 이것이다.
   - **랙은 `Consumer#currentLag`(KIP-695)로 잰다.** Micrometer 게이지를 읽지 않는다 — **제어 입력을 관측 지표에서 읽으면** 지표 이름이 바뀔 때 `NaN` 이 「랙 없음」으로 읽혀 판단이 조용히 멈춘다. 아래 §9.1 의 "Kafka 소비자 랙은 기본 지표 사용" 은 **보는** 용도다. 값은 **파티션** 단위이므로 「이 캠프의 랙」이 아니라 **「이 캠프가 실린 소비 흐름의 랙」**이다(campId 키라 같은 캠프는 언제나 같은 파티션이지만, 파티션 수 < 캠프 수라 역은 아니다).
-  - **모름은 0이 아니다.** 랙을 볼 수 없는 경로(운영자 재실행·정체 회수·리밸런스 직후)에서 `null` 을 0 으로 접으면 랙 조건이 조용히 「아니오」가 된다. 사유 다섯 — `REQUESTED`(사람이 정했다, **열화 아님**) · `LAG` · `BUDGET` · `LAG_UNKNOWN`(FULL 이지만 조건 하나를 못 봤다) · `NONE`.
+  - **모름은 0이 아니다.** 랙을 볼 수 없는 경로(운영자 재실행·리밸런스 직후)에서 `null` 을 0 으로 접으면 랙 조건이 조용히 「아니오」가 된다. 사유 다섯 — `REQUESTED`(사람이 정했다, **열화 아님**) · `LAG` · `BUDGET` · `LAG_UNKNOWN`(FULL 이지만 조건 하나를 못 봤다) · `NONE`.
   - **사유는 계획 행에 남는다**(`route_plans.mode_reason`, V5). 카운터 라벨은 집계지 개별 답이 아니고, "이 웨이브는 왜 FAST 였나" 는 §6.3 이 라우트에 "왜 이 차인가" 를 남기게 한 것과 같은 요구다.
   - **직전 계획은 DB 에서, 캠프별로** 읽는다. 인메모리 홀더는 재기동에 사라지고 인스턴스마다 다르다. 큰 캠프의 느린 계획이 작은 캠프를 열화시키면 이 신호가 「이 캠프가 밀린다」가 아니라 「어딘가 바쁘다」를 뜻하게 된다. 조회 비용은 10만 행에서 **5.4 ms**(계획 시간의 0.09%)라 인덱스를 넣지 않았다 — 판단과 재검토 조건은 [측정](benchmarks/phase4-fast-mode.md) §5.
   - **열화는 래치가 아니다.** 상태를 들지 않고 매 계획마다 두 사실을 다시 본다. 조건이 사라지면 다음 계획이 곧바로 FULL 이라 "한 번 열화하면 누가 되돌리는가" 라는 질문이 없다.
@@ -2679,7 +2679,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 | Kafka 브로커 다운 | outbox 미발행 누적 | 릴레이 재시도, 주문 API 정상 | RB-01: 브로커 복구 후 outbox 지연 해소 확인 |
 | PostgreSQL 다운(서비스 1개) | 해당 서비스 5xx, 레디니스 실패, **릴레이 발행 중단**(리더십 판정 불가 — 발행할 행도 못 읽으므로 같은 사건이다, ADR-027 정정) | 트래픽 차단(프로브), 소비자 재시도 후 pause — **(2026-09-25, 7-5 정정) `pause` 는 구현되지 않았다**: 재시도 3회 뒤 DLQ 이고, 멈춤처럼 보이는 것은 커넥션 풀의 대기(30초 × 네 번 — 레코드 하나에 약 2분)가 리스너 스레드를 묶기 때문이다. 5분 20초 장애에서 200건 중 6건이 DLQ, 194건은 복구 뒤 처리(근거: 관측(재현됨) — RB-02 §3). **결정(2026-09-25): 구현을 원칙에 맞춘다** — DLQ 는 독약 메시지의 자리이지 장애의 자리가 아니다. 소비 측 오류 처리기가 발행 측 분류기(ADR-015)를 재사용해 **일시적 실패(DB 연결 · 타임아웃)는 백오프로 끝없이 재시도**(= 파티션이 멈춘다 — 이 칸이 「pause」라 부르던 것, 장애 중에는 순서를 지키는 원하는 성질이다), **결정적 실패만 3회 뒤 DLQ**. 영구적인 「일시」 실패(틀린 자격 증명)는 소비자 랙 알림이 잡는다. 7-3 의 DB 장애 카오스가 「DLQ 0건, 복구 뒤 전부 처리」로 본다. **(2026-09-25, 7-3) 구현** — 경계는 [ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md)의 경계표다(§4.6 「경계」). 영구적인 「일시」 실패는 랙이 아니라 **재시도의 나이**로 잡는다 — `dawnline_event_retry_age_seconds` 가 30분을 넘으면 `DawnlineConsumerRetryStuck`. 일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다 | RB-02 |
 | Redis 다운 | 성능 저하, 락 폴백 | 폴백 경로(§7.2) | RB-03: 복구 후 geo 재적재 확인 |
-| dispatch 계획 중 크래시 | plan `PLANNING` 정체 | 10분 후 자동 재실행 | RB-04: 강제 재실행 |
+| dispatch 계획 중 크래시 | 계획 트랜잭션 롤백 — 그 웨이브의 `route_plans` 행이 없다(`PLANNING` 은 커밋되지 않는다, ADR-024 후속 정정) | 재기동 즉시 `wave.closed` 재전달로 다시 계획 | RB-04 §1: 재기동 · 소비 확인 |
 | 독약 메시지 (소비 측) | 소비자 반복 실패 | 결정적 실패만 3회 후 DLQ, 역직렬화 · 스키마 불일치는 즉시(§4.6 「경계」) | RB-05: 원인 수정 후 replay |
 | 독약 행 (발행 측) | 릴레이가 봉투 조립 실패 반복 | 결정적 실패로 분류해 격리(`failed_at`), 뒤 행은 계속 발행 (§4.6, ADR-015) | RB-05: 원인 수정 후 `failed_at = NULL` 로 재큐 |
 | 컷오프 스케줄러 이중 실행 | 없음 | Redis 락 + 낙관적 락 | — |
@@ -2702,7 +2702,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 
 - 레디니스: **DB 마이그레이션 완료만**. Kafka 브로커 연결은 넣지 않는다 — 브로커 장애 시에도 쓰기 경로는 outbox로 정상 동작해야 하기 때문이다(§8.4, [ADR-016](adr/ADR-016-readiness-excludes-kafka.md)). 브로커 상태는 레디니스가 아니라 outbox 지연·랙 알림으로 감시한다.
 - **Redis GEO 적재도 넣지 않는다**(2026-09-05 정정, ADR-016 후속 정정). 이전 판은 "(fulfillment) GEO 적재 완료"를 조건으로 적었는데, 그것은 §7.2 가 `geo:fc`·`geo:camp` 에 폴백(DB 전체 조회 + 메모리 하버사인)을 둔 것과 모순이다. **폴백이 있는 의존성을 레디니스에 넣으면 Redis 장애가 곧 서비스 차단이 되어 폴백을 만든 이유가 사라진다.** 적재는 best-effort 로 하고 주기적으로 재시도하며, 상태는 `dawnline_geo_index_loaded{index}` 게이지(0/1)와 폴백 사용 카운터로 관측한다(§9.1) — 레이트 리밋의 `bypassed` 와 같은 방식이다.
-- 그레이스풀 셧다운: HTTP 드레인 30초, Kafka 소비자 커밋 후 종료, 진행 중 계획은 `PLANNING` 유지(재실행 경로가 회수).
+- 그레이스풀 셧다운: HTTP 드레인 30초, Kafka 소비자 커밋 후 종료, 진행 중 계획은 트랜잭션과 함께 롤백되고 `wave.closed` 가 재기동 뒤 다시 전달된다(§5.3 — `PLANNING` 은 남지 않는다).
 
 ---
 
@@ -2805,7 +2805,7 @@ ADR-060 맥락 1) — §9.4 의 p95 알림이 읽을 것이 없었다.
 | `dawnline_plan_cost_krw` | gauge | dispatch | camp |
 | `dawnline_plan_unassigned` | gauge | dispatch | camp |
 | `dawnline_plan_degraded_total` | counter | dispatch | camp, reason(LAG/BUDGET) — **자동 열화만** 센다([ADR-034](adr/ADR-034-degrade-mode.md)). 운영자가 `mode=FAST` 를 지정한 계획은 들어가지 않는다 — 사람이 고른 것은 시스템이 밀려서 포기한 것이 아니고, 섞으면 이 값이 「성수기에 무엇을 포기했나」가 아니라 「누가 FAST 를 몇 번 썼나」가 된다. 개별 답은 `route_plans.mode_reason` 이 든다 |
-| `dawnline_plan_backlog_unknown_total` | counter | dispatch | camp — 랙을 **모른 채** 내린 자동 모드 판단. 모름은 0 이 아니다(§6.7) — 이 값이 오르는 동안 열화 판단은 조건 둘 중 하나만 보고 있고, 그 사실이 안 보이면 「랙 조건이 한 번도 발화하지 않았다」가 건강의 증거처럼 읽힌다. `dawnline_geo_lookups_total{outcome=bypassed}` 와 같은 어휘다 — **폴백은 조용히 일어나면 안 된다.** 운영자 재실행·정체 회수는 볼 파티션이 없어 정상적으로 오르므로, 0 이어야 하는 값이 아니라 **비율**을 보는 값이다 |
+| `dawnline_plan_backlog_unknown_total` | counter | dispatch | camp — 랙을 **모른 채** 내린 자동 모드 판단. 모름은 0 이 아니다(§6.7) — 이 값이 오르는 동안 열화 판단은 조건 둘 중 하나만 보고 있고, 그 사실이 안 보이면 「랙 조건이 한 번도 발화하지 않았다」가 건강의 증거처럼 읽힌다. `dawnline_geo_lookups_total{outcome=bypassed}` 와 같은 어휘다 — **폴백은 조용히 일어나면 안 된다.** 운영자 재실행은 볼 파티션이 없어 정상적으로 오르므로, 0 이어야 하는 값이 아니라 **비율**을 보는 값이다 |
 | `dawnline_cancel_too_late_total` | counter | dispatch | camp — 이미 `ARRIVED`/`COMPLETED` 인 stop 에 도착해 **거부한** `order.cancelled` (§6.10, [ADR-026](adr/ADR-026-dispatch-cancellation-window.md)). order-service 의 축 밖 거부 카운터와 **한 쌍**이다 — 저쪽은 "취소된 주문에 배차가 왔다", 이쪽은 "배송된 주문에 취소가 왔다" 를 세고 둘 다 같은 경합 창의 양 끝이다. 오르면 볼 곳은 dispatch 가 아니라 order-service 의 `order.dispatched` 컨슈머 랙이다 |
 | `dawnline_at_risk_total` | counter | tracking | camp — `route_revisions.camp_id` 가 그 출처다(§5.4). **`shipments` 가 아니라 여기인 이유**: 캠프는 라우트의 성질이고 at-risk 판정도 라우트 단위라 결이 같다. 주문 단위 표에 두면 라우트 속성을 행 수만큼 비정규화하게 된다. 라벨 집합은 나중에 바꿀 수 없으므로(같은 이름의 미터가 라벨 키를 바꾸면 등록이 실패한다 — `dawnline_event_rejected_total` 의 같은 문단) **카운터가 처음 등록되는 Phase 5-1b 전에** 보관을 먼저 넣었다 |
 | `dawnline_at_risk_cooldown_bypassed_total` | counter | tracking | 라벨 없음 — at-risk 쿨다운(Redis)을 쓰지 못해 **쿨다운 없이 발행한** 횟수 (§7.2 fail-open). 건너뛰면 Redis 장애가 곧 위험 감지 중단이 되므로 발행하는 쪽을 고르고, 그 사실을 여기서 센다. `dawnline_geo_lookups_total{outcome=bypassed}` 와 같은 어휘다 — **폴백은 조용히 일어나면 안 된다.** 이 값이 오르는 동안 「알림이 늘었다」는 위험이 늘어난 것이 아니라 Redis 가 죽은 것이다 |

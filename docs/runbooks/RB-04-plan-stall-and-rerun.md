@@ -4,16 +4,18 @@
 |---|---|
 | 대상 | dispatch 의 웨이브 계획 — `wave.closed` 가 시작하고 `plan.completed` · `plan.failed` 로 끝난다 |
 | 알림 | `DawnlinePlanDurationP95` ([README](README.md) 1). 알림 밖에서 오는 곳 둘: `dawnline_fulfillment_orders_stuck` · `dawnline_route_plans_stuck` 이 0 이 아니다(§9.1 — 볼 곳이 여기다) |
-| 관련 설계 | §5.3(계획 상태 머신 · 정체 회수) · §6.7(시간 예산 · 열화 사다리) · §8.4(「dispatch 계획 중 크래시」 행) · ADR-024 · ADR-034 · ADR-036 |
+| 관련 설계 | §5.3(계획 상태 머신 · 계획 하나는 트랜잭션 하나) · §6.7(시간 예산 · 열화 사다리) · §8.4(「dispatch 계획 중 크래시」 행) · ADR-024 · ADR-034 · ADR-036 |
 
-**먼저 본다 — SQL** 끝나지 않은 계획이 있는가 — 느린 것과 멈춘 것은 대응이 다르다:
+**먼저 본다 — SQL** 계획을 기다리는 웨이브와 실패한 계획이 있는가 — 느린 것과 멈춘 것은 대응이 다르다. 계획 하나는 트랜잭션 하나라(§5.3)
+도는 중인 계획은 `route_plans` 에 **행이 없다** — 기다리는 것은 웨이브 쪽에서 본다:
 
 ```bash
+sql fulfillment "SELECT id, camp_id, service_tier, closed_at FROM waves
+                  WHERE status = 'CLOSED' AND closed_at < now() - interval '5 minutes' ORDER BY closed_at LIMIT 20"
 sql dispatch "SELECT id, wave_id, status, strategy, mode, mode_reason, started_at, finished_at, failure_reason
                 FROM route_plans
-               WHERE status IN ('REQUESTED', 'PLANNING', 'PLANNED')
-                  OR (status = 'FAILED' AND finished_at > now() - interval '1 day')
-               ORDER BY started_at DESC NULLS FIRST LIMIT 20"
+               WHERE status = 'FAILED' AND finished_at > now() - interval '1 day'
+               ORDER BY finished_at DESC LIMIT 20"
 ```
 
 있으면 1(멈췄다 · 실패했다), 없고 알림만 울리면 2(느리다). `FAILED` 를 하루로 자르는 이유: 재실행하지 않은 옛 실패가 남는다 — 로컬 볼륨에는
@@ -27,8 +29,8 @@ sql dispatch "SELECT id, wave_id, status, strategy, mode, mode_reason, started_a
 
 | 상태 | 뜻 | 대응 |
 |---|---|---|
-| `PLANNING`, `started_at` 10분 이내 | 도는 중이다 | 기다린다. 예산은 30초다(§6.7) — 10분은 인스턴스가 죽었다는 뜻이다 |
-| `PLANNING`, 10분 넘음 | 계획하던 인스턴스가 죽었다 | **저절로 회수된다** — 1분마다 도는 회수가 `REQUESTED` 로 되돌려 다시 돈다(로그 「정체된 계획 N건을 회수합니다」). 회수가 돌지 않으면 dispatch 가 떠 있는지부터 본다 |
+| **행이 없다** — 웨이브는 `CLOSED` | 도는 중이거나, `wave.closed` 를 아직 소비하지 않았다. **계획 하나는 트랜잭션 하나라**(§5.3, ADR-024 후속 정정) 도는 동안의 `REQUESTED` · `PLANNING` 은 다른 세션에 보이지 않는다 | 예산은 30초다(§6.7). 몇 분이 지나도 없으면 소비를 본다 — 그룹 랙(RB-01 §2.1)과 재시도 나이(`dawnline_event_retry_age_seconds{service="dispatch-service"}`, RB-02 §3). 도는 중인지는 `sql dispatch "SELECT now() - xact_start, left(query, 60) FROM pg_stat_activity WHERE usename = 'dawnline_dispatch' AND state <> 'idle'"` |
+| dispatch 가 계획 중에 죽었다 | 트랜잭션이 롤백됐다 — **남은 행이 없다** | **저절로 된다** — 재기동하면 커밋되지 않은 `wave.closed` 가 다시 전달돼 처음부터 계획한다(로그 「웨이브 계획: waveId=… 결과=PUBLISHED」). dispatch 가 떠 있는지부터 본다. 관측: 결과 쓰기에서 죽여도 행 0, 재기동 26초 뒤 `PUBLISHED`(`make chaos-kill`) |
 | `FAILED` | 계획이 실패로 끝났다 — `failure_reason` 을 본다 | 아래 1.1 |
 | `REQUESTED` · `PLANNED` 가 오래 남음 | 결과 쓰기와 발행 사이에서 멈췄다 — 한 트랜잭션이라 정상에서는 보이지 않는다 | dispatch 로그의 예외. DB 장애 뒤라면 [RB-02](RB-02-database-outage.md) |
 
@@ -48,8 +50,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   "http://localhost:$OPS_API_PORT/api/v1/plans/<waveId>/run?mode=FULL" | jq
 ```
 
-- **`FAILED` 만 다시 돈다.** `PUBLISHED` 는 `ALREADY_PUBLISHED` 로 아무것도 하지 않는다(멱등, §5.3). `PLANNING` 중인 계획에 누르면 상태 전이가
-  거절된다 — 도는 계획을 둘로 만들지 않는다.
+- **`FAILED` 만 다시 돈다.** `PUBLISHED` 는 `ALREADY_PUBLISHED` 로 아무것도 하지 않는다(멱등, §5.3). 처음 도는 중인 계획은 아직
+  행이 없어 404 다(§5.3 — 한 트랜잭션) — 도는 계획을 둘로 만들지 않는다.
 - 성공하면 `plan.completed` 가 다시 나가고 fulfillment 의 웨이브가 `PLAN_FAILED → PLANNED` 로 돌아온다 — 그 경로는 이것 하나다(ADR-024 결정 3).
 - `mode=FAST` 는 사람이 고른 열화다 — `dawnline_plan_degraded_total` 에 들어가지 않고 `route_plans.mode_reason` 이 `REQUESTED` 다(ADR-034).
 - 감사 행이 남는다(`RUN_PLAN`). 응답이 `UNKNOWN`(504 · 502 `core-error`)이면 [RB-07](RB-07-audit-unknown.md) 이다 — dispatch 의 읽기 타임아웃은
