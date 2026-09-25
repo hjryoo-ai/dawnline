@@ -34,5 +34,14 @@ public enum UnserviceableReason {
      * 왔다"</em> 이다. 20일 묵은 {@code order.placed} 가 DLQ replay 로 들어와도 다음 웨이브로
      * 밀려 오늘 날짜의 새 배송 약속이 나가지 않게 하는 방어다.
      */
-    STALE_PLACED
+    STALE_PLACED,
+
+    /**
+     * FC 선택 <strong>뒤</strong> — 원래 컷오프의 웨이브와 밀린 셋이 모두 닫혀 있다 (ADR-063).
+     *
+     * <p>이벤트는 제때 왔다. 받을 웨이브가 없는 것이고, 그렇게 되는 길은 사실상 하나다 — 운영자가 같은 캠프 ·
+     * 티어의 웨이브를 컷오프 전에 거듭 닫았다(ADR-054). 이 이름이 {@code STALE_PLACED} 와 갈라져 있어야
+     * 운영자가 그날 자기가 누른 마감의 결과로 읽는다.
+     */
+    MAX_PUSHES_EXCEEDED
 }

@@ -95,6 +95,30 @@ printf '  %-22s %s\n' "zones"               "$zones"
 [ "$zones" -ge 91 ] || fail "권역 시드가 91개 미만이다($zones). UNSERVICEABLE 이 시드 부족으로 나온다 (ADR-021)."
 
 # -----------------------------------------------------------------------------
+# 전제 — 받을 웨이브가 남아 있다 (ADR-063). 주문은 닫힌 웨이브를 만나면 다음 컷오프로 밀리고, 원래 것과 밀린
+# MAX_WAVE_PUSHES 개가 모두 닫혀 있으면 MAX_PUSHES_EXCEEDED 로 끝난다. 이 데모는 실행마다 웨이브 하나를 컷오프 전에
+# 닫는다(phase6-demo 3 단계 — 운영자 조기 마감). 그래서 **같은 볼륨에서 같은 날 거듭 돌리면** 그 캠프 · 티어의
+# 앞으로 올 웨이브가 차례로 닫혀 있고, 어느 실행에서 5 단계가 배차 불가 수십 건으로 멈춘다 — 그 자리에서는 원인이
+# 보이지 않는다. 여기서 먼저 센다: 캠프 · 티어마다 컷오프가 아직 오지 않은 웨이브를 컷오프 순으로 보고, 첫 OPEN
+# 앞에 늘어선 닫힌 웨이브의 수. 그 수가 MAX_WAVE_PUSHES + 1 이면 그 캠프 · 티어로 가는 다음 주문은 받을 웨이브가 없다.
+# MAX_WAVE_PUSHES 는 PlanOrderService 의 상수다 — 둘이 같은지는 PlanOrderServiceTest 가 본다.
+MAX_WAVE_PUSHES=3
+exhausted="$(fq "WITH ahead AS (
+                   SELECT camp_id, service_tier, status,
+                          count(*) FILTER (WHERE status = 'OPEN')
+                            OVER (PARTITION BY camp_id, service_tier ORDER BY cutoff_at) AS opens
+                     FROM waves WHERE cutoff_at > now())
+                 SELECT string_agg(c.code || ' ' || a.service_tier || ' ' || a.closed, ', ')
+                   FROM (SELECT camp_id, service_tier, count(*) AS closed FROM ahead WHERE opens = 0
+                          GROUP BY camp_id, service_tier HAVING count(*) > $MAX_WAVE_PUSHES) a
+                   JOIN camps c ON c.id = a.camp_id")"
+printf '  %-22s %s\n' "밀림 소진 캠프 · 티어" "${exhausted:-없음}"
+[ -z "$exhausted" ] || fail "앞으로 올 웨이브가 $((MAX_WAVE_PUSHES + 1))개 이상 연달아 닫혀 있다(캠프 티어 개수): $exhausted
+  같은 날 반복 실행으로 밀림이 소진됐다 — 데모는 실행마다 웨이브 하나를 컷오프 전에 닫는다(ADR-063).
+  이대로 돌리면 그 캠프 · 티어의 주문이 MAX_PUSHES_EXCEEDED 로 끝난다.
+  'make clean-volumes' 로 볼륨을 새로 하거나, 닫힌 웨이브의 컷오프가 지난 뒤에 돌린다."
+
+# -----------------------------------------------------------------------------
 # 워밍업. Phase 1 k6 실측(docs/benchmarks/phase1-orders-k6.md)에서 콜드 p99 가 1.9~4.0 초로
 # 나왔다 — 0.75 CPU 에서 SerialGC 와 JIT 가 겹치는 구간이다. 워밍업 없이 본 시나리오를 돌리면
 # 첫 몇 건이 sim-runner 의 5초 타임아웃에 걸려 "주문 200건 중 199건" 으로 죽는다.

@@ -69,9 +69,18 @@ tasks.register<Test>("updateOpenApi") {
 // -----------------------------------------------------------------------------
 // RetentionTableDefaultsTest 가 docs/DESIGN.md §7.1 보존 표를 읽는다(ADR-058 결정 7) — 입력으로 선언하지 않으면
 // 표만 고친 빌드에서 test 가 UP-TO-DATE 로 건너뛴다. 검사가 돌지 않는데 초록인 것은 이 검사가 막으려는 모양이다.
+// 같은 이유로 단위 테스트가 읽는 파일 둘을 더 건다 — ServiceTierContractTest · UnserviceableReasonContractTest 가
+// contracts/events 를, PlanOrderServiceTest 가 데모의 밀림 상한을 읽는다(ADR-063). 앞의 둘은 2026-09-25 까지 입력이
+// 아니었다 — 스키마만 고친 빌드에서 ServiceTierContractTest 가 건너뛰어졌다.
 // -----------------------------------------------------------------------------
 tasks.named<Test>("test") {
     inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
             .withPropertyName("retentionTable")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.layout.projectDirectory.dir("contracts/events"))
+            .withPropertyName("eventContracts")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.layout.projectDirectory.file("tools/demo/phase2-demo.sh"))
+            .withPropertyName("demoWavePushes")
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }

@@ -19,6 +19,9 @@ import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.Zone;
 import com.dawnline.observability.DawnlineMetrics;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,6 +30,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -288,6 +293,56 @@ class PlanOrderServiceTest {
 
         assertThat(outcome.reason()).contains(UnserviceableReason.STALE_PLACED);
         assertThat(repositories.waves()).as("웨이브를 만들지 않는다").isEmpty();
+    }
+
+    @Test
+    void 받을_웨이브가_모두_닫혀_있으면_STALE_PLACED_가_아니라_MAX_PUSHES_EXCEEDED_다() {
+        // ADR-063 — 운영자가 같은 캠프 · 티어의 웨이브를 컷오프 전에 거듭 닫으면(ADR-054) 밀림 상한에 닿는다.
+        // 이벤트는 제때 왔다. 사유가 STALE 이면 운영자는 그것을 「늦게 온 주문」으로 읽고 자기가 누른 마감을 보지 않는다.
+        Instant cutoff = CUTOFF_10;
+        for (int wave = 0; wave <= PlanOrderService.MAX_WAVE_PUSHES; wave++) {
+            closedWave(cutoff, WaveCloseCause.MANUAL);
+            cutoff = schedule.nextCutoffAfter("SAME_DAY", cutoff);
+        }
+        PlacedOrderSnapshot snapshot = snapshot(CUTOFF_10);
+        // 전제 — 이 주문은 늦게 온 것이 아니다. 이 전제가 무너지면 STALE 이 옳은 답이 된다.
+        assertThat(new FcSelection(Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofHours(24)).isStale(snapshot.cutoffAt()))
+                .as("컷오프가 24시간 안이다").isFalse();
+
+        PlanOrderUseCase.PlanOutcome outcome = service.plan(snapshot, UUID.randomUUID());
+
+        assertThat(outcome.reason()).contains(UnserviceableReason.MAX_PUSHES_EXCEEDED);
+        assertThat(events.unserviceable).singleElement()
+                .extracting(Rejected::reason).isEqualTo(UnserviceableReason.MAX_PUSHES_EXCEEDED);
+        assertThat(repositories.waves()).as("상한 너머의 웨이브를 만들지 않는다")
+                .hasSize(PlanOrderService.MAX_WAVE_PUSHES + 1);
+    }
+
+    @Test
+    void 밀림_상한_바로_앞의_웨이브가_열려_있으면_편입한다() {
+        // 위 테스트의 경계 — 마지막으로 보는 웨이브(밀림 셋째)가 열려 있으면 거기로 간다.
+        Instant cutoff = CUTOFF_10;
+        for (int wave = 0; wave < PlanOrderService.MAX_WAVE_PUSHES; wave++) {
+            closedWave(cutoff, WaveCloseCause.MANUAL);
+            cutoff = schedule.nextCutoffAfter("SAME_DAY", cutoff);
+        }
+
+        PlacedOrderSnapshot snapshot = snapshot(CUTOFF_10);
+        PlanOrderUseCase.PlanOutcome outcome = service.plan(snapshot, UUID.randomUUID());
+
+        assertThat(outcome.reason()).isEmpty();
+        assertThat(repositories.order(snapshot.orderId()).orElseThrow().cutoffAt()).contains(cutoff);
+    }
+
+    @Test
+    void 데모의_전제가_세는_밀림_상한이_이_상수와_같다() throws IOException {
+        // tools/demo/phase2-demo.sh 는 시작 전에 「앞으로 올 웨이브가 MAX_WAVE_PUSHES + 1 개 이상 연달아 닫혀 있는가」를 센다
+        // (ADR-063). 그 스크립트는 이 상수를 읽을 수 없어 숫자를 다시 적는다 — 서로를 비추는 두 자리라 대조한다.
+        String demo = Files.readString(Path.of("../../tools/demo/phase2-demo.sh"));
+        Matcher line = Pattern.compile("(?m)^MAX_WAVE_PUSHES=(\\d+)$").matcher(demo);
+
+        assertThat(line.find()).as("phase2-demo.sh 에 MAX_WAVE_PUSHES= 줄이 없다 — 전제 검사가 사라졌거나 모양이 바뀌었다").isTrue();
+        assertThat(Integer.parseInt(line.group(1))).isEqualTo(PlanOrderService.MAX_WAVE_PUSHES);
     }
 
     // --- 순서 뒤바뀜 -----------------------------------------------------------
