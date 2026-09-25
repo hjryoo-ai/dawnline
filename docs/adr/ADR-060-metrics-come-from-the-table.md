@@ -4,7 +4,7 @@
 |---|---|
 | 상태 | Accepted (2026-09-25) |
 | 결정일 | 2026-09-25 |
-| 관련 문서 | `docs/DESIGN.md` §9.1 「라벨 칸의 문법」 · §9.4 알림 표 · §13 ArchUnit 규칙 11 · 「픽스처가 정하지 않은 축」 10 · `docs/IMPLEMENTATION_PLAN.md` 7-0 A5 · A6 · A7 · A30 |
+| 관련 문서 | `docs/DESIGN.md` §9.1 「라벨 칸의 문법」 · §9.4 알림 표 · §13 ArchUnit 규칙 11 · 「픽스처가 정하지 않은 축」 10 · 12 · `docs/IMPLEMENTATION_PLAN.md` 7-0 A5 · A6 · A7 · A30 |
 | 관련 ADR | [ADR-058](ADR-058-shipment-and-read-model-retention.md) (「NaN 은 모름」 게이지들) · [ADR-059](ADR-059-dispatch-retention-is-per-plan.md) (필드로 잡아 둔 정리기 — 이 ADR 이 되돌린다) · [ADR-055](ADR-055-operator-writes-on-cores-carry-an-internal-token.md) (미리 등록한 첫 카운터) · [ADR-022](ADR-022-fulfillment-order-aggregate.md) (같은 이름의 미터는 같은 라벨 키 집합) |
 
 ---
@@ -51,6 +51,15 @@
    에 `_bucket` 이 없었다(근거: 관측(재현됨) — order-service 컨텍스트의 `/actuator/prometheus`). 맥락 1 과 같은 부류다 —
    그리는 쪽이 읽을 것이 있는지를 아무도 긁어 보지 않았다. 카탈로그 밖의 Spring 미터라서 헬퍼가 켤 수 없고, 속성 파일에서
    **미터 이름**(`http.server.requests`)으로 켠다. 버킷이 실제로 있는지는 Compose 스모크(`make obs-check`)가 본다.
+6. **§9.4 가 그리라고 적은 것에 §9.1 의 행이 없었다** (2026-09-25 추가). Delivery 의 「실패 · 라우트 진행」이다. 대시보드
+   대조는 「패널이 쓰는 이름은 §9.1 에 있다」를 보므로, 이름이 없는 항목은 텍스트 패널로만 남을 수 있었다 — 첫 판이 그렇게
+   했고, 그것은 **꺼 둔 검증의 패널판**이다. 근거: 관측(재현됨) — 패널을 그리며 §9.4 의 항목을 §9.1 과 맞대 보다 드러났다.
+   두 행을 더했다: `dawnline_kpi_delivery{camp, outcome}`(정시율과 같은 스냅숏의 결과 수)와 `dawnline_routes{camp, status}`
+   (`rm_routes` 의 진행 집계 — 라우트 단위가 아니다, `routeId` 는 열린 라벨이다). 둘 다 표 → 카탈로그 → 헬퍼를 지나고,
+   나머지(등록 · 라벨 값 · 패널)는 대조 검사가 요구했다.
+
+맥락 1 과 5 는 한 모양이다 — **알림과 패널이 존재하지 않는 시계열을 보고 있었다**(§13 축 12). 맥락 2 는 카탈로그가 라벨
+집합을 넷째 칸으로 드는 이유가 첫 실행에서 증명된 사례다.
 
 ---
 
