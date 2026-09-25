@@ -2866,7 +2866,9 @@ PRODUCER → CONSUMER 쌍뿐이다** — 발행 스팬(템플릿 관측)의 id �
 CI 에서 흔들렸다 — `dispatch→tracking` 만 빠졌는데 같은 실행의 TraceQL 검사(4)는 tracking 을 봤다. 소비자가 여럿인 토픽에서
 발행 스팬 하나는 한 소비자와만 짝지어지는 것으로 보인다(근거: 추정 — 로컬에서 `route.assigned` 를 함께 받는 `dispatch→ops-api` 는
 1,056, `dispatch→tracking` 은 8 이었다. Tempo 의 짝짓기 코드는 읽지 않았다). 그러면 어느 간선이 서는지는 소비 스팬의 도착 순서에
-달렸으므로 「넷을 덮는다」는 검사할 성질이 아니다. 로컬 실측(2026-09-25): 코어 간선
+달렸으므로 「넷을 덮는다」는 검사할 성질이 아니다. **그래프는 존재 증명이지 완전성 증명이 아니다** — 이 추정이 참이면 팬아웃
+토픽에서 그래프는 구조적으로 한 소비자만 보이므로, 간선 하나가 없다는 것만으로는 그 경계가 끊겼다고 말할 수 없다. 그 질문의 답은 TraceQL(4)이다
+(런북 [README](runbooks/README.md) 2.1). 로컬 실측(2026-09-25): 코어 간선
 여섯 — `order→fulfillment` · `fulfillment→dispatch` · `dispatch→tracking` 의 사슬과 되돌아오는 `fulfillment→order` ·
 `dispatch→order` · `dispatch→fulfillment`. `ops-api` 로 가는 간선(프로젝션 소비)과 `ops-api→` 의 HTTP 간선(위임)도 있지만
 코어 밖이다. **음성 표본 — 다섯 서비스의 템플릿 관측만 끈다**(`SPRING_KAFKA_TEMPLATE_OBSERVATION_ENABLED=false`): 코어 간선이
