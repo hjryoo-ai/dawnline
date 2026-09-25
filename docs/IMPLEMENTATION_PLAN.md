@@ -1952,7 +1952,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 2 | outbox 격리 조회·재큐 | ✅ | #52 `94c8ab2` — [ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md) |
 | 2 | 코어 운영자 쓰기의 내부 토큰 | ✅ | #53 `75338d4` — [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md) |
 | 2 | ops-api 의 fulfillment·tracking 위임 | ✅ | #54 `468113f` |
-| — | (이월 정리) 없는 시계열 §9.1 · 알림 카운터 사전 등록 | ✅ | #55 `83c6fcb` · #56 `a47de5a`. 남은 하나(`cancel_too_late{camp}`)는 7-1 에서 닫았다(`219c28d`, ADR-060) |
+| — | (이월 정리) 없는 시계열 §9.1 · 알림 카운터 사전 등록 | ✅ | #55 `83c6fcb` · #56 `a47de5a`. 남은 하나(`cancel_too_late{camp}`)는 7-1 에서 닫았다(`ef0b0a5`, ADR-060) |
 | 3 | C1 조회 표면 + `ops-api.yaml` | ✅ | #57 `7679c3b` |
 | 3 | 캠프 코드 | ✅ | #58 `6fe3a2f` — 변경은 반영되지 않는다(§5.5, #61) |
 | 3 | C2 ops-web | ✅ | #59 `90f5e32` — [ADR-056](adr/ADR-056-ops-web-client-is-typed-from-the-committed-contract.md) · [ADR-057](adr/ADR-057-map-draws-without-tiles-ops-web-is-an-nginx-image.md). `shortId` 결함은 #60 에서 고쳤다(§13 축 11) |
@@ -2028,10 +2028,10 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A2 | 콜드 스타트(기동 80초 p99 2~4초, 재현됨) | 위 인용 · `phase1-orders-k6.md` 6절 | 이미 켜졌다 — 코드가 아니라 **측정 조건**이다(D1) | peak-day 를 콜드 스택에서 시작해 첫 계획·첫 소비 처리량을 정상 상태와 갈라 적는다 | 측정 7-4 · 예열 항목 7-5(RB-06) |
 | A3 | lag-aware grace | Phase 2 이월 · ADR-020 결정 5 | `dawnline_promise_revised_total` 이 컷오프 직후 **뭉친다** | 그 카운터의 시간축 | 7-4 |
 | A4 | 4-20 구성의 수락 기준 · ADR-043 「`small` 회복」 · ADR-004 조건 (a) | Phase 4 대조표 20 · ADR-043 ② · ADR-044 ③ · ADR-004 | `small` 에서 `savings-cw+ls` ≤ 기본 전략 — **다섯 데이터셋 전부** | peak-day 의 `peak` 규모 웨이브 + 벤치마크 다섯 | 7-4 |
-| A5 | `cancel_too_late_total{camp}` 알림식 | §9.1 「없는 시계열」 · Phase 6 이월 | 라벨이 열린 집합 — 식이 첫 표본을 증가로 읽는다 | 규칙 파일 + 컨테이너 | 7-1 ✅ `219c28d` — `increase(x[w]) > 0 or (x unless x offset w)`. **같은 모양이 하나 더 있었다**(DLQ 신규 — `consumer`·`eventType`). 판정은 카탈로그의 라벨 칸이 한다(ADR-060 결정 3) |
-| A6 | §9.4 알림 규칙 전체 · 대시보드 4종 · Phase 5 카운터 넷의 패널 | §9.4 · 7-1 · `deploy/compose` 의 빈 자리 셋 | — (산출물) | — | 7-1 ✅ `219c28d` · `afa6c4c` — 규칙 14 · 대시보드 넷, §9.1 39행이 전부 패널이나 규칙에 나온다(`DashboardsConsistencyTest`). Delivery 의 「실패 · 라우트 진행」은 §9.1 에 메트릭이 없어 텍스트 패널이다 |
-| A7 | `increase()` 가 1 로 태어난 시계열의 첫 증가를 못 읽는다 — 근거를 `관측(재현됨)` 으로 | §9.1 | 미리 등록한 카운터와 안 한 카운터를 나란히 | 규칙 파일 + 컨테이너(음성 표본) | 7-1 ✅ `219c28d` — `PrometheusRulesIT`(실제 Prometheus 가 Micrometer 레지스트리를 긁는다) · promtool 첫 묶음 |
-| A8 | KPI 알림 두 개의 초기값(`kpi_refresh_age` > 300 · `promise_unknown` 30분) | §9.4 「초기값 — peak-day 에서 재검토」 | peak-day 에서 오탐·미탐 | 두 게이지의 시간축 | 식 7-1 ✅ `219c28d` · 값 7-4 |
+| A5 | `cancel_too_late_total{camp}` 알림식 | §9.1 「없는 시계열」 · Phase 6 이월 | 라벨이 열린 집합 — 식이 첫 표본을 증가로 읽는다 | 규칙 파일 + 컨테이너 | 7-1 ✅ `ef0b0a5` — `increase(x[w]) > 0 or (x unless x offset w)`. **같은 모양이 하나 더 있었다**(DLQ 신규 — `consumer`·`eventType`). 판정은 카탈로그의 라벨 칸이 한다(ADR-060 결정 3) |
+| A6 | §9.4 알림 규칙 전체 · 대시보드 4종 · Phase 5 카운터 넷의 패널 | §9.4 · 7-1 · `deploy/compose` 의 빈 자리 셋 | — (산출물) | — | 7-1 ✅ `ef0b0a5` · `3e7a5e7` — 규칙 14 · 대시보드 넷, §9.1 39행이 전부 패널이나 규칙에 나온다(`DashboardsConsistencyTest`). Delivery 의 「실패 · 라우트 진행」은 §9.1 에 메트릭이 없어 텍스트 패널이다 |
+| A7 | `increase()` 가 1 로 태어난 시계열의 첫 증가를 못 읽는다 — 근거를 `관측(재현됨)` 으로 | §9.1 | 미리 등록한 카운터와 안 한 카운터를 나란히 | 규칙 파일 + 컨테이너(음성 표본) | 7-1 ✅ `ef0b0a5` — `PrometheusRulesIT`(실제 Prometheus 가 Micrometer 레지스트리를 긁는다) · promtool 첫 묶음 |
+| A8 | KPI 알림 두 개의 초기값(`kpi_refresh_age` > 300 · `promise_unknown` 30분) | §9.4 「초기값 — peak-day 에서 재검토」 | peak-day 에서 오탐·미탐 | 두 게이지의 시간축 | 식 7-1 ✅ `ef0b0a5` · 값 7-4 |
 | A9 | `STALE_PLACED` — 단위만(⚠️) | Phase 2 대조표 | 재처리 경로가 생겼다(ADR-053) — 24시간 넘은 `order.placed` 가 브로커로 다시 올 수 있다 | 재처리를 지나는 IT | 7-3 |
 | A10 | `late-injection` → at-risk → 재계획 → revision 의 compose 전 구간(◐) · 5-4 의 두 서비스 잇기(◐) | Phase 5 대조표 · DoD | — (빈칸) | 로그·DB | 7-4 |
 | A11 | `rules:camp` 룰셋 캐시(⬜) | Phase 3 대조표 · `adapter/out/redis/package-info.java` | 부분 재계획이 룰을 라우트마다 읽어 룰 조회가 **보일 때** | 계획당 룰 조회 수·시간 | 7-4 |
@@ -2053,7 +2053,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A27 | **peak-day 의 전제** — 시나리오가 없다(`scenarios.yml` 은 smoke · tiny · ops-demo · late-injection), sim-runner 이미지는 꺼져 있다(「Phase 7 피크에서 다시 켠다」), `make peak` 은 자리표시다. 그리고 **부록 A 의 목록과 `scenarios.yml` 이 어긋난다** — `tiny`·`ops-demo` 는 목록에 없고, `late-injection` 은 목록이 「지연 15% · 실패 3%」, 파일이 `delay-probability: 1.0` · `failure-probability: 0.05` 다 | `tools/sim-runner` · `Makefile` · 부록 A | — | — | 7-4a |
 | A28 | 사건은 지나갔고 재검토 기록이 없는 셋 — ADR-029 ①(4-1 이후 예산 배분) · ②(부분 저장의 배치 단위) · ADR-047 ④(relocate 가 돌기 시작한 뒤 「덮음」의 빈도) | 표 C 에 있던 행 | — (소급) | 판정이 다른 곳에 있는지부터 찾는다 | 7-6 |
 | A29 | `cause="manual"` 이 일상이 되는가 | ADR-054 재검토 지점 1 | 조기 마감이 드문 결정이라는 가정이 틀렸다 | `promise_revised_total{cause}` · 감사 행 — peak-day 가 정해진 시각에 커맨드를 섞으므로(D3) 0 이 아니다 | 7-4 |
-| A30 | `DawnlineMetricsTest` 가 「§9.1 표를 그대로 옮긴 것」이라고 말하지만 **문서를 읽지 않는** 11개 고정 목록이다 — 표에는 그 뒤로 게이지·카운터가 여럿 늘었고(`dawnline_retention_last_success_age_seconds` · `*_stuck` 셋 등) 검사는 초록이다. 「서로를 비추는 목록」이 대조 없이 갈라진 모양(CLAUDE.md) | 7-0c 에서 §9.1 에 `dawnline_route_plans_stuck` 을 더하며 발견(2026-09-25) | — (이미 어긋나 있다) | §9.1 표 ↔ 코드의 메트릭 이름 — 문서에서 전부 읽고 빼는 방식으로 대조, `docs/DESIGN.md` 를 태스크 입력으로 | 7-1 ✅ `a17f15d` — 카탈로그(`DawnlineMetrics`)가 §9.1 의 행마다 항목을 들고 `DawnlineMetricsTest` 가 표를 읽어 이름 · 타입 · 라벨 집합을 양방향으로 대조한다(ADR-060). 처음 돌며 넷을 찾았다 — 히스토그램 버킷 없음 · action 둘 · cause `unknown` · tier `NEXT_DAY` · `geo_lookups` 의 index 둘 |
+| A30 | `DawnlineMetricsTest` 가 「§9.1 표를 그대로 옮긴 것」이라고 말하지만 **문서를 읽지 않는** 11개 고정 목록이다 — 표에는 그 뒤로 게이지·카운터가 여럿 늘었고(`dawnline_retention_last_success_age_seconds` · `*_stuck` 셋 등) 검사는 초록이다. 「서로를 비추는 목록」이 대조 없이 갈라진 모양(CLAUDE.md) | 7-0c 에서 §9.1 에 `dawnline_route_plans_stuck` 을 더하며 발견(2026-09-25) | — (이미 어긋나 있다) | §9.1 표 ↔ 코드의 메트릭 이름 — 문서에서 전부 읽고 빼는 방식으로 대조, `docs/DESIGN.md` 를 태스크 입력으로 | 7-1 ✅ `2c14d63` — 카탈로그(`DawnlineMetrics`)가 §9.1 의 행마다 항목을 들고 `DawnlineMetricsTest` 가 표를 읽어 이름 · 타입 · 라벨 집합을 양방향으로 대조한다(ADR-060). 처음 돌며 넷을 찾았다 — 히스토그램 버킷 없음 · action 둘 · cause `unknown` · tier `NEXT_DAY` · `geo_lookups` 의 index 둘 |
 
 **B. Phase 7 표기는 없지만 peak-day 가 판정 데이터를 내는 것** — 적어 두지 않으면 7-4 가 그 수를 재고도 판정하지 않는다
 
