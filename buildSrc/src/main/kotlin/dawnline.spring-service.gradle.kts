@@ -16,6 +16,11 @@ dependencies {
     add("implementation", libs.findLibrary("spring-boot-starter").get())
     add("implementation", libs.findLibrary("spring-boot-starter-actuator").get())
     add("implementation", libs.findLibrary("micrometer-registry-prometheus").get())
+    // 트레이싱(Micrometer Tracing → OTLP, DESIGN.md §9.2). libs/observability 에서 옮겨 왔다 — 그 모듈은 이제
+    // libs/messaging · libs/web 이 참조하고(ADR-060), 웹이 아닌 소비자(sim-runner)에게 OTel 스택을 끌고 가면 안 된다.
+    // Boot 4 모듈화 주의: 트레이싱 자동설정은 spring-boot-micrometer-tracing-opentelemetry / spring-boot-opentelemetry 에
+    // 있고, 이 스타터가 그것들과 bridge-otel · exporter-otlp 를 한 번에 가져온다. 빼면 MDC 의 traceId 도 OTLP 도 없다.
+    add("implementation", libs.findLibrary("spring-boot-starter-opentelemetry").get())
 
     add("testImplementation", libs.findLibrary("spring-boot-starter-test").get())
     add("integrationTestImplementation", libs.findLibrary("spring-boot-starter-test").get())

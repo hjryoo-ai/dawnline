@@ -2,7 +2,8 @@ package com.dawnline.messaging.kafka;
 
 import com.dawnline.messaging.EventHeaders;
 import com.dawnline.messaging.MessagingMetrics;
-import io.micrometer.core.instrument.Counter;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
@@ -52,12 +53,10 @@ public class DlqRecordRecoverer implements ConsumerAwareRecordRecoverer {
         log.error("DLQ 로 보냅니다. topic={}, partition={}, offset={}, eventType={}",
                 record.topic(), record.partition(), record.offset(), eventType, exception);
         delegate.accept(record, kafkaConsumer, exception);
-        Counter.builder(MessagingMetrics.EVENT_PROCESSED)
-                .description("이벤트 소비 결과")
-                .tag(MessagingMetrics.TAG_CONSUMER, consumer)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
-                .tag(MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_DLQ)
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_PROCESSED,
+                MessagingMetrics.TAG_CONSUMER, consumer,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType,
+                MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_DLQ)
                 .increment();
     }
 

@@ -1,7 +1,8 @@
 package com.dawnline.messaging.retention;
 
 import com.dawnline.messaging.MessagingMetrics;
-import io.micrometer.core.instrument.Gauge;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -58,10 +59,8 @@ public class RetentionAges {
 
     private Table register(String name) {
         Table table = new Table(name, clock);
-        Gauge.builder(MessagingMetrics.RETENTION_LAST_SUCCESS_AGE, table, Table::ageSeconds)
-                .description("그 표의 정리가 마지막으로 성공한 뒤로 흐른 초. 성공한 적이 없으면 기동부터 (ADR-058).")
-                .tag(MessagingMetrics.TAG_TABLE, name)
-                .register(registry);
+        DawnlineMeters.gauge(registry, DawnlineMetrics.RETENTION_LAST_SUCCESS_AGE, table, Table::ageSeconds,
+                MessagingMetrics.TAG_TABLE, name);
         return table;
     }
 

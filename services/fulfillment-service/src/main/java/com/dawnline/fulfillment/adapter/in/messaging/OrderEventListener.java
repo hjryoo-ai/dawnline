@@ -1,14 +1,15 @@
 package com.dawnline.fulfillment.adapter.in.messaging;
 
+import com.dawnline.fulfillment.application.port.in.CancelFulfillmentOrderUseCase;
+import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.idempotency.EventRejectedException;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.kafka.EventRecords;
-import com.dawnline.fulfillment.application.port.in.CancelFulfillmentOrderUseCase;
-import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
-import io.micrometer.core.instrument.Counter;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -116,11 +117,9 @@ public class OrderEventListener {
     }
 
     private void countAbsorbed() {
-        Counter.builder(MessagingMetrics.EVENT_STALE)
-                .description("order.placed 보다 먼저 도착한 order.cancelled (§4.5 순서 뒤바뀜)")
-                .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, "order.cancelled")
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, "order.cancelled")
                 .increment();
     }
 }

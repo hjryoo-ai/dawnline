@@ -13,6 +13,7 @@ import com.dawnline.fulfillment.application.port.out.ReferenceData;
 import com.dawnline.fulfillment.domain.Camp;
 import com.dawnline.fulfillment.domain.FulfillmentCenter;
 import com.dawnline.fulfillment.domain.Zone;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.Collection;
@@ -129,7 +130,7 @@ class CachingReferenceDataTest {
     }
 
     private double counter(String outcome) {
-        var found = registry.find(GeoMetrics.LOOKUPS_COUNTER)
+        var found = registry.find(DawnlineMetrics.GEO_LOOKUPS.meterName())
                 .tag("index", "zone").tag("outcome", outcome).counter();
         return found == null ? 0 : found.count();
     }

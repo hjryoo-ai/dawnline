@@ -7,7 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.Ids;
-import com.dawnline.tracking.application.TrackingMetrics;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.AssignedStop;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.RouteAssignment;
@@ -488,7 +488,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
 
     private double scanAfterRelocateCount() {
         try {
-            return meters.get(TrackingMetrics.SCAN_AFTER_RELOCATE).counter().count();
+            return meters.get(DawnlineMetrics.SCAN_AFTER_RELOCATE.meterName()).counter().count();
         } catch (MeterNotFoundException e) {
             return 0.0;
         }
@@ -496,7 +496,7 @@ class ScanApiIT extends TrackingIntegrationTestBase {
 
     private double scanAfterCancelCount() {
         try {
-            return meters.get(TrackingMetrics.SCAN_AFTER_CANCEL).counter().count();
+            return meters.get(DawnlineMetrics.SCAN_AFTER_CANCEL.meterName()).counter().count();
         } catch (MeterNotFoundException e) {
             return 0.0;
         }

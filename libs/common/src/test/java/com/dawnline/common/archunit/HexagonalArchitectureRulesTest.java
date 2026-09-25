@@ -152,6 +152,22 @@ class HexagonalArchitectureRulesTest {
     }
 
     @Test
+    void 규칙11_은_헬퍼를_지나지_않은_미터_등록을_잡는다() {
+        // 빌더와 레지스트리 메서드 둘 다 — 표본은 Counter.builder 와 registry.gauge 를 한 번씩 부른다.
+        assertThatThrownBy(() -> HexagonalArchitectureRules.metersRegisterThroughCatalogue(SAMPLES + ".bad").check(BAD))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("SelfNamedMeterUseCase")
+                .hasMessageContaining("Counter.builder")
+                .hasMessageContaining("MeterRegistry.gauge");
+    }
+
+    @Test
+    void 규칙11_은_미터를_읽는_것은_통과시킨다() {
+        // 반대 방향 — registry.get · find 는 등록이 아니다. 이것까지 막으면 테스트가 값을 볼 수 없다.
+        HexagonalArchitectureRules.metersRegisterThroughCatalogue(SAMPLES + ".good").check(GOOD);
+    }
+
+    @Test
     void 규칙6_은_올바른_표본을_통과시킨다() {
         HexagonalArchitectureRules.PUBLISHING_GOES_THROUGH_OUTBOX_ONLY.check(GOOD);
     }
@@ -178,7 +194,7 @@ class HexagonalArchitectureRulesTest {
     void 서비스별_규칙_전부를_만들_수_있고_대상이_없으면_통과한다(String service) {
         List<ArchRule> rules = HexagonalArchitectureRules.allRulesFor(service);
 
-        assertThat(rules).hasSize(9);
+        assertThat(rules).hasSize(10);
         // GOOD 표본에는 위반이 없으므로 전부 통과해야 한다. 규칙 3·4 는 이 표본에 대상이 0개이고,
         // allowEmptyShould(true) 덕분에 "대상 없음" 이 실패가 되지 않는다.
         // 그 둘의 탐지 능력은 위의 전용 테스트가 확인한다.

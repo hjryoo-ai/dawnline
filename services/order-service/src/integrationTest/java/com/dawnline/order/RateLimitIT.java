@@ -3,6 +3,7 @@ package com.dawnline.order;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Ids;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.adapter.out.redis.RedisOutageGate;
 import com.dawnline.order.adapter.out.redis.RedisRateLimiter;
@@ -209,9 +210,9 @@ class RateLimitIT {
         limiter.tryAcquire(customer);
         limiter.tryAcquire(customer);
 
-        assertThat(meters.find(OrderMetrics.RATE_LIMIT_DECISIONS)
+        assertThat(meters.find(DawnlineMetrics.RATE_LIMIT_DECISIONS.meterName())
                 .tag(OrderMetrics.TAG_OUTCOME, "allowed").counter().count()).isEqualTo(1);
-        assertThat(meters.find(OrderMetrics.RATE_LIMIT_DECISIONS)
+        assertThat(meters.find(DawnlineMetrics.RATE_LIMIT_DECISIONS.meterName())
                 .tag(OrderMetrics.TAG_OUTCOME, "limited").counter().count()).isEqualTo(1);
     }
 }

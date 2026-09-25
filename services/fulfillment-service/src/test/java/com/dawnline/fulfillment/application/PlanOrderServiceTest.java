@@ -18,13 +18,13 @@ import com.dawnline.fulfillment.domain.UnserviceableReason;
 import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.Zone;
+import com.dawnline.observability.DawnlineMetrics;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -159,7 +159,7 @@ class PlanOrderServiceTest {
 
         service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
 
-        assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED)
+        assertThat(registry.get(DawnlineMetrics.PROMISE_REVISED.meterName())
                 .tag("camp", "CAMP-A").tag("tier", "SAME_DAY").tag("cause", "scheduled").counter().count())
                 .isEqualTo(1);
     }
@@ -173,10 +173,10 @@ class PlanOrderServiceTest {
         PlanOrderUseCase.PlanOutcome outcome = service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
 
         assertThat(outcome.revised()).isTrue();
-        assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED)
+        assertThat(registry.get(DawnlineMetrics.PROMISE_REVISED.meterName())
                 .tag("camp", "CAMP-A").tag("tier", "SAME_DAY").tag("cause", "manual").counter().count())
                 .isEqualTo(1);
-        assertThat(registry.find(FulfillmentMetrics.PROMISE_REVISED).tag("cause", "scheduled").counter())
+        assertThat(registry.find(DawnlineMetrics.PROMISE_REVISED.meterName()).tag("cause", "scheduled").counter())
                 .as("한 개정은 한 원인이다").isNull();
     }
 
@@ -189,7 +189,7 @@ class PlanOrderServiceTest {
 
         service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
 
-        assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED).tag("cause", "manual").counter().count())
+        assertThat(registry.get(DawnlineMetrics.PROMISE_REVISED.meterName()).tag("cause", "manual").counter().count())
                 .isEqualTo(1);
     }
 
@@ -207,7 +207,7 @@ class PlanOrderServiceTest {
         // 홈 FC 가 필터를 통과했다. 세면 "대체가 일어났다" 가 거짓이 된다.
         service.plan(snapshot(CUTOFF_10), UUID.randomUUID());
 
-        assertThat(registry.find(FulfillmentMetrics.FC_FALLBACK).counter()).isNull();
+        assertThat(registry.find(DawnlineMetrics.FC_FALLBACK.meterName()).counter()).isNull();
     }
 
     @Test

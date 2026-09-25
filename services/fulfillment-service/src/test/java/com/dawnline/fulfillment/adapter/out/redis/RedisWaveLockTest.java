@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.dawnline.fulfillment.application.port.out.WaveLock;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
@@ -132,7 +133,7 @@ class RedisWaveLockTest {
     }
 
     private double counter(String outcome) {
-        var found = registry.find(GeoMetrics.LOOKUPS_COUNTER)
+        var found = registry.find(DawnlineMetrics.GEO_LOOKUPS.meterName())
                 .tag("index", "wave_lock").tag("outcome", outcome).counter();
         return found == null ? 0 : found.count();
     }

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.common.error.DomainException;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.observability.MdcKeys;
 import com.dawnline.ops.application.port.in.ReplayDeadLettersUseCase.RecordRef;
 import com.dawnline.ops.application.port.in.ReplayDeadLettersUseCase.Replayed;
@@ -181,7 +182,7 @@ class DlqReplayServiceTest {
                 .extracting(e -> ((DomainException) e).code()).isEqualTo("unavailable");
         assertThat(letters.republished).as("기록 없는 재처리는 없다").isEmpty();
         // 시계열은 미리 등록돼 있다(§9.1) — 「세지 않았다」는 전부 0 이라는 뜻이다.
-        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).isNotEmpty()
+        assertThat(registry.get(DawnlineMetrics.OPS_COMMANDS.meterName()).counters()).isNotEmpty()
                 .allSatisfy(counter -> assertThat(counter.count()).isZero());
     }
 
@@ -192,7 +193,7 @@ class DlqReplayServiceTest {
 
         Replayed replayed = service.replay("kim", TOPIC, List.of(REF)).getFirst();
 
-        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다")
+        assertThat(registry.get(DawnlineMetrics.OPS_COMMANDS.meterName()).counters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다")
                 .isNotEmpty().allSatisfy(counter -> assertThat(counter.count()).isZero());
         assertThat(replayed.result()).as("브로커는 받았다 — 운영자에게는 그대로 알린다").isEqualTo(AuditResult.SUCCEEDED);
     }
@@ -249,7 +250,7 @@ class DlqReplayServiceTest {
     }
 
     private double counted(String result) {
-        return registry.get(OpsCommandService.COMMANDS).tag("action", "DLQ_REPLAY").tag("result", result).counter()
+        return registry.get(DawnlineMetrics.OPS_COMMANDS.meterName()).tag("action", "DLQ_REPLAY").tag("result", result).counter()
                 .count();
     }
 

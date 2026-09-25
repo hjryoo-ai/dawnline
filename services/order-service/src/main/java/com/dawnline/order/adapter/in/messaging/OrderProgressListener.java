@@ -6,13 +6,14 @@ import com.dawnline.messaging.idempotency.EventRejectedException;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.kafka.EventRecords;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
 import com.dawnline.order.application.port.in.ApplyFulfillmentPlanUseCase;
 import com.dawnline.order.application.port.in.OrderProgress;
 import com.dawnline.order.domain.OrderStatus;
 import com.dawnline.order.domain.PromisedWindow;
 import com.dawnline.order.domain.ServiceTier;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Instant;
 import java.util.EnumMap;
@@ -142,11 +143,9 @@ public class OrderProgressListener {
                 && result != ApplyFulfillmentPlanUseCase.PlanApplication.STALE_BUT_DATA_APPLIED) {
             return;
         }
-        Counter.builder(MessagingMetrics.EVENT_STALE)
-                .description("이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017)")
-                .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType + "." + result.name().toLowerCase())
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType + "." + result.name().toLowerCase())
                 .increment();
     }
 
@@ -228,11 +227,9 @@ public class OrderProgressListener {
         if (progress != OrderProgress.STALE) {
             return;
         }
-        Counter.builder(MessagingMetrics.EVENT_STALE)
-                .description("이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017)")
-                .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType)
                 .increment();
     }
 
@@ -241,12 +238,10 @@ public class OrderProgressListener {
      * stop 안의 일부만 거부된 경우에는 예외를 던지지 않으므로 여기서 직접 올린다.
      */
     private void countRejected(String eventType, OrderProgress progress) {
-        Counter.builder(MessagingMetrics.EVENT_REJECTED)
-                .description("비즈니스 규칙 위반으로 무시한 이벤트 (DLQ 아님)")
-                .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
-                .tag(MessagingMetrics.TAG_REASON, progress.name())
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_REJECTED,
+                MessagingMetrics.TAG_CONSUMER, CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType,
+                MessagingMetrics.TAG_REASON, progress.name())
                 .increment();
     }
 }

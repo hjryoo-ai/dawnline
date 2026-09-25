@@ -15,7 +15,7 @@
 - Java 25 LTS (Temurin), Gradle 9.x Kotlin DSL, 멀티모듈 모노레포
 - Spring Boot 4.1.x (Spring Framework 7, Spring Kafka 4.1, Spring Security 7.1, Hibernate ORM 7 — BOM 관리)
 - Apache Kafka 4.3.x (KRaft), PostgreSQL 18, Redis 8.x, Flyway
-- 테스트: JUnit(BOM), AssertJ, Testcontainers, ArchUnit, WireMock, k6
+- 테스트: JUnit(BOM), AssertJ, Testcontainers, ArchUnit, WireMock, k6, SnakeYAML(Prometheus 규칙 파일을 구조로 읽는 대조 검사 — Boot BOM, 테스트 전용)
 - 관측성: Micrometer + OpenTelemetry → Prometheus / Grafana / Tempo
 - 프론트(ops-web): React 19 + Vite + TypeScript + Leaflet, 테스트는 Vitest + Testing Library(jsdom). Node 는 `.nvmrc`(24 LTS)
 - ops-web 클라이언트: 타입은 **커밋된 `contracts/openapi/ops-api.yaml`** 에서 `openapi-typescript` 로 빌드 때 생성하고(커밋하지 않는다),

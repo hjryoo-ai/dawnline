@@ -16,6 +16,8 @@ import com.dawnline.common.Ids;
 import com.dawnline.common.error.ConflictException;
 import com.dawnline.common.error.DomainException;
 import com.dawnline.common.error.ValidationException;
+import com.dawnline.observability.DawnlineMetrics;
+import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.application.port.in.OrderAccepted;
 import com.dawnline.order.application.port.in.PlaceOrderCommand;
 import com.dawnline.order.application.port.in.PlaceOrderResult;
@@ -30,7 +32,6 @@ import com.dawnline.order.domain.OrderItem;
 import com.dawnline.order.domain.OrderStatus;
 import com.dawnline.order.domain.Parcel;
 import com.dawnline.order.domain.ServiceTier;
-import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.domain.TierEligibility;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -149,13 +150,13 @@ class PlaceOrderServiceTest {
     }
 
     private double placedCount(ServiceTier tier) {
-        var counter = meters.find(OrderMetrics.ORDERS_PLACED)
+        var counter = meters.find(DawnlineMetrics.ORDERS_PLACED.meterName())
                 .tag(OrderMetrics.TAG_TIER, tier.name()).counter();
         return counter == null ? 0 : counter.count();
     }
 
     private double replayCount(ServiceTier tier) {
-        var counter = meters.find(OrderMetrics.IDEMPOTENT_REPLAYS)
+        var counter = meters.find(DawnlineMetrics.IDEMPOTENT_REPLAYS.meterName())
                 .tag(OrderMetrics.TAG_TIER, tier.name()).counter();
         return counter == null ? 0 : counter.count();
     }

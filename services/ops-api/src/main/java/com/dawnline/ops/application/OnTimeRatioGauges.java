@@ -1,9 +1,10 @@
 package com.dawnline.ops.application;
 
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.DeliveryKpis.CampDeliveries;
 import com.dawnline.ops.application.port.out.DeliveryKpis.DeliveryWindow;
-import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -57,15 +58,6 @@ import org.springframework.scheduling.annotation.Scheduled;
  */
 public class OnTimeRatioGauges {
 
-    /** §9.1 의 이름 — Prometheus 에서 {@code dawnline_delivery_on_time_ratio}. */
-    public static final String ON_TIME_RATIO = "dawnline.delivery.on.time.ratio";
-
-    /** §9.1 — Prometheus 에서 {@code dawnline_kpi_excluded}. */
-    public static final String EXCLUDED = "dawnline.kpi.excluded";
-
-    /** §9.1 — Prometheus 에서 {@code dawnline_kpi_refresh_age_seconds}. */
-    public static final String REFRESH_AGE = "dawnline.kpi.refresh.age.seconds";
-
     static final String TAG_CAMP = "camp";
     static final String TAG_BASIS = "basis";
     static final String TAG_REASON = "reason";
@@ -113,16 +105,9 @@ public class OnTimeRatioGauges {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.lastSuccess = clock.instant();
-        Gauge.builder(EXCLUDED, this, OnTimeRatioGauges::excludedPromiseUnknown)
-                .description("정시율에서 빠진 결과 — 약속(또는 캠프)을 아직 모르는 완료·실패, 현재 버킷 포함 UTC "
-                        + "정시 버킷 24개의 합. 정상에서는 프로젝션 랙만큼의 일시값이고 계속 0 이 아니면 "
-                        + "fulfillment.planned 가 오지 않고 있다 (DESIGN.md §5.5 · §9.1)")
-                .tag(TAG_REASON, PROMISE_UNKNOWN)
-                .register(registry);
-        Gauge.builder(REFRESH_AGE, this, OnTimeRatioGauges::refreshAgeSeconds)
-                .description("마지막으로 성공한 KPI 갱신 뒤로 흐른 초 — 갱신이 죽으면 정시율은 NaN 이 되고 "
-                        + "NaN 은 알림을 울리지 않으므로 이 값이 대신 커진다 (DESIGN.md §9.1 · §9.4)")
-                .register(registry);
+        DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_EXCLUDED, this, OnTimeRatioGauges::excludedPromiseUnknown,
+                TAG_REASON, PROMISE_UNKNOWN);
+        DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_REFRESH_AGE, this, OnTimeRatioGauges::refreshAgeSeconds);
     }
 
     /**
@@ -192,13 +177,8 @@ public class OnTimeRatioGauges {
             return;
         }
         for (Basis basis : Basis.values()) {
-            Gauge.builder(ON_TIME_RATIO, this, gauges -> gauges.ratio(campId, basis))
-                    .description("정시 배송률 — 현재 버킷 포함 UTC 정시 버킷 24개(창은 23시간 남짓~24시간), "
-                            + "정시 / (완료 + 실패). 원 약속(promised)이 SLO 기준이고 개정 약속(revised)은 "
-                            + "참고값이다 (DESIGN.md §8.1 · §9.1)")
-                    .tag(TAG_CAMP, campId.toString())
-                    .tag(TAG_BASIS, basis.label())
-                    .register(registry);
+            DawnlineMeters.gauge(registry, DawnlineMetrics.DELIVERY_ON_TIME_RATIO, this,
+                    gauges -> gauges.ratio(campId, basis), TAG_CAMP, campId.toString(), TAG_BASIS, basis.label());
         }
     }
 

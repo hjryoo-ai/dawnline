@@ -8,6 +8,7 @@ import com.dawnline.messaging.EventHeaders;
 import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.Topics;
 import com.dawnline.messaging.contract.EventContracts;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.adapter.in.messaging.ListenerTopics;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
@@ -363,7 +364,7 @@ class DlqReplayIT extends OpsIntegrationTestBase {
     }
 
     private double outcome(String outcome) {
-        Counter counter = meters.find(MessagingMetrics.EVENT_PROCESSED)
+        Counter counter = meters.find(DawnlineMetrics.EVENT_PROCESSED.meterName())
                 .tag(MessagingMetrics.TAG_CONSUMER, SELF)
                 .tag(MessagingMetrics.TAG_EVENT_TYPE, "order.placed")
                 .tag(MessagingMetrics.TAG_OUTCOME, outcome)

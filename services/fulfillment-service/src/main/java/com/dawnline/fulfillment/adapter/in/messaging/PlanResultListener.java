@@ -1,12 +1,13 @@
 package com.dawnline.fulfillment.adapter.in.messaging;
 
+import com.dawnline.fulfillment.application.port.in.RecordPlanResultUseCase;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.kafka.EventRecords;
-import com.dawnline.fulfillment.application.port.in.RecordPlanResultUseCase;
-import io.micrometer.core.instrument.Counter;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import java.util.UUID;
@@ -104,11 +105,9 @@ public class PlanResultListener {
         if (outcome != RecordPlanResultUseCase.PlanResultOutcome.STALE) {
             return;
         }
-        Counter.builder(MessagingMetrics.EVENT_STALE)
-                .description("이미 지나온 지점으로의 전이라 무시한 이벤트 (ADR-017·024)")
-                .tag(MessagingMetrics.TAG_CONSUMER, OrderEventListener.CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, OrderEventListener.CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType)
                 .increment();
     }
 
@@ -117,12 +116,10 @@ public class PlanResultListener {
      * Prometheus 는 같은 이름의 미터가 같은 라벨 키 집합을 갖기를 요구한다(§9.1).
      */
     private void countRejected(String eventType) {
-        Counter.builder(MessagingMetrics.EVENT_REJECTED)
-                .description("계획된 웨이브에 늦게 도착한 plan.failed (ADR-024 결정 4)")
-                .tag(MessagingMetrics.TAG_CONSUMER, OrderEventListener.CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, eventType)
-                .tag(MessagingMetrics.TAG_REASON, WAVE_ALREADY_PLANNED)
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_REJECTED,
+                MessagingMetrics.TAG_CONSUMER, OrderEventListener.CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, eventType,
+                MessagingMetrics.TAG_REASON, WAVE_ALREADY_PLANNED)
                 .increment();
     }
 }

@@ -3,9 +3,10 @@ package com.dawnline.fulfillment.application;
 import com.dawnline.fulfillment.domain.FcFallbackReason;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.WaveCloseCause;
-import java.util.Locale;
-import io.micrometer.core.instrument.Counter;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,9 +39,6 @@ import org.jspecify.annotations.Nullable;
  */
 public class FulfillmentMetrics {
 
-    /** 개정 카운터 이름 (§9.1). */
-    public static final String PROMISE_REVISED = "dawnline.promise.revised";
-
     /**
      * 원래 컷오프 웨이브가 닫혀 있었지만 원인을 모를 때의 라벨 값.
      *
@@ -49,12 +47,6 @@ public class FulfillmentMetrics {
      * 보이면 그 불변식이 깨졌다는 뜻이다.
      */
     public static final String CAUSE_UNKNOWN = "unknown";
-
-    /** 대체 FC 카운터 이름 (§9.1). */
-    public static final String FC_FALLBACK = "dawnline.fc.fallback";
-
-    /** 웨이브 편입량 게이지 이름 (§9.1). */
-    public static final String WAVE_ORDERS = "dawnline.wave.orders";
 
     private final MeterRegistry registry;
     private final Map<String, AtomicInteger> gauges = new ConcurrentHashMap<>();
@@ -79,12 +71,10 @@ public class FulfillmentMetrics {
      * @param cause    주문의 원래 컷오프 웨이브를 누가 닫았는가. 모르면 {@code null}
      */
     public void promiseRevised(String campCode, ServiceTier tier, @Nullable WaveCloseCause cause) {
-        Counter.builder(PROMISE_REVISED)
-                .description("하류가 상류의 약속을 개정한 횟수 (ADR-020 결정 3, cause 는 ADR-054)")
-                .tag("camp", campCode)
-                .tag("tier", tier.name())
-                .tag("cause", cause == null ? CAUSE_UNKNOWN : cause.name().toLowerCase(Locale.ROOT))
-                .register(registry)
+        DawnlineMeters.counter(registry, DawnlineMetrics.PROMISE_REVISED,
+                "camp", campCode,
+                "tier", tier.name(),
+                "cause", cause == null ? CAUSE_UNKNOWN : cause.name().toLowerCase(Locale.ROOT))
                 .increment();
     }
 
@@ -95,11 +85,9 @@ public class FulfillmentMetrics {
      * @param reason   홈 FC 가 떨어진 필터
      */
     public void fcFallback(String campCode, FcFallbackReason reason) {
-        Counter.builder(FC_FALLBACK)
-                .description("캠프의 홈 FC 가 필터에서 떨어져 대체 FC 를 고른 횟수 (ADR-021)")
-                .tag("camp", campCode)
-                .tag("reason", reason.name().toLowerCase())
-                .register(registry)
+        DawnlineMeters.counter(registry, DawnlineMetrics.FC_FALLBACK,
+                "camp", campCode,
+                "reason", reason.name().toLowerCase())
                 .increment();
     }
 
@@ -115,12 +103,15 @@ public class FulfillmentMetrics {
      * @param orderCount 마감 시점의 편입 주문 수
      */
     public void waveClosed(String campCode, ServiceTier tier, int orderCount) {
-        // AtomicInteger 를 들고 있어야 한다. registry.gauge 는 (이름, 라벨)이 같으면 기존 미터를
-        // 돌려주고 새 값을 반영하지 않으며, 참조도 약한 참조라 박싱된 Integer 를 넘기면 GC 뒤
-        // 게이지가 NaN 이 된다. GeoMetrics 의 적재 게이지와 같은 이유·같은 방식이다.
-        gauges.computeIfAbsent(campCode + "/" + tier.name(), key -> registry.gauge(WAVE_ORDERS,
-                        io.micrometer.core.instrument.Tags.of("camp", campCode, "tier", tier.name()),
-                        new AtomicInteger()))
+        // (캠프, 티어)마다 상태 하나를 들고 값을 바꾼다 — 같은 이름 · 태그로 다시 등록하면 레지스트리는 기존 미터를
+        // 돌려주고 새 상태를 쓰지 않는다. 상태는 헬퍼가 강한 참조로 잡는다(ADR-060): 약한 참조였을 때 박싱된 값을 넘기면
+        // GC 뒤 게이지가 NaN 이 됐다.
+        gauges.computeIfAbsent(campCode + "/" + tier.name(), key -> {
+                    AtomicInteger slot = new AtomicInteger();
+                    DawnlineMeters.gauge(registry, DawnlineMetrics.WAVE_ORDERS, slot, AtomicInteger::doubleValue,
+                            "camp", campCode, "tier", tier.name());
+                    return slot;
+                })
                 .set(orderCount);
     }
 }

@@ -16,6 +16,7 @@ import com.dawnline.messaging.Topics;
 import com.dawnline.messaging.idempotency.EventRejectedException;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
 import com.dawnline.order.application.port.in.OrderProgress;
 import com.dawnline.order.domain.OrderStatus;
@@ -93,12 +94,12 @@ class OrderProgressListenerTest {
     }
 
     private double staleCount() {
-        var counter = meters.find(MessagingMetrics.EVENT_STALE).counter();
+        var counter = meters.find(DawnlineMetrics.EVENT_STALE.meterName()).counter();
         return counter == null ? 0 : counter.count();
     }
 
     private double rejectedCount() {
-        var counter = meters.find(MessagingMetrics.EVENT_REJECTED).counter();
+        var counter = meters.find(DawnlineMetrics.EVENT_REJECTED.meterName()).counter();
         return counter == null ? 0 : counter.count();
     }
 
@@ -238,7 +239,7 @@ class OrderProgressListenerTest {
 
         listener.onDeliveryStatus(deliveryStatus("COMPLETED", Ids.newId()));
 
-        assertThat(meters.find(MessagingMetrics.EVENT_STALE)
+        assertThat(meters.find(DawnlineMetrics.EVENT_STALE.meterName())
                 .tag(MessagingMetrics.TAG_CONSUMER, "order-service")
                 .tag(MessagingMetrics.TAG_EVENT_TYPE, "delivery.status")
                 .counter()).isNotNull();

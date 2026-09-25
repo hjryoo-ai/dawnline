@@ -5,9 +5,10 @@ import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.kafka.EventRecords;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.Outcome;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -97,11 +98,9 @@ public class RouteAssignedListener {
     }
 
     private void countStale() {
-        Counter.builder(MessagingMetrics.EVENT_STALE)
-                .description("이미 적용한 개정보다 낮거나 같은 route.assigned (§6.8 순서 역전)")
-                .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
-                .tag(MessagingMetrics.TAG_EVENT_TYPE, EVENT_TYPE)
-                .register(meters)
+        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, EVENT_TYPE)
                 .increment();
     }
 }

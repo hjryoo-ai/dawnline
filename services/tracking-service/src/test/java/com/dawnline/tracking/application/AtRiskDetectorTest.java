@@ -2,6 +2,7 @@ package com.dawnline.tracking.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.application.EtaPropagator.Propagation;
 import com.dawnline.tracking.application.port.out.AtRiskCooldown;
 import com.dawnline.tracking.application.port.out.DeliveryEvents;
@@ -19,12 +20,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
-import org.jspecify.annotations.Nullable;
 
 /**
  * 지연 위험 판정과 통지 (DESIGN.md §5.4).
@@ -73,7 +74,7 @@ class AtRiskDetectorTest {
                     .as("위험한 것만이 아니라 남은 전부다 — 재계획의 입력은 남은 구간이다")
                     .containsExactly(2, 3);
         });
-        assertThat(meters.find(TrackingMetrics.AT_RISK).tag("camp", CAMP.toString()).counter())
+        assertThat(meters.find(DawnlineMetrics.AT_RISK.meterName()).tag("camp", CAMP.toString()).counter())
                 .isNotNull();
     }
 

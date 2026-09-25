@@ -5,6 +5,7 @@ import static org.awaitility.Awaitility.await;
 
 import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.contract.EventContracts;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.adapter.in.messaging.ListenerTopics;
 import com.dawnline.ops.adapter.in.messaging.ProjectionListener;
 import com.dawnline.ops.adapter.in.messaging.ProjectionScenario;
@@ -164,7 +165,7 @@ class ProjectionListenerIT extends OpsIntegrationTestBase {
     }
 
     private double duplicates() {
-        Counter counter = meters.find(MessagingMetrics.EVENT_PROCESSED)
+        Counter counter = meters.find(DawnlineMetrics.EVENT_PROCESSED.meterName())
                 .tag(MessagingMetrics.TAG_CONSUMER, "ops-api")
                 .tag(MessagingMetrics.TAG_EVENT_TYPE, "order.placed")
                 .tag(MessagingMetrics.TAG_OUTCOME, MessagingMetrics.OUTCOME_DUP)

@@ -10,6 +10,7 @@ import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.messaging.retention.ManualClock;
 import com.dawnline.messaging.retention.RetentionAges;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -46,7 +47,7 @@ class FulfillmentRetentionCleanerTest {
     }
 
     private double stuckGauge() {
-        return meters.get(FulfillmentRetentionCleaner.STUCK).gauge().value();
+        return meters.get(DawnlineMetrics.FULFILLMENT_ORDERS_STUCK.meterName()).gauge().value();
     }
 
     @Test

@@ -23,6 +23,7 @@ import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.DispatchErrorCode;
 import com.dawnline.messaging.retention.RetentionAges;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.sql.Timestamp;
 import java.time.Clock;
@@ -119,12 +120,6 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
 
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
-    /**
-     * 마지막으로 만든 정리기 — 붙잡아 둔다. 게이지는 상태 객체를 <strong>약한 참조</strong>로 잡으므로(Micrometer),
-     * 아무도 들고 있지 않으면 GC 뒤에 게이지가 {@code NaN} 을 낸다. 운영에서는 스프링 빈이 붙잡는다.
-     */
-    private DispatchRetentionCleaner cleaner;
-
     private TransactionTemplate tx() {
         return new TransactionTemplate(transactionManager);
     }
@@ -133,11 +128,11 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
         return new JdbcDispatchRetention(jdbc);
     }
 
+    /** 붙잡아 두지 않는다 — 게이지의 상태는 등록 헬퍼가 강한 참조로 잡는다(ADR-060, 7-0c 의 필드 우회를 걷어냈다). */
     private DispatchRetentionCleaner cleaner() {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        cleaner = new DispatchRetentionCleaner(retention(), transactionManager, clock, SHORT, SHORT, PLANS, CAP,
+        return new DispatchRetentionCleaner(retention(), transactionManager, clock, SHORT, SHORT, PLANS, CAP,
                 200, 1000, 10, new RetentionAges(new SimpleMeterRegistry(), clock), meters);
-        return cleaner;
     }
 
     /**
@@ -192,7 +187,7 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
 
         assertThat(rows(stuck)).containsEntry("plan_explanations", 3L).containsEntry("dispatch_candidates", 3L);
         assertThat(deleted.stuckPlans()).isEqualTo(1);
-        assertThat(meters.get(DispatchRetentionCleaner.STUCK).gauge().value()).isEqualTo(1.0);
+        assertThat(meters.get(DawnlineMetrics.ROUTE_PLANS_STUCK.meterName()).gauge().value()).isEqualTo(1.0);
     }
 
     @Test

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.common.error.DomainException;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.observability.MdcKeys;
 import com.dawnline.ops.application.port.in.OpsCommand;
 import com.dawnline.ops.application.port.in.RunOpsCommandUseCase.Outcome;
@@ -55,7 +56,7 @@ class OpsCommandServiceTest {
             for (String result : List.of("SUCCEEDED", "REJECTED", "FAILED", "UNKNOWN")) {
                 assertThat(counted(action, result)).as("%s %s", action, result).isZero();
             }
-            assertThat(registry.find(OpsCommandService.COMMANDS).tag("action", action).tag("result", "PENDING")
+            assertThat(registry.find(DawnlineMetrics.OPS_COMMANDS.meterName()).tag("action", action).tag("result", "PENDING")
                     .counter()).as("PENDING 은 세지 않는 값이다").isNull();
         }
     }
@@ -98,7 +99,7 @@ class OpsCommandServiceTest {
                 .extracting(e -> ((DomainException) e).code()).isEqualTo("unavailable");
         assertThat(journal).as("기록 없는 커맨드는 없다").doesNotContain("delegate");
         // 시계열은 미리 등록돼 있다(§9.1) — 「세지 않았다」는 전부 0 이라는 뜻이다.
-        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).isNotEmpty()
+        assertThat(registry.get(DawnlineMetrics.OPS_COMMANDS.meterName()).counters()).isNotEmpty()
                 .allSatisfy(counter -> assertThat(counter.count()).isZero());
     }
 
@@ -109,7 +110,7 @@ class OpsCommandServiceTest {
         Outcome outcome = service(id -> applied()).run("kim", RUN);
 
         assertThat(journal).containsExactly("open PENDING", "delegate");
-        assertThat(registry.get(OpsCommandService.COMMANDS).counters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다")
+        assertThat(registry.get(DawnlineMetrics.OPS_COMMANDS.meterName()).counters()).as("행은 PENDING 으로 남았다 — 카운터가 다른 말을 하면 안 된다")
                 .isNotEmpty().allSatisfy(counter -> assertThat(counter.count()).isZero());
         assertThat(outcome.reply()).as("코어는 적용했다 — 운영자에게는 그대로 알린다").isInstanceOf(CoreReply.Applied.class);
     }
@@ -162,7 +163,7 @@ class OpsCommandServiceTest {
     }
 
     private double counted(String action, String result) {
-        return registry.get(OpsCommandService.COMMANDS).tag("action", action).tag("result", result).counter().count();
+        return registry.get(DawnlineMetrics.OPS_COMMANDS.meterName()).tag("action", action).tag("result", result).counter().count();
     }
 
     private static CoreReply applied() {

@@ -2,6 +2,7 @@ package com.dawnline.fulfillment.adapter.out.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
@@ -20,9 +21,9 @@ class GeoMetricsTest {
         metrics.indexLoaded("fc", false);
         metrics.indexLoaded("camp", true);
 
-        assertThat(registry.get(GeoMetrics.LOADED_GAUGE).tag("index", "fc").gauge().value()).isZero();
-        assertThat(registry.get(GeoMetrics.LOADED_GAUGE).tag("index", "camp").gauge().value()).isEqualTo(1);
-        assertThat(registry.find(GeoMetrics.LOADED_GAUGE).gauges()).hasSize(2);
+        assertThat(registry.get(DawnlineMetrics.GEO_INDEX_LOADED.meterName()).tag("index", "fc").gauge().value()).isZero();
+        assertThat(registry.get(DawnlineMetrics.GEO_INDEX_LOADED.meterName()).tag("index", "camp").gauge().value()).isEqualTo(1);
+        assertThat(registry.find(DawnlineMetrics.GEO_INDEX_LOADED.meterName()).gauges()).hasSize(2);
     }
 
     @Test
@@ -32,7 +33,7 @@ class GeoMetricsTest {
         metrics.servedByRedis("fc");
         metrics.servedByFallback("fc");
 
-        assertThat(registry.find(GeoMetrics.LOOKUPS_COUNTER).counters())
+        assertThat(registry.find(DawnlineMetrics.GEO_LOOKUPS.meterName()).counters())
                 .hasSize(2)
                 .allSatisfy(counter -> assertThat(counter.getId().getTags())
                         .extracting(io.micrometer.core.instrument.Tag::getKey)
@@ -44,7 +45,7 @@ class GeoMetricsTest {
         // 레이트 리밋의 bypassed 와 같은 어휘다 — "폴백이 돌고 있다" 는 관측되어야 하는 정상이다.
         metrics.servedByFallback("zone");
 
-        assertThat(registry.get(GeoMetrics.LOOKUPS_COUNTER)
+        assertThat(registry.get(DawnlineMetrics.GEO_LOOKUPS.meterName())
                 .tag("index", "zone").tag("outcome", "bypassed").counter().count()).isEqualTo(1);
     }
 }

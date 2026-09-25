@@ -1,8 +1,9 @@
 package com.dawnline.ops.application;
 
 import com.dawnline.messaging.retention.RetentionAges;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.port.out.ReadModelRetention;
-import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -40,9 +41,6 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 표마다 끝까지 돈 정리만 {@code dawnline_retention_last_success_age_seconds{table}} 을 0 으로 되돌린다(결정 6).
  */
 public class ReadModelRetentionCleaner {
-
-    /** §9.1 — Prometheus 에서 {@code dawnline_rm_orders_stuck}. */
-    public static final String STUCK = "dawnline.rm.orders.stuck";
 
     private static final Logger log = LoggerFactory.getLogger(ReadModelRetentionCleaner.class);
 
@@ -109,9 +107,9 @@ public class ReadModelRetentionCleaner {
         this.orderAge = ages.table("rm_orders");
         this.routeAge = ages.table("rm_routes");
         this.waveAge = ages.table("rm_waves");
-        Gauge.builder(STUCK, this, ReadModelRetentionCleaner::stuckOrders)
-                .description("보존 기간을 넘겼는데 종결이 아닌 rm_orders 행 수 — 프로젝션 결손. 모르면 NaN (ADR-058).")
-                .register(Objects.requireNonNull(meters, "meters"));
+        // 헬퍼가 강한 참조로 잡는다 — 이 정리기가 컨텍스트 밖에서 만들어져도(테스트) 게이지가 GC 로 NaN 이 되지 않는다.
+        // 「세기 전 · 실패 중 NaN」이 뜻하는 것은 모름 하나뿐이어야 한다(ADR-060, §13 축 10).
+        DawnlineMeters.gauge(Objects.requireNonNull(meters, "meters"), DawnlineMetrics.RM_ORDERS_STUCK, this, ReadModelRetentionCleaner::stuckOrders);
     }
 
     /**

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.retention.ManualClock;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
 import com.dawnline.tracking.application.TrackingRetentionCleaner;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
@@ -216,7 +217,7 @@ class TrackingRetentionIT extends TrackingIntegrationTestBase {
         // 없는 시계열에는 알림이 울리지 않는다(§9.1 「짝」). 이 컨텍스트에서 정리가 있는 표 전부 —
         // outbox 는 이 IT 가 껐다.
         for (String table : List.of("shipments", "route_revisions", "shipment_events", "processed_events")) {
-            assertThat(meters.find(MessagingMetrics.RETENTION_LAST_SUCCESS_AGE).tag(MessagingMetrics.TAG_TABLE, table)
+            assertThat(meters.find(DawnlineMetrics.RETENTION_LAST_SUCCESS_AGE.meterName()).tag(MessagingMetrics.TAG_TABLE, table)
                     .gauge())
                     .as("table=%s", table)
                     .isNotNull();
@@ -228,7 +229,7 @@ class TrackingRetentionIT extends TrackingIntegrationTestBase {
         cleaner.deleteExpired();
 
         for (String table : List.of("shipments", "route_revisions")) {
-            double age = meters.get(MessagingMetrics.RETENTION_LAST_SUCCESS_AGE)
+            double age = meters.get(DawnlineMetrics.RETENTION_LAST_SUCCESS_AGE.meterName())
                     .tag(MessagingMetrics.TAG_TABLE, table).gauge().value();
             assertThat(age).as("table=%s", table).isLessThan(60.0);
         }

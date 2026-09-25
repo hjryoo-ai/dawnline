@@ -15,6 +15,7 @@ import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.Wave;
 import com.dawnline.fulfillment.domain.WaveCloseCause;
 import com.dawnline.fulfillment.domain.WaveStatus;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.observability.MdcKeys;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
@@ -144,7 +145,7 @@ class CloseWaveServiceTest {
 
         service().close(wave.id(), "r");
 
-        assertThat(registry.get(FulfillmentMetrics.WAVE_ORDERS)
+        assertThat(registry.get(DawnlineMetrics.WAVE_ORDERS.meterName())
                 .tag("camp", "CAMP-TEST").tag("tier", "DAWN").gauge().value()).isZero();
     }
 
@@ -155,7 +156,7 @@ class CloseWaveServiceTest {
 
         assertThatThrownBy(() -> service(new Transactions(true)).close(wave.id(), "r"))
                 .isInstanceOf(TransactionSystemException.class);
-        assertThat(registry.find(FulfillmentMetrics.WAVE_ORDERS).gauge()).isNull();
+        assertThat(registry.find(DawnlineMetrics.WAVE_ORDERS.meterName()).gauge()).isNull();
     }
 
     @Test

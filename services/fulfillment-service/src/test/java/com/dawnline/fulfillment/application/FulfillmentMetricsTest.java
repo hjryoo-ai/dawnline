@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.dawnline.fulfillment.domain.FcFallbackReason;
 import com.dawnline.fulfillment.domain.ServiceTier;
 import com.dawnline.fulfillment.domain.WaveCloseCause;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -24,9 +25,9 @@ class FulfillmentMetricsTest {
         metrics.promiseRevised("CAMP-SEO-C", ServiceTier.SAME_DAY, WaveCloseCause.SCHEDULED);
         metrics.fcFallback("CAMP-GYG-N", FcFallbackReason.COLD);
 
-        assertThat(registry.get(FulfillmentMetrics.PROMISE_REVISED)
+        assertThat(registry.get(DawnlineMetrics.PROMISE_REVISED.meterName())
                 .tag("camp", "CAMP-SEO-C").tag("tier", "SAME_DAY").counter().count()).isEqualTo(2);
-        assertThat(registry.get(FulfillmentMetrics.FC_FALLBACK)
+        assertThat(registry.get(DawnlineMetrics.FC_FALLBACK.meterName())
                 .tag("camp", "CAMP-GYG-N").tag("reason", "cold").counter().count()).isEqualTo(1);
     }
 
@@ -37,9 +38,9 @@ class FulfillmentMetricsTest {
         metrics.waveClosed("CAMP-SEO-C", ServiceTier.DAWN, 4820);
         metrics.waveClosed("CAMP-SEO-C", ServiceTier.DAWN, 5100);
 
-        assertThat(registry.get(FulfillmentMetrics.WAVE_ORDERS)
+        assertThat(registry.get(DawnlineMetrics.WAVE_ORDERS.meterName())
                 .tag("camp", "CAMP-SEO-C").tag("tier", "DAWN").gauge().value()).isEqualTo(5100);
-        assertThat(registry.find(FulfillmentMetrics.WAVE_ORDERS).gauges()).hasSize(1);
+        assertThat(registry.find(DawnlineMetrics.WAVE_ORDERS.meterName()).gauges()).hasSize(1);
     }
 
     @Test
@@ -48,7 +49,7 @@ class FulfillmentMetricsTest {
         metrics.waveClosed("CAMP-SEO-C", ServiceTier.SAME_DAY, 20);
         metrics.waveClosed("CAMP-GYG-N", ServiceTier.DAWN, 30);
 
-        assertThat(registry.find(FulfillmentMetrics.WAVE_ORDERS).gauges()).hasSize(3);
+        assertThat(registry.find(DawnlineMetrics.WAVE_ORDERS.meterName()).gauges()).hasSize(3);
     }
 
     @Test
@@ -59,7 +60,7 @@ class FulfillmentMetricsTest {
         metrics.promiseRevised("CAMP-B", ServiceTier.NEXT_DAY, WaveCloseCause.MANUAL);
         metrics.promiseRevised("CAMP-C", ServiceTier.SAME_DAY, null);
 
-        assertThat(registry.find(FulfillmentMetrics.PROMISE_REVISED).counters())
+        assertThat(registry.find(DawnlineMetrics.PROMISE_REVISED.meterName()).counters())
                 .hasSize(3)
                 .allSatisfy(counter -> assertThat(counter.getId().getTags())
                         .extracting(Tag::getKey).containsExactlyInAnyOrder("camp", "tier", "cause"));
@@ -80,7 +81,7 @@ class FulfillmentMetricsTest {
     }
 
     private double revised(String cause) {
-        return registry.get(FulfillmentMetrics.PROMISE_REVISED)
+        return registry.get(DawnlineMetrics.PROMISE_REVISED.meterName())
                 .tag("camp", "CAMP-A").tag("tier", "DAWN").tag("cause", cause).counter().count();
     }
 }

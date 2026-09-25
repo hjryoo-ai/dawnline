@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.MessagingMetrics;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.ReadModelRetentionCleaner;
 import com.dawnline.ops.application.port.out.OrderColumn;
 import com.dawnline.ops.application.port.out.OrderRows;
@@ -157,7 +158,7 @@ class ReadModelRetentionIT extends OpsIntegrationTestBase {
                 .containsExactlyInAnyOrder("null/null", "PLACED/null", "PLANNED/null", "DISPATCHED/null");
         assertThat(countedBefore).as("지우기 전에도 셈은 같은 넷이다 — 종결 행을 세지 않는다").isEqualTo(kept.size());
         assertThat(result.stuckOrders()).as("남은 행이 곧 센 행이다").isEqualTo(kept.size());
-        assertThat(meters.get(ReadModelRetentionCleaner.STUCK).gauge().value()).isEqualTo(kept.size());
+        assertThat(meters.get(DawnlineMetrics.RM_ORDERS_STUCK.meterName()).gauge().value()).isEqualTo(kept.size());
     }
 
     @Test
@@ -260,12 +261,12 @@ class ReadModelRetentionIT extends OpsIntegrationTestBase {
     void 정리가_있는_표마다_성공_나이_게이지가_기동_때부터_있다() {
         // 없는 시계열에는 알림이 울리지 않는다(§9.1 「짝」). outbox 는 이 IT 가 껐다.
         for (String table : List.of("rm_orders", "rm_routes", "rm_waves", "processed_events")) {
-            assertThat(meters.find(MessagingMetrics.RETENTION_LAST_SUCCESS_AGE).tag(MessagingMetrics.TAG_TABLE, table)
+            assertThat(meters.find(DawnlineMetrics.RETENTION_LAST_SUCCESS_AGE.meterName()).tag(MessagingMetrics.TAG_TABLE, table)
                     .gauge())
                     .as("table=%s", table)
                     .isNotNull();
         }
-        assertThat(meters.find(ReadModelRetentionCleaner.STUCK).gauge()).isNotNull();
+        assertThat(meters.find(DawnlineMetrics.RM_ORDERS_STUCK.meterName()).gauge()).isNotNull();
     }
 
     // --- 픽스처 --------------------------------------------------------------

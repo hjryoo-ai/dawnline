@@ -3,6 +3,7 @@ package com.dawnline.ops.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.OnTimeRatioGauges.Basis;
 import com.dawnline.ops.application.port.out.DeliveryKpis;
 import com.dawnline.ops.application.port.out.DeliveryKpis.CampDeliveries;
@@ -53,13 +54,13 @@ class OnTimeRatioGaugesTest {
 
     @Test
     void 캠프를_처음_볼_때_두_기준을_등록한다() {
-        assertThat(registry.find(OnTimeRatioGauges.ON_TIME_RATIO).gauges()).as("아직 본 캠프가 없다").isEmpty();
+        assertThat(registry.find(DawnlineMetrics.DELIVERY_ON_TIME_RATIO.meterName()).gauges()).as("아직 본 캠프가 없다").isEmpty();
 
         kpis.rows.add(new CampDeliveries(CAMP, 1, 0, 1, 1, 0));
         gauges.refreshNow();
         gauges.refreshNow();
 
-        assertThat(registry.find(OnTimeRatioGauges.ON_TIME_RATIO).tag("camp", CAMP.toString()).gauges())
+        assertThat(registry.find(DawnlineMetrics.DELIVERY_ON_TIME_RATIO.meterName()).tag("camp", CAMP.toString()).gauges())
                 .extracting(g -> g.getId().getTag("basis"))
                 .containsExactlyInAnyOrder("promised", "revised");
     }
@@ -132,15 +133,15 @@ class OnTimeRatioGaugesTest {
     }
 
     private double excluded() {
-        return registry.get(OnTimeRatioGauges.EXCLUDED).tag("reason", "promise_unknown").gauge().value();
+        return registry.get(DawnlineMetrics.KPI_EXCLUDED.meterName()).tag("reason", "promise_unknown").gauge().value();
     }
 
     private double age() {
-        return registry.get(OnTimeRatioGauges.REFRESH_AGE).gauge().value();
+        return registry.get(DawnlineMetrics.KPI_REFRESH_AGE.meterName()).gauge().value();
     }
 
     private double value(Basis basis) {
-        Gauge gauge = registry.get(OnTimeRatioGauges.ON_TIME_RATIO)
+        Gauge gauge = registry.get(DawnlineMetrics.DELIVERY_ON_TIME_RATIO.meterName())
                 .tag("camp", CAMP.toString()).tag("basis", basis.name().toLowerCase(java.util.Locale.ROOT)).gauge();
         return gauge.value();
     }

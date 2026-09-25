@@ -12,6 +12,7 @@ import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.domain.DispatchCandidate;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
@@ -202,7 +203,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
         // 사실만 남고 *얼마나* 는 사라진다 (§6.9 「환경 없는 수치」와 같은 이유). 시간은 <em>기록만</em>
         // 하므로 환경을 함께 적는다 — 환경 없는 시간은 다른 실행의 시간과 견줄 수 없다.
         Duration persisted = Duration.ofMillis((long) meterRegistry
-                .get(DispatchMetrics.PLAN_PERSIST).timer().totalTime(TimeUnit.MILLISECONDS));
+                .get(DawnlineMetrics.PLAN_PERSIST.meterName()).timer().totalTime(TimeUnit.MILLISECONDS));
         System.out.printf("[Phase 3 DoD] 환경: %s %s · %d 코어 · CI=%s%n", System.getProperty("os.name"),
                 System.getProperty("os.arch"), Runtime.getRuntime().availableProcessors(),
                 System.getenv().getOrDefault("CI", "false"));
@@ -260,7 +261,7 @@ class PhaseThreeDoDIT extends DispatchIntegrationTestBase {
     }
 
     private long terminations(String termination) {
-        io.micrometer.core.instrument.Timer timer = meterRegistry.find(DispatchMetrics.PLAN_DURATION)
+        io.micrometer.core.instrument.Timer timer = meterRegistry.find(DawnlineMetrics.PLAN_DURATION.meterName())
                 .tag(DispatchMetrics.TAG_TERMINATION, termination).timer();
         return timer == null ? 0 : timer.count();
     }

@@ -8,6 +8,7 @@ import com.dawnline.messaging.contract.EventContracts;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.idempotency.ProcessedEventRepository;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.Outcome;
 import com.dawnline.tracking.application.port.in.ApplyRouteAssignmentUseCase.RouteAssignment;
@@ -131,11 +132,11 @@ class RouteAssignedListenerTest {
     // --- 픽스처 --------------------------------------------------------------
 
     private double staleCount() {
-        return counterOrZero(MessagingMetrics.EVENT_STALE);
+        return counterOrZero(DawnlineMetrics.EVENT_STALE.meterName());
     }
 
     private double rejectedCount() {
-        return counterOrZero(MessagingMetrics.EVENT_REJECTED);
+        return counterOrZero(DawnlineMetrics.EVENT_REJECTED.meterName());
     }
 
     private double counterOrZero(String name) {

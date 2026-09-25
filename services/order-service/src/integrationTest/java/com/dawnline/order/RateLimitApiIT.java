@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.config.MessagingAutoConfiguration;
+import com.dawnline.observability.DawnlineMetrics;
 import com.redis.testcontainers.RedisContainer;
 import java.time.Clock;
 import java.time.Duration;
@@ -102,7 +103,7 @@ class RateLimitApiIT extends OrderIntegrationTestBase {
     @org.junit.jupiter.api.AfterEach
     void 전제_레이트_리밋이_우회되지_않았다() {
         io.micrometer.core.instrument.Counter bypassed = meters
-                .find(com.dawnline.order.OrderMetrics.RATE_LIMIT_DECISIONS).tag("outcome", "bypassed").counter();
+                .find(DawnlineMetrics.RATE_LIMIT_DECISIONS.meterName()).tag("outcome", "bypassed").counter();
         if (bypassed != null) {
             org.assertj.core.api.Assertions.assertThat(bypassed.count())
                     .as("Redis 지연으로 레이트 리밋이 fail-open 되면 이 클래스가 검사하려는 것이 사라진다")

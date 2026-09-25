@@ -16,6 +16,7 @@ import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.messaging.contract.EventContracts;
+import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
@@ -319,7 +320,7 @@ class ReplanIT extends DispatchIntegrationTestBase {
     }
 
     private double replanCount(Outcome outcome) {
-        return registry.counter(DispatchMetrics.REPLAN, DispatchMetrics.TAG_OUTCOME,
+        return registry.counter(DawnlineMetrics.REPLAN.meterName(), DispatchMetrics.TAG_OUTCOME,
                 outcome.label()).count();
     }
 
@@ -332,7 +333,7 @@ class ReplanIT extends DispatchIntegrationTestBase {
     }
 
     private double mismatchCount() {
-        return registry.counter(DispatchMetrics.AT_RISK_DEVIATION_MISMATCH).count();
+        return registry.counter(DawnlineMetrics.AT_RISK_DEVIATION_MISMATCH.meterName()).count();
     }
 
     private Instant lastReplannedAt(UUID routeId) {
@@ -361,7 +362,7 @@ class ReplanIT extends DispatchIntegrationTestBase {
     }
 
     private double relocateCount() {
-        return registry.counter(DispatchMetrics.STATUS_AFTER_RELOCATE).count();
+        return registry.counter(DawnlineMetrics.STATUS_AFTER_RELOCATE.meterName()).count();
     }
 
     private long explanationCount() {

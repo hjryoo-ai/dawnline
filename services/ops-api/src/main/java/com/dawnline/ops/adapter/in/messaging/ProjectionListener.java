@@ -6,9 +6,10 @@ import com.dawnline.messaging.idempotency.ConsumeOutcome;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.kafka.EventRecords;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase.Projection;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import java.util.Set;
@@ -149,11 +150,9 @@ public class ProjectionListener {
                 () -> result.set(projector.project(envelope.payload().toFact(envelope))));
         // 여기는 커밋 뒤다 — 롤백되면 consumeOnce 가 예외로 끝나 이 줄에 오지 않는다.
         if (outcome == ConsumeOutcome.PROCESSED && result.get().stale() > 0) {
-            Counter.builder(MessagingMetrics.EVENT_STALE)
-                    .description("순서 역전을 흡수하느라 적지 않은 판정 (ADR-017 · ADR-051)")
-                    .tag(MessagingMetrics.TAG_CONSUMER, CONSUMER)
-                    .tag(MessagingMetrics.TAG_EVENT_TYPE, envelope.eventType())
-                    .register(meters)
+            DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_STALE,
+                    MessagingMetrics.TAG_CONSUMER, CONSUMER,
+                    MessagingMetrics.TAG_EVENT_TYPE, envelope.eventType())
                     .increment(result.get().stale());
         }
     }

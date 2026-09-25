@@ -3,17 +3,19 @@ package com.dawnline.tracking.config;
 import com.dawnline.common.Ids;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.messaging.outbox.OutboxAppender;
+import com.dawnline.messaging.retention.RetentionAges;
+import com.dawnline.observability.DawnlineMeters;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.tracking.adapter.in.messaging.RouteAssignedListener;
+import com.dawnline.tracking.adapter.out.messaging.OutboxDeliveryEvents;
 import com.dawnline.tracking.adapter.out.persistence.JdbcEventPartitions;
 import com.dawnline.tracking.adapter.out.persistence.JdbcRouteRevisions;
 import com.dawnline.tracking.adapter.out.persistence.JdbcShipmentEvents;
 import com.dawnline.tracking.adapter.out.persistence.JdbcTrackingRetention;
 import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
-import com.dawnline.tracking.application.ApplyRouteAssignmentService;
-import com.dawnline.messaging.outbox.OutboxAppender;
-import com.dawnline.messaging.retention.RetentionAges;
-import com.dawnline.tracking.adapter.out.messaging.OutboxDeliveryEvents;
 import com.dawnline.tracking.adapter.out.redis.RedisAtRiskCooldown;
+import com.dawnline.tracking.application.ApplyRouteAssignmentService;
 import com.dawnline.tracking.application.AtRiskDetector;
 import com.dawnline.tracking.application.EtaPropagator;
 import com.dawnline.tracking.application.RecordScanService;
@@ -278,9 +280,7 @@ public class TrackingApplicationConfig {
     @ConditionalOnProperty(prefix = "dawnline.tracking.partitions", name = "enabled",
             havingValue = "true", matchIfMissing = true)
     public Gauge shipmentPartitionsAheadGauge(MeterRegistry registry, ShipmentEventPartitions partitions) {
-        return Gauge.builder("dawnline_shipment_partitions_ahead", partitions,
-                        ShipmentEventPartitions::partitionsAhead)
-                .description("오늘을 포함해 앞으로 덮여 있는 shipment_events 일 파티션 수 (DESIGN.md §5.4)")
-                .register(registry);
+        return DawnlineMeters.gauge(registry, DawnlineMetrics.SHIPMENT_PARTITIONS_AHEAD, partitions,
+                ShipmentEventPartitions::partitionsAhead);
     }
 }

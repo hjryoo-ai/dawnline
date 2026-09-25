@@ -70,8 +70,9 @@ class ObservabilityResourcesTest {
         assertThat(yaml).contains("observation-enabled: true");
         // ECS 는 MDC 의 service 키와 충돌해 로그가 유실된다. logstash 여야 한다.
         assertThat(yaml).contains("console: \"logstash\"");
-        // §9.1 histogram 메트릭 이름을 그대로 써야 버킷이 붙는다.
-        assertThat(yaml).contains(DawnlineMetrics.PLAN_DURATION_SECONDS);
+        // 히스토그램 버킷은 카탈로그의 타입이 켠다(DawnlineMeters, ADR-060). 속성 파일의 키는 미터 이름과 따로 적히는
+        // 둘째 원천이고, 실제로 갈라져 있었다 — 키가 Prometheus 이름이라 버킷이 한 번도 생기지 않았다.
+        assertThat(yaml).doesNotContain("percentiles-histogram").doesNotContain("percentiles:");
     }
 
     @Test

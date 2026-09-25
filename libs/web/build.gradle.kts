@@ -16,6 +16,8 @@ dependencies {
     // 내부 토큰 거부 카운터(dawnline_internal_token_rejected_total, ADR-055 「추가」). 레지스트리는 서비스의
     // actuator 가 준다 — 여기서는 API 만 안다.
     implementation(libs.micrometer.core)
+    // 미터는 카탈로그 항목으로, 헬퍼 한 곳에서만 등록한다(ADR-060, ArchUnit 규칙 11).
+    implementation(project(":libs:observability"))
 
     // 문서의 ProblemDetail 스키마를 실제 본문의 모양으로 고친다(openapi.ProblemDetailSchema).
     // compileOnly 인 이유: springdoc 을 쓰는 서비스만 그 customizer 를 받는다(@ConditionalOnClass).

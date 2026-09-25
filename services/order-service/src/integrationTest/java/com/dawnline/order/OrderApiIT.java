@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.dawnline.common.Ids;
+import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.order.OrderMetrics;
 import com.dawnline.order.application.port.in.AdvanceOrderUseCase;
 import com.dawnline.order.application.port.out.IdempotencyCache;
@@ -20,8 +21,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -108,7 +109,7 @@ class OrderApiIT extends OrderIntegrationTestBase {
     }
 
     private double bypassedCount() {
-        var counter = meters.find(OrderMetrics.RATE_LIMIT_DECISIONS)
+        var counter = meters.find(DawnlineMetrics.RATE_LIMIT_DECISIONS.meterName())
                 .tag(OrderMetrics.TAG_OUTCOME, "bypassed").counter();
         return counter == null ? 0 : counter.count();
     }
