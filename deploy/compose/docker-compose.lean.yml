@@ -8,18 +8,24 @@
 # (실측: 5개 서비스 기동 몇 분 만에 ERROR 113건). 로그가 이래서는 진짜 오류를 못 찾는다.
 #
 # 그래서 **내보내기만** 끈다. 계측 자체는 살려 둔다:
-#   management.tracing.export.enabled=false      → 스팬 수집은 하되 OTLP 전송을 안 한다.
+#   management.tracing.export.otlp.enabled=false → OTLP 스팬 익스포터만 끈다. 스팬 수집과 전파(Kafka 헤더의
+#                                                   traceparent)는 그대로라 서비스 사이의 traceId 가 이어지고
 #                                                   traceId/spanId 는 그대로 MDC 에 남는다.
 #   management.otlp.metrics.export.enabled=false → OTLP 메트릭 푸시만 끈다.
 #                                                   /actuator/prometheus 는 계속 동작한다.
 # (두 키 모두 spring-boot 4.1.1 의 spring-configuration-metadata.json 에서 존재를 확인했다.
 #  기본값은 둘 다 true.)
 #
+# **management.tracing.export.enabled=false 를 쓰지 않는다** (2026-09-25 정정, ADR-062 · DESIGN.md §13 축 13).
+# 이 파일은 처음에 그 키를 「수집은 하되 전송만 끈다」는 주석과 함께 썼다. Boot 4.1 은 그 키로 W3C 전파기 빈까지
+# 거둔다(@ConditionalOnEnabledTracingExport) — lean 스택은 서비스마다 트레이스를 끊고 있었다. 주석이 말하는 것보다
+# 키가 더 많이 껐다.
+#
 # 관측성까지 보려면 lean 이 아니라 `make up` 을 쓴다.
 # =============================================================================
 
 x-lean-otel: &lean-otel
-  MANAGEMENT_TRACING_EXPORT_ENABLED: "false"
+  MANAGEMENT_TRACING_EXPORT_OTLP_ENABLED: "false"
   MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "false"
 
 services:
