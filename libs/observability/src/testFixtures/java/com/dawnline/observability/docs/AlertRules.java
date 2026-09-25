@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.jspecify.annotations.Nullable;
 import org.yaml.snakeyaml.Yaml;
 
 /**
@@ -40,10 +41,11 @@ public final class AlertRules {
     /**
      * 알림 규칙 하나.
      *
-     * @param alert 알림 이름
-     * @param expr  식
+     * @param alert   알림 이름
+     * @param expr    식
+     * @param runbook {@code annotations.runbook} — 없으면 null(런북 표의 「절차」 칸이 {@code —} 인 알림, RunbooksConsistencyTest)
      */
-    public record Rule(String alert, String expr) {
+    public record Rule(String alert, String expr, @Nullable String runbook) {
     }
 
     /**
@@ -63,7 +65,10 @@ public final class AlertRules {
             for (Map<String, Object> rule : (List<Map<String, Object>>) group.get("rules")) {
                 Object alert = rule.get("alert");
                 if (alert != null) {
-                    rules.add(new Rule(alert.toString(), rule.get("expr").toString()));
+                    Map<String, Object> annotations = (Map<String, Object>) rule.getOrDefault("annotations", Map.of());
+                    Object runbook = annotations.get("runbook");
+                    rules.add(new Rule(alert.toString(), rule.get("expr").toString(),
+                            runbook == null ? null : runbook.toString()));
                 }
             }
         }

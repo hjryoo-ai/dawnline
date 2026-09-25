@@ -48,6 +48,7 @@ dependencies {
 // 이 모듈의 테스트는 저장소의 문서와 배포 설정을 읽는다(ADR-060):
 //  - DawnlineMetricsTest · DashboardsConsistencyTest · AlertRulesConsistencyTest 가 docs/DESIGN.md §9.1 · §9.4 를
 //  - 두 대조 검사가 deploy/compose 의 대시보드 JSON 과 규칙 파일을
+//  - RunbooksConsistencyTest 가 docs/runbooks 와 §9.5 를(7-5)
 // 입력으로 선언하지 않으면 문서나 대시보드만 바꾼 실행에서 Gradle 이 test 를 UP-TO-DATE 로 건너뛴다 — 검사가 돌지 않는데
 // 초록이고, 그것이 이 검사들이 막으려는 모양이다(CLAUDE.md 「서로를 비추는 목록」).
 // -----------------------------------------------------------------------------
@@ -60,6 +61,10 @@ tasks.named<Test>("test") {
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.layout.projectDirectory.dir("deploy/compose/prometheus"))
         .withPropertyName("prometheusConfiguration")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // RunbooksConsistencyTest — 알림 표 · RB 문서가 규칙 파일과 §9.5 를 비춘다(7-5).
+    inputs.dir(rootProject.layout.projectDirectory.dir("docs/runbooks"))
+        .withPropertyName("runbooks")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
