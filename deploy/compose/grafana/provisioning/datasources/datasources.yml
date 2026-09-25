@@ -22,8 +22,8 @@ datasources:
     jsonData:
       httpMethod: POST
       timeInterval: 10s
-      # 트레이스 exemplar → Tempo 로 점프 (한 주문의 traceId 로 4개 서비스를
-      # 한 줄로 보는 것이 데모의 핵심이다 — DESIGN.md §9.2)
+      # 트레이스 exemplar → Tempo 로 점프 (웨이브 하나의 일을 TraceQL 한 줄로 찾는 것이
+      # 데모의 핵심이다 — DESIGN.md §9.2)
       exemplarTraceIdDestinations:
         - name: trace_id
           datasourceUid: dawnline-tempo
@@ -36,6 +36,10 @@ datasources:
     url: http://tempo:3200
     editable: false
     jsonData:
-      # 서비스 그래프는 Tempo metrics-generator 가 필요하다. Phase 7 에서 켠다.
       tracesToMetrics:
         datasourceUid: dawnline-prometheus
+      # 서비스 그래프 — Tempo metrics_generator 가 Prometheus 로 remote-write 한 traces_service_graph_* 를 읽는다(§9.2).
+      serviceMap:
+        datasourceUid: dawnline-prometheus
+      nodeGraph:
+        enabled: true

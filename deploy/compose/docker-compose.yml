@@ -240,6 +240,8 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=3d
       - --web.enable-lifecycle
+      # Tempo metrics_generator 의 서비스 그래프를 받는다(tempo/tempo.yml, §9.2).
+      - --web.enable-remote-write-receiver
     ports:
       - "${PROMETHEUS_PORT}:9090"
     deploy:
