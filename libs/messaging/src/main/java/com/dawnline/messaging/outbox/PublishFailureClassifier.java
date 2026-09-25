@@ -1,5 +1,6 @@
 package com.dawnline.messaging.outbox;
 
+import com.dawnline.messaging.FailureKind;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -29,6 +30,8 @@ import org.apache.kafka.common.errors.SerializationException;
  * 격리는 사람의 개입을 요구한다. 잘못 격리하면 멀쩡한 이벤트가 멈추고, 잘못 재시도하면
  * 최악의 경우 예전 동작(무한 재시도)으로 돌아갈 뿐이다. 되돌리기 쉬운 쪽이 기본값이다.
  *
+ * <p>판정의 두 값({@link FailureKind})은 소비 측 경계표({@code ConsumeFailure})와 공유한다(ADR-015 후속 정정 2026-09-25).
+ *
  * <p>이 클래스는 프레임워크에 의존하지 않고 상태도 없다. 정책이 한 곳에 모여 있어야
  * "이 예외가 왜 격리되는가" 를 코드 전체에서 재구성하지 않아도 된다.
  */
@@ -44,31 +47,21 @@ public final class PublishFailureClassifier {
         DELIVERY
     }
 
-    /** 실패의 성질. */
-    public enum Kind {
-
-        /** 재시도해도 같은 결과. 격리한다. */
-        DETERMINISTIC,
-
-        /** 기다리면 풀린다. 격리하지 않는다. */
-        TRANSIENT
-    }
-
     /**
      * 실패를 판정한다.
      *
      * @param phase   실패가 난 단계
      * @param failure 실패 원인. {@code ExecutionException} 등 래퍼는 벗겨서 본다.
-     * @return 결정적이면 {@link Kind#DETERMINISTIC}, 아니면 {@link Kind#TRANSIENT}
+     * @return 결정적이면 {@link FailureKind#DETERMINISTIC}, 아니면 {@link FailureKind#TRANSIENT}
      */
-    public Kind classify(Phase phase, Throwable failure) {
+    public FailureKind classify(Phase phase, Throwable failure) {
         Objects.requireNonNull(phase, "phase");
         Objects.requireNonNull(failure, "failure");
 
         return switch (phase) {
             // 조립 단계의 실패는 정의상 행 자체의 문제다. 이 단계는 네트워크도 브로커도 건드리지 않고
             // 저장된 바이트만 읽으므로, 같은 행을 다시 읽으면 같은 예외가 난다.
-            case ASSEMBLY -> Kind.DETERMINISTIC;
+            case ASSEMBLY -> FailureKind.DETERMINISTIC;
             case DELIVERY -> deliveryKind(unwrap(failure));
         };
     }
@@ -88,23 +81,23 @@ public final class PublishFailureClassifier {
      * 의도했던 예외 처리도 그대로 남는다 — {@code UnknownTopicOrPartitionException} 은
      * {@code RetriableException} 이라 기동 직후 토픽이 아직 없는 상황은 여전히 일시적이다.
      */
-    private static Kind deliveryKind(Throwable cause) {
+    private static FailureKind deliveryKind(Throwable cause) {
         // Kafka 가 재시도 가능이라고 선언했다. 그 판단을 그대로 쓴다.
         if (cause instanceof RetriableException) {
-            return Kind.TRANSIENT;
+            return FailureKind.TRANSIENT;
         }
         // 직렬화 실패는 §4.6 이 명시적으로 결정적이라고 정한 경우다. 같은 값을 다시 직렬화해도 같다.
         // (KafkaException 이지만 ApiException 은 아니라 아래 분기에 걸리지 않는다.)
         if (cause instanceof SerializationException) {
-            return Kind.DETERMINISTIC;
+            return FailureKind.DETERMINISTIC;
         }
         // 브로커가 돌려준 오류인데 재시도 가능이 아니다 = Kafka 가 결정적이라고 말한 것이다.
         if (cause instanceof ApiException) {
-            return Kind.DETERMINISTIC;
+            return FailureKind.DETERMINISTIC;
         }
         // Kafka 가 분류하지 않은 예외(IO, 프로듀서 상태 오류 등)는 판단 근거가 없다.
         // ADR-015 의 "애매하면 일시적" 이 여기에 적용된다.
-        return Kind.TRANSIENT;
+        return FailureKind.TRANSIENT;
     }
 
     /**

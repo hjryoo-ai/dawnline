@@ -3,7 +3,7 @@ package com.dawnline.messaging.outbox;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.EventHeaders;
 import com.dawnline.messaging.json.EventJson;
-import com.dawnline.messaging.outbox.PublishFailureClassifier.Kind;
+import com.dawnline.messaging.FailureKind;
 import com.dawnline.messaging.outbox.PublishFailureClassifier.Phase;
 import java.time.Clock;
 import java.time.Duration;
@@ -186,7 +186,7 @@ public class OutboxBatchPublisher {
      *         일시적이라 이 배치를 여기서 멈춰야 하면 {@code false}
      */
     private boolean quarantine(Phase phase, OutboxEvent event, Throwable failure, Instant now) {
-        if (classifier.classify(phase, failure) == Kind.DETERMINISTIC) {
+        if (classifier.classify(phase, failure) == FailureKind.DETERMINISTIC) {
             // 재시도로 풀리지 않는다. 사람이 행을 고쳐야 한다 → warn 이 아니라 error (§9.4 알림 대상).
             event.markFailed(now);
             log.error("outbox 행을 발행할 수 없어 격리합니다(결정적 실패, {}단계). 뒤의 행은 계속 발행합니다. "
