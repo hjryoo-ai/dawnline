@@ -9,6 +9,8 @@ import com.dawnline.ops.adapter.in.messaging.ListenerTopics;
 import com.dawnline.ops.adapter.in.messaging.ProjectionListener;
 import com.dawnline.ops.adapter.in.messaging.ProjectionScenario;
 import com.dawnline.ops.adapter.in.messaging.ProjectionScenario.Event;
+import com.dawnline.ops.adapter.out.persistence.JdbcRouteCounts;
+import com.dawnline.ops.adapter.out.persistence.JdbcRouteRows;
 import com.dawnline.ops.application.KpiGauges;
 import com.dawnline.ops.application.KpiGauges.Basis;
 import com.dawnline.ops.domain.DeliveryOutcome;
@@ -167,34 +169,56 @@ class KpiViewsIT extends OpsIntegrationTestBase {
     }
 
     @Test
-    void 라우트_진행은_사실에서_판정하고_계획이_없는_행은_창_없이_센다() {
+    void 라우트_진행은_쓰기_때_적은_완료를_읽고_끝나지_않은_것은_창_없이_센다() {
         Instant since = clock.instant().truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(23));
         Instant soon = clock.instant().plus(Duration.ofHours(1));
+        Instant first = clock.instant().minus(Duration.ofMinutes(20));
+        Instant last = first.plus(Duration.ofMinutes(7));
         gauges.refreshNow();
         double unknownCampBefore = gauges.routes(KpiGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN);
 
         route(camp, 1, "ASSIGNED", soon);                                    // 출발 전
         UUID moving = route(camp, 1, "DEPARTED", soon);
-        routed(moving, "COMPLETED", "DISPATCHED");
-        routed(moving, null, "DISPATCHED");                                   // 결과가 남았다
+        routed(moving, "COMPLETED", "DISPATCHED", first);
+        routed(moving, null, "DISPATCHED", null);                                 // 결과가 남았다
         UUID done = route(camp, 2, "DEPARTED", soon);
-        routed(done, "COMPLETED", "DISPATCHED");
-        routed(done, "FAILED", "DISPATCHED");
-        routed(done, null, "CANCELLED");                                      // 취소는 기다리지 않는다
-        UUID earlier = route(camp, 1, "DEPARTED", since.minus(Duration.ofMinutes(1)));   // 창 밖 — 세지 않는다
-        routed(earlier, "COMPLETED", "DISPATCHED");
+        routed(done, "COMPLETED", "DISPATCHED", first);
+        routed(done, "FAILED", "DISPATCHED", last);
+        routed(done, null, "CANCELLED", null);                                    // 취소는 기다리지 않는다
+        UUID empty = route(camp, 1, "DEPARTED", soon);                        // 재계획이 주문을 전부 옮겼다
+        UUID stale = route(camp, 1, "DEPARTED", since.minus(Duration.ofHours(30)));   // 창 밖인데 끝나지 않았다 — 센다
+        routed(stale, null, "DISPATCHED", null);
+        UUID earlier = route(camp, 1, "DEPARTED", since.minus(Duration.ofMinutes(1)));   // 창 밖의 완료 — 세지 않는다
+        routed(earlier, "COMPLETED", "DISPATCHED", first);
         route(camp, null, "DEPARTED", null);                                  // 계획이 아직 — 출발은 알지만 완료는 모른다
         route(null, null, "DEPARTED", null);                                  // delivery.status 가 먼저 — 캠프도 모른다
+        // 핸들러가 부르는 그 재집계 — 완료의 판정은 여기서 한다(ADR-061). 읽기는 그 칸만 본다.
+        new JdbcRouteRows(jdbc).recount(routeIds);
+
+        assertThat(completedAt(done)).as("마지막 결과 시각 — 먼저 난 완료가 아니라 뒤의 실패").isEqualTo(last);
+        assertThat(completedAt(empty)).as("결과가 없는데 남은 것도 없다 — 계획 출발").isEqualTo(soon);
+        assertThat(completedAt(moving)).as("남은 주문이 있다").isNull();
 
         gauges.refreshNow();
 
         String key = camp.toString();
         assertThat(gauges.routes(key, RouteProgress.ASSIGNED)).isEqualTo(1.0);
-        assertThat(gauges.routes(key, RouteProgress.IN_PROGRESS)).isEqualTo(1.0);
-        assertThat(gauges.routes(key, RouteProgress.COMPLETED)).as("창 밖의 완료는 세지 않는다").isEqualTo(1.0);
+        assertThat(gauges.routes(key, RouteProgress.IN_PROGRESS)).as("창 밖의 끝나지 않은 라우트도 센다").isEqualTo(2.0);
+        assertThat(gauges.routes(key, RouteProgress.COMPLETED)).as("창 밖의 완료는 세지 않는다").isEqualTo(2.0);
         assertThat(gauges.routes(key, RouteProgress.UNKNOWN)).isEqualTo(1.0);
         assertThat(gauges.routes(KpiGauges.UNKNOWN_CAMP, RouteProgress.UNKNOWN) - unknownCampBefore)
                 .as("캠프를 모르는 행도 빠지지 않는다").isEqualTo(1.0);
+    }
+
+    @Test
+    void 라우트_진행의_질의는_rm_orders_를_읽지_않는다() {
+        // 7-1 의 첫 판은 라우트마다 rm_orders 를 찾았고, EXISTS 로 쓰면 해시 서브플랜이 매분 rm_orders 전체를 읽었다 — 그
+        // 회귀는 운영 크기에서만 드러나 IT 가 잡지 못했다. 지금 완료는 쓰기 때 적으므로 질의가 읽는 표는 rm_routes 하나다.
+        // 이 검사는 계획 <em>선택</em>을 보지 않는다 — 문장이 어떤 표를 읽는가를 본다. 그래서 크기 · 통계를 전제로 두지 않는다.
+        String plan = String.join("\n", jdbc.queryForList(
+                "EXPLAIN " + JdbcRouteCounts.COUNT_SQL.replace("?", "now()"), String.class));
+
+        assertThat(plan).as(plan).contains("rm_routes").doesNotContain("rm_orders");
     }
 
     @Test
@@ -272,12 +296,17 @@ class KpiViewsIT extends OpsIntegrationTestBase {
         return routeId;
     }
 
-    private void routed(UUID routeId, @Nullable String outcome, String status) {
-        Instant at = clock.instant();
+    private void routed(UUID routeId, @Nullable String outcome, String status, @Nullable Instant at) {
         jdbc.update("INSERT INTO rm_orders (order_id, customer_id, order_status, delivery_outcome, camp_id, route_id, "
                         + "delivered_at, failed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())",
                 Ids.newId(), MARKER, status, outcome, camp, routeId,
                 utc("COMPLETED".equals(outcome) ? at : null), utc("FAILED".equals(outcome) ? at : null));
+    }
+
+    private @Nullable Instant completedAt(UUID routeId) {
+        OffsetDateTime at = jdbc.queryForObject("SELECT completed_at FROM rm_routes WHERE route_id = ?",
+                OffsetDateTime.class, routeId);
+        return at == null ? null : at.toInstant();
     }
 
     private void placed(@Nullable UUID campId, String status) {

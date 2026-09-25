@@ -79,7 +79,7 @@ public class ReadModelProjector implements ProjectFactUseCase {
             case Fact.OrderPlaced f -> orderPlaced(f);
             case Fact.FulfillmentPlanned f -> fulfillmentPlanned(f);
             case Fact.OrderDispatched f -> orderStatusOnly(f.orderId(), OrderStatus.DISPATCHED);
-            case Fact.OrderCancelled f -> orderStatusOnly(f.orderId(), OrderStatus.CANCELLED);
+            case Fact.OrderCancelled f -> orderCancelled(f.orderId());
             case Fact.WaveClosed f -> waveClosed(f);
             case Fact.RouteAssigned f -> routeAssigned(f);
             case Fact.PlanCompleted f -> planCompleted(f);
@@ -136,7 +136,26 @@ public class ReadModelProjector implements ProjectFactUseCase {
     }
 
     private int orderStatusOnly(UUID orderId, OrderStatus target) {
+        return orderStatus(orderId, lockOne(orderId), target);
+    }
+
+    /**
+     * 취소된 주문은 라우트의 「남은 주문」에서 빠진다 — 그 라우트의 완료({@code completed_at})가 바뀔 수 있으므로 다시
+     * 센다(ADR-061). 라우트의 칸은 쓰지 않는다. 주문의 지금 라우트를 알아야 하므로 주문을 먼저 잠근다(잠금 순서 그대로).
+     * 라우트를 아직 모르면 셀 것이 없다 — 뒤에 오는 {@code route.assigned} 가 이 취소를 보고 센다.
+     */
+    private int orderCancelled(UUID orderId) {
         OrderRow row = lockOne(orderId);
+        int stale = orderStatus(orderId, row, OrderStatus.CANCELLED);
+        UUID routeId = row.routeId();
+        if (routeId != null) {
+            routes.lock(List.of(routeId), clock.instant());
+            routes.recount(List.of(routeId));
+        }
+        return stale;
+    }
+
+    private int orderStatus(UUID orderId, OrderRow row, OrderStatus target) {
         Verdict verdict = Progress.judge(row.orderStatus(), target);
         if (verdict.writes()) {
             orders.write(orderId, Patch.of(OrderColumn.class).set(OrderColumn.ORDER_STATUS, target.name()),

@@ -12,6 +12,8 @@ import com.dawnline.ops.application.port.out.RouteColumn;
 import com.dawnline.ops.application.port.out.WaveColumn;
 import com.dawnline.ops.support.RowDiff;
 import com.dawnline.ops.support.Shuffles;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -63,7 +65,7 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
     static final Map<String, Set<String>> AGGREGATES = Map.of(
             "rm_orders", Set.of(),
             "rm_waves", Set.of("order_count"),
-            "rm_routes", Set.of("completed_count", "failed_count"));
+            "rm_routes", Set.of("completed_count", "failed_count", "completed_at"));
 
     /**
      * 칸 대조에서 빼는 표와 그 이유. 비어 있는 것이 정상이다 — V1 의 {@code rm_kpi_hourly} 가 여기
@@ -171,9 +173,12 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
                 scenario.r2))
                 .containsEntry("completed_count", 2).containsEntry("failed_count", 1)
                 .containsEntry("revision", 2).containsEntry("status", "DEPARTED");
+        // 완료는 쓰기 때 판정한다(ADR-061) — R1 에 남은 O6 은 취소됐으니 마지막 결과는 O1 의 배송, R2 는 O2 의 실패다.
+        assertThat(completedAt(scenario.r1)).as("R1 — O6 의 취소가 끝을 가른다").isEqualTo(scenario.o1Delivered);
+        assertThat(completedAt(scenario.r2)).as("R2").isEqualTo(scenario.o2Failed);
         assertThat(jdbc.queryForMap("SELECT status, order_count, route_count FROM rm_waves WHERE wave_id = ?",
                 scenario.waveId))
-                .containsEntry("status", "PLANNED").containsEntry("order_count", 4).containsEntry("route_count", 2);
+                .containsEntry("status", "PLANNED").containsEntry("order_count", 5).containsEntry("route_count", 2);
         assertThat(jdbc.queryForMap("SELECT camp_id, wave_id, order_status FROM rm_orders WHERE order_id = ?",
                 scenario.o5))
                 .as("배차 불가 — 캠프·웨이브는 끝까지 비어 있다")
@@ -192,10 +197,11 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
                         kpi("15", 1, 0, 1, 1, 0),
                         kpi("16", 1, 0, 1, 1, 0),
                         kpi("17", 0, 1, 0, 0, 0));
-        // 접수 축: 캠프가 정해진 넷이 접수 버킷 하나에. O5 는 캠프가 없어 이 캠프의 행에 없다.
+        // 접수 축: 캠프가 정해진 다섯이 접수 버킷 하나에(O6 은 취소됐지만 접수된 주문이다). O5 는 캠프가 없어 이 캠프의
+        // 행에 없다.
         assertThat(jdbc.queryForList("SELECT orders, unserviceable FROM kpi_intake_hourly WHERE camp_id = ?",
                 scenario.campId))
-                .containsExactly(Map.of("orders", 4L, "unserviceable", 0L));
+                .containsExactly(Map.of("orders", 5L, "unserviceable", 0L));
     }
 
     private static Map<String, Object> kpi(String hour, long delivered, long failed, long onTimePromised,
@@ -209,7 +215,7 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
         List<Event> causal = scenario.causalOrder();
         replay(causal);
         var baseline = tables.snapshot(scenario.keys(), EXCLUDED_COLUMNS.keySet());
-        assertThat(baseline.get("rm_orders")).as("기준 행이 있다 — 비어 있으면 아래 비교는 공허하다").hasSize(5);
+        assertThat(baseline.get("rm_orders")).as("기준 행이 있다 — 비어 있으면 아래 비교는 공허하다").hasSize(6);
         assertEveryColumnFilled(baseline);
 
         for (long seed = 1; seed <= ROUNDS; seed++) {
@@ -234,7 +240,7 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
         List<Event> causal = scenario.causalOrder();
         replay(causal);
         var baseline = tables.snapshot(scenario.keys(), EXCLUDED_COLUMNS.keySet());
-        assertThat(baseline.get("rm_orders")).as("기준 행이 있다 — 비어 있으면 아래 비교는 공허하다").hasSize(5);
+        assertThat(baseline.get("rm_orders")).as("기준 행이 있다 — 비어 있으면 아래 비교는 공허하다").hasSize(6);
         assertEveryColumnFilled(baseline);
 
         for (int i = 0; i < causal.size() - 1; i++) {
@@ -278,6 +284,11 @@ class ProjectionShuffleIT extends OpsIntegrationTestBase {
         for (Event event : order) {
             ListenerTopics.deliver(listener, new ConsumerRecord<>(event.topic(), 0, offset++, event.key(), event.value()));
         }
+    }
+
+    private Instant completedAt(UUID routeId) {
+        return jdbc.queryForObject("SELECT completed_at FROM rm_routes WHERE route_id = ?", OffsetDateTime.class, routeId)
+                .toInstant();
     }
 
     private List<Boolean> onTime(UUID orderId) {

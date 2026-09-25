@@ -29,7 +29,9 @@ public interface RouteRows {
     void write(UUID routeId, Patch<RouteColumn> patch, Instant touchedAt);
 
     /**
-     * {@code completed_count}·{@code failed_count} 를 {@code rm_orders} 에서 다시 센다(ADR-051 결정 4).
+     * {@code completed_count}·{@code failed_count}·{@code completed_at} 을 {@code rm_orders} 에서 다시 센다(ADR-051 결정 4 ·
+     * ADR-061). {@code completed_at} 은 결과 없는 비취소 주문이 남지 않았을 때의 마지막 결과 시각이다 — 그래서 부르는
+     * 자리는 라우트의 주문 집합 · 결과 · 취소가 바뀌는 사실 셋이다.
      *
      * <p><strong>계획이 도착한 라우트만</strong> 센다({@code revision} 이 있는 행). 소속을 모르는
      * 동안의 0 은 「배송한 것이 없다」가 아니라 「아직 모른다」이고, 그것을 0 으로 적으면 부재가

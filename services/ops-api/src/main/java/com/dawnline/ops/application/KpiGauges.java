@@ -66,7 +66,8 @@ import org.springframework.scheduling.annotation.Scheduled;
  * {@code dawnline_kpi_delivery{camp, outcome}} 은 정시율의 분모를 둘로 편 것이다 — 같은 창 · 같은 스냅숏에서 읽으므로
  * 「대시보드의 24행과 게이지가 다를 수 없다」가 여기도 성립한다. 창에 결과가 없는 캠프는 {@code NaN} 이 아니라 0 이다:
  * 0/0 은 정의되지 않지만 「결과 0 건」은 참인 셈이다. {@code dawnline_routes{camp, status}} 는 {@code rm_routes} 를
- * 진행으로 센 집계다({@link RouteCounts}). 캠프를 모르는 행은 {@code camp="unknown"} 이다. 한 갱신이 셋을 함께 내고 함께
+ * 진행으로 센 집계다({@link RouteCounts}) — 끝나지 않은 라우트는 창 없이, 출발 전 · 완료는 같은 창으로(ADR-061).
+ * 캠프를 모르는 행은 {@code camp="unknown"} 이다. 한 갱신이 셋을 함께 내고 함께
  * 실패한다 — 성공 시각이 하나라서 {@code dawnline_kpi_refresh_age_seconds} 가 셋 모두의 알림이다.
  *
  * <h2>미터는 캠프를 처음 볼 때 등록한다</h2>

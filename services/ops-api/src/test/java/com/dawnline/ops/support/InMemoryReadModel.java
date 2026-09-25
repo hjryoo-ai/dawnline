@@ -13,6 +13,7 @@ import com.dawnline.ops.domain.RouteStatus;
 import com.dawnline.ops.domain.WaveStatus;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -144,7 +145,30 @@ public final class InMemoryReadModel {
                 }
                 route.put("completed_count", countOrders(routeId, "COMPLETED"));
                 route.put("failed_count", countOrders(routeId, "FAILED"));
+                Instant completedAt = completedAt(routeId, (Instant) route.get("planned_departure"));
+                if (completedAt == null) {
+                    route.remove("completed_at");
+                } else {
+                    route.put("completed_at", completedAt);
+                }
             }
+        }
+
+        /** {@code JdbcRouteRows.RECOUNT_SQL} 의 {@code completed_at} — 남은 비취소 주문이 있으면 없다(ADR-061). */
+        private @Nullable Instant completedAt(UUID routeId, @Nullable Instant plannedDeparture) {
+            List<Map<String, Object>> onRoute = orders.values().stream()
+                    .filter(o -> routeId.equals(o.get("route_id")))
+                    .toList();
+            boolean pending = onRoute.stream().anyMatch(o -> o.get("delivery_outcome") == null
+                    && !"CANCELLED".equals(o.get("order_status")));
+            if (pending) {
+                return null;
+            }
+            return onRoute.stream()
+                    .map(o -> (Instant) (o.get("delivered_at") != null ? o.get("delivered_at") : o.get("failed_at")))
+                    .filter(Objects::nonNull)
+                    .max(Comparator.naturalOrder())
+                    .orElse(plannedDeparture);
         }
 
         private long countOrders(UUID routeId, String outcome) {

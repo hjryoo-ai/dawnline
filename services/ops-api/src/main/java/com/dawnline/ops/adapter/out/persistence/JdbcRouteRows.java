@@ -37,13 +37,24 @@ public class JdbcRouteRows implements RouteRows {
                FOR UPDATE
             """;
 
-    /** 계획이 도착한 라우트만 센다 — 소속을 모르는 동안의 0 은 부재를 값으로 적는 것이다. */
+    /**
+     * 계획이 도착한 라우트만 센다 — 소속을 모르는 동안의 0 은 부재를 값으로 적는 것이다.
+     *
+     * <p>세 칸을 한 번의 탐색으로 낸다. {@code completed_at} 은 결과 없는 비취소 주문이 남았으면 {@code NULL}, 아니면 마지막
+     * 결과 시각이고, 결과가 하나도 없으면(빈 라우트 · 전부 취소) 계획 출발이다 — 전부 사실이라 처리 순서를 타지 않는다
+     * (ADR-061). 주문이 없으면 집계가 한 행({@code bool_or} 는 {@code NULL})을 내므로 {@code ELSE} 로 간다.
+     */
     static final String RECOUNT_SQL = """
             UPDATE rm_routes r
-               SET completed_count = (SELECT count(*) FROM rm_orders o
-                                       WHERE o.route_id = r.route_id AND o.delivery_outcome = 'COMPLETED'),
-                   failed_count    = (SELECT count(*) FROM rm_orders o
-                                       WHERE o.route_id = r.route_id AND o.delivery_outcome = 'FAILED')
+               SET (completed_count, failed_count, completed_at) = (
+                     SELECT count(*) FILTER (WHERE o.delivery_outcome = 'COMPLETED'),
+                            count(*) FILTER (WHERE o.delivery_outcome = 'FAILED'),
+                            CASE WHEN bool_or(o.delivery_outcome IS NULL
+                                              AND o.order_status IS DISTINCT FROM 'CANCELLED') THEN NULL
+                                 ELSE COALESCE(max(COALESCE(o.delivered_at, o.failed_at)), r.planned_departure)
+                            END
+                       FROM rm_orders o
+                      WHERE o.route_id = r.route_id)
              WHERE r.route_id = ANY (?::uuid[])
                AND r.revision IS NOT NULL
             """;

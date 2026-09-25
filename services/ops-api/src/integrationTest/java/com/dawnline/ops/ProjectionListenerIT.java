@@ -125,7 +125,7 @@ class ProjectionListenerIT extends OpsIntegrationTestBase {
         }
         var causal = tables.snapshot(scenario.keys(), ProjectionShuffleIT.EXCLUDED_COLUMNS.keySet());
 
-        assertThat(causal.get("rm_orders")).as("기준 행이 있다").hasSize(5);
+        assertThat(causal.get("rm_orders")).as("기준 행이 있다").hasSize(6);
         assertThat(RowDiff.between(causal, viaBroker, scenario::name)).isEmpty();
     }
 
