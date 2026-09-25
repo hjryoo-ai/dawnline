@@ -5,7 +5,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.dawnline.messaging.config.DawnlineMessagingProperties;
+import com.dawnline.observability.DawnlineMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.sql.SQLTransientConnectionException;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -144,6 +148,26 @@ class DawnlineErrorHandlersTest {
     }
 
     @Test
+    void 역직렬화_실패는_실제_관찰자를_꽂아도_첫_배달에서_DLQ_로_가고_재시도로_세지_않는다() {
+        // 회귀 — Spring Kafka 는 즉시 DLQ 로 갈 실패도 failedDelivery 로 한 번 알린다. 처음 판의 관찰자는 그때 닫힌 라벨 밖의
+        // 값("deserialization")으로 카운터를 올리다 던졌고, 그 예외가 복구를 막아 레코드가 DLQ 에 가지 못했다(DlqReplayIT, 2026-09-25).
+        MeterRegistry meters = new SimpleMeterRegistry();
+        ConsumerRetryObserver observer = new ConsumerRetryObserver(meters, "ops-api", Clock.systemUTC());
+        List<ConsumerRecord<?, ?>> recovered = new ArrayList<>();
+        DefaultErrorHandler handler = DawnlineErrorHandlers.retryThenDlq(
+                (record, exception) -> recovered.add(record), retry, observer);
+        ConsumerRecord<Object, Object> record = new ConsumerRecord<>("dawnline.order.placed.v1", 1, 4L, "broken", "{깨진");
+
+        handleOnce(handler, new DeserializationException("봉투가 JSON 이 아니다", new byte[0], false,
+                new IllegalStateException("파서")), record);
+
+        assertThat(recovered).as("첫 배달에서 DLQ").containsExactly(record);
+        assertThat(meters.find(DawnlineMetrics.EVENT_RETRY.meterName()).counters())
+                .as("재시도가 아니다 — 세지 않는다").allSatisfy(counter -> assertThat(counter.count()).isZero());
+        assertThat(observer.ageSeconds()).isZero();
+    }
+
+    @Test
     void 역직렬화_예외는_스프링_기본_fatal_목록에_이미_있다() {
         // 우리가 따로 추가하지 않는 이유를 코드로 남긴다. 프레임워크 기본값이 바뀌면 이 테스트가 알려 준다.
         assertThat(ExceptionClassifier.defaultFatalExceptionsList()).contains(DeserializationException.class);
@@ -188,28 +212,34 @@ class DawnlineErrorHandlersTest {
         RetryListener listener = (record, exception, attempt) -> deliveries.failedDeliveries++;
         DefaultErrorHandler handler = DawnlineErrorHandlers.retryThenDlq(
                 (record, exception) -> deliveries.recovered.add(record), fast, listener);
-        Consumer<Object, Object> consumer = mock(Consumer.class);
-        MessageListenerContainer container = mock(MessageListenerContainer.class);
-        when(container.isRunning()).thenReturn(true);
         ConsumerRecord<Object, Object> record = new ConsumerRecord<>("dawnline.order.placed.v1", 3, 41L, "k", "v");
 
         int attempt = 0;
         for (Exception failure : failures) {
             attempt++;
-            try {
-                handler.handleRemaining(new ListenerExecutionFailedException("리스너 실패", failure),
-                        List.of(record), consumer, container);
-            } catch (RuntimeException rewound) {
-                // 되감았다 — 컨테이너는 이것(패키지 전용 RecordInRetryException)을 삼키고 같은 오프셋부터 다시 폴한다.
-                if (!rewound.getClass().getSimpleName().equals("RecordInRetryException")) {
-                    throw rewound;
-                }
-            }
+            handleOnce(handler, failure, record);
             if (!deliveries.recovered.isEmpty()) {
                 deliveries.attemptsUntilRecovered = attempt;
                 break;
             }
         }
         return deliveries;
+    }
+
+    /** 컨테이너가 실패 한 번에 하는 일 — 핸들러가 되감으면 그 신호를 삼킨다. */
+    @SuppressWarnings("unchecked")
+    private static void handleOnce(DefaultErrorHandler handler, Exception failure, ConsumerRecord<Object, Object> record) {
+        Consumer<Object, Object> consumer = mock(Consumer.class);
+        MessageListenerContainer container = mock(MessageListenerContainer.class);
+        when(container.isRunning()).thenReturn(true);
+        try {
+            handler.handleRemaining(new ListenerExecutionFailedException("리스너 실패", failure),
+                    List.of(record), consumer, container);
+        } catch (RuntimeException rewound) {
+            // 되감았다 — 컨테이너는 이것(패키지 전용 RecordInRetryException)을 삼키고 같은 오프셋부터 다시 폴한다.
+            if (!rewound.getClass().getSimpleName().equals("RecordInRetryException")) {
+                throw rewound;
+            }
+        }
     }
 }

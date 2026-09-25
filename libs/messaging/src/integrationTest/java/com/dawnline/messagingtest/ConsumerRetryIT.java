@@ -55,7 +55,11 @@ import org.springframework.transaction.CannotCreateTransactionException;
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 class ConsumerRetryIT extends MessagingIntegrationTestBase {
 
-    private static final String TOPIC = Topics.forEvent("wave.closed", 1);
+    /**
+     * 이 IT 만의 토픽. {@code wave.closed} 를 쓰면 안 된다 — {@code OutboxTraceparentIT} 가 그 토픽을 처음부터 읽어 봉투로 연다
+     * (같은 컨테이너, 2026-09-25 에 여기서 넣은 {@code "{}"} 가 그 IT 를 깼다).
+     */
+    private static final String TOPIC = Topics.forEvent("plan.completed", 1);
     private static final String GROUP = "consumer-retry-it";
     private static final Duration MAX_POLL_INTERVAL = Duration.ofSeconds(3);
 
@@ -87,7 +91,7 @@ class ConsumerRetryIT extends MessagingIntegrationTestBase {
             return new SimpleMeterRegistry();
         }
 
-        @KafkaListener(topics = "dawnline.wave.closed.v1", groupId = GROUP,
+        @KafkaListener(topics = "dawnline.plan.completed.v1", groupId = GROUP,
                 properties = {"auto.offset.reset=earliest", "max.poll.interval.ms=3000"})
         void on(ConsumerRecord<String, String> record) {
             DELIVERIES.computeIfAbsent(record.key(), key -> new AtomicInteger()).incrementAndGet();

@@ -17,7 +17,6 @@ import java.util.function.Predicate;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
-import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.kafka.support.converter.ConversionException;
 import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.messaging.converter.MessageConversionException;
@@ -68,9 +67,16 @@ public enum ConsumeFailure {
         return name.startsWith("org.springframework.data.redis.") || name.startsWith("io.lettuce.");
     }),
 
-    /** 커넥션을 얻지 못했다 — RB-02 재현의 Hikari 30초 대기가 이 행이다. */
+    /**
+     * 커넥션을 얻지 못했다 — RB-02 재현의 Hikari 30초 대기가 이 행이다.
+     *
+     * <p>{@code CannotGetJdbcConnectionException} 은 <strong>이름으로</strong> 본다 — spring-jdbc 는 이 라이브러리의 선택 의존이다.
+     * JDBC 가 없는 소비자(sim-runner 는 JPA 스타터를 뺀다)에서 타입으로 참조하면 이 enum 이 적재되지 못하고, 에러 핸들러를 만들다
+     * {@code NoClassDefFoundError} 로 기동이 실패한다(근거: 관측(재현됨) — 2026-09-25 {@code SimDriverIT}). 이 enum 이 선택 의존의
+     * 타입을 참조하지 않는다는 것은 {@code ConsumeFailureTest} 가 ArchUnit 으로 본다.
+     */
     DB_CONNECTION(FailureKind.TRANSIENT, anyOf(CannotCreateTransactionException.class,
-            CannotGetJdbcConnectionException.class, SQLTransientConnectionException.class)),
+            SQLTransientConnectionException.class).or(named("org.springframework.jdbc.CannotGetJdbcConnectionException"))),
 
     /** 자원 장애 — 세션이 끊겼다, 서버가 내려갔다. */
     DB_RESOURCE(FailureKind.TRANSIENT, anyOf(DataAccessResourceFailureException.class, SQLRecoverableException.class)),
@@ -161,6 +167,18 @@ public enum ConsumeFailure {
 
     private static Predicate<Throwable> anyOf(List<? extends Class<?>> types) {
         return failure -> types.stream().anyMatch(type -> type.isInstance(failure));
+    }
+
+    /** 클래스 이름으로 — 그 클래스이거나 그 하위다. 선택 의존의 타입을 참조하지 않고 판정한다. */
+    private static Predicate<Throwable> named(String className) {
+        return failure -> {
+            for (Class<?> type = failure.getClass(); type != null; type = type.getSuperclass()) {
+                if (type.getName().equals(className)) {
+                    return true;
+                }
+            }
+            return false;
+        };
     }
 
     /** enum 상수의 인자에서 정적 필드를 읽을 수 없어서 목록을 중첩 클래스에 둔다. */

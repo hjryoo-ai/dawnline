@@ -8,6 +8,8 @@ import com.dawnline.common.error.IllegalStateTransitionException;
 import com.dawnline.common.error.ValidationException;
 import com.dawnline.messaging.FailureKind;
 import com.dawnline.observability.DawnlineMetrics;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition;
 import io.lettuce.core.RedisCommandTimeoutException;
 import java.sql.SQLRecoverableException;
 import java.sql.SQLTimeoutException;
@@ -156,6 +158,17 @@ class ConsumeFailureTest {
             expected.add(NonRetryableEventException.class);
 
             assertThat(new HashSet<Class<?>>(ConsumeFailure.immediateDlqTypes())).isEqualTo(expected);
+        }
+
+        @Test
+        void 경계표는_선택_의존의_타입을_참조하지_않는다() {
+            // spring-jdbc · Hibernate · Redis 는 이 라이브러리의 선택 의존이다. 타입으로 참조하면 그것이 없는 소비자(sim-runner)에서
+            // enum 이 적재되지 못하고 에러 핸들러를 만들다 기동이 실패한다(관측(재현됨) — 2026-09-25 SimDriverIT). 이름으로 판정한다.
+            ArchRuleDefinition.noClasses()
+                    .that().haveFullyQualifiedName(ConsumeFailure.class.getName())
+                    .should().dependOnClassesThat().resideInAnyPackage(
+                            "org.springframework.jdbc..", "org.hibernate..", "org.springframework.data.redis..", "io.lettuce..")
+                    .check(new ClassFileImporter().importClasses(ConsumeFailure.class));
         }
 
         @Test

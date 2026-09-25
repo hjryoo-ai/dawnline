@@ -14,6 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.kafka.listener.ConsumerAwareRebalanceListener;
 import org.springframework.kafka.listener.RecordInterceptor;
 import org.springframework.kafka.listener.RetryListener;
@@ -29,7 +31,9 @@ import org.springframework.kafka.listener.RetryListener;
  * </ul>
  *
  * <h2>나이의 시작과 끝 — 세 역할이 한 객체인 이유</h2>
- * 시작은 에러 핸들러가 안다({@link RetryListener#failedDelivery} — 재시도 경로에 든 실패만 온다, 즉시 DLQ 는 오지 않는다).
+ * 시작은 에러 핸들러가 안다({@link RetryListener#failedDelivery}). <strong>즉시 DLQ 로 가는 실패도 여기에 한 번 온다</strong> — 재시도
+ * 목록 밖의 예외도 Spring Kafka 는 첫 배달의 실패로 알린 뒤 복구기를 부른다(근거: 관측(재현됨) — 2026-09-25 {@code DlqReplayIT}). 그 행
+ * ({@link ConsumeFailure#DESERIALIZATION})은 재시도가 아니므로 세지도 재지도 않는다.
  * 끝은 셋이다: 그 레코드가 <strong>성공</strong>했다({@link RecordInterceptor#success} — 에러 핸들러는 성공을 모른다),
  * <strong>DLQ 로 갔다</strong>({@link RetryListener#recovered}), <strong>파티션이 이 인스턴스를 떠났다</strong>(리밸런스 — 다른
  * 인스턴스가 이어 재시도하고 그쪽 게이지가 오른다). 하나라도 빠지면 게이지가 풀린 뒤에도 오른 채로 남는다 — 그러면 알림이 거짓으로
@@ -50,6 +54,8 @@ public class ConsumerRetryObserver
     /** 막고 있는 레코드 — 오프셋과 그 레코드의 첫 실패 시각. */
     private record Blocked(long offset, Instant since) {
     }
+
+    private static final Logger log = LoggerFactory.getLogger(ConsumerRetryObserver.class);
 
     private final Map<TopicPartition, Blocked> blocked = new ConcurrentHashMap<>();
     private final MeterRegistry meters;
@@ -74,21 +80,27 @@ public class ConsumerRetryObserver
 
     @Override
     public void failedDelivery(ConsumerRecord<?, ?> record, Exception failure, int deliveryAttempt) {
-        DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_RETRY,
-                MessagingMetrics.TAG_CONSUMER, consumer,
-                MessagingMetrics.TAG_REASON, ConsumeFailure.of(failure).reason())
-                .increment();
-        blocked.compute(partitionOf(record), (partition, current) ->
-                current != null && current.offset() == record.offset()
-                        ? current
-                        : new Blocked(record.offset(), clock.instant()));
+        observe("failedDelivery", () -> {
+            ConsumeFailure row = ConsumeFailure.of(failure);
+            if (row == ConsumeFailure.DESERIALIZATION) {
+                return;
+            }
+            DawnlineMeters.counter(meters, DawnlineMetrics.EVENT_RETRY,
+                    MessagingMetrics.TAG_CONSUMER, consumer,
+                    MessagingMetrics.TAG_REASON, row.reason())
+                    .increment();
+            blocked.compute(partitionOf(record), (partition, current) ->
+                    current != null && current.offset() == record.offset()
+                            ? current
+                            : new Blocked(record.offset(), clock.instant()));
+        });
     }
 
     // --- 끝: DLQ · 성공 · 파티션이 떠남 ---------------------------------------
 
     @Override
     public void recovered(ConsumerRecord<?, ?> record, Exception failure) {
-        release(record);
+        observe("recovered", () -> release(record));
     }
 
     @Override
@@ -99,7 +111,7 @@ public class ConsumerRetryObserver
 
     @Override
     public void success(ConsumerRecord<Object, Object> record, Consumer<Object, Object> kafkaConsumer) {
-        release(record);
+        observe("success", () -> release(record));
     }
 
     @Override
@@ -121,6 +133,19 @@ public class ConsumerRetryObserver
                 .mapToDouble(entry -> Duration.between(entry.since(), now).toMillis() / 1000.0)
                 .max()
                 .orElse(0.0);
+    }
+
+    /**
+     * 관찰은 처리를 바꾸지 않는다 — 여기서 난 예외가 에러 핸들러로 올라가면 그 레코드의 복구가 막힌다. 처음 판이 그랬다: 닫힌 라벨 밖의
+     * 값으로 카운터를 올리다 던진 예외 때문에 즉시 DLQ 로 가야 할 레코드가 DLQ 에 가지 못하고 되풀이됐다(근거: 관측(재현됨) — 2026-09-25
+     * {@code DlqReplayIT}). 지표가 틀리는 것은 보이는 결함이고, 처리가 바뀌는 것은 장애다.
+     */
+    private void observe(String hook, Runnable body) {
+        try {
+            body.run();
+        } catch (RuntimeException e) {
+            log.warn("재시도 관찰에 실패했다 — 처리는 그대로 간다. hook={}", hook, e);
+        }
     }
 
     /** 그 레코드(또는 그 뒤의 레코드)가 끝났으면 칸을 비운다 — 앞선 오프셋의 칸은 이미 지나간 것이다. */
