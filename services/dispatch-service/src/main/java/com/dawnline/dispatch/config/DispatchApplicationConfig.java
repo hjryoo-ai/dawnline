@@ -10,6 +10,7 @@ import com.dawnline.dispatch.application.port.in.RecordDeliveryStatusUseCase;
 import com.dawnline.dispatch.application.port.in.ReplanRouteUseCase;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
 import com.dawnline.dispatch.adapter.out.messaging.OutboxDispatchEvents;
+import com.dawnline.dispatch.adapter.out.persistence.JdbcDispatchRetention;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcPlanQueries;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcPlannedRouteRepository;
 import com.dawnline.dispatch.adapter.out.persistence.JdbcReferenceAdmin;
@@ -19,6 +20,7 @@ import com.dawnline.dispatch.adapter.out.persistence.JpaRoutePlanRepository;
 import com.dawnline.dispatch.adapter.out.persistence.JpaDispatchCandidateRepository;
 import com.dawnline.dispatch.application.CancelOrderService;
 import com.dawnline.dispatch.application.DispatchMetrics;
+import com.dawnline.dispatch.application.DispatchRetentionCleaner;
 import com.dawnline.dispatch.application.LoadCandidateService;
 import com.dawnline.dispatch.domain.CandidatePriority;
 import com.dawnline.dispatch.domain.PlanModeSelector;
@@ -44,8 +46,11 @@ import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.outbox.OutboxAppender;
+import com.dawnline.messaging.retention.RetentionAges;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManagerFactory;
 import java.time.Clock;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
@@ -357,6 +362,32 @@ public class DispatchApplicationConfig {
     public WaveClosedListener waveClosedListener(IdempotentConsumer consumer,
             RunPlanUseCase runPlan, EventJson json) {
         return new WaveClosedListener(consumer, runPlan, json);
+    }
+
+    /**
+     * 보존 정리 (§7.1 보존 표, ADR-059). {@code dawnline.dispatch.retention.enabled=false} 로 끌 수 있다 — 끈 배포에는
+     * 성공 나이 게이지도 걸린 계획 게이지도 없다(ADR-058 결정 6).
+     *
+     * <p>{@code Clock} 은 {@code libs/messaging} 이 저장 정밀도(마이크로초)로 자른 빈을 준다(불변규칙 12).
+     *
+     * @param jdbcTemplate       계획마다 여는 트랜잭션에 참여하는 JDBC 템플릿
+     * @param transactionManager 계획마다 새 트랜잭션
+     * @param clock              임계 시각
+     * @param properties         {@code dawnline.dispatch.retention.*}
+     * @param ages               {@code dawnline_retention_last_success_age_seconds{table}}
+     * @param meters             {@code dawnline_route_plans_stuck}
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "dawnline.dispatch.retention", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
+    public DispatchRetentionCleaner dispatchRetentionCleaner(JdbcTemplate jdbcTemplate,
+            PlatformTransactionManager transactionManager, Clock clock, DispatchProperties properties,
+            RetentionAges ages, MeterRegistry meters) {
+
+        DispatchProperties.Retention retention = properties.retention();
+        return new DispatchRetentionCleaner(new JdbcDispatchRetention(jdbcTemplate), transactionManager, clock,
+                retention.candidates(), retention.explanations(), retention.plans(), retention.cap(),
+                retention.maxPlansPerRun(), retention.batchSize(), retention.maxBatchesPerRun(), ages, meters);
     }
 
     /**

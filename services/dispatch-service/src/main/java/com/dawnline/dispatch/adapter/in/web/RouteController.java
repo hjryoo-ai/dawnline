@@ -83,7 +83,9 @@ public class RouteController {
             @ApiResponse(responseCode = "404", description = "없는 라우트·주문",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "409",
-                    description = "옮기면 하드 룰을 어긴다. 재시도해도 결과가 같아 `Retry-After` 는 없다",
+                    description = "옮기면 하드 룰을 어긴다(`conflict`), 또는 계획의 후보가 보존 기간이 지나 지워졌다"
+                            + "(`candidates-expired` — 그 계획은 다시 풀 수 없고 새로 돌려야 한다, ADR-059). "
+                            + "재시도해도 결과가 같아 `Retry-After` 는 없다",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public ReassignStopUseCase.Result reassign(@PathVariable UUID routeId,
             @PathVariable UUID orderId, @Valid @RequestBody ReassignRequest request) {

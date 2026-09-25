@@ -33,6 +33,10 @@ Phase 3-6 의 취소 경로가 이미 쓰고 있었다. **바뀐 것은 호출 �
 `route_stops`·`route_stop_orders` 가 없다). 그러므로 이 테이블은 **날마다 쌓인다** — 그래서
 1일·10일·30일 세 점에서 잰다.
 
+> **2026-09-25 — 보존이 생겼다**([ADR-059](../adr/ADR-059-dispatch-retention-is-per-plan.md), 7-0c). 라우트 계열은
+> 계획 단위로 90일에 지워진다. 이 측정의 30일 점은 그대로 유효하고, 상한은 91일치 약 1,365만 행이다
+> ([측정](phase7-dispatch-retention.md) §1). 아래 「보존 정책이 없으므로 상한도 없다」는 측정 당시의 문장으로 남긴다.
+
 `ANALYZE` 는 생략하지 않았다. 통계가 없으면 `reltuples = -1` 이고 플래너는 기본 추정치로
 **짐작하며 인덱스를 고른다**(Phase 4 의 같은 자리, `phase4-dispatch-candidates-index.md`).
 

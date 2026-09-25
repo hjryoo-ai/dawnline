@@ -2053,6 +2053,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A27 | **peak-day 의 전제** — 시나리오가 없다(`scenarios.yml` 은 smoke · tiny · ops-demo · late-injection), sim-runner 이미지는 꺼져 있다(「Phase 7 피크에서 다시 켠다」), `make peak` 은 자리표시다. 그리고 **부록 A 의 목록과 `scenarios.yml` 이 어긋난다** — `tiny`·`ops-demo` 는 목록에 없고, `late-injection` 은 목록이 「지연 15% · 실패 3%」, 파일이 `delay-probability: 1.0` · `failure-probability: 0.05` 다 | `tools/sim-runner` · `Makefile` · 부록 A | — | — | 7-4a |
 | A28 | 사건은 지나갔고 재검토 기록이 없는 셋 — ADR-029 ①(4-1 이후 예산 배분) · ②(부분 저장의 배치 단위) · ADR-047 ④(relocate 가 돌기 시작한 뒤 「덮음」의 빈도) | 표 C 에 있던 행 | — (소급) | 판정이 다른 곳에 있는지부터 찾는다 | 7-6 |
 | A29 | `cause="manual"` 이 일상이 되는가 | ADR-054 재검토 지점 1 | 조기 마감이 드문 결정이라는 가정이 틀렸다 | `promise_revised_total{cause}` · 감사 행 — peak-day 가 정해진 시각에 커맨드를 섞으므로(D3) 0 이 아니다 | 7-4 |
+| A30 | `DawnlineMetricsTest` 가 「§9.1 표를 그대로 옮긴 것」이라고 말하지만 **문서를 읽지 않는** 11개 고정 목록이다 — 표에는 그 뒤로 게이지·카운터가 여럿 늘었고(`dawnline_retention_last_success_age_seconds` · `*_stuck` 셋 등) 검사는 초록이다. 「서로를 비추는 목록」이 대조 없이 갈라진 모양(CLAUDE.md) | 7-0c 에서 §9.1 에 `dawnline_route_plans_stuck` 을 더하며 발견(2026-09-25) | — (이미 어긋나 있다) | §9.1 표 ↔ 코드의 메트릭 이름 — 문서에서 전부 읽고 빼는 방식으로 대조, `docs/DESIGN.md` 를 태스크 입력으로 | 7-1 |
 
 **B. Phase 7 표기는 없지만 peak-day 가 판정 데이터를 내는 것** — 적어 두지 않으면 7-4 가 그 수를 재고도 판정하지 않는다
 
@@ -2074,7 +2075,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 이유 | 항목 |
 |---|---|
 | **이미 닫혔다** | **Phase 3 대조표의 `PRIORITY_BOOST` 계약 결손**(⚠️ — 처음 판에는 D6 으로 적었다. Phase 4-11 이 계약 변경 없이 닫았다: 우선도는 받은 사실에서 파생한다, ADR-028 · `LoadCandidateService`. Phase 3 행만 갱신되지 않았다 — 지금 고쳤다) · ADR-015 ①(ADR-055) · ADR-049 ②(규칙 9 가 조건이라는 증명 — #45 의 음성 표본 `OwnShapeAdvice` 가 했다. ops-api 로 한 번 더 하지는 않았다) · ADR-023 의 DLQ 경로 조건(ADR-053 이 §4.4 의 의존 경고로 답했다) · ADR-028 ①②(ADR-033 의 통합 키와 80% 기준) · **ADR-033 「`peak` 은 아직 재지 않았다」**(`DatasetFeasibilityTest` 가 2026-09-12 부터 빼는 방식으로 `peak` 을 포함한다 — ADR 의 문장만 남았다) · ADR-043 ① · ADR-047 ①⑤ · ADR-048 ④ · ADR-050 ③ · ADR-051 ①②③ · ADR-052 ② · **FAST 클러스터 여유 그림자**(`phase4-strategies.md` §7.3 「판정: 닫는다」 — 이득이 비단조. 커밋되지 않은 probe 의 수라는 ⚠️ 가 그 절에 있다) |
-| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 |
+| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 · ADR-059(재배송이 들어오면 나이의 전제 — D7 이 범위 밖이다 · 다른 계획의 라우트로 옮기는 재배정 · 측정 문서의 행 수 재검토 지점 넷 — `route_plans` 10만 · `dispatch_candidates` 1,500만 · `route_stops` 2,000만) |
 | **조건이 켜지지 않았다** | `phase1-orders-k6.md` 판정표의 「`outbox_lag` 상승 → Phase 7 로 넘길지」 행 — Phase 1 의 미달은 콜드 스타트 하나였다 |
 | **메커니즘 조건 — 7-4 의 수가 연다** | ADR-048 ③ 같은 지점으로는 옮기지 않는 규칙(처음 판의 B3, D4) — 후보 한 칸을 건너뛰는 자리라 트리거 단위 outcome 이 아니다. **peak-day 에서 `no-gain` 이 `applied` 보다 잦으면 연다** |
 | **범위 밖으로 닫았다**(D 의 결정) | 재배송 +3(D7 — DESIGN §6.3 우선도 표 · ADR-028 · Phase 5 대조표에 행을 더했다) |
@@ -2155,6 +2156,10 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 0c. **dispatch 보존**(ADR-058 결정 9) — `dispatch_candidates` · `plan_explanations` 30일(설명은 조사 데이터 — 90일이면
    1,800만 행), `route_plans` · `routes` · `route_stops` · `route_stop_orders` 90일. FK 사슬 순서대로 지우고, 운영 크기
    EXPLAIN 과 함께. 보존 표에 행이 들어오고 대조 검사가 그 행을 본다.
+   **→ [ADR-059](adr/ADR-059-dispatch-retention-is-per-plan.md)** (2026-09-25 승인 — 나이는 계획의 `finished_at`(안전한 쪽이
+   아니다), 후보 · 설명은 **계획이 종결일 때만**(그 계획의 모든 stop 이 종결), 후보 조인 넷은 후보가 없으면 409
+   `candidates-expired`, `dawnline_route_plans_stuck`(30일) · 365일 상한, 계획 하나를 한 트랜잭션에서 자식부터 — 새 인덱스 없음,
+   [측정](benchmarks/phase7-dispatch-retention.md)).
 1. Grafana 대시보드 4종 JSON, Prometheus 알림 규칙(§9.4) 커밋.
    **없는 시계열 둘을 여기서 닫는다**(2026-09-24 이월, §9.1 「없는 시계열은 0 으로 보인다」):
    (a) `dawnline_cancel_too_late_total{camp}` 의 알림은 라벨이 열린 집합이라 미리 등록할 수 없다 — 규칙 식이
