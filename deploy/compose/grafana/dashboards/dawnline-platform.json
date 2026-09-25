@@ -779,8 +779,8 @@
             "type": "prometheus",
             "uid": "dawnline-prometheus"
           },
-          "expr": "min by (table) (dawnline_retention_last_success_age_seconds)",
-          "legendFormat": "{{table}}"
+          "expr": "min by (service, table) (dawnline_retention_last_success_age_seconds)",
+          "legendFormat": "{{service}} · {{table}}"
         }
       ],
       "id": 17,
