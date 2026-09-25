@@ -2854,6 +2854,22 @@ OpenTelemetry(Micrometer Tracing → OTLP → Tempo). Kafka 헤더로 `tracepare
 데모 웨이브의 트레이스는 177개였다. 계획 트레이스는 그중 하나라 잘린 결과에서 빠질 수 있고, 그러면 초록도 빨강도 순서의 우연이다.
 한도를 1000 으로 올리고 결과가 한도에 닿으면 실패로 둔다.
 
+**서비스 그래프 — 둘째 증거** (7-2): Tempo `metrics_generator` 의 `service-graphs` 프로세서가 부모-자식 스팬 쌍이 서비스
+경계를 넘을 때마다 간선을 세어 Prometheus 로 remote-write 한다(`traces_service_graph_request_total{client, server,
+connection_type}`). Grafana 의 Tempo 데이터소스가 그것을 `serviceMap` 으로 읽는다. span 메트릭 프로세서는 켜지 않는다 —
+서비스의 Micrometer 가 같은 것을 이미 긁힌다. 코어 사이에는 동기 호출이 없으므로(불변 규칙 4) **코어 간선은 Kafka 의
+PRODUCER → CONSUMER 쌍뿐이다** — 발행 스팬(템플릿 관측)의 id 가 소비 스팬의 부모일 때만 생긴다. 그래서 이 간선은 위 TraceQL
+검사와 **독립된 증거**다: 트레이스가 이어진다는 것을 트레이스 검색이 아니라 메트릭이 말한다. Tempo 2.9 가 메시징 쌍을
+간선으로 만든다는 것은 실측으로 확인했다(`connection_type="messaging_system"`). 시각화를 위해 스팬 종류를 바꾸지 않는다.
+`make obs-check` 5 가 코어 사이 간선만 골라 **그 양 끝의 합집합이 코어 넷인지** 본다. 로컬 실측(2026-09-25): 코어 간선
+여섯 — `order→fulfillment` · `fulfillment→dispatch` · `dispatch→tracking` 의 사슬과 되돌아오는 `fulfillment→order` ·
+`dispatch→order` · `dispatch→fulfillment`. `ops-api` 로 가는 간선(프로젝션 소비)과 `ops-api→` 의 HTTP 간선(위임)도 있지만
+코어 밖이다. **음성 표본 — 다섯 서비스의 템플릿 관측만 끈다**(`SPRING_KAFKA_TEMPLATE_OBSERVATION_ENABLED=false`): 코어 간선이
+0 이 되어 5 가 빨갛다(「코어 간선 없음」). 같은 구간의 트레이스는 **이어진 채였다** — 웨이브 하나에 15개, 모두 서비스 셋
+이상을 지났고 PRODUCER 스팬은 0개였다. 템플릿 관측이 없으면 릴레이가 저장된 `traceparent` 를 그대로 헤더로 보내므로 소비
+스팬의 부모는 쓰기 스팬이 되고, 쌍을 이룰 발행 스팬이 없다. **두 검사는 서로 다른 것을 본다**: 4 는 컨텍스트가 건너갔는가,
+5 는 경계에 발행 · 소비 스팬의 쌍이 섰는가(그래서 릴레이 지연이 보이는가 — ADR-062 기각 A 의 그 스팬이다).
+
 **outbox 를 지나는 한 줄** — 세 자리가 모두 살아 있어야 이어진다(ADR-062):
 
 1. **쓰기**: outbox 행의 `headers.traceparent` 는 쓰는 트랜잭션의 현재 스팬이다(`TracerTraceparentSupplier`). 7-2 이전에는
