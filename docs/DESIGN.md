@@ -3039,6 +3039,7 @@ ops-api 를 거치지 않으면 감사 없이 적용되는 운영자 쓰기 열 
 | 위임 클라이언트 생성 | openapi-generator (`spring` · `spring-http-interface`) | **7.25.0** — 2026-09-24 채택([ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)) | ops-api 의 코어 위임 클라이언트를 **커밋된 `contracts/openapi/*.yaml` 에서 빌드 때** 만든다. 채택 기준(표준 템플릿·문서화된 옵션만·그대로 컴파일·Jackson 3 왕복·새 런타임 의존 없음)을 시도 전에 적었고 다섯 다 참이다. 생성물은 커밋하지 않는다. HTTP 계층은 Boot 4 의 HTTP Service Client(`@ImportHttpServices`) |
 | 회복탄력성 | Resilience4j | **아직 쓰지 않는다.** `resilience4j-spring-boot4:2.4.0` 은 해결되지만 `resilience4j-spring6`(Spring Framework 6)을 끌고 온다 | Phase 3 의 OSRM 어댑터(Retry·CircuitBreaker)와 Phase 7 의 전역 `Bulkhead`(§8.3)에서 다시 판단한다. Phase 1 의 Redis 장애 차단기는 도입하지 않았다 — CircuitBreaker 가 자기 시계로 돌아 창 만료를 테스트하려면 실제로 기다려야 하고(불변규칙 12), 필요한 것은 `AtomicLong` 하나였다 |
 | 관측성 | Micrometer + OpenTelemetry, Prometheus, Grafana, Tempo | 최신 안정 이미지 | Boot 4.1의 OTel 개선 활용 |
+| 소비 그룹 랙 | kafka-exporter (`danielqsj/kafka-exporter`, compose `obs`) | **v1.10.0** — 2026-09-26 채택 기준을 먼저 적는다(아래) | **랙은 브로커의 사실이고, 사실은 출처에서 잰다.** 클라이언트 랙(`kafka_consumer_fetch_manager_records_lag*`)은 *가져오지 못한* 양이지 *처리하지 못한* 양이 아니다 — 가져왔지만 재시도에 막힌 레코드를 세지 않는다(근거: 관측(재현됨) — 2026-09-25 `make chaos-db`, 그룹 랙 합 약 1,200 에 클라이언트 합 최대 500, RB-02 §3). 서비스마다 관리 API 로 자기 랙을 재는 대안은 표준 exporter 의 일을 다섯 서비스에 복제한다 — 틀릴 자리가 다섯이다. Tempo · OTel 수집기와 같은 부류(관측 스택의 표준 부품)라 ADR 이 아니라 이 표의 사실이다. **채택 기준**(시도 전에 적는다): ① Kafka 4.3.1 KRaft 브로커에 붙어 프로토콜 오류 없이 돈다 ② `kafka_consumergroup_lag{consumergroup, topic, partition}` 이 다섯 그룹 전부에 있다 ③ 그룹 · 토픽별 합이 같은 순간 `kafka-consumer-groups --describe` 의 LAG 합과 같다(한 스크레이프 안의 차이만) ④ 파티션마다 시계열이 하나다 ⑤ 메모리 한도 64 MiB 안에서 돈다. 하나라도 어긋나면 채택하지 않고 서비스 안의 게이지로 돌아간다 |
 | 테스트 | JUnit(Boot BOM), Testcontainers, ArchUnit, WireMock(OSRM 스텁), k6 | 최신 안정 | §13 |
 | 최적화(선택) | Timefold Solver Community | — | **도입하지 않는다** ([ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md), 2026-09-18). 비교 대신 §6.9 의 **고정비 하한 열**. Phase 7-6 에 여유가 있으면 `medium` 한 개 한정 |
 | 프론트 | React 19 + Vite + TypeScript, Leaflet · Vitest | `apps/ops-web/package.json` 에 정확히 고정, Node 24(`.nvmrc`) | ops-web 최소 범위. 타입은 커밋된 `ops-api.yaml` 에서 생성(ADR-056). 이미지는 nginx — Buildpacks 의 예외(ADR-057) |
@@ -3084,7 +3085,7 @@ dawnline/
 │   ├── sim-runner/
 │   └── benchmark/
 ├── deploy/
-│   ├── compose/docker-compose.yml, .env.example, grafana/, prometheus/, tempo/
+│   ├── compose/docker-compose.yml, .env.example, grafana/, prometheus/, tempo/   # obs: prometheus · grafana · tempo · otel-collector · kafka-exporter(그룹 랙 — 브로커 기준)
 │   └── k8s/ (선택)
 └── .github/workflows/ci.yml, release.yml
 ```
