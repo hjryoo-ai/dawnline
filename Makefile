@@ -37,7 +37,7 @@ OPS_WEB_ENV_KEYS := NODE_IMAGE NGINX_IMAGE OPS_WEB_PORT
 SERVICE       ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls \
+.PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls obs-check \
         topics psql redis-cli config demo peak chaos-kafka clean-volumes \
         k6-orders k6-rate-limit smoke token
 
@@ -57,6 +57,7 @@ help:
 	@printf '    make ps             컨테이너 상태\n'
 	@printf '    make wait           5개 서비스 /actuator/health/readiness 200 대기\n'
 	@printf '    make urls           접속 URL 목록\n'
+	@printf '    make obs-check      규칙 적재 · 대시보드 넷 · 긁히는 플랫폼 지표와 버킷 (demo 뒤)\n'
 	@printf '    make topics         Kafka 토픽 목록\n'
 	@printf '    make logs [SERVICE=dispatch-service]\n'
 	@printf '    make config         compose 파일 문법·변수 치환 검증\n'
@@ -293,6 +294,11 @@ demo: env
 	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) SCENARIO=$(SCENARIO) bash tools/demo/phase2-demo.sh
 	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) bash tools/demo/phase3-demo.sh
 	@DEMO_TIMEOUT=$(DEMO_TIMEOUT) bash tools/demo/phase6-demo.sh
+
+# 떠 있는 스택의 관측성 — 규칙 적재 · 대시보드 등록 · 표가 없는 이름과 버킷이 실제로 긁히는가 (DESIGN.md §9.4, ADR-060).
+# Compose 스모크가 demo 뒤에 돌린다(데모가 만든 요청 · 계획이 있어야 버킷과 HTTP 지표가 있다).
+obs-check: env
+	@bash tools/demo/observability-check.sh
 
 peak:
 	@echo ""

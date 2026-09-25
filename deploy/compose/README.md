@@ -156,9 +156,15 @@ docker run --rm --entrypoint /opt/kafka/bin/kafka-storage.sh apache/kafka:4.3.1 
 
 - Grafana 는 기동 시 `grafana/provisioning/` 을 읽어 **Prometheus·Tempo 데이터소스를 자동 등록**한다.
   (익명 Viewer 접근 허용. 관리자는 `.env` 의 `GRAFANA_ADMIN_*`)
-- **대시보드 JSON 4종은 Phase 7 산출물**이다. 지금은 프로바이더만 있고
-  `grafana/dashboards/` 는 비어 있다. JSON 을 넣으면 30초 안에 자동으로 잡힌다.
-- **Prometheus 알림 규칙(§9.4)도 Phase 7** 이라 `rule_files` 는 비어 있다.
+- **대시보드 4종**(`Order Intake` · `Waves & Plans` · `Delivery` · `Platform`, DESIGN.md §9.4)은 `grafana/dashboards/` 의
+  JSON 이다. Grafana 폴더 `Dawnline` 에 30초 안에 잡힌다.
+- **커밋된 대시보드 JSON 은 프로비저닝 전용이다 — UI 에서 저장하지 않는다.** Grafana 는 저장할 때 키를 재정렬하고 id ·
+  version 을 붙여 diff 를 뜻 없이 키우고, 그 JSON 이 커밋되면 대조 검사(`DashboardsConsistencyTest`)가 그 모양을
+  잡는다. 패널을 고치려면 JSON 을 직접 고친다. 대조는 파일이 아니라 **메트릭 이름 집합**으로 한다 — 패널이 쓰는
+  `dawnline_*` 이름은 §9.1 에 있어야 하고, §9.1 의 모든 행이 패널이나 규칙 어딘가에 나와야 한다(ADR-060).
+- **알림 규칙**은 `prometheus/rules/dawnline-alerts.yml`(§9.4 알림 표) · 단위 테스트는 `prometheus/tests/`(promtool).
+  Alertmanager 는 없다 — 울린 알림은 Prometheus `/alerts` 와 Grafana 에서 본다. `make obs-check` 가 규칙 적재 ·
+  대시보드 등록 · 패널이 쓰는 플랫폼 지표와 버킷이 실제로 긁히는지를 본다(Compose 스모크가 demo 뒤에 돌린다).
 - 서비스가 안 떠 있으면 Prometheus 타깃 5개가 `DOWN` 으로 보이는 게 정상이다.
 - Tempo `metrics_generator`(서비스 그래프)는 Prometheus remote-write 가 필요해서 꺼 두었다. Phase 7.
 

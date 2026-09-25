@@ -297,7 +297,7 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      # 대시보드 JSON 은 Phase 7 산출물이다. 지금은 빈 디렉터리를 마운트한다.
+      # 대시보드 JSON 4종(§9.4) — 프로비저닝 전용이다. UI 에서 저장하지 않는다(README).
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on:

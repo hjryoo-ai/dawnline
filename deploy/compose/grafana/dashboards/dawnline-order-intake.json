@@ -1,0 +1,396 @@
+{
+  "__comment": "프로비저닝 전용 — UI 에서 저장하지 않는다(deploy/compose/README.md, DESIGN.md §9.4). 대조는 메트릭 이름 집합으로 한다(DashboardsConsistencyTest).",
+  "id": null,
+  "uid": "dawnline-order-intake",
+  "title": "Order Intake",
+  "description": "주문 접수 — rps · p99 · 429/5xx · outbox 지연 (DESIGN.md §9.4)",
+  "tags": [
+    "dawnline"
+  ],
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "title": "접수",
+      "collapsed": false,
+      "panels": [],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "주문 접수 (rps, 티어별)",
+      "description": "접수에 성공한 주문. 멱등 재생은 세지 않는다 — 캠프별 유입은 Waves & Plans 의 편입 수가 본다(§9.1).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum by (tier) (rate(dawnline_orders_placed_total[1m]))",
+          "legendFormat": "{{tier}}"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "접수 대 멱등 재생",
+      "description": "둘을 함께 봐야 「요청이 늘었다」와 「클라이언트가 재시도를 퍼붓는다」가 갈린다 — 재생만 오르면 원인은 수요가 아니라 응답 지연이나 클라이언트의 타임아웃이다.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum(rate(dawnline_orders_placed_total[5m]))",
+          "legendFormat": "접수"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum(rate(dawnline_idempotent_replays_total[5m]))",
+          "legendFormat": "재생"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "주문 API p99 (uri 별)",
+      "description": "http.server.requests 의 버킷에서 계산한다 — 버킷은 observability-defaults 가 미터 이름으로 켠다(ADR-060). 기동 직후 80초의 콜드 스타트는 여기서 보인다(7-0 A2).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, uri) (rate(http_server_requests_seconds_bucket{service=\"order-service\"}[5m])))",
+          "legendFormat": "{{uri}}"
+        }
+      ],
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "429 · 5xx",
+      "description": "429 는 레이트 리밋의 판정이고 5xx 는 장애다. 둘을 한 판에 두는 이유는 레이트 리밋이 꺼진 동안(bypassed) 429 가 사라지고 5xx 가 오르는 모양을 한눈에 보려는 것이다.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{service=\"order-service\", status=~\"429|5..\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "보호 장치",
+      "collapsed": false,
+      "panels": [],
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "레이트 리밋 판정",
+      "description": "bypassed 는 Redis 장애로 판정을 건너뛴 것이다 — 무인증 API 의 유일한 남용 방지 수단이 꺼진 상태(§7.2, 알림 DawnlineRateLimitBypassed · RB-03).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "sum by (outcome) (rate(dawnline_rate_limit_decisions_total[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "outbox 지연 (서비스별)",
+      "description": "가장 오래된 미발행 행의 나이. 30초가 알림 선이다(DawnlineOutboxLag). 왜 오르는지는 Platform 의 리더 패널이 말한다.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "max by (service) (dawnline_outbox_lag_seconds)",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      }
+    }
+  ]
+}
