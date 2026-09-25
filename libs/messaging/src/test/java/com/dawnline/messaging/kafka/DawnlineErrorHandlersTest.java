@@ -1,6 +1,7 @@
 package com.dawnline.messaging.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -165,6 +166,22 @@ class DawnlineErrorHandlersTest {
         assertThat(meters.find(DawnlineMetrics.EVENT_RETRY.meterName()).counters())
                 .as("재시도가 아니다 — 세지 않는다").allSatisfy(counter -> assertThat(counter.count()).isZero());
         assertThat(observer.ageSeconds()).isZero();
+    }
+
+    @Test
+    void 백오프_상한은_폴_간격_상한보다_짧아야_한다() {
+        // 운영 기본값 — 5초 < 300초.
+        DawnlineErrorHandlers.requireBackOffWithinPollInterval(retry, Duration.ofMinutes(5));
+
+        // ConsumerRetryIT 의 음성 표본과 같은 관계(5초 ≥ 3초) — 그때 컨슈머가 그룹에서 쫓겨났다.
+        assertThatThrownBy(() -> DawnlineErrorHandlers.requireBackOffWithinPollInterval(retry, Duration.ofSeconds(3)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-interval(PT5S)")
+                .hasMessageContaining("max.poll.interval.ms(PT3S)")
+                .hasMessageContaining("쫓겨나");
+        // 같으면 안 된다 — 백오프가 끝나는 순간이 폴 간격이 끝나는 순간이다.
+        assertThatThrownBy(() -> DawnlineErrorHandlers.requireBackOffWithinPollInterval(retry, Duration.ofSeconds(5)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

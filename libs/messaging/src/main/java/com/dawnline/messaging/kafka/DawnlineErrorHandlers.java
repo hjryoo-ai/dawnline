@@ -2,6 +2,7 @@ package com.dawnline.messaging.kafka;
 
 import com.dawnline.messaging.FailureKind;
 import com.dawnline.messaging.config.DawnlineMessagingProperties;
+import java.time.Duration;
 import java.util.Objects;
 import org.springframework.kafka.listener.ConsumerRecordRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
@@ -89,6 +90,30 @@ public final class DawnlineErrorHandlers {
         backOff.setMaxAttempts(Long.MAX_VALUE);
         backOff.setMaxElapsedTime(Long.MAX_VALUE);
         return backOff;
+    }
+
+    /**
+     * 백오프 상한은 폴 간격 상한보다 짧아야 한다 — 기동에서 거부한다(보존 기간의 순서 검증과 같은 형태, 예: dispatch 의 보존 설정).
+     *
+     * <p>끝없는 재시도의 한 바퀴는 폴 → 리스너가 실패할 때까지 → 백오프다. 백오프 하나가 {@code max.poll.interval.ms} 를 넘으면
+     * 컨슈머가 그룹에서 쫓겨나고, 리밸런스가 끝나면 같은 레코드를 다시 재시도하며 또 쫓겨난다 — 끝없는 재시도가 끝없는 리밸런스가
+     * 된다(근거: 관측(재현됨) — {@code ConsumerRetryIT} 의 음성 표본, 백오프 상한 5초 · 폴 간격 3초에서 멤버 id 가 바뀌었다). 운영
+     * 기본값(5초 · 300초)은 이 관계를 우연히 만족하고 있었다 — 설정 하나가 바뀌는 날 조용히 깨지는 관계라 기동에서 본다.
+     *
+     * <p>이 검사는 필요조건이다. 한 바퀴에는 리스너의 실패 시간(커넥션 대기 — Hikari 30초)도 든다. 그 시간은 이 설정이 모른다.
+     *
+     * @param retry           재시도 설정
+     * @param maxPollInterval 컨슈머 팩토리의 {@code max.poll.interval.ms}
+     * @throws IllegalArgumentException 백오프 상한이 폴 간격 상한보다 짧지 않으면
+     */
+    public static void requireBackOffWithinPollInterval(DawnlineMessagingProperties.Retry retry, Duration maxPollInterval) {
+        Objects.requireNonNull(retry, "retry");
+        Objects.requireNonNull(maxPollInterval, "maxPollInterval");
+        if (retry.maxInterval().compareTo(maxPollInterval) >= 0) {
+            throw new IllegalArgumentException(("dawnline.messaging.retry.max-interval(%s)이 컨슈머의 max.poll.interval.ms(%s)보다 짧아야 합니다 — "
+                    + "일시적 실패는 끝없이 재시도하므로, 백오프 하나가 폴 간격을 넘으면 컨슈머가 그룹에서 쫓겨나 리밸런스를 되풀이합니다")
+                    .formatted(retry.maxInterval(), maxPollInterval));
+        }
     }
 
     private static ExponentialBackOff exponential(DawnlineMessagingProperties.Retry retry) {

@@ -9,9 +9,11 @@ import com.dawnline.messaging.kafka.ReplayTargetFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -22,6 +24,7 @@ import org.springframework.boot.kafka.autoconfigure.DefaultKafkaConsumerFactoryC
 import org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
@@ -94,17 +97,35 @@ public class MessagingKafkaAutoConfiguration {
     /**
      * §4.6 의 재시도 → DLQ 핸들러. Boot 의 기본 리스너 컨테이너 팩토리가 이 빈을 집어 간다.
      *
+     * <p>만들기 전에 백오프 상한과 폴 간격 상한의 관계를 본다({@link DawnlineErrorHandlers#requireBackOffWithinPollInterval}).
+     * 폴 간격은 컨슈머 팩토리의 설정이고({@code spring.kafka.consumer.properties.max.poll.interval.ms}), 없으면 Kafka 의 기본값이다.
+     * 리스너 하나가 {@code @KafkaListener(properties = …)} 로 덮은 값은 여기서 보이지 않는다.
+     *
      * @param recoverer  DLQ 발행기
      * @param properties {@code dawnline.messaging.*}
      * @param observer   재시도 관찰자
+     * @param consumers  컨슈머 팩토리 — 폴 간격을 읽는다
      */
     @Bean
     @ConditionalOnMissingBean(CommonErrorHandler.class)
     @ConditionalOnBean(DlqRecordRecoverer.class)
     public CommonErrorHandler dawnlineKafkaErrorHandler(DlqRecordRecoverer recoverer,
-            DawnlineMessagingProperties properties, ConsumerRetryObserver observer) {
+            DawnlineMessagingProperties properties, ConsumerRetryObserver observer,
+            ObjectProvider<ConsumerFactory<?, ?>> consumers) {
+        DawnlineErrorHandlers.requireBackOffWithinPollInterval(properties.retry(), maxPollInterval(consumers.getIfAvailable()));
         return DawnlineErrorHandlers.retryThenDlq(recoverer, properties.retry(), observer);
     }
+
+    /** 컨슈머 팩토리의 {@code max.poll.interval.ms} — 없으면 Kafka 의 기본값(300초). 값은 숫자이거나 문자열이다. */
+    static Duration maxPollInterval(@Nullable ConsumerFactory<?, ?> consumers) {
+        Object value = consumers == null ? null
+                : consumers.getConfigurationProperties().get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
+        long millis = value == null ? DEFAULT_MAX_POLL_INTERVAL_MS : Long.parseLong(value.toString());
+        return Duration.ofMillis(millis);
+    }
+
+    /** Kafka 클라이언트의 {@code max.poll.interval.ms} 기본값 — {@code ConsumerConfig} 는 이것을 상수로 내놓지 않는다. */
+    private static final long DEFAULT_MAX_POLL_INTERVAL_MS = 300_000L;
 
     /**
      * 다른 그룹을 지목한 DLQ 재처리를 리스너 앞에서 건너뛴다 (§4.6, ADR-053). Boot 의 기본 리스너 컨테이너
