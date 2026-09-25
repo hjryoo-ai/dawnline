@@ -12,6 +12,7 @@ import com.dawnline.messaging.outbox.RelayLeadership;
 import com.dawnline.messaging.retention.RetentionAges;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.observation.ObservationRegistry;
 import java.time.Clock;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.ObjectProvider;
@@ -70,13 +71,15 @@ public class OutboxRelayAutoConfiguration {
      * {@code spring.kafka.producer.value-serializer} 를 바꾸면 이 전제가 깨진다.
      *
      * @param kafkaOperations Kafka 템플릿
+     * @param observations    관측 레지스트리 — 행을 쓴 트랜잭션의 트레이스로 보낸다(§9.2). 없으면 NOOP
      */
     @Bean
     @ConditionalOnMissingBean
-    public RecordPublisher dawnlineRecordPublisher(KafkaOperations<?, ?> kafkaOperations) {
+    public RecordPublisher dawnlineRecordPublisher(KafkaOperations<?, ?> kafkaOperations,
+            ObjectProvider<ObservationRegistry> observations) {
         @SuppressWarnings("unchecked")
         KafkaOperations<String, String> typed = (KafkaOperations<String, String>) kafkaOperations;
-        return new KafkaRecordPublisher(typed);
+        return new KafkaRecordPublisher(typed, observations.getIfAvailable(() -> ObservationRegistry.NOOP));
     }
 
     /**

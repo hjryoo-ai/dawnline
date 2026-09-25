@@ -66,6 +66,8 @@ postgresql          = { module = "org.postgresql:postgresql" }
 
 # --- 관측성 ---
 micrometer-core             = { module = "io.micrometer:micrometer-core" }
+# outbox 의 traceparent 제공자(libs/messaging, compileOnly) — 서비스에는 spring-boot-starter-opentelemetry 가 이미 싣는다(§9.2)
+micrometer-tracing          = { module = "io.micrometer:micrometer-tracing" }
 micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
 logback-classic             = { module = "ch.qos.logback:logback-classic" }
 
