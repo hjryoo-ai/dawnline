@@ -32,6 +32,8 @@ COMPOSE_LEANP := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_LEAN_FILE) --env
 SERVICES      := order-service fulfillment-service dispatch-service tracking-service ops-api
 # ops-web 은 Buildpacks 가 아니라 Dockerfile 이미지다(ADR-057). 기존 .env 에 없으면 make env 가 예시에서 덧붙이는 키들.
 OPS_WEB_ENV_KEYS := NODE_IMAGE NGINX_IMAGE OPS_WEB_PORT
+# 관측 스택에 나중에 들어온 이미지 — 예전에 만든 .env 에 없으면 .env.example 에서 덧붙인다(ops-web 과 같은 방식).
+OBS_ENV_KEYS := KAFKA_EXPORTER_IMAGE
 
 # `make logs SERVICE=dispatch-service` 처럼 좁힐 수 있다.
 SERVICE       ?=
@@ -101,6 +103,12 @@ env:
 	for key in $(OPS_WEB_ENV_KEYS); do \
 	if ! grep -q "^$$key=" $(ENV_FILE); then \
 	printf '\n# ops-web (make env 가 .env.example 에서 덧붙였다, ADR-057)\n%s\n' "$$(grep "^$$key=" $(ENV_EXAMPLE))" >> $(ENV_FILE); \
+	echo "덧붙임: $(ENV_FILE) 에 $$key (.env.example 의 값)"; \
+	fi; \
+	done; \
+	for key in $(OBS_ENV_KEYS); do \
+	if ! grep -q "^$$key=" $(ENV_FILE); then \
+	printf '\n# 관측 스택 (make env 가 .env.example 에서 덧붙였다, DESIGN.md §11)\n%s\n' "$$(grep "^$$key=" $(ENV_EXAMPLE))" >> $(ENV_FILE); \
 	echo "덧붙임: $(ENV_FILE) 에 $$key (.env.example 의 값)"; \
 	fi; \
 	done; \

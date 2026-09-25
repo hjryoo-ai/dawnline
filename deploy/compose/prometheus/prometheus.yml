@@ -39,3 +39,8 @@ scrape_configs:
         labels: { service: tracking-service }
       - targets: ["ops-api:8080"]
         labels: { service: ops-api }
+
+  # 소비 그룹 랙 — 브로커가 아는 랙(커밋된 오프셋 기준, DESIGN.md §11). 서비스 라벨은 없다 — 그룹 이름(consumergroup)이 서비스다.
+  - job_name: kafka-exporter
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
