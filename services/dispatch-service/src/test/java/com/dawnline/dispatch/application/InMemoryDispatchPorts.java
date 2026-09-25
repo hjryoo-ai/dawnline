@@ -95,14 +95,6 @@ final class InMemoryDispatchPorts {
         }
 
         @Override
-        public List<RoutePlan> findStalePlanning(Instant startedBefore, int limit) {
-            return byId.values().stream()
-                    .filter(plan -> plan.status() == PlanStatus.PLANNING)
-                    .filter(plan -> plan.startedAt().map(at -> at.isBefore(startedBefore)).orElse(false))
-                    .limit(limit).toList();
-        }
-
-        @Override
         public Optional<Duration> lastPublishedDuration(UUID campId) {
             // 마지막으로 발행된 것 — 삽입 순서가 곧 발행 순서다(이 흉내에서는 한 번에 하나씩 돈다).
             return byId.values().stream()

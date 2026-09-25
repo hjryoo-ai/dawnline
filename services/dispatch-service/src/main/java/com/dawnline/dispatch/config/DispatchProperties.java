@@ -129,14 +129,10 @@ public record DispatchProperties(@DefaultValue Plan plan, @DefaultValue Distance
      * @param defaultStrategy 기본 전략 (§6.6)
      * @param budget          계획 전체의 시간 예산 (§6.7 기본 30초)
      * @param perRouteBudget  라우트 하나의 상한
-     * @param staleAfter      이만큼 지난 {@code PLANNING} 은 죽은 것으로 본다 (§5.3 기본 10분)
-     * @param recoverBatch    한 번에 회수할 최대 계획 수
      */
     public record Plan(@DefaultValue("sweep-greedy-nn+ls") String defaultStrategy,
             @DefaultValue("30s") Duration budget,
-            @DefaultValue("3s") Duration perRouteBudget,
-            @DefaultValue("10m") Duration staleAfter,
-            @DefaultValue("20") int recoverBatch) {
+            @DefaultValue("3s") Duration perRouteBudget) {
 
         public Plan {
             if (defaultStrategy.isBlank()) {

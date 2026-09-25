@@ -57,11 +57,11 @@ spring:
   #     ArrayList 라 중복 제거가 없어서 "Found more than one migration with version" 으로
   #     기동이 깨진다(jar 를 열어 확인).
 
-  # @Scheduled 작업 6개가 이 풀을 쓴다: OutboxRelay 의 폴링(100ms)·메트릭(5s)·outbox 정리(1h),
-  # ProcessedEventCleaner 의 processed_events 정리(24h, §4.4 보존 14일), RecoverStalePlansService 의
-  # 정체 회수(1분, §5.3), DispatchRetentionCleaner 의 계획 계열 정리(24h, ADR-059 — 기간은
-  # DispatchProperties.Retention 의 기본값이고 §7.1 보존 표가 그것을 비춘다).
-  # 적힌 수가 넷이던 동안 정체 회수가 빠져 있었다(2026-09-25, 7-0c 에서 셈을 다시 했다).
+  # @Scheduled 작업 5개가 이 풀을 쓴다: OutboxRelay 의 폴링(100ms)·메트릭(5s)·outbox 정리(1h),
+  # ProcessedEventCleaner 의 processed_events 정리(24h, §4.4 보존 14일), DispatchRetentionCleaner 의
+  # 계획 계열 정리(24h, ADR-059 — 기간은 DispatchProperties.Retention 의 기본값이고 §7.1 보존 표가 그것을 비춘다).
+  # 적힌 수가 넷이던 동안 정체 회수가 빠져 있었다(2026-09-25, 7-0c 에서 셈을 다시 했다). 그 정체 회수는
+  # 입력이 생기는 경로가 없어 지웠다(2026-09-26, ADR-024 후속 정정 — 계획 하나는 트랜잭션 하나다).
   # Boot 기본값 1이면 Kafka 장애로 폴링이 막히는 동안 메트릭 갱신이 함께 멈춰,
   # 그 장애를 알려 줄 유일한 지표(outbox 지연·격리 게이지)가 바로 그때 낡는다.
   # 4로 두는 이유: 정리 작업 셋은 배치를 반복하느라 초 단위로 길어질 수 있다. 초기 지연을
@@ -183,11 +183,8 @@ dawnline:
       # (docs/benchmarks/phase4-constraint-classes.md §4).
       budget: 30s
       per-route-budget: 3s
-      # §5.3 — 이만큼 지난 PLANNING 은 죽은 인스턴스가 남긴 것으로 본다.
-      stale-after: 10m
-      recover-batch: 20
-      recover-interval-ms: 60000
-      recover-initial-delay-ms: 60000
+      # 정체 회수의 설정 넷(stale-after · recover-*)은 없다 — 계획 하나는 트랜잭션 하나라 크래시는 롤백되고 wave.closed 가
+      # 다시 전달된다(§5.3, ADR-024 후속 정정).
     # §6.7 열화 **사다리** (ADR-034 + 후속 정정). 두 조건은 다른 것을 말하므로 처방도 다르다:
     #   랙 > 3        → 처리량이 모자란다      → FAST (개선을 끈다, 대가 +9.4%)
     #   직전 > 예산×0.8 → 개선이 예산을 다 썼다 → 개선 예산 × 0.5 (덜 한다, 대가 1% 대)

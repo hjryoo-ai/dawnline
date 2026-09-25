@@ -17,7 +17,6 @@ import com.dawnline.dispatch.domain.RoutePlan;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import jakarta.persistence.TypedQuery;
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -109,23 +108,6 @@ class JpaRoutePlanRepositoryTest {
 
         verify(nativeQuery).setParameter(5, (Object) null);
         verify(nativeQuery).setParameter(6, (Object) null);
-    }
-
-    @Test
-    void 회수_대상_조회는_술어를_리터럴로_적는다() {
-        // PLANNING 을 바인드로 넣으면 부분 인덱스를 못 탄다 (CLAUDE.md 코딩 컨벤션).
-        repository.findStalePlanning(Instant.parse("2026-09-06T01:00:00Z"), 50);
-
-        verify(entityManager).createQuery(sql.capture(), eq(RoutePlanEntity.class));
-        assertThat(sql.getValue())
-                .contains("PlanStatus.PLANNING")
-                .doesNotContain(":status");
-        verify(typed).setMaxResults(50);
-    }
-
-    @Test
-    void 회수_대상이_없으면_빈_목록이다() {
-        assertThat(repository.findStalePlanning(Instant.EPOCH, 10)).isEmpty();
     }
 
     @Test

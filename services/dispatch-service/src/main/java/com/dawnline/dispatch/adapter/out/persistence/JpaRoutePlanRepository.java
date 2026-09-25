@@ -4,7 +4,6 @@ import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.domain.RoutePlan;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -22,14 +21,6 @@ public class JpaRoutePlanRepository implements RoutePlanRepository {
             INSERT INTO route_plans (id, wave_id, camp_id, status, depot_lat, depot_lng, version)
             VALUES (?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT (wave_id) DO NOTHING
-            """;
-
-    /** 술어를 리터럴로 적는다 (CLAUDE.md 코딩 컨벤션). */
-    private static final String STALE_JPQL = """
-            SELECT p FROM RoutePlanEntity p
-             WHERE p.status = com.dawnline.dispatch.domain.PlanStatus.PLANNING
-               AND p.startedAt < :before
-             ORDER BY p.startedAt
             """;
 
     /**
@@ -82,16 +73,6 @@ public class JpaRoutePlanRepository implements RoutePlanRepository {
     public Optional<RoutePlan> findById(UUID planId) {
         return Optional.ofNullable(entityManager.find(RoutePlanEntity.class, planId))
                 .map(RoutePlanEntity::toDomain);
-    }
-
-    @Override
-    public List<RoutePlan> findStalePlanning(Instant startedBefore, int limit) {
-        return entityManager.createQuery(STALE_JPQL, RoutePlanEntity.class)
-                .setParameter("before", startedBefore)
-                .setMaxResults(limit)
-                .getResultList().stream()
-                .map(RoutePlanEntity::toDomain)
-                .toList();
     }
 
     @Override
