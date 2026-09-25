@@ -65,6 +65,10 @@ SLO 파괴다(§7.2).
 - `dawnline_geo_index_loaded` 가 둘 다 1.
 - `dawnline_geo_lookups_total{outcome="bypassed"}` · `dawnline_at_risk_cooldown_bypassed_total` 이 멈춘다.
 - **검증** — Redis 중단 중에도 발행이 멈추지 않고 지연이 오르지 않는다는 것(ADR-027 후속 정정)은 카오스 스크립트(`make chaos-redis`, 7-3)가 잰다.
+  **기준은 재기 전에 적었다**(2026-09-26 — 이 줄이 첫 실행보다 먼저 커밋됐다): ① 장애가 **끝나기 전에** 검증 표 V1 · V7 이 ✅(주문 전부가 Redis
+  없이 후보까지 · outbox 0/0) ② 장애 중 `max(dawnline_outbox_lag_seconds)` 의 최댓값 **≤ 5초**(5초마다 잰다 — 알림 문턱 30초의 1/6, 릴레이는
+  100 ms 마다 돈다) ③ `DawnlineRateLimitBypassed` 가 실제 Prometheus 에서 울고 GEO `bypassed` 가 오른다 — 폴백은 조용하면 안 된다 ④ 복구 뒤
+  레이트 리밋이 다시 판정한다(`bypassed` 그대로 · `allowed` 가 오른다) · 검증 표 V1–V7(DLQ 0).
 
 ## 참조
 

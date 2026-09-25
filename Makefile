@@ -40,7 +40,7 @@ SERVICE       ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls obs-check \
-        topics psql redis-cli config demo peak chaos-kafka chaos-db chaos-verify clean-volumes \
+        topics psql redis-cli config demo peak chaos-kafka chaos-redis chaos-kill chaos-db chaos-verify clean-volumes \
         k6-orders k6-rate-limit smoke token
 
 # -----------------------------------------------------------------------------
@@ -73,10 +73,12 @@ help:
 	@printf '    make demo           주문→편입→컷오프→wave.closed 검증  [Phase 2]\n\n'
 	@printf '  \033[1m카오스\033[0m (tools/chaos — 끝에 검증 표 V1–V7, 보고는 build/chaos/)\n'
 	@printf '    make chaos-db       서비스 하나의 DB 장애 → DLQ 0 · 전부 처리 [SERVICE=fulfillment HOLD=300]  [7-3]\n'
+	@printf '    make chaos-kafka    브로커 정지 → 주문은 받고 outbox 가 쌓였다 비운다 [HOLD=300]         [7-3]\n'
+	@printf '    make chaos-redis    Redis 정지 → 발행이 멈추지 않고 지연이 오르지 않는다 [HOLD=300]      [7-3]\n'
+	@printf '    make chaos-kill     dispatch 가 계획 중에 죽는다 → 남는 행 0 · 재전달로 PUBLISHED          [7-3]\n'
 	@printf '    make chaos-verify   검증 표만 — STATE=<baseline 파일> [VERIFY_ARGS=…]                    [7-3]\n\n'
 	@printf '  \033[1m시나리오\033[0m (아직 미구현 — 해당 Phase 에서 채운다)\n'
-	@printf '    make peak           피크 시나리오                [Phase 7]\n'
-	@printf '    make chaos-kafka    Kafka 중단→복구 검증          [Phase 7]\n\n'
+	@printf '    make peak           피크 시나리오                [Phase 7]\n\n'
 
 # -----------------------------------------------------------------------------
 # .env 준비 — 이미 있으면 절대 덮어쓰지 않는다.
@@ -318,20 +320,15 @@ peak:
 	@echo ""
 	@exit 2
 
-chaos-kafka:
-	@echo ""
-	@echo "make chaos-kafka 는 아직 구현되지 않았다."
-	@echo "  필요한 것: 카오스 스크립트 + 검증 SQL (IMPLEMENTATION_PLAN.md Phase 7)"
-	@echo "  Phase 7 에서 이 타깃은 kafka 중단 → 복구 → outbox 미발행 0건 검증까지 수행한다."
-	@echo ""
-	@exit 2
-
 # -----------------------------------------------------------------------------
 # 카오스 (DESIGN.md §13 「카오스」, tools/chaos). 끝에 검증 표 V1–V7 을 낸다 — 카오스 종류와 무관하게 같은 표이고 7-4 peak-day 도
 # 같은 표를 낸다. 보고는 build/chaos/ 에 남는다.
 #
 #   make chaos-db                       fulfillment 의 DB 를 5분 멈춘다(계정 NOLOGIN — 끝에서 반드시 되돌린다)
 #   make chaos-db SERVICE=dispatch HOLD=600
+#   make chaos-kafka HOLD=300           브로커를 멈춘다(dc stop kafka — 끝에서 반드시 시작한다)
+#   make chaos-redis                    Redis 를 멈춘다 — ADR-027 후속 정정의 기준(발행이 멈추지 않고 지연이 5초를 넘지 않는다)
+#   make chaos-kill                     dispatch 를 계획 중에 SIGKILL — routes 락으로 결과 쓰기에서 세운 뒤(ADR-024 후속 정정)
 #   make chaos-verify STATE=build/chaos/db.state VERIFY_ARGS='--expect-dlq 0'
 CHAOS_SCENARIO ?= ops-demo
 HOLD           ?= 300
@@ -340,6 +337,15 @@ VERIFY_ARGS    ?=
 
 chaos-db: env
 	@SERVICE=$(or $(SERVICE),fulfillment) SCENARIO=$(CHAOS_SCENARIO) HOLD=$(HOLD) bash tools/chaos/chaos-db.sh
+
+chaos-kafka: env
+	@SCENARIO=$(CHAOS_SCENARIO) HOLD=$(HOLD) bash tools/chaos/chaos-kafka.sh
+
+chaos-redis: env
+	@SCENARIO=$(CHAOS_SCENARIO) HOLD=$(HOLD) bash tools/chaos/chaos-redis.sh
+
+chaos-kill: env
+	@SCENARIO=$(CHAOS_SCENARIO) bash tools/chaos/chaos-kill.sh
 
 chaos-verify: env
 	@test -n "$(STATE)" || { echo "STATE=<verify.sh baseline 파일> 이 필요하다"; exit 2; }
