@@ -1,8 +1,8 @@
-# 런북 — 알림 14 × 대응, 알림 밖 절차 셋
+# 런북 — 알림 15 × 대응, 알림 밖 절차 셋
 
 | 항목 | 내용 |
 |---|---|
-| 대상 | `docs/DESIGN.md` §9.4 의 알림 14개 전부 · 알림이 없는 사건 셋 |
+| 대상 | `docs/DESIGN.md` §9.4 의 알림 15개 전부 · 알림이 없는 사건 셋 |
 | 관련 설계 | §8.4(장애 모드 표) · §9.4(알림 규칙) · §9.5(런북 목록) |
 | 대조 | `RunbooksConsistencyTest`(`libs/observability`) — 아래 1 의 알림 집합이 규칙 파일(`deploy/compose/prometheus/rules/dawnline-alerts.yml`)과 같고, 「절차」 칸이 규칙의 `runbook` 주석과 같고, 「먼저 본다」 칸과 모든 절차의 첫 줄이 **메트릭 · 로그 · SQL** 중 하나로 시작한다 |
 
@@ -28,14 +28,15 @@ sql()  { dc exec -T -e PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" postgres psql -
 
 ---
 
-## 1. 알림 14 × 대응
+## 1. 알림 15 × 대응
 
 | 알림 | 먼저 본다 | 갈래 · 대응 | 절차 |
 |---|---|---|---|
 | `DawnlineOutboxLag` | **메트릭** `dawnline_outbox_leader{service="<알림의 service>"}` — 인스턴스마다 `1` 리더 · `0` 팔로워 · `-1` 판정 불가 | `1` 이 있다 → 리더가 발행하는데 브로커가 받지 않는다: RB-01 §1 · `-1` → DB 세션을 잃었다 — 발행할 행도 못 읽는다: RB-02 · 전부 `0` → 락을 **다른 세션**이 쥐었다: RB-01 §1.3 | RB-01 |
 | `DawnlineOutboxFailed` | **SQL** `sql <service> "SELECT event_type, count(*), min(failed_at) FROM outbox_events WHERE failed_at IS NOT NULL GROUP BY 1"` — 원인이 하나인가 여럿인가 | 뒤의 행은 이미 흐르고 있다 — 급한 불은 꺼져 있다. 유형마다 격리 로그(「격리합니다」)의 예외로 원인을 찾고, 고친 뒤 **한 행씩** 재큐한다. 같은 행 목록은 코어의 격리 목록 엔드포인트도 준다(payload 없이) | RB-05 |
-| `DawnlineDlqNew` | **메트릭** `sum by (consumer, eventType) (dawnline_event_processed_total{outcome="dlq"})` — 어느 그룹이 무엇을 | 그룹 하나 · 여러 타입 → 그 소비자나 그 DB 가 죽었다(DB 장애 뒤라면 RB-02 §3 — 장애 시간 ÷ 약 2분만큼 들어온다) · 타입 하나 · 여러 그룹 → 계약 · 스키마 문제 · 비즈니스 규칙 위반으로 보이면 소비자 버그다(`rejected` 로 가야 했다). **소비자를 먼저 고치고** 재처리한다 | RB-05 |
-| `DawnlineConsumerLag` | **메트릭** 그 서비스의 처리율 `sum by (consumer, outcome) (rate(dawnline_event_processed_total{service="<service>"}[5m]))` | 처리율 0 → 멈췄다: DB(RB-02) · 리밸런스 반복 · 재시도 중인 레코드(3회 뒤 DLQ 로 풀린다) · 처리율이 있는데 랙이 는다 → 유입 > 처리, 피크다(RB-06). dispatch 의 랙은 자동 FAST 를 부른다(`dawnline_plan_degraded_total{reason="LAG"}` — 설계된 동작) | RB-01 |
+| `DawnlineDlqNew` | **메트릭** `sum by (consumer, eventType) (dawnline_event_processed_total{outcome="dlq"})` — 어느 그룹이 무엇을 | 그룹 하나 · 여러 타입 → 그 소비자나 그 DB 가 죽었다(**DB 장애로는 들어오지 않는다** — 일시적 실패는 끝없이 재시도한다, 7-3 · RB-02 §3. DLQ 에 온 것은 결정적 실패다) · 타입 하나 · 여러 그룹 → 계약 · 스키마 문제 · 비즈니스 규칙 위반으로 보이면 소비자 버그다(`rejected` 로 가야 했다). **소비자를 먼저 고치고** 재처리한다 | RB-05 |
+| `DawnlineConsumerLag` | **메트릭** 그 서비스의 처리율 `sum by (consumer, outcome) (rate(dawnline_event_processed_total{service="<service>"}[5m]))` | 처리율 0 → 멈췄다: DB(RB-02) · 리밸런스 반복 · 재시도 중인 레코드(일시적 실패면 풀릴 때까지 멈춘다 — `dawnline_event_retry_age_seconds`, 다음 행) · 처리율이 있는데 랙이 는다 → 유입 > 처리, 피크다(RB-06). dispatch 의 랙은 자동 FAST 를 부른다(`dawnline_plan_degraded_total{reason="LAG"}` — 설계된 동작) | RB-01 |
+| `DawnlineConsumerRetryStuck` | **메트릭** `sum by (reason) (increase(dawnline_event_retry_total{service="<service>"}[10m]))` — 무엇 때문에 멈췄나(경계표의 행, ADR-015 후속 정정) | **일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다.** `db_connection` · `db_resource` → 그 서비스의 DB 자격 증명 · 계정 · 연결 설정(RB-02 §2) · `redis` → RB-03 · `db_integrity` 가 반복된다 → 결정적일 가능성이 높다 — 데이터를 고치거나 그 레코드를 격리한다(사람이 거는 격리 경로는 아직 없다 — ADR-053 재검토) · `other` → 판정되지 않은 예외다 — 로그의 예외로 코드 결함을 찾는다. **그 파티션의 뒤는 전부 기다리고 있다** — 순서는 지켜지고, 원인이 풀리면 스스로 따라온다 | RB-02 |
 | `DawnlinePlanDurationP95` | **메트릭** `sum by (mode, termination) (increase(dawnline_plan_duration_seconds_count[1h]))` — 잘린 계획(`termination="deadline"`)의 몫 | `deadline` 이 대부분 → 예산이 문다: 규모 · 차량 · 전략(RB-04 §2) · `converged` 인데 길다 → 기계가 느리다 — CPU 한도 · GC(RB-06 예열) · 알고리즘 밖의 시간은 여기 없다 — `dawnline_plan_persist_seconds` 가 따로 잰다 | RB-04 |
 | `DawnlineOnTimeRatioLow` | **메트릭** 같은 캠프의 `dawnline_kpi_delivery{camp="<camp>"}`(completed · failed)와 `dawnline_delivery_on_time_ratio{camp="<camp>", basis="revised"}` | 실패가 늘었다 → 배송 현장이다: `dawnline_at_risk_total{camp}` · `dawnline_replan_total{outcome}`(`no-candidate` · `no-gain` 은 재계획이 도울 수 없었다) · 원 약속 기준만 낮고 개정 기준은 높다 → 약속이 밀렸다: `dawnline_promise_revised_total{camp, cause}` — `manual` 이면 조기 마감의 대가다(2.3), `scheduled` 면 컷오프 grace 로 흡수 못한 지연이다(컨슈머 랙 — RB-01 §2) · 둘 다 낮다 → 늦게 도착하고 있다: 라우트 진행(2.2)과 at-risk. **정시율은 원 약속이 기준이다**(§8.1) — 개정 기준이 높다는 것은 해명이 아니라 차이의 크기다 | — |
 | `DawnlineKpiRefreshStale` | **로그** `logs ops-api 30m \| grep 'KPI 갱신 실패'` — 예외의 첫 줄 | 연결 · 풀 예외 → ops DB 다(RB-02) · 문장 타임아웃 → `rm_orders` 가 커졌다 — 걸린 행(`dawnline_rm_orders_stuck`)과 보존 정리(`dawnline_retention_last_success_age_seconds{table="rm_orders"}`)를 본다. **이 알림이 울리는 동안 정시율 알림은 울릴 수 없다**(값이 `NaN`) — 그동안의 정시율은 대시보드가 아니라 `sql ops "SELECT camp_id, sum(on_time_promised)::float / nullif(sum(delivered + failed), 0) FROM kpi_delivery_hourly WHERE bucket_hour > now() - interval '24 hours' GROUP BY 1"` 가 말한다. 재기동은 원인이 아니면 해법도 아니다 — 첫 성공에서 나이가 0 이 된다 | — |

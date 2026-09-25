@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 /**
  * 런북 ↔ 규칙 파일 ↔ {@code docs/DESIGN.md} §9.5 (7-5).
  *
- * <p>{@code docs/runbooks/README.md} 의 「알림 14 × 대응」 표는 규칙 파일의 알림을 <strong>비추는 목록</strong>이다 — 알림이 늘었는데 행이
+ * <p>{@code docs/runbooks/README.md} 의 「알림 15 × 대응」 표는 규칙 파일의 알림을 <strong>비추는 목록</strong>이다 — 알림이 늘었는데 행이
  * 없으면 그 알림은 대응 없이 울린다. 그래서 {@link AlertRulesConsistencyTest} 와 같은 방식으로 <strong>빼서</strong> 본다: 양쪽에서
  * 전부 읽고 차집합이 비었는지. 「절차」 칸이 {@code —} 인 행은 그 행이 절차 전부라는 뜻이고, 그 알림에는 {@code runbook} 주석이
  * 없어야 한다 — 칸과 주석이 서로를 설명한다({@code AdrIndexConsistencyTest} 의 「문서」 열과 같은 모양).

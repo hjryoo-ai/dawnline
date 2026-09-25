@@ -111,6 +111,31 @@ tests:
         alertname: DawnlineDlqNew
         exp_alerts: []
 
+  # --- 재시도 나이: 30분에서 운다 — 29분까지는 장애이고 그 뒤는 설정이다(ADR-015 후속 정정) -------------------------------
+  - interval: 1m
+    input_series:
+      # 0 에서 시작해 1분마다 60초씩 늙는다 — 끝없이 재시도하는 파티션 하나.
+      - series: 'dawnline_event_retry_age_seconds{service="fulfillment-service", consumer="fulfillment-service", instance="a"}'
+        values: '0+60x40'
+      # 같은 서비스의 다른 인스턴스는 멀쩡하다 — max 가 막힌 쪽을 고른다(§9.1 「이웃」과 반대 방향: 여기서는 가장 나쁜 것이 답이다).
+      - series: 'dawnline_event_retry_age_seconds{service="fulfillment-service", consumer="fulfillment-service", instance="b"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DawnlineConsumerRetryStuck
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: DawnlineConsumerRetryStuck
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: fulfillment-service
+              consumer: fulfillment-service
+            exp_annotations:
+              summary: "fulfillment-service 의 파티션 하나가 30분 넘게 같은 레코드를 재시도하고 있다"
+              description: "일시적 실패가 30분 넘게 이어지면 장애가 아니라 설정이다. 사유는 dawnline_event_retry_total 의 reason 이 말한다."
+              runbook: RB-02
+
   # --- 게이지 임계 -------------------------------------------------------------------------------------------
   - interval: 1m
     input_series:

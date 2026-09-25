@@ -2950,6 +2950,7 @@ id 를 붙여 diff 를 뜻 없이 키운다. 그래서 대조는 파일이 아�
 | `DawnlineOutboxFailed` | `dawnline_outbox_failed` > 0 | 격리 행 발생 — RB-05 |
 | `DawnlineDlqNew` | `dawnline_event_processed_total{outcome="dlq"}` 증가 — **열린 카운터**, 부재를 다루는 식 | DLQ 신규. RB-05 |
 | `DawnlineConsumerLag` | `kafka_consumer_fetch_manager_records_lag_max` > 1,000 | 소비자 랙 — RB-01 |
+| `DawnlineConsumerRetryStuck` | `dawnline_event_retry_age_seconds` > 30분 | 파티션 하나가 같은 레코드를 30분 넘게 재시도하고 있다 — **일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다**([ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md) 결정 4). 파티션 정지의 신호는 「몇 번」이 아니라 「얼마나 오래」다. 게이지는 기동 때 0 으로 있다(부재를 다룰 필요가 없다). 사유는 `dawnline_event_retry_total{reason}` 이 경계표의 행 이름으로 말한다. RB-02 |
 | `DawnlinePlanDurationP95` | `dawnline_plan_duration_seconds` p95 > 45s | 계획 시간 — §8.1 의 30초 SLO 위 여유 15초를 넘었다. 버킷에서 계산한다(§9.1 「`histogram` 은 버킷이다」). RB-04 |
 | `DawnlineOnTimeRatioLow` | `dawnline_delivery_on_time_ratio{basis="promised"}` < 0.95 | 정시율 < 95%. 창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개** — 현재 버킷은 늘 부분이다. 갱신이 죽으면 `NaN` 이고 **울리지 않는다** — 다음 행이 그 자리다 |
 | `DawnlineKpiRefreshStale` | `dawnline_kpi_refresh_age_seconds` > 300 | **초기값 — Phase 7 peak-day 에서 재검토.** KPI 갱신이 5번 연속 실패했다 — 그 동안 정시율은 `NaN` 이라 앞 행이 울리지 않는다. 이 알림이 없으면 `NaN` 은 정직하지만 아무도 못 듣는다(§5.5) |
@@ -2968,7 +2969,7 @@ id 를 붙여 diff 를 뜻 없이 키운다. 그래서 대조는 파일이 아�
 
 RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정체/강제 재실행 · RB-05 DLQ 재처리·outbox 격리 재큐(§4.6 — 재처리의 `UNKNOWN`·오래된 `PENDING` 은 다시 누른다, [ADR-053](adr/ADR-053-dlq-replay-is-addressed-to-the-failed-group.md)) · RB-06 피크 대비 체크리스트(파티션·인스턴스·룰 파라미터 사전 점검) · RB-07 감사 `UNKNOWN`·오래된 `PENDING` 해소(§5.5 — 코어 로그·트레이스에서 그 행의 `auditId` 를 찾아 적용 흔적이 있으면 `SUCCEEDED`, 요청이 닿은 흔적이 없으면 `FAILED` 로 사람이 닫는다. **조기 마감과 재큐는 다시 누르기가 먼저다**(2026-09-24): 두 코어 커맨드는 이미 적용된 상태에서 409 로 **지금 위치**를 말한다 — 마감은 `wave-not-open` 의 `closeCause`(`MANUAL` 이면 앞의 요청이 적용됐다 — 같은 웨이브의 다른 `CLOSE_WAVE` 행이 없는지 `audit_logs` 로 확인한다, `SCHEDULED` 면 스케줄러가 먼저 닫았고 앞의 요청은 적용되지 않았다)와 `closedAt`, 재큐는 `not-quarantined` 의 `currentState`(`PENDING`·`PUBLISHED` 면 풀려 있다). 다시 누른 요청은 새 감사 행(`REJECTED`)으로 남고, 앞의 `UNKNOWN` 행은 그 본문을 근거로 사람이 닫는다. 흔적으로도 못 가리면 코어의 현재 상태(웨이브·라우트·주문)를 보고 닫고, 무엇을 근거로 닫았는지 남긴다. 이 일을 코드로 옮기는 것 — ops-api 가 코어 상태를 다시 읽어 닫기 — 은 `UNKNOWN` 이 실제로 쌓이면 연다, [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) 재검토 지점 4).
 
-**알림 14 × 대응 — `docs/runbooks/README.md`** (2026-09-25, 7-5). 알림 하나에 행 하나: **먼저 본다**(원인을 가르는 첫 질문 — 그 자리가
+**알림 15 × 대응 — `docs/runbooks/README.md`** (2026-09-25, 7-5 — 7-3 이 재시도 나이 알림 하나를 더했다). 알림 하나에 행 하나: **먼저 본다**(원인을 가르는 첫 질문 — 그 자리가
 **메트릭 · 로그 · SQL** 중 무엇인지가 칸의 첫 단어다) · 갈래 · 대응 · 절차(RB 이거나 `—` — `—` 면 그 행이 절차 전부이고 규칙에 `runbook`
 주석이 없다). RB 가 없는 알림이 여섯이다(정시율 · KPI 둘 · 늦은 취소 · 내부 토큰 · 보존) — 대응이 한 행에 들어가는 것들이다. 같은 문서에
 **알림 밖 절차 셋**: 트레이스가 끊겼다(§9.2 — 서비스 그래프와 TraceQL 이 다른 것을 본다는 것이 갈래다) · `dawnline_routes{status="in_progress"}` 가

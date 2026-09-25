@@ -4,7 +4,8 @@
 |---|---|
 | 대상 | 발행 측(outbox 릴레이 → 브로커) · 소비 측(브로커 → 리스너) |
 | 알림 | `DawnlineOutboxLag`(리더가 `1` 인 경우) · `DawnlineConsumerLag` ([README](README.md) 1) |
-| 관련 설계 | §4.4(outbox · 릴레이 리더십) · §4.6(재시도 · DLQ) · §6.7(랙이 부르는 FAST) · §8.4 · ADR-016 · ADR-027 |
+| 관련 설계 | §4.4(outbox · 릴레이 리더십) · §4.6(재시도 · DLQ · 경계) · §6.7(랙이 부르는 FAST) · §8.4 · ADR-015 후속 정정 · ADR-016 · ADR-027 |
+| 경계 | **일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다.** 소비자는 일시적 실패를 끝없이 재시도하고(DLQ 로 가지 않는다), 발행 측 릴레이도 일시적 실패를 끝없이 기다린다(ADR-015). 둘 다 스스로 끝나지 않는다 — 30분(`DawnlineConsumerRetryStuck`)을 넘기면 원인은 브로커의 장애가 아니라 자격 증명 · ACL · 토픽 · 설정이다 |
 
 **먼저 본다 — 메트릭** 어느 쪽이 막혔나: `max by (service) (dawnline_outbox_lag_seconds)`(발행) 와 `max by (service, client_id) (kafka_consumer_fetch_manager_records_lag_max)`(소비).
 발행이 막혔으면 1, 소비가 밀렸으면 2. 브로커가 죽으면 둘 다 오른다 — 1 이 먼저다(소비는 브로커가 돌아오면 저절로 따라온다).
@@ -85,11 +86,11 @@ prom 'sum by (consumer, outcome) (rate(dawnline_event_processed_total{service="<
 
 | 볼 것 | 뜻 | 대응 |
 |---|---|---|
-| 서비스 로그에 DB 예외 · `hikaricp_connections_pending` > 0 | 리스너가 DB 를 기다린다 | [RB-02](RB-02-database-outage.md) — 리스너는 커넥션을 기다리며 멈춰 있고, **몇 건은 재시도 3회 뒤 DLQ 로 간다**(RB-02 §3) |
-| 같은 오프셋에서 재시도 로그가 반복된다 | 한 레코드가 재시도 중이다 | 기다린다 — 백오프 200 ms · 1 s · 5 s 뒤 DLQ 로 가고 파티션이 풀린다(§4.6). 그 뒤는 [RB-05](RB-05-dlq-and-outbox-quarantine.md) §2 |
+| 서비스 로그에 DB 예외 · `hikaricp_connections_pending` > 0 | 리스너가 DB 를 기다린다 | [RB-02](RB-02-database-outage.md) — 막힌 레코드를 끝없이 재시도하고 뒤는 기다린다. DLQ 로 가지 않는다(RB-02 §3) |
+| `dawnline_event_retry_age_seconds` > 0 | 한 레코드가 재시도 중이다 — 사유는 `sum by (reason) (increase(dawnline_event_retry_total{service="<service>"}[10m]))` | 결정적(`argument` · `domain`)이면 네 번째 배달에서 DLQ 로 가고 파티션이 풀린다 — 그 뒤는 [RB-05](RB-05-dlq-and-outbox-quarantine.md) §2. 일시적이면 원인이 풀릴 때까지 멈춘다 — 경계 행(30분) |
 | 그룹의 멤버가 계속 바뀐다 | 리밸런스가 반복된다 | 인스턴스가 재기동을 반복하는지 본다(`dc ps` — OOM · 헬스체크). `max.poll.records=100` 한 배치의 처리가 `max.poll.interval.ms` 를 넘으면 그룹에서 빠진다 |
 
-그룹의 파티션별 랙과 멤버:
+그룹의 파티션별 랙과 멤버 — **브로커가 아는 랙**(커밋된 오프셋 기준)이다. 클라이언트 지표 `kafka_consumer_fetch_manager_records_lag` 는 이미 가져온 레코드를 세지 않아서, 재시도에 막힌 파티션을 작게 보인다(RB-02 §3 의 관측):
 
 ```bash
 dc exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
