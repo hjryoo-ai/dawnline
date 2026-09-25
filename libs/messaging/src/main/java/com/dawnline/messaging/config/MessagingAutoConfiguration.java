@@ -4,16 +4,24 @@ import com.dawnline.common.Ids;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.messaging.outbox.TraceparentSupplier;
 import com.dawnline.messaging.retention.RetentionAges;
+import com.dawnline.messaging.tracing.TracerTraceparentSupplier;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.tracing.Tracer;
+import io.micrometer.tracing.propagation.Propagator;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.random.RandomGenerator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
 /**
@@ -28,6 +36,8 @@ import org.springframework.core.env.Environment;
 @AutoConfiguration
 @EnableConfigurationProperties(DawnlineMessagingProperties.class)
 public class MessagingAutoConfiguration {
+
+    private static final Logger LOG = LoggerFactory.getLogger(MessagingAutoConfiguration.class);
 
     /** PostgreSQL {@code TIMESTAMPTZ} 의 해상도. 이보다 정밀한 값은 저장할 때 잘린다. */
     private static final Duration STORAGE_RESOLUTION = Duration.ofNanos(1_000);
@@ -88,14 +98,51 @@ public class MessagingAutoConfiguration {
     }
 
     /**
-     * 트레이스 컨텍스트 제공자의 기본값(항상 비어 있음).
+     * 트레이스 컨텍스트 제공자 — 트레이싱 스택이 있으면 현재 스팬에서, 없으면 비어 있다(§9.2).
      *
-     * <p>{@code libs/observability} 가 실제 구현을 빈으로 등록하면 그쪽이 이긴다.
+     * <p><strong>7-2 까지 이 자리에는 {@code NONE} 하나뿐이었다.</strong> 문서는 「{@code libs/observability} 가
+     * 실제 구현을 등록하면 그쪽이 이긴다」고 했지만 그 등록은 한 번도 없었고, ADR-060 이 의존 방향을 뒤집은 뒤로는
+     * 있을 수도 없었다({@code libs/messaging} → {@code libs/observability}). 기본값이 기능을 조용히 껐다 — outbox 를
+     * 지나는 모든 이벤트가 traceparent 없이 나갔다. 그래서 구현이 여기 있고, 클래스 조건으로만 가른다: 트레이싱 클래스가
+     * 있으면 트레이서를 쓰고, 없을 때만 {@code NONE} 이다.
      */
-    @Bean
-    @ConditionalOnMissingBean
-    public TraceparentSupplier dawnlineTraceparentSupplier() {
-        return TraceparentSupplier.NONE;
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.tracing.Tracer")
+    static class TracingTraceparents {
+
+        /**
+         * 트레이서 빈이 없으면(트레이싱을 끈 배포) 비어 있다 — 그때는 이어 붙일 트레이스가 없다. 빈의 등록 순서에 기대지
+         * 않으려고 {@code @ConditionalOnBean} 대신 만들 때 찾는다.
+         *
+         * @param tracer     트레이서
+         * @param propagator 전파기
+         * @return 제공자
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        TraceparentSupplier dawnlineTraceparentSupplier(ObjectProvider<Tracer> tracer,
+                ObjectProvider<Propagator> propagator) {
+            Tracer t = tracer.getIfAvailable();
+            Propagator p = propagator.getIfAvailable();
+            if (t == null || p == null) {
+                LOG.info("트레이서가 없어 outbox 행에 traceparent 를 싣지 않습니다(트레이싱을 끈 배포).");
+                return TraceparentSupplier.NONE;
+            }
+            return new TracerTraceparentSupplier(t, p);
+        }
+    }
+
+    /** 트레이싱 클래스가 없는 소비자(도구) — 이어 붙일 트레이스가 없다. */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnMissingClass("io.micrometer.tracing.Tracer")
+    static class NoTraceparents {
+
+        /** @return 언제나 비어 있는 제공자 */
+        @Bean
+        @ConditionalOnMissingBean
+        TraceparentSupplier dawnlineTraceparentSupplier() {
+            return TraceparentSupplier.NONE;
+        }
     }
 
     /**

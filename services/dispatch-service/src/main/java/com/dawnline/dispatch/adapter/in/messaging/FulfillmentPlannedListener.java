@@ -4,8 +4,10 @@ import com.dawnline.dispatch.application.port.in.LoadCandidateUseCase;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.observability.MdcScope;
 import java.util.Objects;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -64,7 +66,19 @@ public class FulfillmentPlannedListener {
             return;
         }
 
-        consumer.runOnce(envelope, CONSUMER,
-                () -> loadCandidate.load(FulfillmentPlannedPayload.toSnapshot(payload)));
+        // 주문 트레이스의 끝 — 이 소비 스팬이 dawnline.order_id · dawnline.wave_id 를 단다. 계획 트레이스의 시작
+        // (WaveClosedListener)도 같은 wave_id 를 달아, 한 TraceQL 질의가 두 트레이스를 함께 돌려준다(§9.2 · §9.3, ADR-062).
+        MdcScope.builder()
+                .eventId(envelope.eventId())
+                .orderId(textOf(payload, "orderId"))
+                .waveId(textOf(payload, "waveId"))
+                .run(() -> consumer.runOnce(envelope, CONSUMER,
+                        () -> loadCandidate.load(FulfillmentPlannedPayload.toSnapshot(payload))));
+    }
+
+    /** 스냅샷을 만들기 전(멱등 판정 앞)이라 해석하지 않고 글자 그대로 싣는다 — 없으면 MDC · 스팬에 넣지 않는다. */
+    private static @Nullable String textOf(JsonNode payload, String field) {
+        JsonNode value = payload.get(field);
+        return value == null ? null : value.asString();
     }
 }

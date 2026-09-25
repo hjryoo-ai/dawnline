@@ -3,6 +3,7 @@ package com.dawnline.messaging.kafka;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.messaging.EventHeaders;
+import io.micrometer.observation.ObservationRegistry;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -23,7 +24,7 @@ class KafkaRecordPublisherTest {
     void publish_토픽_키_값_헤더를_그대로_옮긴다() {
         CapturingKafkaTemplate template = new CapturingKafkaTemplate();
 
-        CompletableFuture<Void> result = new KafkaRecordPublisher(template).publish(
+        CompletableFuture<Void> result = new KafkaRecordPublisher(template, ObservationRegistry.NOOP).publish(
                 "dawnline.order.placed.v1", "o-1", "{\"eventId\":\"x\"}",
                 Map.of(EventHeaders.EVENT_TYPE, "order.placed", EventHeaders.SCHEMA_VERSION, "1"));
 
@@ -43,7 +44,7 @@ class KafkaRecordPublisherTest {
         template.failure = new IllegalStateException("브로커 없음");
 
         CompletableFuture<Void> result =
-                new KafkaRecordPublisher(template).publish("t", "k", "v", Map.of());
+                new KafkaRecordPublisher(template, ObservationRegistry.NOOP).publish("t", "k", "v", Map.of());
 
         assertThat(result).isCompletedExceptionally();
     }

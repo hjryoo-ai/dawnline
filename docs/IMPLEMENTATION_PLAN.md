@@ -2044,7 +2044,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A18 | `cancel_too_late_total` ≠ 0 이면 창의 폭이 가정을 넘은 것 | ADR-026 | peak-day 에서 0 이 아니다 | 그 카운터 + order-service 의 `order.dispatched` 랙 | 7-4 |
 | A19 | `UNKNOWN` 자동 해소 | ADR-052 재검토 지점 4 | `UNKNOWN` 이 사람이 따라가기 어려운 빈도 | `dawnline_ops_commands_total{result="UNKNOWN"}` — peak-day 에서는 구조적으로 0 이다. **카오스 중의 커맨드가 낸다**(D3, 인위 주입 없음) | 7-3 |
 | A20 | 출발 정시율 | ADR-050 재검토 지점 1 · §4.1 「peak-day 스토리의 첫 칸」 | `plannedDeparture − departedAt` 이 크고 at-risk 와 상관 | 그 차의 분포 | 7-4 |
-| A21 | 한 traceId 로 네 서비스 span · Tempo `metrics_generator`(서비스 그래프) | 7-2 · `deploy/compose/README.md` | — | 스크린샷 | 7-2 |
+| A21 | 한 traceId 로 네 서비스 span · Tempo `metrics_generator`(서비스 그래프) | 7-2 · `deploy/compose/README.md` | — | 스크린샷 | 7-2 — **트레이스 ✅** `2c0e144` · `a3e59b6` · `afa521c` · `f981e0c` · `257af58` · `970acd5` · `ff86cfb` · `e6a9737`: outbox 를 지나는 한 줄(쓰기 · 발행 · 소비)이 처음으로 살았다 — 제공자는 `NONE` 하나뿐이었고 릴레이는 헤더를 자기 폴링의 트레이스로 덮었다(ADR-062, §13 축 13). 「한 traceId」는 이벤트 흐름상 성립하지 않아(계획은 웨이브가 시작한다) **`dawnline.wave_id` 속성의 TraceQL 한 줄**로 정정했고 Compose 스모크가 그 질의의 `service.name` 합집합에 코어 넷을 본다. **`metrics_generator` 는 미구현** · 스크린샷은 A24(7-6) |
 | A22 | 런북 — **계획서의 「RB-01~06」은 낡았다**: RB-05 는 있고(Phase 6) RB-07 이 §9.5 에 있다 | 7-5 · §9.5 | — | — | 7-5 (RB-01~04 · 06 · 07 — 작업 5 를 고쳤다) |
 | A23 | 포스트모템(가상 장애, 실제 측정치 기반) | 7-5 | 7-4 의 수치 | 7-4 리포트 | 7-5 |
 | A24 | README — 그림 · 데모 GIF · Tempo 스크린샷 · 피크 SLO 표 · 카오스 결과 · 정시율 리포트 | README 「측정해서 채울 자리」 넷 | — | 7-2 · 7-3 · 7-4 | 7-6 |
@@ -2075,7 +2075,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 이유 | 항목 |
 |---|---|
 | **이미 닫혔다** | **Phase 3 대조표의 `PRIORITY_BOOST` 계약 결손**(⚠️ — 처음 판에는 D6 으로 적었다. Phase 4-11 이 계약 변경 없이 닫았다: 우선도는 받은 사실에서 파생한다, ADR-028 · `LoadCandidateService`. Phase 3 행만 갱신되지 않았다 — 지금 고쳤다) · ADR-015 ①(ADR-055) · ADR-049 ②(규칙 9 가 조건이라는 증명 — #45 의 음성 표본 `OwnShapeAdvice` 가 했다. ops-api 로 한 번 더 하지는 않았다) · ADR-023 의 DLQ 경로 조건(ADR-053 이 §4.4 의 의존 경고로 답했다) · ADR-028 ①②(ADR-033 의 통합 키와 80% 기준) · **ADR-033 「`peak` 은 아직 재지 않았다」**(`DatasetFeasibilityTest` 가 2026-09-12 부터 빼는 방식으로 `peak` 을 포함한다 — ADR 의 문장만 남았다) · ADR-043 ① · ADR-047 ①⑤ · ADR-048 ④ · ADR-050 ③ · ADR-051 ①②③ · ADR-052 ② · **FAST 클러스터 여유 그림자**(`phase4-strategies.md` §7.3 「판정: 닫는다」 — 이득이 비단조. 커밋되지 않은 probe 의 수라는 ⚠️ 가 그 절에 있다) |
-| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 · ADR-059(재배송이 들어오면 나이의 전제 — D7 이 범위 밖이다 · 다른 계획의 라우트로 옮기는 재배정 · 측정 문서의 행 수 재검토 지점 넷 — `route_plans` 10만 · `dispatch_candidates` 1,500만 · `route_stops` 2,000만) · ADR-061(`rm_routes` 약 200만 행이면 두 인덱스를 다시 잰다 · 재배송이 들어오면 마지막 결과 시각의 뜻 — `assigned` 의 창은 `void` 가 생겨 닫혔다) |
+| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 · ADR-059(재배송이 들어오면 나이의 전제 — D7 이 범위 밖이다 · 다른 계획의 라우트로 옮기는 재배정 · 측정 문서의 행 수 재검토 지점 넷 — `route_plans` 10만 · `dispatch_candidates` 1,500만 · `route_stops` 2,000만) · ADR-061(`rm_routes` 약 200만 행이면 두 인덱스를 다시 잰다 · 재배송이 들어오면 마지막 결과 시각의 뜻 — `assigned` 의 창은 `void` 가 생겨 닫혔다) · ADR-062(배치 리스너가 들어오면 레코드마다 부모를 여는 자리 · 샘플링을 1.0 아래로 내리면 주문과 계획 트레이스가 따로 뽑힌다) |
 | **조건이 켜지지 않았다** | `phase1-orders-k6.md` 판정표의 「`outbox_lag` 상승 → Phase 7 로 넘길지」 행 — Phase 1 의 미달은 콜드 스타트 하나였다 |
 | **메커니즘 조건 — 7-4 의 수가 연다** | ADR-048 ③ 같은 지점으로는 옮기지 않는 규칙(처음 판의 B3, D4) — 후보 한 칸을 건너뛰는 자리라 트리거 단위 outcome 이 아니다. **peak-day 에서 `no-gain` 이 `applied` 보다 잦으면 연다** |
 | **범위 밖으로 닫았다**(D 의 결정) | 재배송 +3(D7 — DESIGN §6.3 우선도 표 · ADR-028 · Phase 5 대조표에 행을 더했다) |
@@ -2177,6 +2177,8 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
    닫혔으면 미리 등록 · 열렸으면 식이 부재를 다룬다. §9.4 는 규칙 파일과 대조하려고 표가 됐고, 대시보드는 이름 집합으로
    대조한다 — JSON 은 프로비저닝 전용).
 2. 트레이싱 검증: 주문 1건 traceId로 4개 서비스 span이 Tempo에서 연결됨(스크린샷 README).
+   **2026-09-25 정정** — 주문 하나의 트레이스는 tracking 에 닿지 않는다(계획은 웨이브 마감이 시작한다, ADR-062 맥락 4). 검증은
+   `{ span.dawnline.wave_id = "…" }` 한 줄의 트레이스들이 코어 넷을 지나는가이고 `make obs-check` 가 본다(A21).
 3. 카오스 스크립트: `make chaos-kafka`, `make chaos-redis`, `make chaos-kill dispatch`. 각 실행 후 검증 SQL(주문 수 = 후보 수 + 취소 수, 라우트 stop 주문 중복 0, processed_events 중복 0)을 자동 실행.
    **감사 `UNKNOWN` 은 여기서 난다**(D3): Kafka·Redis 중단 중에 운영자 커맨드 하나를 보내면 코어의 5xx·타임아웃이
    자연히 `UNKNOWN` 을 만든다 — 인위 주입은 하지 않는다. `chaos-redis` 의 기준은 ADR-027 후속 정정의 것이다(발행이

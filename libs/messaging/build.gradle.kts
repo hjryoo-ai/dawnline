@@ -20,6 +20,10 @@ dependencies {
     // 미터는 카탈로그 항목으로, 헬퍼 한 곳에서만 등록한다(ADR-060, ArchUnit 규칙 11).
     implementation(project(":libs:observability"))
     compileOnly(libs.spring.boot.starter.actuator)
+    // outbox 의 traceparent 제공자(§9.2). compileOnly 인 이유: 트레이싱 스택은 서비스 규약(dawnline.spring-service)이 싣고,
+    // 도구는 싣지 않는다. 그 타입을 참조하는 코드는 com.dawnline.messaging.tracing 하나에 있고 자동 설정이 클래스 조건으로
+    // 가른다 — 클래스가 없으면 그 패키지는 로드되지 않는다.
+    compileOnly(libs.micrometer.tracing)
 
     // outbox 격리 조회·재큐 엔드포인트 (DESIGN.md §4.6, ADR-015 후속 정정). compileOnly 인 이유: 웹이 없는
     // 소비자(도구·배치)가 이 라이브러리를 쓰면서 서블릿 스택을 끌어오지 않게 한다. 자동 설정은
@@ -58,6 +62,9 @@ dependencies {
     integrationTestImplementation(libs.spring.boot.starter.flyway)
     integrationTestImplementation(libs.flyway.postgresql)
     integrationTestImplementation(libs.awaitility)
+    // OutboxTraceparentIT — 서비스와 같은 트레이싱 스택(Micrometer Tracing → OTel)이 있어야 릴레이가 자기 폴링의 트레이스로
+    // 헤더를 덮는지가 드러난다. 서비스는 dawnline.spring-service 규약이 같은 스타터를 건다(§9.2).
+    integrationTestImplementation(libs.spring.boot.starter.opentelemetry)
     // 런타임이 아니라 컴파일 의존이다 — OutboxLeaderLockIT 가 PGSimpleDataSource 를 직접 만든다.
     // advisory lock 은 세션에 걸리므로 인스턴스마다 다른 커넥션이어야 하고, 그것을 스프링 없이
     // 만들려면 드라이버의 DataSource 가 필요하다.

@@ -40,7 +40,12 @@ import org.slf4j.MDC;
  * <p>MDC 는 스레드 로컬이다. 이 객체는 연 스레드에서만 닫아야 한다. 다른 스레드로 작업을
  * 넘길 때는 값을 명시적으로 넘겨 그쪽에서 새 스코프를 열어라. 가상 스레드에서도 동일하다.
  *
- * <p>개인정보는 넣지 않는다 — {@link MdcKeys} 의 정책 설명을 참고한다.
+ * <h2>스팬 속성</h2>
+ * <p>여는 순간 id 키({@link MdcKeys#SPAN_ATTRIBUTE_KEYS})를 현재 스팬에도 단다 — 이름은
+ * {@link MdcKeys#spanAttribute}({@code waveId} → {@code dawnline.wave_id}). 로그가 그 id 로 찾히는 자리에서 트레이스도
+ * 같은 id 로 찾힌다(§9.3, ADR-062 결정 4). 닫아도 스팬의 속성은 남는다.
+ *
+ * <p>개인정보는 넣지 않는다 — {@link MdcKeys} 의 정책 설명을 참고한다. 스팬 속성도 같은 정책이다: 트레이스 저장소로 퍼진다.
  */
 public final class MdcScope implements AutoCloseable {
 
@@ -155,6 +160,7 @@ public final class MdcScope implements AutoCloseable {
             values.forEach((key, value) -> {
                 previous.put(key, MDC.get(key));
                 MDC.put(key, value);
+                SpanAttributes.tag(key, value);
             });
             return new MdcScope(previous);
         }

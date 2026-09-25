@@ -6,6 +6,7 @@ import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
+import com.dawnline.observability.MdcScope;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.UUID;
@@ -73,11 +74,14 @@ public class WaveClosedListener {
 
         Long backlog = backlogOf(kafka, record);
 
-        consumer.runOnce(envelope, CONSUMER, () -> {
-            RunPlanUseCase.Outcome outcome =
-                    runPlan.run(RunPlanCommand.of(waveId, campId, point, backlog));
-            log.info("웨이브 계획: waveId={} 결과={}", waveId, outcome);
-        });
+        // 계획 트레이스의 시작 — 계획은 이 스레드에서 돈다. 이 소비 스팬이 dawnline.wave_id 를 달아 주문 트레이스의 끝
+        // (FulfillmentPlannedListener)과 한 질의로 이어진다(§9.2 · §9.3, ADR-062 결정 4).
+        MdcScope.builder().eventId(envelope.eventId()).waveId(waveId).run(() ->
+                consumer.runOnce(envelope, CONSUMER, () -> {
+                    RunPlanUseCase.Outcome outcome =
+                            runPlan.run(RunPlanCommand.of(waveId, campId, point, backlog));
+                    log.info("웨이브 계획: waveId={} 결과={}", waveId, outcome);
+                }));
     }
 
     /**
