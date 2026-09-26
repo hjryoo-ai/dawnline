@@ -1228,6 +1228,23 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 - **타임아웃**: 연결 1초. 읽기는 dispatch 60초(계획 시간 p95 경보가 45초다, §9.4 — 그보다 짧으면 정상적인
   재계획이 `UNKNOWN` 이 된다), order·fulfillment·tracking 5초(취소·마감·재큐는 행 하나의 전이다).
 
+**감사 해소는 칸이 아니라 행이다** (2026-09-26, 7-3b, [ADR-065](adr/ADR-065-audit-resolution-is-a-row.md)).
+`UNKNOWN` 을 사람이 닫는 일도 커맨드이고 감사 행이다. 대상 행은 **고치지 않는다** — 감사 표는 덧붙이기만 한다.
+
+| ops-api | 위임 대상 | `audit_logs.action` · `target_type` |
+|---|---|---|
+| `POST /api/v1/audit/{auditId}/resolve` (`resolution` · `reason` **필수**) | **없음** — ops-api 의 `audit_logs` 한 트랜잭션 | `RESOLVE_AUDIT` · `AUDIT` |
+
+- `resolution` 은 `APPLIED` · `NOT_APPLIED` — 그 커맨드가 코어에 **적용됐는가**. 위임 결과의 이름(`SUCCEEDED` · `FAILED`)을 빌리지 않는다:
+  `FAILED` 는 「연결이 맺어지지 않았다」이고 해소가 말하는 것과 다르다.
+- 대상은 `UNKNOWN`, 또는 5분 넘은 `PENDING`(RB-07 의 정의) — 아니면 409 `audit-not-resolvable`. **해소는 한 번**이다 — 이미 해소됐으면
+  409 `audit-already-resolved`(`resolutionId`). 대상 행을 `FOR UPDATE` 로 잡고 판정하므로 동시에 온 둘 중 하나만 적힌다. 없는 행은 404.
+- 거절(409 · 404)도 행이다 — `result=REJECTED`. `reason` 이 비었거나 200자를 넘으면 400 이고 행을 남기지 않는다(조기 마감과 같은 규칙).
+- 위임이 없으므로 `PENDING` 이 없다 — 판정과 삽입이 한 트랜잭션이고, 카운터(`action="RESOLVE_AUDIT"`)는 그 커밋 뒤에 센다.
+  응답 헤더 `X-Dawnline-Audit-Id` 는 **새 행**의 id 다.
+- 「지금 열린 `UNKNOWN`」은 해소 행이 없는 `UNKNOWN` 이다(RB-07 첫 SQL). `target_id` 에 인덱스는 없다 — 행 수가 운영자 커맨드 수라 순차
+  스캔이 맞다(ADR-065 재검토 지점: 수만 행).
+
 **조회** (2026-09-24, 묶음 C). 캠프 대시보드와 라우트 지도(ops-web 두 화면)가 읽는 것이다. 전부 `GET` 이라
 `OPS_VIEWER` 에게 열리고 **감사하지 않는다**.
 
@@ -2817,7 +2834,7 @@ ADR-060 맥락 1) — §9.4 의 p95 알림이 읽을 것이 없었다.
 | `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다. 창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개**(`kpi_delivery_hourly` 의 24행 합 — 현재 버킷은 늘 부분이라 23시간 남짓~24시간)이고 1분마다 다시 센다. 분모는 완료 + **실패**, 취소·배차 불가는 뺀다(§5.5 「KPI — 두 축, 뷰」). 결과가 없는 캠프와 갱신 실패 중에는 `NaN` — 0 도 마지막 값도 아니다. 약속을 모르는 결과도 빠지고, 그 수는 아래 `dawnline_kpi_excluded` 가 낸다 |
 | `dawnline_kpi_excluded` | gauge | **ops-api** | reason(promise_unknown) — 정시율의 창에서 **모집단 밖으로 빠진** 결과: 완료·실패했는데 약속(또는 캠프)을 아직 모른다(`kpi_delivery_hourly.outcome_without_promise` 의 합, 캠프가 없는 행 포함). 분모에서 조용히 빠지는 것은 실패를 빼서 정시율을 올리는 것과 같은 부류다 — **부재는 값이 아니지만 부재의 수는 값이다.** 정상에서는 프로젝션 랙만큼의 일시값이고 계속 0 이 아니면 `fulfillment.planned` 가 오지 않고 있다. 갱신 실패 중에는 `NaN` — 0 은 「빠진 것이 없다」는 주장이다 |
-| `dawnline_ops_commands_total` | counter | **ops-api** | action(`RUN_PLAN`·`REASSIGN_STOP`·`CANCEL_ORDER`·`CLOSE_WAVE`·`REQUEUE_OUTBOX`·`DLQ_REPLAY` — 재처리는 레코드마다 하나. `CLOSE_WAVE`·`REQUEUE_OUTBOX` 는 ADR-054·ADR-015 후속 정정이 더했고 이 칸이 모르고 있었다 — 2026-09-25 카탈로그 대조가 찾았다), result(`SUCCEEDED`·`REJECTED`·`FAILED`·`UNKNOWN`) — 감사 행의 결과를 **커밋한 뒤에** 센다(CLAUDE.md 「카운터는 커밋 뒤에 센다」). `PENDING` 은 세지 않는다 — 끝나지 않은 커맨드의 수는 카운터가 아니라 `audit_logs` 가 안다 |
+| `dawnline_ops_commands_total` | counter | **ops-api** | action(`RUN_PLAN`·`REASSIGN_STOP`·`CANCEL_ORDER`·`CLOSE_WAVE`·`REQUEUE_OUTBOX`·`DLQ_REPLAY`·`RESOLVE_AUDIT` — 재처리는 레코드마다 하나. `RESOLVE_AUDIT` 는 감사 해소(2026-09-26, ADR-065 — 결과는 `SUCCEEDED`·`REJECTED` 만 난다). `CLOSE_WAVE`·`REQUEUE_OUTBOX` 는 ADR-054·ADR-015 후속 정정이 더했고 이 칸이 모르고 있었다 — 2026-09-25 카탈로그 대조가 찾았다), result(`SUCCEEDED`·`REJECTED`·`FAILED`·`UNKNOWN`) — 감사 행의 결과를 **커밋한 뒤에** 센다(CLAUDE.md 「카운터는 커밋 뒤에 센다」). `PENDING` 은 세지 않는다 — 끝나지 않은 커맨드의 수는 카운터가 아니라 `audit_logs` 가 안다 |
 | `dawnline_internal_token_rejected_total` | counter | 코어 넷(`libs/web`) | reason(`missing`·`mismatch`) — 운영자 쓰기가 내부 토큰 없이·틀린 토큰으로 들어와 401 을 받았다(§10 셋째 층, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)). 정상 운영에서 **0** 이다 — ops-api 는 모든 호출에 싣고 고객·현장 표면은 면제다. 레이트 리밋의 `bypassed` 와 같은 부류: 보상 통제가 뚫리는 것을 센다 |
 | `dawnline_kpi_refresh_age_seconds` | gauge | **ops-api** | 라벨 없음 — 마지막으로 **성공한** KPI 갱신 뒤로 흐른 초. 스크레이프마다 계산하므로 갱신이 멈추면 값이 멈추지 않고 커진다(성공한 적이 없으면 기동부터). 위 둘은 갱신이 죽으면 `NaN` 이고 **`NaN` 에는 어떤 비교 알림도 울리지 않는다** — 그래서 알림은 이 값에 건다(§9.4). `dawnline_shipment_partitions_ahead` 와 같은 모양이다 |
 | `dawnline_kpi_delivery` | gauge | **ops-api** | camp, outcome(completed/failed) — 정시율과 **같은 창 · 같은 스냅숏**의 결과 수(`kpi_delivery_hourly` 24행의 `delivered` · `failed` 합). 정시율의 분모를 둘로 편 것이라 「대시보드의 24행과 게이지가 다를 수 없다」가 여기도 성립한다 — 따로 세는 질의가 아니라 정시율을 낸 그 갱신이 함께 낸다(2026-09-25, 7-1 — §9.4 Delivery 의 「실패」가 대응하는 행 없이 적혀 있던 빈틈). 캠프는 정시율과 같이 창에 처음 나타날 때 등록한다. 창에 결과가 없는 캠프는 **0** 이다 — 정시율이 그때 `NaN` 인 것과 다른 이유는, 0/0 은 정의되지 않지만 「결과 0 건」은 참인 셈이기 때문이다. 갱신 실패 중에는 `NaN` |
@@ -2920,6 +2937,10 @@ JSON 구조 로그(traceId, spanId, service, eventId, orderId/waveId/routeId MDC
 `MdcFilter` 가 MDC 로 옮긴다. **요청 헤더를 MDC 에 넣는 유일한 자리**이고 값이 UUID 형식일 때만 받는다 — 헤더는
 누구나 보낼 수 있으므로 형식이 아니면 버린다(로그 줄에 임의 문자열이 실리지 않게). 값은 ops-api 가 만든 UUIDv7
 이라 개인을 식별하지 않는다.
+**수신 줄** (2026-09-26, 7-3b, ADR-065 결정 4): 같은 필터가 그 헤더가 온 요청마다 **처리 전에** INFO 한 줄을 남긴다 —
+`운영자 커맨드를 받았습니다: POST /api/v1/…`(메서드와 경로만, 쿼리 · 본문 없음). 코어는 커맨드의 성공만 로그했고 `RUN_PLAN` 은 그것도
+없어서, 「`auditId` 줄이 없다」가 닿지 않았다 · 거절됐다 · 줄 없이 적용됐다를 가르지 못했다(§9.5 정정). 이제 **수신 줄이 없으면 닿지
+않았다**(그 코어의 로그가 그 시각에 남아 있다면) — 닿은 뒤 적용됐는지는 여전히 코어의 현재 상태가 말한다.
 
 ### 9.4 대시보드·알림 (저장소에 JSON으로 커밋)
 
@@ -2983,6 +3004,8 @@ RB-01 Kafka 복구 · RB-02 DB 장애 · RB-03 Redis 복구 · RB-04 계획 정�
 INFO 로 남기고(`RUN_PLAN` 은 그것도 없다) 4xx 거절은 줄을 남기지 않으므로, `auditId` 를 싣는 줄이 없다는 것은 닿지 않았다는 증거가 아니다 —
 **줄이 있으면 적용, 없으면 코어의 현재 상태가 근거다**(근거: 관측 — 로컬에서 발행된 웨이브에 `RUN_PLAN` 을 보냈다: 200 `ALREADY_PUBLISHED`,
 감사 `SUCCEEDED`, dispatch 로그에 그 `auditId` 가 0줄). RB-07 §2 가 커맨드마다 성공의 줄을 적는다.
+**그 뒤 (2026-09-26, 7-3b)**: 코어가 커맨드를 **받은** 순간 한 줄을 남긴다(§9.3 「수신 줄」) — 흔적의 부재가 다시 근거가 된다: 수신 줄이 없으면
+닿지 않았다. RB-07 §3 의 SQL `UPDATE` 는 해소 행(`POST /api/v1/audit/{auditId}/resolve`, §5.5 「감사 해소」)으로 바뀌었다.
 
 ---
 
@@ -3405,6 +3428,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 062 | **outbox 를 지나도 트레이스는 이어진다** — 쓰기: 행의 `traceparent` 는 현재 스팬(`TracerTraceparentSupplier`, 클래스 조건으로만 `NONE`) · 발행: 릴레이는 저장된 값을 부모로 하는 수신 관측 안에서 보낸다(템플릿 관측이 헤더를 지우고 다시 쓰므로 — 발행 스팬이 그 자식이라 릴레이 지연이 보인다) · 소비: Boot 리스너 팩토리의 관측 · 주문과 계획은 두 트레이스이고 `dawnline.wave_id`(MDC 키에서 규칙으로 나온 스팬 속성) 하나로 함께 찾는다 — 스모크가 그 TraceQL 로 코어 넷을 본다 · `export.enabled=false` 는 전파까지 끄므로 lean 은 `export.otlp.enabled` 만 · 7-2 전에는 `NONE` 이 전부였다 | [ADR-062](adr/ADR-062-trace-survives-the-outbox.md) |
 | 063 | **받을 웨이브가 없는 것은 늦게 온 것이 아니다** — 밀림 상한(`MAX_WAVE_PUSHES`)에 닿으면 `MAX_PUSHES_EXCEEDED`(그전에는 `STALE_PLACED` 로 나갔다) · 운영자가 같은 캠프 · 티어의 웨이브 넷을 연달아 닫으면 닿는다(ADR-054 뒤의 성질) · 데모는 시작 전에 밀림 여유를 센다 · 상한 값은 그대로 | [ADR-063](adr/ADR-063-no-open-wave-is-not-a-late-event.md) |
 | 064 | **계산은 트랜잭션 밖에서 돈다** — 계획은 읽기(읽기 전용 트랜잭션) → 계산(없음) → 쓰기(트랜잭션 하나) · 정정 전에는 `wave.closed` 의 멱등 트랜잭션이 최적화기를 덮어 커넥션 하나가 계산 시간만큼 `idle in transaction` 이었다(근거: 관측(재현됨), `PlanComputeConnectionIT`) · `peak` 19.9초 · 리스너 동시성 3 이면 풀 10 중 3 · 멱등 게이트는 유스케이스가 받아 쓰기만 감싼다(불변 규칙 2 그대로 — 게이트 앞의 계산은 같은 `eventId` 재전달 한 경우에 낭비) · 계획 카운터는 커밋 뒤로 · 부분 재계획은 아직 안에서 계산한다(재지 않았다 — B13) | [ADR-064](adr/ADR-064-planning-computes-outside-the-transaction.md) |
+| 065 | **감사 해소는 칸이 아니라 행이다** — `POST /api/v1/audit/{auditId}/resolve` 가 `RESOLVE_AUDIT` · `AUDIT` 행을 더하고 대상 `UNKNOWN` 행은 그대로 둔다 · 값은 `APPLIED` · `NOT_APPLIED`(위임 결과의 이름을 빌리지 않는다) · 대상은 `UNKNOWN` 과 5분 넘은 `PENDING`, 한 번만(`FOR UPDATE` 뒤 판정) · 거절도 `REJECTED` 행 · 코어는 `X-Dawnline-Audit-Id` 가 온 요청마다 `MdcFilter` 에서 **수신 줄** 하나 — 줄이 없으면 닿지 않았다 · RB-07 §3 의 SQL `UPDATE` 를 대신한다 | [ADR-065](adr/ADR-065-audit-resolution-is-a-row.md) |
 | 052 | **위임 클라이언트는 커밋된 계약에서 만든다 — 채택 기준을 먼저 적는다** — 후보 하나(`spring` 생성기 · `spring-http-interface`), 기준 다섯(표준 템플릿 · 문서화된 옵션만 · 생성물 그대로 컴파일 · Jackson 3 왕복 · 새 런타임 의존 없음) — 하나라도 거짓이면 손으로 쓴 인터페이스 + YAML 대조 테스트 — **채택**(7.25.0, 다섯 기준 모두 참 · 왕복 32개) · 토큰은 스크립트가 찍고 ops-api 는 검증만 · 감사 행은 위임 **전에** `PENDING`, 응답을 못 받으면 `UNKNOWN` · 감사 id 를 상관 헤더로 | 계약 없이 컨트롤러 소스에서, 살아 있는 `/v3/api-docs` 에서 생성(입력이 커밋에 남지 않는다), 생성물 커밋(서로를 비추는 목록이 하나 는다), 개발 전용 로그인 엔드포인트(프로필이 꺼져 있다는 조용한 전제), 위임 뒤 한 번만 기록(죽으면 기록이 사라진다) | [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) |
 | 051 | **읽기 모델의 행은 먼저 온 사실이 만든다 — 부재는 값이 아니다** — 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **다섯 번째 자리**이고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓴다**(`rm_orders` 에 여섯 — 2026-09-24 DDL 정정 뒤 일곱 · `rm_waves` 에 넷 · `rm_routes` 에 넷) — 그래서 「이 전이를 받는가」 앞에 **「그 행이 아직 있기는 한가」**가 하나 더 있다 · 핸들러는 전부 **upsert** 이고 「행을 만드는 핸들러」를 두지 않는다(늦게 온 `UPDATE` 는 0 행을 갱신하고 **예외 없이 성공**한다) · **자기 칸만 쓴다** — 모르는 칸에 `NULL`·`0`·`false` 를 넣지 않는다(`false` 는 「위험하지 않다」라는, 아직 아무도 하지 않은 주장이다) · 개수는 증감이 아니라 **집계**다([ADR-025](adr/ADR-025-wave-admission-share-lock.md) 의 「카운터 드리프트가 구조적으로 불가능」과 같은 형태 — `delivery.status` 가 `order.dispatched` 보다 먼저 오면 올릴 라우트가 없다) · 「아직 안 왔다」는 DLQ 도 `rejected` 도 아니다(§4.6) · 관측 근거는 **순서를 뒤섞는 IT** 이고 토픽을 **빼는 방식**으로 돈다([ADR-050](adr/ADR-050-route-departure-is-an-event.md) 이 방금 열한 번째를 더했다 — 열거였다면 그 토픽은 검사 밖이었다) · 근거는 **관측(재현됨)**(2026-09-24 — 기각한 반대안 셋을 임시로 넣자 셋 다 씨 1 에서 사실을 조용히 잃었다) | 정방향 전제 + 어긋나면 DLQ(정상 트래픽을 DLQ 로 보내고 화면의 정확성이 그날의 컨슈머 랙에 걸린다), 행이 없으면 재시도(그 6초가 다른 파티션의 지연과 아무 관계가 없다 — ADR-017 이 같은 제안을 같은 이유로 기각했다), 키별 재정렬 버퍼(**완료 조건이 없다** — 끝내 오지 않는 것이 정상인 토픽이 있고, 지연이 열한 소비자 랙의 최소가 아니라 최대가 된다), 전 토픽 단일 스레드 소비(직렬화는 순서가 아니다 — 아무것도 사지 않고 처리량만 판다), 골격 행에 기본값 채우기(**없는 사실을 지어내는 일** — `NULL` 은 「아직 모른다」라는 참인 말을 하지만 기본값은 거짓인 말을 한다), `rm_*` 없이 동기 조회(불변규칙 4 · ADR-012), ADR 없이 코드에만(이 규칙은 **하지 않는 일**들이라 코드에서 보이지 않는다 — 가장 먼저 「`SET (…) = EXCLUDED.(…)` 로 줄이자」가 들어온다) | [ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) |
 | 050 | **라우트 출발은 이벤트다 — 출발이 첫 편차의 출처이기 때문이다** — `dawnline.delivery.route-departed.v1`(키 `routeId`, 소비자 **ops 뿐**) · 근거는 화면이 아니라 **사실의 가시성**이다: 지금 출발을 아는 것은 tracking 뿐이라(`ScanType.isPublished()` 가 `DEPARTED_CAMP` 를 뺀다) ops 는 첫 `ARRIVED` 가 올 때까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, **그 구간이 운영자가 개입할 수 있는 마지막 창이다**(아직 안 나간 차는 다시 짤 수 있다) · **라우트 하나에 이벤트 하나** — 반복하지 않는다는 이유가 말하지 않을 이유였던 적은 없다([ADR-024](adr/ADR-024-plan-completed-event.md) 의 거울상: 사실의 단위와 토픽의 단위를 맞춘다) · 페이로드 여섯 칸(`routeId`·`campId`·`revision`·`plannedDeparture`·`departedAt`·`stopCount` — 2026-09-24 `stopCount` 를 빼 다섯: 부재를 다른 출처로 메우지 않는다)은 **마이그레이션 없이** 나온다 · `revision` 을 싣는 이유는 「어느 개정본의 계획에 대해 늦었나」를 말해야 하기 때문 · 스키마·예시·토픽·발행은 **소비자가 먼저**(묶음 B, ops 의 `rm_routes`) | 정의하지 않는다(더 단순하지만 그 대가가 **마지막 개입 창을 숨기는 것**이다 — `rm_routes` 는 없는 사실을 만들어 내지 못한다), `delivery.status` 의 `status` 에 `DEPARTED_CAMP` 추가(한 사실이 stop 수만큼 반복된다 — 5-1b 가 발행하지 않기로 한 그 이유), `route.assigned` 에 `departedAt` 을 나중에 채우기(계획 이벤트를 사실로 갱신하면 개정으로 거르는 소비자가 사실을 함께 버린다), ops-api 가 tracking 에 동기 조회(출발은 사건이지 조회 대상이 아니다 — 해상도가 폴링 주기가 된다), 페이로드를 `{routeId, departedAt}` 둘로(편차의 기준선 `plannedDeparture` 가 개정마다 다르다) | [ADR-050](adr/ADR-050-route-departure-is-an-event.md) |
