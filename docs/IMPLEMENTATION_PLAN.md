@@ -2231,6 +2231,12 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
    흔적 경로를 되살린다. 7-4 앞 — peak-day 의 운영자 스크립트가 카오스로 생긴 `UNKNOWN` 을 닫는 경로까지 보여야 한다.
    **실제 사례가 생겼다** (2026-09-25, 7-3① `make chaos-db`): fulfillment 의 DB 가 멈춘 동안 보낸 조기 마감 하나가 504 → 감사 `UNKNOWN`. 적용될 수 없었다(그 DB 에
    아무도 들어가지 못했다) — 해소는 `FAILED` 이고 근거는 「그 시각 그 계정은 NOLOGIN 이었다」다. 인위 주입이 아니다.
+   **✅ 7-3b (2026-09-26)** — [ADR-065](adr/ADR-065-audit-resolution-is-a-row.md): `POST /api/v1/audit/{auditId}/resolve` 가 `RESOLVE_AUDIT` 행을 더하고
+   대상 행은 그대로(값은 `APPLIED` · `NOT_APPLIED` — 위임 결과의 이름을 빌리지 않는다, 계획의 「결과 `FAILED`」는 `NOT_APPLIED` 가 됐다) · 코어는
+   `MdcFilter` 에서 수신 줄 하나. **실제 사례는 셋이었다**(12:33 · 21:53 · 00:14 — 가운데는 7-3② 준비 중의 `chaos-db`). 로컬 스택에서 RB-07 을 그대로 밟았다:
+   두 웨이브 모두 이미 `SCHEDULED` 로 닫혀 있음을 먼저 확인(다시 누르기가 마감을 하지 않게) → §1 다시 누르기 409 `wave-not-open` `closeCause=SCHEDULED` →
+   §2 fulfillment 로그에 그 `auditId` 의 수신 줄(거절된 커맨드에도 — 전에는 줄이 없었다) → §3 셋 다 `NOT_APPLIED` 로 해소, 같은 행을 다시 해소하면 409
+   `audit-already-resolved` · RB-07 첫 SQL 0 행 · 카운터 `RESOLVE_AUDIT` SUCCEEDED 3 · REJECTED 1. `audit_logs` 는 로컬 23행 — `target_id` 인덱스 없음이 맞다.
 4a. **peak-day 의 전제**(A27) — 시나리오 넷(`normal-day` · `peak-day` · `overload-day` · `cold-heavy`, 부록 A), 함대 변형
    (`peak-day` 는 80% 기준이 정하는 함대 — D2), sim-runner 이미지, `make peak`. 부록 A 의 목록과 `scenarios.yml` 의
    어긋남도 여기서 맞춘다 — **고치는 것과 함께 검사가 산출물이다**: 진실은 `scenarios.yml` 이고 부록 A 는 그것을 비추는
