@@ -60,7 +60,7 @@ public final class SmokeScenario {
     public ScenarioReport run(String name, Scenario scenario, OrderGenerator generator, String runId)
             throws InterruptedException {
 
-        long intervalNanos = NANOS_PER_SECOND / scenario.ratePerSecond();
+        long intervalNanos = Math.round(NANOS_PER_SECOND / scenario.ratePerSecond());
         long[] latencies = new long[scenario.orders()];
         Map<String, Integer> problemCodes = new HashMap<>();
         int accepted = 0;

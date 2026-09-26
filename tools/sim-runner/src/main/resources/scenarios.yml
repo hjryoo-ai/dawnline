@@ -92,3 +92,69 @@ dawnline:
           delay-probability: 1.0
           delay-magnitude: 0.6
           failure-probability: 0.05
+
+      # ----------------------------------------------------------------------------------------------------------
+      # 창 시나리오 넷 — DAWN 컷오프(00:00 KST) 앞의 한 시간 (DESIGN.md 부록 A 「창은 하나다」, 7-4a).
+      #
+      # 하루가 아니라 창이다: §8.2 의 「컷오프 직전 1시간에 30% 집중」이 피크의 모양이고, normal-day 도 같은 창으로 돈다 —
+      # 비교 축이 같아야 표가 읽힌다. start-at 은 **유효 시각**(주입 시계)이다 — 시뮬레이션 스택(make sim-up, ADR-066)이
+      # 그 시각을 아무 때나 만들고, sim-runner 는 같은 오프셋의 시계로 기다린다. 22:58 에 시작해 한 시간, 끝이 컷오프보다
+      # 2분 앞 — 보내는 쪽이 밀려도 마지막 주문이 컷오프를 넘지 않는 여유다. 속도는 창 전체에 균일하다(순간 버스트는 k6).
+      #
+      # 고객은 주문의 절반 — 고객당 평균 2건이라 §7.2 레이트 리밋(용량 60)에 닿지 않는다.
+      # 티어 비율은 smoke 와 같다. SAME_DAY 는 다음 날 10:00 웨이브로 가서 이 창의 측정 밖이다.
+      # 기사는 아직 없다 — 지금의 기사는 「라우트 N 대」를 기다리는데 창의 라우트 수는 계획이 정한다(7-4).
+      # peak-day 와 overload-day 는 함대만 다르다 — 함대 칸은 ③ 에서(실현 가능성 기준 80%, 부록 A).
+      # ----------------------------------------------------------------------------------------------------------
+
+      # 평일 — 하루 3만(§8.2)의 30%.
+      normal-day:
+        orders: 9000
+        rate-per-second: 2.5
+        seed: 20260927
+        customers: 4500
+        cold-ratio: 0.25
+        start-at: "22:58"
+        tier-weights:
+          DAWN: 5
+          SAME_DAY: 3
+          NEXT_DAY: 2
+
+      # 피크 — 하루 15만의 30%. 함대는 실현 가능성 기준(80%)이 정한다(③).
+      peak-day:
+        orders: 45000
+        rate-per-second: 12.5
+        seed: 20260928
+        customers: 22500
+        cold-ratio: 0.25
+        start-at: "22:58"
+        tier-weights:
+          DAWN: 5
+          SAME_DAY: 3
+          NEXT_DAY: 2
+
+      # 과부하 — 같은 물량(같은 seed), 함대 그대로. 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터다.
+      overload-day:
+        orders: 45000
+        rate-per-second: 12.5
+        seed: 20260928
+        customers: 22500
+        cold-ratio: 0.25
+        start-at: "22:58"
+        tier-weights:
+          DAWN: 5
+          SAME_DAY: 3
+          NEXT_DAY: 2
+
+      # 평일 물량에 냉장 40% — 좌석 예약(ADR-039)이 수요 쪽에서 눌리는 유일한 시나리오.
+      cold-heavy:
+        orders: 9000
+        rate-per-second: 2.5
+        seed: 20260929
+        customers: 4500
+        cold-ratio: 0.40
+        start-at: "22:58"
+        tier-weights:
+          DAWN: 5
+          SAME_DAY: 3
+          NEXT_DAY: 2

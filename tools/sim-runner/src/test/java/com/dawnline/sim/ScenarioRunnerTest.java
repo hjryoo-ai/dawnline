@@ -15,6 +15,10 @@ import com.dawnline.sim.driver.ScanClient;
 import com.dawnline.sim.order.OrderClient;
 import com.dawnline.sim.order.ScenarioReport;
 import com.dawnline.sim.order.SmokeScenario;
+import com.dawnline.sim.order.WindowStart;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,19 +34,27 @@ import org.junit.jupiter.api.Test;
 class ScenarioRunnerTest {
 
     private static final SimProperties.Scenario SMOKE = new SimProperties.Scenario(
-            5, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1), null);
+            5, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1), null, null);
 
     /** 기사까지 도는 시나리오. 기다릴 라우트는 0 이라 대기 없이 끝난다. */
     private static final SimProperties.Scenario WITH_DRIVER = new SimProperties.Scenario(
             3, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1),
             new SimProperties.Scenario.Driver(1, 0.0, 1, 0, "http://localhost:8084",
-                    0.0, 0.0, 0.0, 0));
+                    0.0, 0.0, 0.0, 0), null);
 
     private static final LongSupplier FROZEN_CLOCK = () -> 1_000_000_000L;
 
+    /** 유효 시각 22:40 KST — `make sim-up` 의 기본값. 창 시나리오의 시작(22:58)이 18분 뒤다. */
+    private static final Clock AT_2240_KST = Clock.fixed(Instant.parse("2026-09-27T13:40:00Z"), ZoneOffset.UTC);
+
+    private static SimProperties.Scenario windowAt(String startAt) {
+        return new SimProperties.Scenario(5, 1000, 20260927L, 10, 0.25, Map.of("DAWN", 1), null, startAt);
+    }
+
     private static SimProperties properties(String selected) {
         return new SimProperties(selected, "http://localhost:8081", 5000,
-                Map.of("smoke", SMOKE, "with-driver", WITH_DRIVER));
+                Map.of("smoke", SMOKE, "with-driver", WITH_DRIVER,
+                        "window-ahead", windowAt("22:58"), "window-missed", windowAt("22:30")));
     }
 
     /** 켜졌는지를 기억하는 피드. 순서를 보는 테스트가 쓴다. */
@@ -78,7 +90,7 @@ class ScenarioRunnerTest {
         SmokeScenario smoke = new SmokeScenario(client, nanos -> { }, FROZEN_CLOCK);
         return new ScenarioRunner(properties, smoke, driverScenario(feed),
                 seed -> RandomGeneratorFactory.of("L64X128MixRandom").create(seed),
-                () -> "run-fixed");
+                () -> "run-fixed", new WindowStart(AT_2240_KST, nanos -> { }));
     }
 
     @Test
@@ -109,6 +121,36 @@ class ScenarioRunnerTest {
         ScenarioReport report = runner.lastReport();
         assertThat(report).isNotNull();
         assertThat(report.problemCodes()).containsEntry("tier-not-serviceable", 1);
+    }
+
+    @Test
+    void 창이_앞에_있으면_기다린_뒤_보낸다() throws InterruptedException {
+        List<String> keys = new ArrayList<>();
+        ScenarioRunner runner = runner(properties("window-ahead"), (order, key) -> {
+            keys.add(key);
+            return OrderClient.Response.of(201, null);
+        });
+
+        runner.run();
+
+        assertThat(runner.getExitCode()).isZero();
+        assertThat(keys).hasSize(5);
+    }
+
+    @Test
+    void 창을_이미_지났으면_한_건도_보내지_않고_실패한다() throws InterruptedException {
+        // 22:40 에 22:30 창 — 다음 창은 23시간 50분 뒤다. 늦게 시작한 한 시간은 컷오프를 넘어 창의 수를 바꾼다.
+        List<String> keys = new ArrayList<>();
+        ScenarioRunner runner = runner(properties("window-missed"), (order, key) -> {
+            keys.add(key);
+            return OrderClient.Response.of(201, null);
+        });
+
+        runner.run();
+
+        assertThat(runner.getExitCode()).isEqualTo(ScenarioRunner.FAILURE_EXIT_CODE);
+        assertThat(keys).isEmpty();
+        assertThat(runner.lastReport()).isNull();
     }
 
     @Test

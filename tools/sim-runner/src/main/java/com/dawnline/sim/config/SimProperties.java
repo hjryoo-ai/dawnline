@@ -1,5 +1,7 @@
 package com.dawnline.sim.config;
 
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -63,7 +65,7 @@ public record SimProperties(
      * @param orders        보낼 주문 수
      * @param ratePerSecond 초당 주문 수. 이 도구는 부하 측정기가 아니다 — 부하는 k6 가 잰다
      *                      ({@code tools/k6/orders.js}). 여기서 속도를 두는 것은 <em>흐름</em>을
-     *                      만들기 위해서다
+     *                      만들기 위해서다. 소수를 받는다 — 창 시나리오는 「한 시간에 9,000건」(2.5)이다
      * @param seed          난수 seed. 같은 seed 면 같은 주문 200건이 나온다 (불변규칙 12)
      * @param customers     고객 풀 크기. 같은 고객이 여러 건을 내는 것이 현실이고,
      *                      §7.2 레이트 리밋에 닿지 않으려면 {@code orders / customers} 가
@@ -72,22 +74,32 @@ public record SimProperties(
      * @param tierWeights   티어별 가중치. 키는 API 에 보내는 문자열 그대로다
      * @param driver        기사 시뮬레이터 설정 (Phase 5-2). 없으면 주문만 넣고 끝난다 —
      *                      그래야 {@code smoke} 가 브로커 없이 돈다
+     * @param startAt       창의 시작 — 유효 시각(주입 시계)의 KST {@code HH:mm}. 있으면 그 시각까지 기다린 뒤 보낸다
+     *                      (부록 A 「창은 하나다」, ADR-066). 없으면 곧바로 보낸다
      */
     public record Scenario(
             @DefaultValue("200") int orders,
-            @DefaultValue("20") int ratePerSecond,
+            @DefaultValue("20") double ratePerSecond,
             @DefaultValue("1") long seed,
             @DefaultValue("1000") int customers,
             @DefaultValue("0.25") double coldRatio,
             @DefaultValue Map<String, Integer> tierWeights,
-            @Nullable Driver driver) {
+            @Nullable Driver driver,
+            @Nullable String startAt) {
 
         public Scenario {
             if (orders < 1) {
                 throw new IllegalArgumentException("orders 는 1 이상이어야 합니다");
             }
-            if (ratePerSecond < 1) {
-                throw new IllegalArgumentException("rate-per-second 는 1 이상이어야 합니다");
+            if (!(ratePerSecond > 0.0)) {
+                throw new IllegalArgumentException("rate-per-second 는 0 보다 커야 합니다");
+            }
+            if (startAt != null) {
+                try {
+                    LocalTime.parse(startAt);
+                } catch (DateTimeParseException e) {
+                    throw new IllegalArgumentException("start-at 은 HH:mm 이어야 합니다: " + startAt, e);
+                }
             }
             if (customers < 1) {
                 throw new IllegalArgumentException("customers 는 1 이상이어야 합니다");
@@ -106,6 +118,11 @@ public record SimProperties(
                 throw new IllegalArgumentException("tier-weights 의 합이 0 입니다");
             }
             tierWeights = Map.copyOf(tierWeights);
+        }
+
+        /** @return 창의 시작(KST), 없으면 {@code null} */
+        public @Nullable LocalTime windowStart() {
+            return startAt == null ? null : LocalTime.parse(startAt);
         }
 
         /**

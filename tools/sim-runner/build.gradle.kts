@@ -47,6 +47,10 @@ tasks.named<Test>("test") {
     inputs.dir(rootProject.layout.projectDirectory.dir("contracts/openapi"))
             .withPropertyName("openApiContracts")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // ScenariosTableTest 가 부록 A 의 표를 읽는다 — 문서만 고친 실행에서 test 가 UP-TO-DATE 로 건너뛰지 않게.
+    inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
+            .withPropertyName("designDoc")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // -----------------------------------------------------------------------------

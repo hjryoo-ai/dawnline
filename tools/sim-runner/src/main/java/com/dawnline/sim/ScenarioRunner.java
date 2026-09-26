@@ -6,6 +6,9 @@ import com.dawnline.sim.driver.DriverScenario;
 import com.dawnline.sim.order.OrderGenerator;
 import com.dawnline.sim.order.ScenarioReport;
 import com.dawnline.sim.order.SmokeScenario;
+import com.dawnline.sim.order.WindowStart;
+import java.time.Instant;
+import java.time.LocalTime;
 import java.util.Objects;
 import java.util.random.RandomGenerator;
 import org.jspecify.annotations.Nullable;
@@ -35,6 +38,7 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
     private final DriverScenario driverScenario;
     private final RandomGeneratorFactory randomFactory;
     private final RunIds runIds;
+    private final WindowStart windowStart;
 
     private int exitCode;
     private @Nullable ScenarioReport lastReport;
@@ -46,20 +50,36 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
      * @param driverScenario 기사 시뮬레이션. 기사 설정이 없는 시나리오에서는 아무 일도 하지 않는다
      * @param randomFactory  seed → 난수원. 주입하는 이유는 불변규칙 12 그대로다
      * @param runIds         실행 식별자 생성기. 멱등 키 접두어가 되므로 실행마다 달라야 한다
+     * @param windowStart    창의 시작까지 기다림 — 시나리오에 {@code start-at} 이 있을 때만 쓴다
      */
     public ScenarioRunner(SimProperties properties, SmokeScenario smoke, DriverScenario driverScenario,
-            RandomGeneratorFactory randomFactory, RunIds runIds) {
+            RandomGeneratorFactory randomFactory, RunIds runIds, WindowStart windowStart) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.smoke = Objects.requireNonNull(smoke, "smoke");
         this.driverScenario = Objects.requireNonNull(driverScenario, "driverScenario");
         this.randomFactory = Objects.requireNonNull(randomFactory, "randomFactory");
         this.runIds = Objects.requireNonNull(runIds, "runIds");
+        this.windowStart = Objects.requireNonNull(windowStart, "windowStart");
     }
 
     @Override
     public void run(String... args) throws InterruptedException {
         SimProperties.Scenario scenario = properties.selected();
         boolean withDriver = scenario.driver() != null;
+
+        // 창이 있으면 그 시작까지 유효 시각으로 기다린다(부록 A). 창을 이미 지났으면 보내지 않고 실패한다 —
+        // 늦게 시작한 한 시간은 컷오프를 넘고, 넘은 주문은 다음 날 웨이브로 가서 창의 수를 조용히 바꾼다.
+        LocalTime start = scenario.windowStart();
+        @Nullable Instant opened = null;
+        if (start != null) {
+            try {
+                opened = windowStart.await(start);
+            } catch (IllegalStateException e) {
+                log.error("시나리오 '{}' 를 시작하지 않았다 — {}", properties.scenario(), e.getMessage());
+                this.exitCode = FAILURE_EXIT_CODE;
+                return;
+            }
+        }
 
         // 수신을 주문보다 먼저 켠다. 뒤면 그 사이에 확정된 라우트를 놓치고,
         // 놓친 것은 "라우트가 안 왔다" 로 보여서 원인이 도구인지 스택인지 구별되지 않는다.
@@ -74,6 +94,9 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
         this.exitCode = report.isSuccess() ? 0 : FAILURE_EXIT_CODE;
 
         log.info("시나리오 '{}' 완료\n{}", properties.scenario(), report.toMarkdown());
+        if (opened != null) {
+            log.info("창: 유효 시각 {} – {} (시작 {} KST)", opened, windowStart.now(), start);
+        }
         if (!report.isSuccess()) {
             log.error("주문 {}건 중 {}건만 접수되었다. 위 표의 code 별 건수를 보라.",
                     report.requested(), report.accepted());
