@@ -1,8 +1,8 @@
-# 런북 — 알림 15 × 대응, 알림 밖 절차 셋
+# 런북 — 알림 16 × 대응, 알림 밖 절차 셋
 
 | 항목 | 내용 |
 |---|---|
-| 대상 | `docs/DESIGN.md` §9.4 의 알림 15개 전부 · 알림이 없는 사건 셋 |
+| 대상 | `docs/DESIGN.md` §9.4 의 알림 16개 전부 · 알림이 없는 사건 셋 |
 | 관련 설계 | §8.4(장애 모드 표) · §9.4(알림 규칙) · §9.5(런북 목록) |
 | 대조 | `RunbooksConsistencyTest`(`libs/observability`) — 아래 1 의 알림 집합이 규칙 파일(`deploy/compose/prometheus/rules/dawnline-alerts.yml`)과 같고, 「절차」 칸이 규칙의 `runbook` 주석과 같고, 「먼저 본다」 칸과 모든 절차의 첫 줄이 **메트릭 · 로그 · SQL** 중 하나로 시작한다 |
 
@@ -28,7 +28,7 @@ sql()  { dc exec -T -e PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" postgres psql -
 
 ---
 
-## 1. 알림 15 × 대응
+## 1. 알림 16 × 대응
 
 | 알림 | 먼저 본다 | 갈래 · 대응 | 절차 |
 |---|---|---|---|
@@ -47,6 +47,7 @@ sql()  { dc exec -T -e PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" postgres psql -
 | `DawnlineInternalTokenRejected` | **로그** 알림의 `service` 에서 `logs <service> 30m \| grep '내부 토큰 없이 들어온 운영자 쓰기를 거부했습니다'` — `path` · `reason` | `reason=mismatch` 가 이어지고 ops-api 의 커맨드가 401 로 거절된다(`sql ops "SELECT action, result, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 20"` 에 `REJECTED` 가 줄지어 있다) → 서비스 사이의 토큰이 어긋났다: `.env` 의 `DAWNLINE_INTERNAL_TOKEN` 이 한쪽 기동 뒤에 바뀌었다 — 같은 `.env` 로 둘 다 다시 띄운다 · `reason=missing` 이고 감사 행이 없다 → ops-api 를 거치지 않는 누군가가 코어 포트를 부른다. RB-05 의 재큐 `curl` 을 토큰 없이 누른 사람일 수 있다 — 거부됐으므로 아무것도 적용되지 않았다. 누가 왜인지는 사람이 본다 | — |
 | `DawnlineOpsCommandUnknown` | **SQL** `sql ops "SELECT id, action, target_id, actor, created_at FROM audit_logs WHERE result IN ('UNKNOWN', 'PENDING') AND action <> 'DLQ_REPLAY' ORDER BY created_at"` — 행의 `id` 가 코어 로그의 `auditId` 다 | `CLOSE_WAVE` · `REQUEUE_OUTBOX` → **다시 누르기가 먼저다** — 이미 적용됐으면 409 가 지금 위치를 말한다 · `RUN_PLAN` · `REASSIGN_STOP` · `CANCEL_ORDER` → 코어 로그에서 `auditId` 를 찾는다 — **성공의 줄이 있으면 적용됐고, 줄이 없다는 것은 아무것도 말하지 않는다**(코어는 성공만 로그하고 `RUN_PLAN` 은 그것도 없다) — 그때는 코어의 현재 상태 | RB-07 |
 | `DawnlineRetentionStalled` | **로그** 알림의 `service` 에서 그 표의 정리 실패 — `logs <service> 2d \| grep '정리 실패'` 의 예외. 문자열은 표마다 다르다: 「보존 정리 실패」(fulfillment · dispatch) · 「tracking 보존 정리 실패」 · 「읽기 모델 보존 정리 실패」(ops-api) · 「processed_events 정리 실패」 · 「outbox 정리 실패」 · 「idempotency_keys 정리 실패」 | 알림은 `service` · `table` 을 함께 싣는다 — `outbox_events` · `processed_events` 는 서비스마다 다른 표다. `shipment_events` 는 파티션 회전이다(RB-06 §1). 정리는 예외를 삼킨다 — 원인을 고치면 **다음 실행이 밀린 것을 이어서 지운다**(배치 상한에 걸린 실행도 성공이다). 대부분 DB 다(RB-02). 급한 것은 아니다 — 용량 문제지 정확성 문제가 아니다(ADR-058) | — |
+| `DawnlineAgeNegative` | **메트릭** `max by (service) (dawnline_clock_offset_seconds)` — 서비스들이 한 오프셋인가(`make obs-check` 6 과 같은 질문) | 오프셋이 갈린다 · 방금 줄었다 → 시계가 거꾸로 갔다: 오프셋 아래 쓴 사실은 미래에 있다 — 시뮬레이션은 자기 프로젝트에서 돌리고(`make sim-up`, ADR-066 결정 6) 개발 볼륨에 오프셋을 주지 않는다. 사실의 시각을 벽시계가 따라잡으면 값은 스스로 돌아온다 · 오프셋이 하나다 → **코드가 두 시계를 섞는다**: 알림의 `gauge` 가 가리키는 값의 두 시각이 어디서 오는지 본다 — SQL 의 `now()` 는 `SqlUsesInjectedClockTest` 가 막지만 다른 원천(DB 기본값 · 외부 시각)은 아니다. **어느 쪽이든 그동안 그 게이지의 알림은 모름이다** — 그 게이지가 보는 것(릴레이 · 재시도 · KPI 갱신 · 정리)을 로그로 직접 본다 | — |
 
 ---
 
