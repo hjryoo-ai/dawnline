@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.env.StandardEnvironment;
 
 /**
  * 시각의 저장 정밀도 (CLAUDE.md 불변규칙 9·12).
@@ -23,7 +24,8 @@ import org.junit.jupiter.api.Test;
 @DisplayName("dawnlineClock — 저장 정밀도(마이크로초)로 잘린 시계")
 class MessagingClockTest {
 
-    private final Clock clock = new MessagingAutoConfiguration().dawnlineClock();
+    private final Clock clock = new MessagingAutoConfiguration()
+            .dawnlineClock(new DawnlineClockProperties(Duration.ZERO), new StandardEnvironment());
 
     @Test
     void 나노초를_주는_시계도_마이크로초로_잘린다() {
