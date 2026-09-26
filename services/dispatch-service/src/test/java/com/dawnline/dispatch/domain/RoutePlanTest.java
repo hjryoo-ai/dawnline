@@ -77,11 +77,22 @@ class RoutePlanTest {
     }
 
     @Test
-    void 정체된_계획을_되돌린다() {
+    void 계획_중인_계획은_되돌릴_수_없다() {
+        // 크래시의 회수는 롤백과 재전달이다 — PLANNING 은 커밋되지 않는다(§5.3, ADR-024 후속 정정).
         RoutePlan plan = requested();
         plan.begin("baseline-nn", PlanMode.FULL, PlanModeReason.NONE, 1L, 1, NOW);
 
-        plan.requeue(NOW.plusSeconds(600));
+        assertThatThrownBy(() -> plan.requeue(NOW.plusSeconds(600)))
+                .isInstanceOf(IllegalStateTransitionException.class);
+    }
+
+    @Test
+    void 되살린_계획은_시작_시각을_지운다() {
+        RoutePlan plan = requested();
+        plan.begin("baseline-nn", PlanMode.FULL, PlanModeReason.NONE, 1L, 1, NOW);
+        plan.fail("TIMEOUT", NOW.plusSeconds(1));
+
+        plan.requeue(NOW.plusSeconds(2));
 
         assertThat(plan.status()).isEqualTo(PlanStatus.REQUESTED);
         assertThat(plan.startedAt()).as("다시 시작할 것이므로 시작 시각을 지운다").isEmpty();

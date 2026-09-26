@@ -27,8 +27,7 @@ public final class RoutePlan {
      * 캠프 좌표. {@code wave.closed} 의 스냅샷이다(불변규칙 4).
      *
      * <p>계획 행에 남기는 이유는 <strong>이벤트가 없는 자리에서도 다시 돌아야 하기</strong>
-     * 때문이다 — 정체 회수(§5.3), 운영자 재실행, 부분 재계획(§6.8)은 {@code wave.closed} 를
-     * 다시 받지 않는다.
+     * 때문이다 — 운영자 재실행과 부분 재계획(§6.8)은 {@code wave.closed} 를 다시 받지 않는다.
      */
     private @Nullable GeoPoint depot;
 
@@ -165,9 +164,9 @@ public final class RoutePlan {
     }
 
     /**
-     * 죽은 인스턴스가 남긴 {@code PLANNING} 을 되돌린다 (§5.3 정체 회수).
+     * 실패한 계획을 다시 돌 자리로 되돌린다 — 운영자 재실행 (§5.3, ADR-024 결정 3).
      *
-     * @param at 회수 시각
+     * @param at 되돌린 시각
      */
     public void requeue(Instant at) {
         status = status.transitionTo(PlanStatus.REQUESTED);

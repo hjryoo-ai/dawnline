@@ -21,7 +21,7 @@ class PlanStatusTest {
 
         assertThat(actual).isEqualTo("""
                 REQUESTED→[PLANNING]
-                PLANNING→[REQUESTED, PLANNED, FAILED]
+                PLANNING→[PLANNED, FAILED]
                 PLANNED→[PUBLISHED, FAILED]
                 PUBLISHED→[]
                 FAILED→[REQUESTED]
@@ -35,9 +35,10 @@ class PlanStatusTest {
     }
 
     @Test
-    void PLANNING_도_되돌아간다() {
-        // 죽은 인스턴스가 남긴 계획의 유일한 출구다 (§5.3 정체 회수).
-        assertThat(PlanStatus.PLANNING.canTransitionTo(PlanStatus.REQUESTED)).isTrue();
+    void PLANNING_은_되돌아가지_않는다() {
+        // 계획 하나는 트랜잭션 하나다 — PLANNING 은 커밋되지 않고, 크래시의 회수는 롤백과 wave.closed 재전달이다
+        // (§5.3, ADR-024 후속 정정). 이 전이를 쓰던 정체 회수는 입력이 없어 지웠다.
+        assertThat(PlanStatus.PLANNING.canTransitionTo(PlanStatus.REQUESTED)).isFalse();
     }
 
     @Test

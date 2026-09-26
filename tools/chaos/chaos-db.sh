@@ -28,7 +28,6 @@ STATE="$OUT/db.state"
 REPORT="$OUT/chaos-db.md"
 : > "$REPORT"
 
-orders_of() { awk -v s="$1:" '$1 == s { f = 1 } f && $1 == "orders:" { print $2; exit }' tools/sim-runner/src/main/resources/scenarios.yml; }
 EXPECT_ORDERS=$(orders_of "$SCENARIO")
 [[ "$EXPECT_ORDERS" =~ ^[0-9]+$ ]] || { echo "시나리오 $SCENARIO 의 주문 수를 읽지 못했다" >&2; exit 2; }
 
@@ -53,14 +52,7 @@ sample() {
 
 say "전제 — 스택이 떠 있고 $ROLE 이 로그인할 수 있다"
 [[ "$(sqlv admin "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$ROLE'")" == t ]] || { echo "$ROLE 이 이미 NOLOGIN 이다 — 앞 실행을 확인한다" >&2; exit 1; }
-curl -sf "http://localhost:$PROMETHEUS_PORT/-/ready" >/dev/null || { echo "Prometheus 가 없다" >&2; exit 1; }
-# 규칙 파일을 다시 읽힌다 — 떠 있는 Prometheus 는 파일이 바뀌어도 스스로 다시 읽지 않고, make up 은 그 컨테이너를 다시 만들지 않는다.
-# 두 번째 실행의 앞 10분이 바뀌기 전의 식으로 판정됐다(2026-09-25) — 「울리지 않았다」가 식의 결론이 아니라 적재의 결과였다.
-curl -sf -X POST "http://localhost:$PROMETHEUS_PORT/-/reload" >/dev/null || { echo "Prometheus 규칙을 다시 읽히지 못했다" >&2; exit 1; }
-rule_errors=$(curl -s "http://localhost:$PROMETHEUS_PORT/api/v1/rules" | jq '[.data.groups[].rules[] | select((.lastError // "") != "")] | length')
-[[ "$rule_errors" == 0 ]] || { echo "적재된 규칙에 평가 오류가 있다($rule_errors)" >&2; exit 1; }
-[[ "$(curl -s "http://localhost:$PROMETHEUS_PORT/api/v1/status/runtimeinfo" | jq -r .data.reloadConfigSuccess)" == true ]] \
-  || { echo "Prometheus 가 설정 · 규칙을 다시 읽는 데 실패했다" >&2; exit 1; }
+prom_preflight || exit 1
 [[ -n "$(promv "max(dawnline_event_retry_age_seconds{service=\"$APP\"})")" ]] \
   || { echo "$APP 의 dawnline_event_retry_age_seconds 가 없다 — 이미지가 7-3 이전이다(make images)" >&2; exit 1; }
 
@@ -85,20 +77,12 @@ say "주문 ${EXPECT_ORDERS}건 (SCENARIO=$SCENARIO)"
 make -s smoke SCENARIO="$SCENARIO" > "$OUT/smoke.log" 2>&1 || { echo "smoke 실패 — $OUT/smoke.log" >&2; exit 1; }
 sample "주문 끝"
 
-# 운영자 커맨드 하나 — 장애 중인 코어에 조기 마감을 보낸다. 적용될 수 없다(그 DB 에 아무도 못 들어간다). 감사 행이 무엇으로 남는지는
-# 그대로 본다 — UNKNOWN 이 자연히 생기면 7-3b 의 해소 경로가 닫는다. 만들지 않는다(IMPLEMENTATION_PLAN 7-3).
+# 운영자 커맨드 하나 — 장애 중인 코어에 조기 마감을 보낸다. 적용될 수 없다(그 DB 에 아무도 못 들어간다).
 if [[ "$SERVICE" == fulfillment ]]; then
-  wave=$(sqlv fulfillment "SELECT w.id FROM waves w WHERE w.status = 'OPEN' AND NOT EXISTS (
-            SELECT 1 FROM waves e WHERE e.status = 'OPEN' AND e.camp_id = w.camp_id AND e.service_tier = w.service_tier
-               AND e.cutoff_at < w.cutoff_at) ORDER BY w.cutoff_at LIMIT 1")
+  wave=$(earliest_open_wave)
   if [[ -n "$wave" ]]; then
-    token=$(bash tools/ops-token/ops-token.sh OPS_OPERATOR chaos-operator)
-    code=$(curl -s -o "$OUT/command.json" -w '%{http_code}' --max-time 90 -X POST \
-      -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-      -d '{"reason":"7-3 chaos-db — 장애 중인 코어에 보낸 조기 마감"}' \
-      "http://localhost:$OPS_API_PORT/api/v1/waves/$wave/close")
-    audit=$(sqlv ops "SELECT result FROM audit_logs WHERE action = 'CLOSE_WAVE' AND target_id = '$wave' ORDER BY created_at DESC LIMIT 1")
-    echo "| $(ts) | 운영자 커맨드 CLOSE_WAVE $wave | 응답 $code | 감사 ${audit:-없음} | | | | | | |" | tee -a "$REPORT"
+    read -r code audit <<< "$(operator_close "$wave" "7-3 chaos-db — 장애 중인 코어에 보낸 조기 마감" "$OUT/command.json")"
+    echo "| $(ts) | 운영자 커맨드 CLOSE_WAVE $wave | 응답 $code | 감사 $audit | | | | | | |" | tee -a "$REPORT"
   fi
 fi
 
@@ -127,10 +111,7 @@ verified=$?
 retries_after=$(retry_sum); retries_after=${retries_after:-0}
 age_after=$(promv "max(dawnline_event_retry_age_seconds{service=\"$APP\"})")
 
-# 판정은 파이프 밖에서 — `{ …; } | tee` 의 블록은 서브셸이라 거기서 세운 fail 이 밖에 남지 않는다(첫 실행에서 ✗ 가 있는데 0 으로 끝났다).
-fail=0
-verdicts=""
-check() { if [[ "$2" == ok ]]; then verdicts+="- ✅ $1"$'\n'; else verdicts+="- ✗ $1"$'\n'; fail=1; fi; }
+# 판정은 파이프 밖에서 — lib.sh 의 check · observe.
 check "검증 표(DLQ 0 · 전부 처리 포함)" "$([[ $verified == 0 ]] && echo ok)"
 check "장애 중의 검증 표는 빠진 주문을 봤다 — 검사가 유실을 볼 수 있다" "$([[ $during != 0 ]] && echo ok)"
 check "재시도 카운터(db_*)가 올랐다: ${retries_before} → ${retries_after}" "$(awk -v a="$retries_before" -v b="$retries_after" 'BEGIN { if (b > a) print "ok" }')"
@@ -140,12 +121,12 @@ check "재시도 나이가 0 으로 돌아왔다(${age_after:-모름})" "$([[ "$
 if (( EXPECT_ORDERS > 1000 )); then
   check "밀림 — \`DawnlineConsumerLag\` 가 실제 Prometheus 에서 firing 에 닿았다" "$([[ -n $lag_fired ]] && echo ok)"
 else
-  verdicts+="- 관찰: \`DawnlineConsumerLag\` — 주문 ${EXPECT_ORDERS} ≤ 1,000 이라 기대하지 않는다(${lag_fired:-울리지 않았다})"$'\n'
+  observe "\`DawnlineConsumerLag\` — 주문 ${EXPECT_ORDERS} ≤ 1,000 이라 기대하지 않는다(${lag_fired:-울리지 않았다})"
 fi
 if (( HOLD >= 1860 )); then
   check "정지 — \`DawnlineConsumerRetryStuck\` 가 실제 Prometheus 에서 firing 에 닿았다" "$([[ -n $stuck_fired ]] && echo ok)"
 else
-  verdicts+="- 관찰: \`DawnlineConsumerRetryStuck\` — HOLD ${HOLD}s < 31분이라 기대하지 않는다(${stuck_fired:-울리지 않았다})"$'\n'
+  observe "\`DawnlineConsumerRetryStuck\` — HOLD ${HOLD}s < 31분이라 기대하지 않는다(${stuck_fired:-울리지 않았다})"
 fi
 printf '\n### chaos-db 판정\n\n%s' "$verdicts" | tee -a "$REPORT"
 say "보고 — $REPORT"

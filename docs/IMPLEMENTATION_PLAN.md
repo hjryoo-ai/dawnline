@@ -306,7 +306,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | `make demo` — 200건 편입 → 컷오프 → 캠프별 `wave.closed` 1회 | ✅ | 2026-09-05 실행. 주문 200건(편입 199 · 재고결손 1) → 웨이브 29개 마감 → `wave.closed` 29건 **중복 0**, `order_count` 불일치 0. 컷오프는 표가 아니라 `cutoff_at` 을 과거로 밀어 만든다 |
 | 이중 마감 없음 테스트 | ✅ | `WaveLifecycleIT` 둘(`af08791`). 세 번째 방어를 일부러 부수면 **fail-open 쪽만 빨개진다** — 실물 락 쪽은 락이 두 번째 인스턴스를 DB 앞에서 돌려보내 통과한다. 그래서 둘 다 둔다 |
 | 순서 역전 두 방향 + ADR-022 표 전체 | ✅ | 취소 선착 `FulfillmentPersistenceIT.취소_선착_뒤에_온_order_placed_는_행을_덮지_않는다`, 취소 후착 `취소가_웨이브_소속과_판정_결과를_지우지_않는다` · `WaveLifecycleIT.취소된_주문은_마감_카운트에서_빠진다`. **표의 행이 셋에서 둘로 줄었다** — ADR-025 이후 웨이브 상태별 분기가 사라졌고, 그 사실 자체가 ADR-022 에 정정으로 남아 있다 |
-| 24시간 넘은 `order.placed` → `STALE_PLACED` | ⚠️ **단위만** → 7-0 A9 | `FcSelectionTest` 5건(경계 양쪽 1초, 상한이 설정값인 것, FC 선택보다 먼저 판정) · `PlanOrderServiceTest.하루_넘은_컷오프는_STALE_PLACED_다`. 브로커를 지나는 IT 는 없다 — 판정이 순수 함수 안에 있고 시각은 주입된 `Clock` 이라 IT 가 더 볼 것이 없다고 봤다. **DLQ replay 경로가 생기는 Phase 7 에서 다시 본다** — 경로는 Phase 6 묶음 B 에 생겼다(ADR-053, 2026-09-24). 재검토는 예정대로 Phase 7 |
+| 24시간 넘은 `order.placed` → `STALE_PLACED` | ✅ 7-3 `2f8a9e1` — 재처리 경로를 지나는 IT(`StalePlacedReplayIT`, 7-0 A9). 그 전: ⚠️ **단위만** | `FcSelectionTest` 5건(경계 양쪽 1초, 상한이 설정값인 것, FC 선택보다 먼저 판정) · `PlanOrderServiceTest.하루_넘은_컷오프는_STALE_PLACED_다`. 브로커를 지나는 IT 는 없다 — 판정이 순수 함수 안에 있고 시각은 주입된 `Clock` 이라 IT 가 더 볼 것이 없다고 봤다. **DLQ replay 경로가 생기는 Phase 7 에서 다시 본다** — 경로는 Phase 6 묶음 B 에 생겼다(ADR-053, 2026-09-24). 재검토는 예정대로 Phase 7 |
 | 정리 배치가 종결 상태만 지운다 | ✅ | `FulfillmentRetentionIT` 8건 |
 | `plan.completed`/`plan.failed` 세 전이 + 늦은 실패 무시 | ✅ | `WaveLifecycleIT` 3건 (위 표) |
 | **게이트 — §8.3 Bulkhead 판정 기록** | ✅ **Phase 7 유지** | DESIGN §8.3 「Bulkhead 판정 기록」. 원자료 `docs/benchmarks/phase1-orders-k6.md`. 조건(`hikaricp_connections_pending` > 0)은 콜드에서 켜졌으나(191) 원인이 풀 분리로 완화되는 종류가 아니었다 |
@@ -2032,13 +2032,13 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A6 | §9.4 알림 규칙 전체 · 대시보드 4종 · Phase 5 카운터 넷의 패널 | §9.4 · 7-1 · `deploy/compose` 의 빈 자리 셋 | — (산출물) | — | 7-1 ✅ `ef0b0a5` · `3e7a5e7` — 규칙 14 · 대시보드 넷, §9.1 의 행이 전부 패널이나 규칙에 나온다(`DashboardsConsistencyTest`). Delivery 의 「실패 · 라우트 진행」은 처음에 §9.1 에 메트릭이 없어 텍스트 패널이었다 — 설계서의 빈틈이라 두 행을 더했다(`dawnline_kpi_delivery` · `dawnline_routes`, 41행). 텍스트 자리표시는 「꺼 둔 검증」의 패널판이라 두지 않는다. 라우트 진행의 완료는 처음에 읽을 때 판정하고 전부를 KPI 창으로 잘랐다 — 창 밖의 진행 중 라우트가 빠졌다. 쓸 때 판정으로 옮겼다(`a415c5a` · `b5d6c2a`, ADR-061 — `rm_routes.completed_at`, 끝나지 않은 것은 창 없음). 할 일이 없는 라우트는 완료가 아니라 다섯째 값 `void` 다 — 첫 판이 빈 라우트에 계획 출발을 완료 시각으로 적은 것을 리뷰가 되돌렸다(`b1ef80d` · `5a2528c`, `rm_routes.live_count`, `assigned` 도 창 없음). 클래스 이름도 `KpiGauges` 로(`41ba688`) |
 | A7 | `increase()` 가 1 로 태어난 시계열의 첫 증가를 못 읽는다 — 근거를 `관측(재현됨)` 으로 | §9.1 | 미리 등록한 카운터와 안 한 카운터를 나란히 | 규칙 파일 + 컨테이너(음성 표본) | 7-1 ✅ `ef0b0a5` — `PrometheusRulesIT`(실제 Prometheus 가 Micrometer 레지스트리를 긁는다) · promtool 첫 묶음 |
 | A8 | KPI 알림 두 개의 초기값(`kpi_refresh_age` > 300 · `promise_unknown` 30분) | §9.4 「초기값 — peak-day 에서 재검토」 | peak-day 에서 오탐·미탐 | 두 게이지의 시간축 | 식 7-1 ✅ `ef0b0a5` · 값 7-4 |
-| A9 | `STALE_PLACED` — 단위만(⚠️) | Phase 2 대조표 | 재처리 경로가 생겼다(ADR-053) — 24시간 넘은 `order.placed` 가 브로커로 다시 올 수 있다 | 재처리를 지나는 IT | 7-3 |
+| A9 | `STALE_PLACED` — 단위만(⚠️) | Phase 2 대조표 | 재처리 경로가 생겼다(ADR-053) — 24시간 넘은 `order.placed` 가 브로커로 다시 올 수 있다 | 재처리를 지나는 IT | 7-3 ✅ `2f8a9e1` — `StalePlacedReplayIT`: DLQ 재처리 모양(같은 바이트 · `dawnline-replay-for`)의 하루 넘은 `order.placed` → `STALE_PLACED` · 웨이브 없음. 전제(같은 모양 · 새 컷오프 → `PLANNED`)와 다른 그룹 지목(건너뜀)을 함께. 음성 표본: 상한 1000h → 빨강 |
 | A10 | `late-injection` → at-risk → 재계획 → revision 의 compose 전 구간(◐) · 5-4 의 두 서비스 잇기(◐) | Phase 5 대조표 · DoD | — (빈칸) | 로그·DB | 7-4 |
 | A11 | `rules:camp` 룰셋 캐시(⬜) | Phase 3 대조표 · `adapter/out/redis/package-info.java` | 부분 재계획이 룰을 라우트마다 읽어 룰 조회가 **보일 때** | 계획당 룰 조회 수·시간 | 7-4 |
 | A12 | ADR-008 확정 · 4-3 병렬화 이월 · ADR-035 게이트 | Phase 4 대조표 3·7 · ADR-035 | `peak` 에서 예산이 물리고 잘림의 대가 ≥ 1% | peak-day 의 계획 시간·열화 사유 | 데이터 7-4 · 문서 7-6 |
 | A13 | ADR-004 한정 실행(`timefold` · `medium` 한 개, 선택) | ADR-004 결정 4 | 7-6 에 여유가 있을 때 · 공정성 셋 | 벤치마크 | 7-6 |
 | A14 | 쓰이지 않은 ADR 넷 — 005(Phase 2 예정) · 010(Phase 3 예정) · 011(Phase 7 예정) · 012(Phase 6 예정) | `docs/adr/README.md` · §16 | — (「001–012 확정」) | — | 7-6 |
-| A15 | 카오스 셋 + 검증 SQL · ADR-027 의 `chaos-redis` 기준(**발행이 멈추지 않고 지연도 오르지 않는다** — 후속 정정의 기준) | 7-3 · ADR-027 재검토 지점 | — | 검증 SQL 세 줄 · `outbox_lag` | 7-3 — **7-3① 부분** (2026-09-26): 검증 표 V1–V7(`tools/chaos/verify.sh` — 세 줄에 셋을 더했다) · DB 장애 카오스(`make chaos-db`). `chaos-kafka` · `chaos-redis`(이 행의 기준) · `chaos-kill` 은 7-3② |
+| A15 | 카오스 셋 + 검증 SQL · ADR-027 의 `chaos-redis` 기준(**발행이 멈추지 않고 지연도 오르지 않는다** — 후속 정정의 기준) | 7-3 · ADR-027 재검토 지점 | — | 검증 SQL 세 줄 · `outbox_lag` | 7-3 — **7-3① 부분** (2026-09-26): 검증 표 V1–V7(`tools/chaos/verify.sh` — 세 줄에 셋을 더했다) · DB 장애 카오스(`make chaos-db`). `chaos-kafka` · `chaos-redis`(이 행의 기준) · `chaos-kill` 은 7-3②. **✅ 7-3②** (2026-09-26) `e84827e` — 넷 다 검증 표 ✅. `chaos-redis` 는 기준을 재기 전에 적었고(RB-03 §3) outbox 지연 최대 0.110초 ≤ 5초 · 장애 중에 검증 표 ✅(RB-03 §4). 검증 SQL 세 줄은 표의 V1(사유별) · V2 · V3 이 됐다 |
 | A16 | 리더 합이 **항상 1** — 인스턴스 둘 이상 · 열린 카운터 알림의 `unless … offset w` 가 인스턴스 라벨마다 판정한다(새로 뜬 인스턴스도 「새 시계열」) | ADR-027 · ADR-060 재검토 지점 | 인스턴스를 실제로 둘 이상 올릴 때 | `dawnline_outbox_leader` 의 인스턴스 합 · 인스턴스가 뜬 직후 첫 사건에서 열린 카운터 알림이 한 번 울리는가 | 7-4 |
 | A17 | `FOR SHARE` 의 multixact | ADR-025 | peak-day 버스트 | `pg_stat_slru` multixact · 락 대기 | 7-4 |
 | A18 | `cancel_too_late_total` ≠ 0 이면 창의 폭이 가정을 넘은 것 | ADR-026 | peak-day 에서 0 이 아니다 | 그 카운터 + order-service 의 `order.dispatched` 랙 | 7-4 |
@@ -2069,6 +2069,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | B9 | 후보가 10,000 건을 넘는가 — 넘으면 프로젝션 읽기를 다시 잰다 | ADR-029 ③ | 웨이브당 후보 수 | |
 | B10 | FAST 첫 단의 대가 — 재삽입 한 번을 더할지 | ADR-041 ① · ADR-043 ④ | FAST 전환 횟수(7-4 가 이미 잰다) × 그 계획의 비용 | 여유(slack) 그림자는 **닫혔다**(표 C) — 이 행은 그것과 다른 물음이다 |
 | B11 | 보존 인덱스 둘의 쓰기 대가 — `updated_at` 이 인덱스 키라 HOT 갱신을 잃는다 | ADR-058 · 7-0b [측정](benchmarks/phase7-retention-indexes.md) §1.4 · §2.4 | peak-day 동안 `shipments` · `rm_orders` 의 `n_tup_hot_upd / n_tup_upd`(`pg_stat_user_tables`) | 7-0b 측정은 채운 직후라 인덱스 없이도 HOT 0 이었다 — 운영 모양의 몫은 **근거: 추정**. 크면 BRIN 을 다시 잰다(PostgreSQL 16 릴리스 노트: BRIN 칸만 바뀌는 갱신은 HOT 을 허용한다 — 이 저장소에서 재지 않았다) |
+| B12 | 계획 트랜잭션이 `max.poll.interval.ms`(300초)에 다가가는가 — 넘기면 컨슈머가 쫓겨나 같은 `wave.closed` 가 다른 소비자에게 가고 두 계획이 한 행을 두고 경합한다(`wave_id` UNIQUE 가 하나를 막는다) | ADR-024 후속 정정 재검토 지점 (2026-09-26 — 계획 하나는 트랜잭션 하나) | `dawnline_plan_duration_seconds` + `dawnline_plan_persist_seconds` 의 최댓값 — 트랜잭션 전체 | 예산 30초는 그 1/10 이다. peak 규모 웨이브에서 영속화까지 합이 60초를 넘으면 다시 본다 |
 
 **C. 뺀 것 — Phase 7 에서 판정하지 않는 재검토 지점**
 
@@ -2110,7 +2111,7 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 | 파일 | 줄 | 행 |
 |---|---|---|
 | `.github/workflows/ci.yml` | 4 | A25 |
-| `Makefile` | 5 | A15 · A27 |
+| `Makefile` | 2 | A27 |
 | `README.md` | 8 | A4 · A22 · A23 · A24 · A27 |
 | `docs/DESIGN.md` | 11 | A1 · A2 · A8 · A13 · A14 · A26 · D2 · D7 |
 | `docs/IMPLEMENTATION_PLAN.md` | 20 | A1 · A2 · A3 · A4 · A5 · A9 · A10 · A11 · A12 · A13 · C · D5 · D7 |
@@ -2189,8 +2190,19 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
    없다 — 경계표의 「HTTP — 해당 없음」) · 검증 표 V1–V7 과 `make chaos-db`. **신호가 둘로 정리됐다**: 밀림은 브로커 랙(kafka-exporter 의 그룹 · 토픽별 합 > 1,000),
    정지는 재시도 나이(30분 — 「일시적 실패가 30분 넘게 이어지면 그건 장애가 아니라 설정이다」). 첫 실행이 **클라이언트 랙은 가져오지 못한 양이지 처리하지 못한
    양이 아니다**를 관측으로 남겼다(1,200 건이 밀렸는데 `records_lag_max` 102 · 합 500). 결과: DLQ 0 · 1,200 전부 처리 · 재시도 0 → 33 · 나이 최대 328초 → 0.
-   **7-3②** — `chaos-kafka` · `chaos-redis` · `chaos-kill`(PLANNING 회수 — 정체 판정 90초로 줄여 돌리고 값을 출력한다) · A9 · RB-01 · 03 의 검증 절 ·
-   `workflow_dispatch` 로 넷을 돌려 검증 표를 아티팩트로 남기는 워크플로(PR 게이트에는 넣지 않는다).
+   **7-3② (2026-09-26)** — 계획은 `chaos-kafka` · `chaos-redis` · `chaos-kill`(PLANNING 회수 — 정체 판정 90초로 줄여 돌리고 값을 출력한다) · A9 ·
+   RB-01 · 03 의 검증 절 · `workflow_dispatch` 워크플로였다. **chaos-kill 의 전제가 관측으로 깨졌다**: 계획 하나는 트랜잭션 하나라(멱등 소비 트랜잭션에
+   합류) 커밋된 `PLANNING` 이 생기는 경로가 없다 — 결과 쓰기에서 세운 계획을 `SIGKILL` 해도 행 0, 재기동 뒤 `wave.closed` 재전달로 `PUBLISHED`.
+   사용자 결정으로 관측이 정본이 됐다 — [ADR-024 후속 정정](adr/ADR-024-plan-completed-event.md) · 정체 회수 삭제 · `PlanCrashIT` · §5.3 · §8.4 · RB-04.
+   결과(로컬, 셋 다 검증 표 ✅ · DLQ 0 — `chaos-db` 는 7-3①):
+   - `chaos-kill` — 전제(계획 트랜잭션이 결과 쓰기에서 5.3초째) · 죽인 뒤 행 0 · 재기동 26초 뒤 `PUBLISHED`
+   - `chaos-kafka` — 브로커 없이 주문 1,200 전부 201 · outbox 지연 298초 · `DawnlineOutboxLag` firing · 복구 40초 안에 미발행 0 (RB-01 §3)
+   - `chaos-redis` — 기준을 재기 전에 적었다. 장애 중에 검증 표 ✅ · outbox 지연 최대 0.110초 · `DawnlineRateLimitBypassed` firing · GEO 재적재는 최대
+     5분 늦다 (RB-03 §4)
+   - 사용자 지시 셋: V1 의 배차 불가를 **사유별로**(흐름 사유 0 · `OUT_OF_STOCK` 은 시드에서 파생) — 7-3① 1차의 177 은 앞선 데모가 닫아 둔 웨이브 때문의
+     `MAX_PUSHES_EXCEEDED` 176 이었다(RB-02 §3) · `make obs-check` 1 이 **규칙 내용 해시**를 견준다(§13 「꺼 둔 검증」 규칙판 — 단일 파일 바인드
+     마운트의 inode 도 같은 자리에서 나왔다) · exporter 기준 ③ 은 「모름은 0 도 −1 도 아니다」의 적용(#75 본문)
+   - `.github/workflows/chaos.yml` — 수동 실행, 넷을 한 스택에서 차례로, `build/chaos/` 를 아티팩트로
 3b. **감사 해소는 칸이 아니라 행이다**(2026-09-25 결정) — 감사 행은 덧붙이지 고치지 않는다. `RESOLVE_AUDIT` 행 하나(대상 = `UNKNOWN`
    행 id, 결과, `reason` 필수, actor)를 ops-api `POST /audit/{id}/resolve` 로 남기고, `UNKNOWN` 행은 그대로 둔다. RB-07 §3 의
    「사건 기록에 남긴다」와 SQL `UPDATE` 가 이 행으로 바뀐다. ADR-052 재검토 지점 4(자동 해소)가 열리면 같은 행을 쓴다. **같은 PR 에

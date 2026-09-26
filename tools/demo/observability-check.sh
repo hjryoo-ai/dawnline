@@ -3,7 +3,12 @@
 # make obs-check — 떠 있는 스택의 관측성이 설계서대로 섰는가 (DESIGN.md §9.4, ADR-060)
 #
 # Compose 스모크가 `make demo` 뒤에 돌린다. 다섯을 본다:
-#   1. Prometheus 가 규칙 파일의 알림 전부를 적재했고 평가에 실패한 규칙이 없다
+#   1. Prometheus 가 **지금 파일에 있는 규칙**을 적재했고 평가에 실패한 규칙이 없다 — 이름이 아니라 내용을 대조한다.
+#      그룹마다 규칙의 (종류 · 이름 · 식 · for · keep_firing_for · 라벨 · 주석)을 양쪽에서 같은 꼴로 만들어 해시를 견준다.
+#      식은 Prometheus 의 /api/v1/format_query 로 양쪽 다 정규화한다 — 적재된 식은 파서가 다시 쓴 문자열이라 파일의 글자와 다르다.
+#      이름만 보던 처음 판은 **옛 규칙이 적재된 것처럼 보였다**(2026-09-25, 7-3① 2차 chaos-db): 떠 있던 Prometheus 가 바뀐
+#      규칙 파일을 다시 읽지 않았고(`make up` 은 설정만 바뀐 컨테이너를 다시 만들지 않는다), 알림 이름은 그대로라 초록이었다.
+#      그 10분 동안 `DawnlineConsumerLag` 는 옛 식으로 판정됐다(§13 「꺼 둔 검증은 실패하지 않는다」).
 #   2. Grafana 가 커밋된 대시보드 JSON 전부를 프로비저닝했다(uid 집합이 같다)
 #   3. 패널 · 규칙이 쓰는 이름 가운데 **표(§9.1)가 없는 이름**(kafka_* · hikaricp_* · jvm_* · http_server_requests_*)과
 #      **버킷**(*_bucket)이 실제로 긁히고 있다
@@ -42,7 +47,12 @@ WAVE="$("${COMPOSE[@]}" exec -T -e PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" pos
 
 PROM="http://localhost:${PROMETHEUS_PORT}" GRAF="http://localhost:${GRAFANA_PORT}" TEMPO="http://localhost:${TEMPO_HTTP_PORT}" \
   WAVE="$WAVE" OBS_TIMEOUT="$OBS_TIMEOUT" python3 - <<'PY'
-import glob, json, os, re, sys, time, urllib.parse, urllib.request
+import glob, hashlib, json, os, re, sys, time, urllib.parse, urllib.request
+try:
+    import yaml
+except ImportError:
+    print("  ✗ 규칙 대조에 PyYAML 이 필요하다 — python3 -m pip install pyyaml")
+    sys.exit(1)
 
 PROM, GRAF, TIMEOUT = os.environ["PROM"], os.environ["GRAF"], int(os.environ["OBS_TIMEOUT"])
 TEMPO, WAVE = os.environ["TEMPO"], os.environ["WAVE"].strip()
@@ -70,14 +80,69 @@ def until(what, check):
 
 print("관측성 확인 (DESIGN.md §9.4)")
 
-expected_alerts = set(re.findall(r"(?m)^\s+- alert: (\S+)", open(RULES, encoding="utf-8").read()))
+# 1. 규칙 — 파일과 적재된 것을 같은 꼴로 만들어 그룹마다 해시를 견준다.
+UNITS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "y": 31536000}
+def seconds(value):
+    if value in (None, 0, "0", ""):
+        return 0
+    if isinstance(value, (int, float)):
+        return float(value)
+    parts = re.findall(r"(\d+)(ms|s|m|h|d|w|y)", value)
+    if "".join(n + u for n, u in parts) != value:
+        raise ValueError(f"기간을 읽지 못했다: {value}")
+    return float(sum(int(n) * UNITS[u] for n, u in parts))
+
+formatted = {}
+def fmt(expr):
+    if expr not in formatted:
+        formatted[expr] = get(PROM + "/api/v1/format_query?query=" + urllib.parse.quote(expr))["data"]
+    return formatted[expr]
+
+def canonical(kind, name, expr, for_, keep, labels, annotations):
+    return {"kind": kind, "name": name, "expr": fmt(expr), "for": seconds(for_), "keep_firing_for": seconds(keep),
+            "labels": {k: str(v) for k, v in (labels or {}).items()},
+            "annotations": {k: str(v) for k, v in (annotations or {}).items()}}
+
+def from_file():
+    doc = yaml.safe_load(open(RULES, encoding="utf-8"))
+    return {g["name"]: [canonical("alert" if "alert" in r else "record", r.get("alert") or r.get("record"), r["expr"],
+                                  r.get("for"), r.get("keep_firing_for"), r.get("labels"), r.get("annotations"))
+                        for r in g["rules"]] for g in doc["groups"]}
+
+def from_prometheus(groups):
+    return {g["name"]: [canonical("alert" if r["type"] == "alerting" else "record", r["name"], r["query"],
+                                  r.get("duration"), r.get("keepFiringFor"), r.get("labels"), r.get("annotations"))
+                        for r in g["rules"]] for g in groups}
+
+def digest(rules):
+    return hashlib.sha256(json.dumps(rules, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
+
+expected = from_file()
+n_alerts = sum(1 for rules in expected.values() for r in rules if r["kind"] == "alert")
 def rules_loaded():
     groups = get(PROM + "/api/v1/rules")["data"]["groups"]
-    rules = [r for g in groups for r in g["rules"] if r["type"] == "alerting"]
-    names = {r["name"] for r in rules}
-    broken = [r["name"] for r in rules if r.get("health") not in ("ok", "unknown")]
-    return names == expected_alerts and not broken, f"적재 {sorted(names ^ expected_alerts)} 평가 실패 {broken}"
-until(f"Prometheus 가 알림 {len(expected_alerts)}개를 적재했고 평가 실패가 없다", rules_loaded)
+    loaded = from_prometheus(groups)
+    broken = [r["name"] for g in groups for r in g["rules"] if r.get("health") not in ("ok", "unknown")]
+    differ = []
+    # 재적재가 실패하면 옛 규칙이 그대로 돈다 — 단일 파일 바인드 마운트는 git checkout 이 파일을 새로 쓰면 지워진 inode 를 붙든다
+    # (2026-09-26 관측: 컨테이너 안 prometheus.yml 의 링크 수 0, 재적재 「no such file」). 컨테이너를 다시 만들어야 풀린다.
+    if not get(PROM + "/api/v1/status/runtimeinfo")["data"].get("reloadConfigSuccess", False):
+        differ.append("마지막 재적재가 실패했다 — 설정 파일이 컨테이너에서 보이지 않으면 dc up -d --force-recreate prometheus")
+    for name in sorted(set(expected) | set(loaded)):
+        want, got = expected.get(name), loaded.get(name)
+        if want is None or got is None:
+            differ.append(f"그룹 {name}: {'파일에 없다' if want is None else '적재되지 않았다'}")
+        elif digest(want) != digest(got):
+            by_name = {r["name"]: r for r in got}
+            changed = [r["name"] for r in want if by_name.get(r["name"]) != r] + \
+                      [r for r in by_name if r not in {w["name"] for w in want}]
+            differ.append(f"그룹 {name}: 파일 {digest(want)} ≠ 적재 {digest(got)} — 다른 규칙 {changed}")
+    summary = " · ".join(f"{n} {digest(r)}" for n, r in sorted(expected.items()))
+    if not differ and not broken:
+        print(f"    (그룹 해시 {summary})")
+    hint = " — 적재가 옛 것이면 curl -X POST $PROM/-/reload" if differ else ""
+    return not differ and not broken, f"{differ} 평가 실패 {broken}{hint}"
+until(f"Prometheus 가 파일의 규칙을 그대로 적재했다(알림 {n_alerts}개 · 내용 해시) · 평가 실패가 없다", rules_loaded)
 
 expected_uids = {json.load(open(f, encoding="utf-8"))["uid"] for f in BOARDS}
 def boards_provisioned():

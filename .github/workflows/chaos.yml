@@ -1,0 +1,147 @@
+# =============================================================================
+# 카오스 — 수동 실행 (IMPLEMENTATION_PLAN 7-3②, DESIGN.md §13 「카오스」)
+#
+# PR 게이트가 아니다(2026-09-25 결정). 한 번에 넷(db · kafka · redis · kill)을 같은 스택에서 차례로 돌리고, 각자가 남긴 보고
+# (build/chaos/*.md — 30초 표본 · 검증 표 V1–V7 · 판정)를 아티팩트로 올린다. 판정 하나라도 ✗ 면 실패로 끝나지만, 앞의 것이 실패해도
+# 뒤의 것은 돈다 — 넷의 표가 한 실행에 다 남아야 서로 견줄 수 있다.
+#
+# 스택은 Compose 스모크 job 과 같은 방법으로 세운다(make images → make up). 알림 판정은 이 러너의 실제 Prometheus 에 묻는다.
+# 액션 버전은 ci.yml 머리의 확인과 같다.
+# =============================================================================
+name: Chaos
+
+on:
+  workflow_dispatch:
+    inputs:
+      kinds:
+        description: "돌릴 카오스 — 공백으로 구분 (db kafka redis kill)"
+        required: true
+        default: "db kafka redis kill"
+      hold:
+        description: "장애 시간(초) — chaos-db · chaos-kafka · chaos-redis"
+        required: true
+        default: "300"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: "25"
+  KINDS: ${{ inputs.kinds }}
+  HOLD: ${{ inputs.hold }}
+
+jobs:
+  chaos:
+    name: 카오스 (${{ inputs.kinds }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+
+      # 입력은 셸에 바로 넣지 않고 환경 변수로 받는다 — 그리고 모양부터 본다.
+      - name: 입력 확인
+        run: |
+          [[ "$HOLD" =~ ^[0-9]+$ ]] || { echo "hold 는 초(정수)다: $HOLD"; exit 1; }
+          for k in $KINDS; do
+            case "$k" in db|kafka|redis|kill) ;; *) echo "알 수 없는 카오스: $k"; exit 1 ;; esac
+          done
+
+      - name: JDK ${{ env.JAVA_VERSION }} 설치 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle 설정 · 캐시
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
+      - name: 환경 파일 준비
+        run: cp deploy/compose/.env.example deploy/compose/.env
+
+      - name: 서비스 이미지 빌드 (Buildpacks + ops-web)
+        run: make images
+
+      - name: 스택 기동
+        run: make up
+
+      # 규칙 적재의 전제는 스크립트마다 prom_preflight 가 본다(재적재 · 평가 오류 · reloadConfigSuccess). make obs-check 를 여기
+      # 두지 않는 이유: 그 4 · 5(트레이스 · 서비스 그래프)는 발행된 계획을 전제로 해 데모 없이는 빨갛고, 「|| true」로 둔 검사는
+      # 실패하지 않는 검사다.
+      - name: chaos-db
+        id: db
+        if: contains(format(' {0} ', env.KINDS), ' db ')
+        continue-on-error: true
+        run: make chaos-db HOLD="$HOLD"
+
+      - name: chaos-kafka
+        id: kafka
+        if: contains(format(' {0} ', env.KINDS), ' kafka ')
+        continue-on-error: true
+        run: make chaos-kafka HOLD="$HOLD"
+
+      - name: chaos-redis
+        id: redis
+        if: contains(format(' {0} ', env.KINDS), ' redis ')
+        continue-on-error: true
+        run: make chaos-redis HOLD="$HOLD"
+
+      - name: chaos-kill
+        id: kill
+        if: contains(format(' {0} ', env.KINDS), ' kill ')
+        continue-on-error: true
+        run: make chaos-kill
+
+      - name: 검증 표 요약
+        if: always()
+        run: |
+          for f in build/chaos/chaos-*.md; do
+            [ -f "$f" ] && { cat "$f"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: 카오스 보고 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chaos-reports
+          path: build/chaos/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 컨테이너 로그 수집
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color > compose-logs.txt
+
+      - name: 컨테이너 로그 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chaos-compose-logs
+          path: compose-logs.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # 돌린 것 가운데 하나라도 실패면 실패다. 건너뛴 것(skipped)은 입력이 고르지 않은 것이다.
+      - name: 판정
+        if: always()
+        env:
+          DB: ${{ steps.db.outcome }}
+          KAFKA: ${{ steps.kafka.outcome }}
+          REDIS: ${{ steps.redis.outcome }}
+          KILL: ${{ steps.kill.outcome }}
+        run: |
+          echo "db=$DB kafka=$KAFKA redis=$REDIS kill=$KILL"
+          for o in "$DB" "$KAFKA" "$REDIS" "$KILL"; do [ "$o" = failure ] && exit 1; done
+          exit 0
+
+      # 데이터 볼륨까지 지우는 `down -v` 는 쓰지 않는다 (CLAUDE.md "하지 말 것").
+      - name: 스택 종료
+        if: always()
+        run: make down

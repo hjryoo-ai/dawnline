@@ -16,7 +16,7 @@
 set -a; . deploy/compose/.env; set +a
 dc()   { docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.env --profile app --profile obs "$@"; }
 prom() { curl -s "http://localhost:$PROMETHEUS_PORT/api/v1/query" --data-urlencode "query=$1" | jq -c '.data.result[] | [.metric, .value[1]]'; }
-logs() { dc logs --no-log-prefix --since "${2:-30m}" "$1"; }      # logs dispatch-service 2h | grep '정체된 계획'
+logs() { dc logs --no-log-prefix --since "${2:-30m}" "$1"; }      # logs dispatch-service 2h | grep '웨이브 계획'
 sql()  { dc exec -T -e PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" postgres psql -U "$POSTGRES_SUPERUSER" -d "dawnline_$1" -c "$2"; }
 ```
 

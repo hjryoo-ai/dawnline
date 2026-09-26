@@ -329,7 +329,7 @@ public class RunPlanService implements RunPlanUseCase {
                             candidate.requiresCold(), candidate.hazmat()),
                     candidate.promised(), candidate.serviceSeconds(), candidate.priority()));
         }
-        // 좌표는 계획 행에 저장돼 있다 — 재실행·정체 회수·부분 재계획은 wave.closed 를 다시
+        // 좌표는 계획 행에 저장돼 있다 — 재실행·부분 재계획은 wave.closed 를 다시
         // 받지 않는다(V2 마이그레이션 주석).
         GeoPoint point = plan.depot().orElseThrow(() -> new IllegalStateException(
                 "캠프 좌표가 없는 계획은 다시 돌릴 수 없습니다: planId=" + plan.id()));

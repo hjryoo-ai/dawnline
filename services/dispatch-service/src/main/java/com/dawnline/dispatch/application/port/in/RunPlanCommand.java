@@ -19,7 +19,7 @@ import org.jspecify.annotations.Nullable;
  * @param seed     난수 seed. {@code null} 이면 웨이브 id 에서 유도한다 — 같은 웨이브를 다시
  *                 돌리면 같은 결과가 나와야 하고(불변규칙 12), 시각에서 유도하면 그것이 깨진다
  * @param backlog  이 명령을 부른 <strong>파티션</strong>의 컨슈머 랙(레코드 수 = 웨이브 수).
- *                 {@code null} 은 <strong>0 이 아니라 모름</strong>이다 — 웹·정체 회수처럼
+ *                 {@code null} 은 <strong>0 이 아니라 모름</strong>이다 — 웹(운영자 재실행)처럼
  *                 이벤트가 없는 경로에는 파티션이 없다. 부르는 쪽이 아는 것을 그대로 싣는다:
  *                 랙은 Kafka 어댑터만 알고, 유스케이스는 숫자만 본다
  */
@@ -44,17 +44,6 @@ public record RunPlanCommand(UUID waveId, UUID campId, @Nullable GeoPoint depot,
             @Nullable Long backlog) {
         return new RunPlanCommand(waveId, campId, Objects.requireNonNull(depot, "depot"),
                 null, null, null, backlog);
-    }
-
-    /**
-     * 재실행이 쓰는 형태 — 좌표는 저장된 계획에서 온다.
-     *
-     * @param waveId 대상 웨이브
-     * @param campId 캠프
-     */
-    public static RunPlanCommand rerun(UUID waveId, UUID campId) {
-        // 랙은 모름이다 — 이 경로는 레코드에서 오지 않으므로 볼 파티션이 없다.
-        return new RunPlanCommand(waveId, campId, null, null, null, null, null);
     }
 
     /**

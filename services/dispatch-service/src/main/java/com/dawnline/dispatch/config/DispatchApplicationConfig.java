@@ -26,7 +26,6 @@ import com.dawnline.dispatch.domain.CandidatePriority;
 import com.dawnline.dispatch.domain.PlanModeSelector;
 import com.dawnline.dispatch.application.ManageResourcesService;
 import com.dawnline.dispatch.application.ReassignStopService;
-import com.dawnline.dispatch.application.RecoverStalePlansService;
 import com.dawnline.dispatch.application.RunPlanService;
 import com.dawnline.dispatch.application.port.in.CancelOrderUseCase;
 import com.dawnline.dispatch.application.port.in.LoadCandidateUseCase;
@@ -388,23 +387,5 @@ public class DispatchApplicationConfig {
         return new DispatchRetentionCleaner(new JdbcDispatchRetention(jdbcTemplate), transactionManager, clock,
                 retention.candidates(), retention.explanations(), retention.plans(), retention.cap(),
                 retention.maxPlansPerRun(), retention.batchSize(), retention.maxBatchesPerRun(), ages, meters);
-    }
-
-    /**
-     * 정체 회수 (§5.3). {@code PLANNING} 으로 남은 계획의 유일한 출구다.
-     *
-     * @param plans              계획 저장소
-     * @param runPlan            재실행할 유스케이스
-     * @param transactionManager 회수 트랜잭션
-     * @param clock              시각 출처
-     * @param properties         {@code dawnline.dispatch.plan.*}
-     */
-    @Bean
-    public RecoverStalePlansService recoverStalePlansService(RoutePlanRepository plans,
-            RunPlanUseCase runPlan, PlatformTransactionManager transactionManager, Clock clock,
-            DispatchProperties properties) {
-
-        return new RecoverStalePlansService(plans, runPlan, transactionManager, clock,
-                properties.plan().staleAfter(), properties.plan().recoverBatch());
     }
 }
