@@ -6,6 +6,7 @@ import com.dawnline.dispatch.application.port.in.ResourceViews;
 import com.dawnline.dispatch.application.port.out.ReferenceAdmin;
 import jakarta.persistence.EntityManager;
 import java.sql.Time;
+import java.time.Clock;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,12 +22,15 @@ public class JdbcReferenceAdmin implements ReferenceAdmin {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final EntityManager entityManager;
+    private final Clock clock;
 
     /**
      * @param entityManager 공유 EntityManager 프록시
+     * @param clock         룰 {@code updated_at} 의 시각 출처 (불변규칙 12 — SQL 의 {@code now()} 가 아니다, ADR-066 결정 4)
      */
-    public JdbcReferenceAdmin(EntityManager entityManager) {
+    public JdbcReferenceAdmin(EntityManager entityManager, Clock clock) {
         this.entityManager = Objects.requireNonNull(entityManager, "entityManager");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     @Override
@@ -55,12 +59,13 @@ public class JdbcReferenceAdmin implements ReferenceAdmin {
         int updated = entityManager.createNativeQuery("""
                 UPDATE dispatch_rules
                    SET params = cast(? as jsonb), enabled = ?, rule_version = rule_version + 1,
-                       updated_at = now()
+                       updated_at = ?
                  WHERE id = ?
                 """)
                 .setParameter(1, JSON.writeValueAsString(params))
                 .setParameter(2, enabled)
-                .setParameter(3, ruleId)
+                .setParameter(3, clock.instant())
+                .setParameter(4, ruleId)
                 .executeUpdate();
         if (updated == 0) {
             throw NotFoundException.of("DispatchRule", ruleId.toString());
