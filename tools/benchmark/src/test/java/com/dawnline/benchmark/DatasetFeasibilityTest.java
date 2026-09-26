@@ -2,9 +2,11 @@ package com.dawnline.benchmark;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.common.fleet.FleetFeasibility;
+import com.dawnline.common.fleet.FleetFeasibility.Assessment;
+import com.dawnline.common.fleet.FleetFeasibility.Line;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
-import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
@@ -59,12 +61,9 @@ class DatasetFeasibilityTest {
     private static final int MAX_STOPS = 120;
     private static final double HEADROOM = 0.70d;
 
-    /**
-     * 제약 조합별 여유. 총량 기준(70%)보다 느슨한 이유는 <strong>목적이 다르기</strong> 때문이다 —
-     * 여기서 보는 것은 "여유로운가" 가 아니라 <strong>"막다른 길이 아닌가"</strong> 다. 조합별
-     * 차량 수는 작아서 한 대가 늘고 주는 것이 비율을 크게 흔든다.
-     */
-    private static final double CLASS_HEADROOM = 0.80d;
+    // 제약 조합별 여유는 FleetFeasibility.HEADROOM_PERCENT(80)다. 총량 기준(70%)보다 느슨한 이유는 <목적이 다르기> 때문이다 —
+    // 여기서 보는 것은 "여유로운가" 가 아니라 "막다른 길이 아닌가" 다. 조합별 차량 수는 작아서 한 대가 늘고 주는 것이
+    // 비율을 크게 흔든다. 그 값은 이제 성수기 증차의 대수도 정한다(ADR-067) — 여기서 따로 적지 않는다.
 
     /**
      * stop 수 축의 여유 — <strong>조합 기준과 같은 80%</strong>다 (2026-09-12).
@@ -74,7 +73,7 @@ class DatasetFeasibilityTest {
      * 달랐던 것이다. [ADR-033](../../../../../docs/adr/ADR-033-constraint-classes.md) 의 80%를
      * stop 축으로 옮긴다.
      */
-    private static final double STOP_HEADROOM = 0.80d;
+    private static final double STOP_HEADROOM = FleetFeasibility.HEADROOM_PERCENT / 100.0d;
 
     // 실현 가능성 기준은 OVERLOAD 를 <strong>빼는 방식</strong>으로 적는다(EXCLUDE), 드는
     // 방식이 아니라 — 데이터셋이 새로 생기면 자동으로 검사 대상이 되어야 한다. 드는 방식이던
@@ -82,7 +81,8 @@ class DatasetFeasibilityTest {
     // 사실을 아무도 보지 못했다. OVERLOAD 의 «일부러 어긴다» 는
     // overload_는_stop_기준을_일부러_어긴다() 가 따로 말한다.
 
-    private static final boolean[] BOTH = {false, true};
+    /** 아무 능력도 요구하지 않는 조합 — 그 stop 축이 전체 stop 수 대 전체 슬롯이다. */
+    private static final FleetFeasibility.Combination GENERAL = new FleetFeasibility.Combination(false, false, false);
 
     private static PlanningProblem problem(Dataset dataset) {
         return new DatasetGenerator(dataset, 20_260_905L, START).generate(RuleSet.empty(), BUDGET, PlanMode.FULL, 1.0d);
@@ -134,117 +134,56 @@ class DatasetFeasibilityTest {
      *
      * <p>그래서 이 기준은 통합 키(§6.5 1단계)가 바뀌면 함께 움직인다. 그건 결함이 아니라 이
      * 기준이 <em>모델을 포함해</em> 실현 가능성을 묻는다는 뜻이다.
+     *
+     * <h2>계산은 {@code libs/common} 의 것이다</h2>
+     * 2026-09-27(ADR-067)부터 조합 판정은 {@link FleetFeasibility} 가 한다 — dispatch 의 {@code fleet-feasibility} 가 성수기
+     * 증차의 대수를 내는 <strong>같은 코드</strong>다. 벤치마크의 기준과 시뮬레이터의 증차가 갈라지면 갈라진 쪽은 조용하다.
+     * 옮기며 조합마다 stop 축(상한 120 의 80%)이 함께 들어왔다 — 일반 조합의 stop 축이 아래 「통합 후 stop 수」다.
      */
     @ParameterizedTest
     @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
     void 모든_제약_조합에서_수요가_그_조합의_차량_용량의_80퍼센트를_넘지_않는다(Dataset dataset) {
-        PlanningProblem problem = problem(dataset);
-        List<Stop> stops = StopMerger.merge(problem.candidates());
-        Capacity smallest = smallestCapacity(problem.vehicles());
-        List<String> violations = new java.util.ArrayList<>();
+        Assessment assessment = assess(problem(dataset));
 
-        // 조합을 손으로 나열하지 않는다 — 모델의 축에서 뽑는다. 축이 하나 늘면 기준이 따라온다.
-        for (boolean cold : BOTH) {
-            for (boolean hazmat : BOTH) {
-                for (boolean large : BOTH) {
-                    check(dataset, stops, problem.vehicles(), smallest, cold, hazmat, large,
-                            violations);
-                }
-            }
-        }
-
-        assertThat(violations)
+        assertThat(assessment.violations().stream().map(line -> describe(dataset, line)).toList())
                 .as("겹친 제약이 막다른 길이 되면 어떤 알고리즘도 그 수요를 실을 수 없다 — "
                         + "그 표는 라우팅 품질이 아니라 용량 부족을 잰다")
                 .isEmpty();
     }
 
-    /** 이 능력을 <em>최소한</em> 요구하는 수요와, 그 능력을 <em>모두</em> 갖춘 차량을 맞대 본다. */
-    private static void check(Dataset dataset, List<Stop> stops, List<VehicleSpec> vehicles,
-            Capacity smallest, boolean cold, boolean hazmat, boolean large,
-            List<String> violations) {
-
-        List<Stop> demand = stops.stream()
-                .filter(stop -> !cold || stop.parcel().requiresCold())
-                .filter(stop -> !hazmat || stop.parcel().hazmat())
-                .filter(stop -> !large || !fits(smallest, stop))
+    /** 통합 후 stop 과 차량을 {@link FleetFeasibility} 의 모양으로 옮겨 잰다. 상한은 시드 룰의 {@code max-stops}. */
+    private static Assessment assess(PlanningProblem problem) {
+        List<FleetFeasibility.Stop> stops = StopMerger.merge(problem.candidates()).stream()
+                .map(stop -> new FleetFeasibility.Stop(stop.parcel().requiresCold(), stop.parcel().hazmat(),
+                        stop.parcel().weightG(), stop.parcel().volumeCm3()))
                 .toList();
-        if (demand.isEmpty()) {
-            return;                             // 이 조합의 수요가 없으면 잴 것이 없다
-        }
-        List<VehicleSpec> fleet = vehicles.stream()
-                .filter(vehicle -> !cold || vehicle.attrs().cold())
-                .filter(vehicle -> !hazmat || vehicle.attrs().allowsHazmat())
-                .filter(vehicle -> !large || exceeds(vehicle.capacity(), smallest))
+        List<FleetFeasibility.Vehicle> fleet = problem.vehicles().stream()
+                .map(vehicle -> new FleetFeasibility.Vehicle(vehicle.id().value().toString(),
+                        vehicle.id().value().toString(), vehicle.attrs().cold(), vehicle.attrs().allowsHazmat(),
+                        vehicle.capacity().maxWeightG(), vehicle.capacity().maxVolumeCm3(),
+                        vehicle.cost().fixed().krw()))
                 .toList();
-
-        String label = "%s %s".formatted(dataset.cliName(), describe(cold, hazmat, large));
-        if (fleet.isEmpty()) {
-            violations.add("%s — 수요 %d stop 인데 실을 수 있는 차량이 0 대다 (막다른 길)"
-                    .formatted(label, demand.size()));
-            return;
-        }
-
-        long weight = demand.stream().mapToLong(stop -> stop.parcel().weightG()).sum();
-        long volume = demand.stream().mapToLong(stop -> stop.parcel().volumeCm3()).sum();
-        long capacityWeight = fleet.stream().mapToLong(v -> v.capacity().maxWeightG()).sum();
-        long capacityVolume = fleet.stream().mapToLong(v -> v.capacity().maxVolumeCm3()).sum();
-
-        if ((double) weight / capacityWeight > CLASS_HEADROOM) {
-            violations.add("%s — 중량 %,d / %,d g = %.0f%% (차량 %d대, stop %d개)".formatted(
-                    label, weight, capacityWeight, 100.0d * weight / capacityWeight,
-                    fleet.size(), demand.size()));
-        }
-        if ((double) volume / capacityVolume > CLASS_HEADROOM) {
-            violations.add("%s — 부피 %,d / %,d cm3 = %.0f%% (차량 %d대, stop %d개)".formatted(
-                    label, volume, capacityVolume, 100.0d * volume / capacityVolume,
-                    fleet.size(), demand.size()));
-        }
+        return FleetFeasibility.assess(stops, fleet, MAX_STOPS);
     }
 
-    private static String describe(boolean cold, boolean hazmat, boolean large) {
-        List<String> parts = new java.util.ArrayList<>();
-        if (cold) {
-            parts.add("냉장");
-        }
-        if (hazmat) {
-            parts.add("위험물");
-        }
-        if (large) {
-            parts.add("대형");
-        }
-        return parts.isEmpty() ? "[제약 없음]" : String.join("∧", parts);
-    }
-
-    /** 가장 작은 차량의 용량. "대형" 은 여기 안 들어가는 stop 이다. */
-    private static Capacity smallestCapacity(List<VehicleSpec> vehicles) {
-        return vehicles.stream().map(VehicleSpec::capacity)
-                .min(java.util.Comparator.comparingLong(
-                        capacity -> (long) capacity.maxWeightG() + capacity.maxVolumeCm3()))
-                .orElseThrow();
-    }
-
-    private static boolean fits(Capacity capacity, Stop stop) {
-        return stop.parcel().weightG() <= capacity.maxWeightG()
-                && stop.parcel().volumeCm3() <= capacity.maxVolumeCm3();
-    }
-
-    private static boolean exceeds(Capacity capacity, Capacity smallest) {
-        return capacity.maxWeightG() > smallest.maxWeightG()
-                || capacity.maxVolumeCm3() > smallest.maxVolumeCm3();
+    private static String describe(Dataset dataset, Line line) {
+        return "%s %s — %s: stop %,d / 슬롯 %,d · 중량 %,d / %,d g · 부피 %,d / %,d cm3 (차량 %d대, 부족 %s대)".formatted(
+                dataset.cliName(), line.combination().label(), line.status(),
+                line.demand().stops(), line.capacity().stops(), line.demand().weightG(), line.capacity().weightG(),
+                line.demand().volumeCm3(), line.capacity().volumeCm3(), line.vehicles(), line.shortfall());
     }
 
     @ParameterizedTest
     @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
     void 통합_후_stop_수가_차량_stop_슬롯의_80퍼센트를_넘지_않는다(Dataset dataset) {
         PlanningProblem problem = problem(dataset);
-        List<Stop> stops = StopMerger.merge(problem.candidates());
-        int slots = problem.vehicles().size() * MAX_STOPS;
+        Line general = assess(problem).line(GENERAL).orElseThrow();
 
-        assertThat((double) stops.size() / slots)
+        assertThat((double) general.demand().stops() / general.capacity().stops())
                 .as("%s stop %,d / 슬롯 %,d (차량 %d × %d) — 넘으면 MAX_STOPS_PER_ROUTE 만으로 "
                                 + "미배정이 확정된다",
-                        dataset.cliName(), stops.size(), slots, problem.vehicles().size(), MAX_STOPS)
+                        dataset.cliName(), general.demand().stops(), general.capacity().stops(),
+                        problem.vehicles().size(), MAX_STOPS)
                 .isLessThanOrEqualTo(STOP_HEADROOM);
     }
 
@@ -279,16 +218,16 @@ class DatasetFeasibilityTest {
      */
     @org.junit.jupiter.api.Test
     void overload_는_stop_기준을_일부러_어긴다() {
-        PlanningProblem problem = problem(Dataset.OVERLOAD);
-        List<Stop> stops = StopMerger.merge(problem.candidates());
-        int slots = problem.vehicles().size() * MAX_STOPS;
+        Line general = assess(problem(Dataset.OVERLOAD)).line(GENERAL).orElseThrow();
 
-        assertThat((double) stops.size() / slots)
+        assertThat((double) general.demand().stops() / general.capacity().stops())
                 .as("overload stop %,d / 슬롯 %,d — 이 데이터셋의 존재 이유가 «다 못 싣는다» 다. "
                                 + "이 어설션이 깨졌다면 차량을 늘린 것이고, 그건 도구를 없앤 것이다",
-                        stops.size(), slots)
+                        general.demand().stops(), general.capacity().stops())
                 .isGreaterThan(STOP_HEADROOM);
-        assertThat(problem.candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
+        assertThat(general.status()).as("같은 판정을 증차의 계산이 «부족» 으로 읽는다")
+                .isNotEqualTo(FleetFeasibility.Status.FEASIBLE);
+        assertThat(problem(Dataset.OVERLOAD).candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
                 .hasSameSizeAs(problem(Dataset.PEAK).candidates());
     }
 
