@@ -23,7 +23,7 @@ import tools.jackson.databind.JsonNode;
  * {@code wave.closed} 수신 → 계획 실행 (§4.1, §5.3).
  *
  * <h2>멱등이 두 겹이다</h2>
- * {@link IdempotentConsumer} 가 같은 {@code eventId} 의 재전달을 막고, {@code route_plans.wave_id}
+ * {@link IdempotentConsumer} 가 같은 {@code eventId} 의 재전달을 막고(게이트는 계획의 쓰기만 감싼다 — ADR-064), {@code route_plans.wave_id}
  * UNIQUE 가 <em>다른</em> eventId 로 온 같은 웨이브를 막는다(§5.3). 앞의 것은 14일 뒤 정리되고
  * (§4.4) 뒤의 것은 남으므로, 둘이 막는 기간이 다르다.
  *
@@ -76,12 +76,14 @@ public class WaveClosedListener {
 
         // 계획 트레이스의 시작 — 계획은 이 스레드에서 돈다. 이 소비 스팬이 dawnline.wave_id 를 달아 주문 트레이스의 끝
         // (FulfillmentPlannedListener)과 한 질의로 이어진다(§9.2 · §9.3, ADR-062 결정 4).
-        MdcScope.builder().eventId(envelope.eventId()).waveId(waveId).run(() ->
-                consumer.runOnce(envelope, CONSUMER, () -> {
-                    RunPlanUseCase.Outcome outcome =
-                            runPlan.run(RunPlanCommand.of(waveId, campId, point, backlog));
-                    log.info("웨이브 계획: waveId={} 결과={}", waveId, outcome);
-                }));
+        //
+        // 멱등 게이트는 계획의 <em>쓰기</em>만 감싼다 — 계산은 그 앞에서 트랜잭션 없이 돈다(ADR-064). 게이트를 여기서 통째로
+        // 두르면 최적화기가 도는 동안(peak 19.9초) 커넥션 하나가 idle in transaction 으로 풀에서 빠진다.
+        MdcScope.builder().eventId(envelope.eventId()).waveId(waveId).run(() -> {
+            RunPlanUseCase.Outcome outcome = runPlan.run(RunPlanCommand.of(waveId, campId, point, backlog),
+                    write -> consumer.runOnce(envelope, CONSUMER, write));
+            log.info("웨이브 계획: waveId={} 결과={}", waveId, outcome);
+        });
     }
 
     /**

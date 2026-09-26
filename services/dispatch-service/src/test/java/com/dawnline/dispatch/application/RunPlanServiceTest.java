@@ -44,6 +44,7 @@ class RunPlanServiceTest {
     private final InMemoryDispatchPorts.Candidates candidates = new InMemoryDispatchPorts.Candidates();
     private final InMemoryDispatchPorts.Routes routes = new InMemoryDispatchPorts.Routes();
     private final InMemoryDispatchPorts.Events events = new InMemoryDispatchPorts.Events();
+    private final InMemoryDispatchPorts.Transactions transactions = new InMemoryDispatchPorts.Transactions();
 
     private RunPlanService service(RuleSet rules, int vehicleCount) {
         return service(rules, vehicleCount, Clock.fixed(NOW, ZoneOffset.UTC));
@@ -84,7 +85,7 @@ class RunPlanServiceTest {
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 clock,
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
-                new PlanModeSelector(3L, 0.8d, 0.5d));
+                new PlanModeSelector(3L, 0.8d, 0.5d), transactions);
     }
 
     private List<UUID> seed(UUID waveId, int count) {
@@ -159,13 +160,109 @@ class RunPlanServiceTest {
                 new DispatchMetrics(registry),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 "baseline-nn", new PlanningBudget(budget, Duration.ofSeconds(3)),
-                new PlanModeSelector(3L, 0.8d, 0.5d));
+                new PlanModeSelector(3L, 0.8d, 0.5d), transactions);
     }
 
     private static long terminations(io.micrometer.core.instrument.MeterRegistry registry, String termination) {
         io.micrometer.core.instrument.Timer timer = registry.find(DawnlineMetrics.PLAN_DURATION.meterName())
                 .tag(DispatchMetrics.TAG_TERMINATION, termination).timer();
         return timer == null ? 0 : timer.count();
+    }
+
+    /** 거리를 물을 때마다 그 순간 열린 트랜잭션 깊이를 적는 거리 제공자 — 최적화기만 거리를 묻는다. */
+    private RunPlanService service(io.micrometer.core.instrument.MeterRegistry registry, List<Integer> depthsDuringCompute) {
+        HaversineDistance real = new HaversineDistance(1.3d, 25.0d);
+        return new RunPlanService(plans, candidates, routes, events,
+                InMemoryDispatchPorts.fleet(2, NOW),
+                InMemoryDispatchPorts.rules(RuleSet.empty()),
+                (from, to) -> {
+                    depthsDuringCompute.add(transactions.depth);
+                    return real.between(from, to);
+                },
+                new DispatchMetrics(registry),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
+                new PlanModeSelector(3L, 0.8d, 0.5d), transactions);
+    }
+
+    @Test
+    void 계산은_트랜잭션_밖에서_돈다_읽기는_읽기_전용이고_쓰기는_하나다() {
+        // ADR-064. 통합 수준의 같은 관측은 PlanComputeConnectionIT(pg_stat_activity)다.
+        UUID waveId = Ids.newId();
+        seed(waveId, 5);
+        List<Integer> depths = new ArrayList<>();
+
+        assertThat(service(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), depths)
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
+                .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
+
+        assertThat(depths).as("전제 — 최적화기가 거리를 물었다").isNotEmpty();
+        assertThat(depths).as("거리를 묻는 동안 열린 트랜잭션").containsOnly(0);
+        assertThat(transactions.opened).as("읽기 전용 하나, 쓰기 하나 — 순서대로").containsExactly(true, false);
+        assertThat(transactions.depth).isZero();
+    }
+
+    @Test
+    void 게이트가_쓰기를_건너뛰면_아무것도_쓰지_않고_DUPLICATE_다() {
+        UUID waveId = Ids.newId();
+        seed(waveId, 3);
+
+        RunPlanUseCase.Outcome outcome = service(RuleSet.empty(), 2)
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null), write -> false);
+
+        assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.DUPLICATE);
+        assertThat(plans.findByWaveId(waveId)).as("계획 행도 쓰기 단계가 넣는다 — 읽기는 아무것도 쓰지 않는다").isEmpty();
+        assertThat(events.routesAssigned).isEmpty();
+        assertThat(events.completed).isZero();
+        assertThat(transactions.opened).as("읽기 전용 하나뿐 — 쓰기 트랜잭션은 열리지 않았다").containsExactly(true);
+    }
+
+    @Test
+    void 게이트_안에서_커밋이_실패하면_계획을_세지_않는다() {
+        // CLAUDE.md 「카운터는 커밋 뒤에 센다 — 그리고 테스트가 그 순서를 본다」, ADR-064 결정 5.
+        UUID waveId = Ids.newId();
+        seed(waveId, 3);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        RunPlanService service = service(registry, new ArrayList<>());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.run(
+                RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null), write -> {
+                    write.run();
+                    throw new IllegalStateException("커밋 실패");
+                })).hasMessage("커밋 실패");
+
+        assertThat(events.completed).as("전제 — 쓰기는 끝까지 돌았다(롤백될 것을 발행했다)").isOne();
+        assertThat(registry.find(DawnlineMetrics.PLAN_DURATION.meterName()).timers())
+                .as("커밋되지 않은 계획의 시간").allSatisfy(timer -> assertThat(timer.count()).isZero());
+        assertThat(registry.find(DawnlineMetrics.PLAN_PERSIST.meterName()).timers())
+                .as("커밋되지 않은 계획의 영속화 시간").allSatisfy(timer -> assertThat(timer.count()).isZero());
+    }
+
+    @Test
+    void 이미_발행된_웨이브는_계산하지_않고_게이트만_지난다() {
+        UUID waveId = Ids.newId();
+        seed(waveId, 3);
+        List<Integer> depths = new ArrayList<>();
+        RunPlanService service = service(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), depths);
+        service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+        depths.clear();
+        AtomicInteger entered = new AtomicInteger();
+
+        RunPlanUseCase.Outcome again = service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null),
+                write -> {
+                    entered.incrementAndGet();
+                    write.run();
+                    return true;
+                });
+        RunPlanUseCase.Outcome duplicate = service.run(
+                RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null), write -> false);
+
+        assertThat(again).isEqualTo(RunPlanUseCase.Outcome.ALREADY_PUBLISHED);
+        assertThat(duplicate).as("게이트가 막으면 그렇게 말한다").isEqualTo(RunPlanUseCase.Outcome.DUPLICATE);
+        assertThat(depths).as("계산하지 않았다 — 최적화기가 거리를 묻지 않았다").isEmpty();
+        assertThat(entered).as("받은 이벤트는 한 번씩 게이트를 지난다 — 멱등 기록과 소비 카운터").hasValue(1);
+        assertThat(events.completed).isOne();
     }
 
     @Test
@@ -237,7 +334,7 @@ class RunPlanServiceTest {
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
-                new PlanModeSelector(3L, 0.8d, 0.5d));
+                new PlanModeSelector(3L, 0.8d, 0.5d), transactions);
 
         assertThat(service.run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
                 .isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
