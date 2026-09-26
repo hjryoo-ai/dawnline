@@ -84,6 +84,7 @@ cd apps/ops-web && npm ci && npm test   # ops-web 타입 검사 + 컴포넌트 �
 - 값 객체·이벤트 페이로드·명령은 `record`. 분기 가능한 타입은 `sealed interface` + 패턴 매칭.
 - 널 가능성은 JSpecify 어노테이션(`@Nullable`)으로 명시. `Optional`은 반환 타입에만.
 - **부분 인덱스의 술어 컬럼은 쿼리에서 리터럴로 적는다.** `WHERE status = 'OPEN'` 부분 인덱스는 값이 바인드 파라미터로 들어오면 플래너가 일반 계획(generic plan)에서 술어를 만족한다고 증명하지 못해 인덱스를 못 탄다. 상수는 상수로 적어야 그 인덱스가 값을 한다 — 그리고 그 사실을 EXPLAIN 으로 확인하는 통합 테스트를 함께 둔다(`FulfillmentPersistenceIT`). 같은 이유로 **FK 대상 컬럼에는 부분 인덱스를 쓰지 않는다**(참조 무결성 검사가 못 쓴다, `docs/DESIGN.md` §7.1).
+- **잠금 질의는 엔티티가 아니라 버전을 읽는다 — 영속성 컨텍스트는 잠근 순간의 행을 덮어쓰지 않는다.** 같은 트랜잭션이 잠그기 전에 그 행을 한 번 읽었으면(자연키 조회 · 사전 확인) 엔티티가 컨텍스트에 있고, `SELECT … FOR SHARE|UPDATE` 를 엔티티로 매핑해도 Hibernate 는 **그 사본**을 돌려준다 — 락은 걸리고 다른 쪽 커밋도 기다리지만, 본 상태는 기다리기 전의 것이다. 잠금 SQL 은 맞아 보여서 코드를 읽어서는 드러나지 않는다. 편입이 그렇게 **닫힌 웨이브에 주문을 넣었다**(2026-09-26, ADR-025 후속 정정). 잠금 질의로는 `version` 을 읽고, 컨텍스트의 엔티티와 다르면 `refresh` 한다(`JpaWaveRepository.findLocked`) — 그리고 「먼저 읽고 → 다른 연결이 바꾸고 커밋 → 잠근 읽기」 를 테스트가 본다(`WaveLockedReadIT`).
 - 로그: 구조화 JSON, MDC에 `orderId/waveId/routeId/eventId`. 전체 주소·고객 식별 정보는 로그 금지.
 - 예외: 도메인 예외(`DomainException` 하위) → HTTP 매핑은 `adapter.in.web`의 단일 `@ControllerAdvice`. 응답은 RFC 9457 Problem Details.
 - 테스트 이름: `메서드_상황_기대결과` 한국어 가능. 통합 테스트는 `*IT.java`, `integrationTest` 소스셋.
