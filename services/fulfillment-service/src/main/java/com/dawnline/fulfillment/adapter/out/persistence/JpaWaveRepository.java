@@ -30,10 +30,10 @@ public class JpaWaveRepository implements WaveRepository {
      * 번역되는지는 방언에 달려 있는데, 이 자리는 <em>어떤 락이 걸리는가가 곧 정확성</em>이다.
      * 배타 락으로 번역되면 조용히 §8.2 의 병목이 돌아오고, 아무 테스트도 그것을 잡지 못한다.
      */
-    private static final String FIND_FOR_SHARE_SQL = "SELECT * FROM waves WHERE id = :id FOR SHARE";
+    private static final String FIND_FOR_SHARE_SQL = "SELECT version FROM waves WHERE id = :id FOR SHARE";
 
     /** 마감용 배타 잠금. 진행 중인 편입(공유 락)이 전부 커밋될 때까지 기다린다 (ADR-025). */
-    private static final String FIND_FOR_UPDATE_SQL = "SELECT * FROM waves WHERE id = :id FOR UPDATE";
+    private static final String FIND_FOR_UPDATE_SQL = "SELECT version FROM waves WHERE id = :id FOR UPDATE";
 
     private static final String INSERT_SQL = """
             INSERT INTO waves (id, camp_id, service_tier, cutoff_at, status, order_count, closed_at, close_cause, version)
@@ -152,13 +152,32 @@ public class JpaWaveRepository implements WaveRepository {
         return findLocked(id, FIND_FOR_UPDATE_SQL);
     }
 
+    /**
+     * 잠그고, <strong>잠근 순간의 행</strong>을 돌려준다.
+     *
+     * <p>잠금 질의가 엔티티를 직접 돌려주던 동안에는 틀렸다 — 같은 트랜잭션이 잠그기 전에 이 웨이브를 이미 읽었으면(편입의
+     * {@code findByNaturalKey}, 운영자 마감의 「다음 웨이브인가」) 그 엔티티가 영속성 컨텍스트에 있고, Hibernate 는 관리 중인
+     * 엔티티를 질의 결과로 덮어쓰지 않는다. 락은 걸리고 다른 쪽 커밋도 기다리지만, 돌아온 것은 <em>기다리기 전의 사본</em>이었다.
+     * 편입은 닫힌 웨이브를 OPEN 으로 보고 주문을 넣었고, 운영자 마감은 낡은 OPEN 을 닫으려다 {@code version} 검사에 걸렸다
+     * (근거: 관측(재현됨) — {@code WaveLockedReadIT}, CI 의 {@code WaveLifecycleIT}).
+     *
+     * <p>그래서 잠금 질의는 버전만 읽고, 엔티티는 그 뒤에 가져온다 — 컨텍스트에 없으면 지금 읽으니(락을 쥐었다) 새것이고, 있으면
+     * 버전을 견주어 다르면 다시 읽는다. 편입은 늘 앞서 읽어 두므로 추가 질의가 없다(버전이 같으면 컨텍스트의 것을 쓴다).
+     */
     private Optional<Wave> findLocked(UUID id, String sql) {
         Objects.requireNonNull(id, "id");
-        @SuppressWarnings("unchecked")
-        List<WaveEntity> rows = entityManager.createNativeQuery(sql, WaveEntity.class)
+        List<?> versions = entityManager.createNativeQuery(sql)
                 .setParameter("id", id)
                 .getResultList();
-        return rows.stream().findFirst().map(WaveEntity::toDomain);
+        if (versions.isEmpty()) {
+            return Optional.empty();
+        }
+        long lockedVersion = ((Number) versions.getFirst()).longValue();
+        WaveEntity entity = entityManager.find(WaveEntity.class, id);
+        if (entity.version() != lockedVersion) {
+            entityManager.refresh(entity);
+        }
+        return Optional.of(entity.toDomain());
     }
 
     @Override
