@@ -931,14 +931,18 @@ REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assign
 | GET | /api/v1/routes/{routeId} | 라우트·stop 목록 |
 | POST | /api/v1/routes/{routeId}/stops/{orderId}/reassign | stop을 다른 라우트로 이동(운영자) |
 | GET/PUT | /api/v1/rules | 룰 조회·수정 (버전 증가, 이력 보관) |
-| GET/POST | /api/v1/vehicles, /drivers | 자원 관리 |
+| GET/POST | /api/v1/vehicles, /drivers | 자원 관리 — 차량 등록의 `source` 는 `operator`(기본) · `peak-sim`(아래 「함대」) |
+| POST | /api/v1/vehicles/{vehicleId}/deactivate | 차량 비활성화(운영자) — 끝나지 않은 stop 이 있으면 409 `vehicle-in-service` |
+| GET | /api/v1/waves/{waveId}/fleet-feasibility | 그 웨이브의 함대 실현 가능성 — 제약 조합별 수요 · 용량 · 부족 대수 · 템플릿(읽기) |
 
 **테이블(핵심)**
 
 ```sql
 CREATE TABLE vehicles (id UUID PK, camp_id UUID NOT NULL, type VARCHAR(16), max_weight_g INTEGER, max_volume_cm3 INTEGER,
   is_cold BOOLEAN, fixed_cost_krw INTEGER, cost_per_km_krw INTEGER, cost_per_min_krw INTEGER,
-  shift_start TIME, shift_end TIME, active BOOLEAN);
+  shift_start TIME, shift_end TIME, active BOOLEAN,
+  -- 누가 넣었나 (V11, 2026-09-27, ADR-067 결정 4). 값 집합은 닫혔다 — 이름(코드 접두어)이 아니라 칸이 출처를 말한다.
+  source VARCHAR(16) NOT NULL DEFAULT 'operator' CHECK (source IN ('seed', 'operator', 'peak-sim')));
 CREATE TABLE drivers (id UUID PK, camp_id UUID, vehicle_id UUID, name TEXT, status VARCHAR(16));
 CREATE TABLE dispatch_candidates (order_id UUID PK, wave_id UUID NOT NULL, camp_id UUID NOT NULL, zone_id UUID,
   lat NUMERIC(9,6), lng NUMERIC(9,6), geohash7 CHAR(7), weight_g INTEGER, volume_cm3 INTEGER,
@@ -1006,6 +1010,25 @@ stop 이 `PlannedRoute` 에는 없기 때문이다([ADR-026](adr/ADR-026-dispatc
 `DomainException` **`candidates-expired`(409)** 로 실패한다 — 재배정은 409, 소비자 경로는 재시도 뒤 DLQ 다. 보존(§7.1)은
 계획이 종결일 때만 후보를 지우므로 평상시에는 나지 않는다. 나면 그것은 상한·재처리·설정 중 하나가 그 조건을
 넘었다는 신호다.
+
+**함대 — 실현 가능성과 비활성화** (2026-09-27, 7-4a ③, [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md)).
+성수기 증차는 운영자 커맨드이고(§5.5 `ADD_VEHICLE` · `DEACTIVATE_VEHICLE`), 대수는 사람이 고르지 않고 **기준이 낸다** — 그 기준을 내는
+자리가 dispatch 다. 후보가 여기에만 있기 때문이다.
+
+- **`GET /waves/{waveId}/fleet-feasibility`** — 그 웨이브의 계획 대상 후보(계획이 읽는 질의 그대로)에 `StopMerger` 를 한 번 돌린
+  **통합 후 stop** 과, 계획이 쓸 수 있는 차량(활성 · 계획이 붙이는 근무창이 후보 약속창의 합과 겹친다 — 주간조를 새벽 웨이브의 용량으로
+  세지 않는다)을 `libs/common` 의 `FleetFeasibility` 에 넣는다. 조합(냉장 × 위험물 × 대형)마다 stop · 중량 · 부피가 그 조합을 모두 갖춘
+  차량 용량의 **80% 이하**인지(ADR-033 — §6.9 의 벤치마크 기준과 **같은 코드**), 넘으면 **몇 대가 모자라는가**. 부족분은 가장 특정한
+  조합부터 재고 앞에서 더한 차량을 뒤 조합의 용량에 넣는다(ADR-067 결정 3 — ADR-039 불변식 2 의 거울). 조합마다 **템플릿**(냉장 · 위험물이 그 조합과
+  정확히 같고 대형 조합이면 대형인, 가장 싼 가용 차량)이 오고, 부족한데 템플릿이 없으면 `NO_TEMPLATE` 으로 **명시한다** — 값이 아니다. 계획이 이미 있는 웨이브는
+  409 `wave-already-planned`(계획 대상 후보가 0 이라 답이 「부족 0」으로 보인다), 후보가 하나도 없는 웨이브는 404.
+- **`POST /vehicles/{vehicleId}/deactivate`** — 그 차량의 라우트에 끝나지 않은 stop(`CANCELLED` · `COMPLETED` · `FAILED` 밖)이 있으면
+  409 `vehicle-in-service`. 그 정의는 보존(§7.1 `JdbcDispatchRetention.SETTLED`)과 **한 SQL 조각을 공유한다** — 두 호출자가 「끝났다」를
+  따로 적으면 갈라진다. 비활성 차량은 다음 계획부터 빠지고 과거 라우트는 그대로다. 이미 비활성이면 200, 바뀌는 것 없음. 완화(「전부
+  `PLANNED` 면 허용」)는 하지 않는다 — 배정된 주문이 주인 없이 남고 그 실수는 다음 날 아침에 드러난다(ADR-067 결정 5).
+- **`routes.status` 는 진행을 말하지 않는다.** `PLANNED` 로 INSERT 된 뒤 쓰는 문장이 없다(`UPDATE routes` 여섯 중 0 — 코드 읽기).
+  진행은 `route_stops.status` 에만 있고, 비활성화 · 보존 둘 다 거기서 읽는다. 그 칸을 `GET /routes/{routeId}` 가 내보내는 것은 열린
+  결함이다(ADR-067 재검토 지점 2, 7-0 A31).
 
 **Redis**: `rules:camp:{id}:v{n}` (룰셋 캐시).
 
@@ -1191,6 +1214,15 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 | `POST /api/v1/waves/{waveId}/close` (`reason` **필수**) | fulfillment 같은 경로 | `CLOSE_WAVE` · `WAVE` |
 | `POST /api/v1/admin/outbox/{service}/{id}/requeue` | `{service}` 코어의 `/api/v1/admin/outbox/{id}/requeue` | `REQUEUE_OUTBOX` · `OUTBOX_EVENT` |
 | `GET /api/v1/admin/outbox/{service}/quarantined?limit=` | `{service}` 코어의 `/api/v1/admin/outbox/quarantined` | **없음** — 조회다 |
+| `POST /api/v1/vehicles` (`campId`·…·`source`) | dispatch 같은 경로 | `ADD_VEHICLE` · `CAMP` |
+| `POST /api/v1/vehicles/{vehicleId}/deactivate` | dispatch 같은 경로 | `DEACTIVATE_VEHICLE` · `VEHICLE` |
+| `GET /api/v1/waves/{waveId}/fleet-feasibility` | dispatch 같은 경로 | **없음** — 조회다 |
+| `GET /api/v1/vehicles?campId=` | dispatch 같은 경로 | **없음** — 조회다 |
+
+- **증차 · 비활성화 · 함대 기준** (2026-09-27, 7-4a ③, [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md)). 성수기 증차는 운영자의
+  행위다 — 시뮬레이터(`peak-day`)도 운영자의 토큰으로 이 넷을 부르고, 그 실행의 증차는 감사 표에 운영자의 것과 같은 모양으로 남는다.
+  내부 토큰을 쥔 도구가 코어에 직접 쓰면 **감사 없는 둘째 운영자**다(ADR-055 가 닫은 경로). 증차의 감사 대상은 **캠프**다 — 차량 id 는
+  코어가 만들고 감사 행은 위임 전에 쓰므로 그 순간에는 없다. 만들어진 id 는 응답 본문과 코어 로그(`auditId`)에 있다.
 
 - **outbox 경로에만 `{service}` 한 칸이 있다** (2026-09-24). 같은 공유 코드가 코어 넷에 같은 경로를 만들었으므로
   (§4.6) ops-api 에서는 어느 코어의 것인지를 경로가 말해야 한다. 값은 `order`·`fulfillment`·`dispatch`·`tracking`
@@ -1283,6 +1315,10 @@ ops-api 가 §11 「문서가 계약이다」의 첫 소비자다. 경로는 코
 - **창고 좌표**: `rm_waves.depot_lat`·`depot_lng`(V3)는 `wave.closed` 의 `depot` 이다 — 새 출처가 아니라 이미
   계약에 있는 사실이다. 라우트는 창고에서 출발해 창고로 돌아오므로 창고 없는 지도는 첫 구간과 마지막 구간을
   지운 그림이다. 키 계열(먼저 온 것이 남는다)이고, 없으면 `null` — 그때 지도는 stop 들의 중심으로 물러난다.
+- **마감 시각**: `rm_waves.closed_at`(V9, 2026-09-27)은 `wave.closed` 의 `closedAt` 이다 — 역시 이미 계약에 있는 사실이다(필수 필드).
+  첫 소비자는 시뮬레이터의 시간 예산이다: 증차가 이 시각 **뒤에** 끝났으면 계획이 그 차량을 못 봤을 수 있다(ADR-067 결정 7).
+  `cutoff_at + grace` 로 파생하지 않는다 — 조기 마감에서 틀리고, grace 설정의 사본이다(ADR-054 가 `close_cause` 를 저장한 것과 같은
+  이유). 키 계열이고 그 전의 이벤트로 만든 행은 `null` 이다.
 - **캠프 코드의 변경은 반영되지 않는다 — 참조 데이터는 버전이 없다.** fulfillment 의 캠프는 참조 데이터이고,
   코드가 바뀌었다는 사실은 어떤 이벤트에도 없다. ops 가 코드를 아는 길은 `wave.closed` 의 스냅샷(§5.3) 하나다.
   - 한 웨이브의 `camp_code` 는 키 계열이라 **첫 값이 남는다** — 같은 웨이브의 사실이 다시 와도 바뀌지 않는다.
@@ -1314,7 +1350,8 @@ CREATE TABLE rm_waves (wave_id UUID PK, camp_id UUID, service_tier VARCHAR(16), 
   route_count INTEGER,    -- plan.completed 의 routeCount = 기다려야 하는 route.assigned 수 (ADR-024 · ADR-051)
   depot_lat NUMERIC(9,6), depot_lng NUMERIC(9,6),    -- wave.closed 의 depot — 지도의 원점 (V3, 2026-09-24 묶음 C)
   camp_code VARCHAR(16),                              -- wave.closed 의 campCode — 선택이라 옛 이벤트의 행은 NULL (V5)
-  updated_at TIMESTAMPTZ NOT NULL);                   -- 보존의 나이 (V6, 2026-09-25, ADR-058)
+  updated_at TIMESTAMPTZ NOT NULL,                    -- 보존의 나이 (V6, 2026-09-25, ADR-058)
+  closed_at TIMESTAMPTZ);                             -- wave.closed 의 closedAt — 실제 마감 시각 (V9, 2026-09-27, ADR-067 결정 7)
 CREATE TABLE rm_routes (route_id UUID PK, plan_id UUID, camp_id UUID, vehicle_id UUID, driver_id UUID,
   revision INTEGER, status VARCHAR(16), planned_departure TIMESTAMPTZ, departed_at TIMESTAMPTZ,   -- 2026-09-24
   stop_count INTEGER, completed_count INTEGER, failed_count INTEGER, at_risk BOOLEAN, distance_m INTEGER, cost_krw INTEGER,
@@ -1642,6 +1679,26 @@ peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 212.2 → 6.
   Kafka 레코드 타임스탬프 · 보존, Prometheus 수집 · `for` · Grafana 시간축 · Tempo · 로그 타임스탬프, 정적 `Ids.newId()` 의 UUIDv7 시간
   성분, `@Scheduled` 간격 · 타임아웃(기간이지 시각이 아니다). 그래서 **그래프의 23:00 버스트는 실제 시각에 찍힌다** — 유효 시각 = 실제 +
   `dawnline_clock_offset_seconds`. 이 목록의 하나가 사실의 판정에 들어오면 그 자리를 주입 시계로 옮긴다(ADR-066 재검토 지점 1).
+
+  **성수기 증차 — 운영자가 하는 일을 그대로** (2026-09-27, 7-4a ③, [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md)).
+  창 시나리오는 `fleet` 칸을 갖는다 — `feasible`(기준이 낸 만큼 더한다, `peak-day`) · `as-is`(재기만 하고 더하지 않는다 — 나머지 셋,
+  `overload-day` 의 「증차 없음」). sim-runner 는 dispatch 에 직접 닿지 않는다 — **ops-api 를 운영자의 토큰으로** 부른다
+  (`DAWNLINE_SIM_OPS_TOKEN`, `make token ROLE=OPS_OPERATOR`). 순서:
+  1. **전제** — 시작할 때 활성 `peak-sim` 차량이 0 이다(`GET /camps` 의 캠프마다 `GET /vehicles`). 0 이 아니면 보내지 않고 실패한다 —
+     앞 실행이 남긴 차량이 이번 `overload-day` 에 섞이는 경로다. 새 스택이면 캠프 목록이 비어 있고 그것이 맞다: `peak-sim` 차량은
+     웨이브가 있는 캠프에만 더해지고, 그 웨이브는 `rm_waves` 에 90일 남는다(ADR-058). 증차 직전에 창의 캠프로 한 번 더 센다.
+  2. **창이 끝나면**(23:58) 창의 DAWN 웨이브(`GET /camps/{campId}/waves` — 컷오프가 창 끝 다음의 00:00 인 것)마다
+     `GET /waves/{waveId}/fleet-feasibility`. `feasible` 이면 조합마다 부족 대수만큼 템플릿을 `POST /vehicles`(`source=peak-sim`)로
+     더한다. 부족한데 `NO_TEMPLATE` 인 조합이 하나라도 있으면 **더하지 않고 실패한다**. 캠프마다 증차 완료 시각을 주입 시계로 적는다.
+  3. **계획을 기다린다** — 창의 웨이브가 전부 `PLANNED`(하나라도 `PLAN_FAILED` 면 실패). **시간 예산은 어설션이다**: 증차 완료 시각이
+     그 웨이브의 `closed_at`(`wave.closed` 의 `closedAt`) 뒤면 실패한다 — 계획이 그 차량을 못 봤을 수 있다.
+  4. **기사** — 기다릴 라우트 수는 설정이 아니라 **계획이 낸다**: 창의 웨이브들의 `route_count` 합. 배속 600, 지연 · 실패 주입 0
+     (§8.1 의 정시율 측정은 7-4 다). 기사가 없으면 라우트가 끝나지 않고, 끝나지 않은 라우트의 차량은 비활성화되지 않는다(§5.3 409).
+  5. **이번 실행이 더한 차량만** `POST /vehicles/{id}/deactivate`. 기사가 끝낸 stop 을 dispatch 가 소비하기까지 409 가 날 수 있어
+     상한(2분) 안에서 다시 시도하고, 넘으면 실패한다.
+  6. **리포트 머리** — 캠프 × 조합의 계산 부족분 · 추가 대수, 감사 행 수, 계산의 기준 후보 수와 마감 주문 수, 계획 뒤 실제 미배정과
+     그 비율의 §6.7 판정(≤ 0.5%). **판정은 표에 남고 종료 코드에 들지 않는다** — ✗ 는 기준에 대한 발견이지 도구의 결함이 아니다.
+     종료 코드는 도구 쪽(전제 · 템플릿 없음 · 시간 예산 · 계획 실패 · 기사 · 비활성화)만 말한다.
 
   시뮬레이터는 개정을 받으면 **현재 위치에서 다시 계획한다**. 그래서 「라우트 → 스캔 열」이 아니라
   「라우트 + 현재 위치 → 남은 스캔 열」이 순수 함수의 모양이고, 이미 끝낸 stop 은 새 개정이 뭐라
@@ -2358,6 +2415,11 @@ DLQ 로 보내면 <em>고칠 수 없는 것</em>이 재시도된다 — 「후�
 
   stop 축의 80%는 2026-09-12 에 옮겨 왔다. 그 축만 여유가 0%(「차량 수 × 120 이하」)였는데 그것은 *완벽한 패킹*을 요구하는 수이고, 같은 이유로 중량·부피에는 이미 여유를 두고 있었다 — 축 하나만 기준이 달랐다. 그리고 **`peak` 이 그 검사의 대상이 아니었다**: stop 8,411 개가 슬롯 7,200 개를 넘는 것을 아무도 보지 못했고, 총비용의 88%가 미배정 페널티인 표를 「피크 성능」으로 읽을 뻔했다([측정](benchmarks/phase4-peak-gate.md)). 검사 목록은 이제 **빼는 방식**(`EXCLUDE`)으로 적는다 — 데이터셋이 새로 생기면 자동으로 대상이 된다.
 
+  **그 기준은 운영에도 있다** (2026-09-27, [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md)). 다섯 축 가운데 **제약 조합 80%**
+  (stop 축의 80%를 조합마다 포함한다 — 일반 조합의 stop 축이 곧 위의 「통합 후 stop 수」다)는 `libs/common` 의 `FleetFeasibility` 로
+  옮겼고, 이 테스트와 dispatch 의 `GET /waves/{waveId}/fleet-feasibility`(§5.3)가 **같은 코드**를 쓴다. 벤치마크의 기준과 시뮬레이터의
+  증차가 갈라지면 갈라진 쪽은 조용하다. 총량 70% · 냉장 70% · 유효 슬롯 1.2배는 데이터셋의 품질 기준이라 이 테스트에 남는다.
+
   **`overload`(15,000/60)는 그 기준을 일부러 어긴다.** `peak` 과 주문·seed 가 같고 차량만 60대라 stop 8,411 개가 슬롯의 **146%**다. 버리지 않는 이유는 그것이 실제 성수기의 질문이기 때문이다 — 「다 못 실을 때 누가 빠지고, 계획은 몇 초에 끝나는가」. 재는 것은 셋이다: **미배정 정책**(ADR-028) · **계획 시간의 상한**(마감이 없는 단계가 여기서 드러난다) · **열화**(§6.7). 실제로 셋을 다 드러냈다.
 
   다만 **웨이브는 (캠프, 티어, 컷오프) 단위**다(§2.2·§5.2). 그러므로 **15,000건 한 웨이브는 캠프 하루치를 통째로 한 웨이브에 넣은 것**이지 정상적인 피크 웨이브가 아니다. `overload` 를 「성수기의 정상 부하」로 읽으면 안 된다.
@@ -2882,7 +2944,7 @@ ADR-060 맥락 1) — §9.4 의 p95 알림이 읽을 것이 없었다.
 | `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다. 창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개**(`kpi_delivery_hourly` 의 24행 합 — 현재 버킷은 늘 부분이라 23시간 남짓~24시간)이고 1분마다 다시 센다. 분모는 완료 + **실패**, 취소·배차 불가는 뺀다(§5.5 「KPI — 두 축, 뷰」). 결과가 없는 캠프와 갱신 실패 중에는 `NaN` — 0 도 마지막 값도 아니다. 약속을 모르는 결과도 빠지고, 그 수는 아래 `dawnline_kpi_excluded` 가 낸다 |
 | `dawnline_kpi_excluded` | gauge | **ops-api** | reason(promise_unknown) — 정시율의 창에서 **모집단 밖으로 빠진** 결과: 완료·실패했는데 약속(또는 캠프)을 아직 모른다(`kpi_delivery_hourly.outcome_without_promise` 의 합, 캠프가 없는 행 포함). 분모에서 조용히 빠지는 것은 실패를 빼서 정시율을 올리는 것과 같은 부류다 — **부재는 값이 아니지만 부재의 수는 값이다.** 정상에서는 프로젝션 랙만큼의 일시값이고 계속 0 이 아니면 `fulfillment.planned` 가 오지 않고 있다. 갱신 실패 중에는 `NaN` — 0 은 「빠진 것이 없다」는 주장이다 |
-| `dawnline_ops_commands_total` | counter | **ops-api** | action(`RUN_PLAN`·`REASSIGN_STOP`·`CANCEL_ORDER`·`CLOSE_WAVE`·`REQUEUE_OUTBOX`·`DLQ_REPLAY`·`RESOLVE_AUDIT` — 재처리는 레코드마다 하나. `RESOLVE_AUDIT` 는 감사 해소(2026-09-26, ADR-065 — 결과는 `SUCCEEDED`·`REJECTED` 만 난다). `CLOSE_WAVE`·`REQUEUE_OUTBOX` 는 ADR-054·ADR-015 후속 정정이 더했고 이 칸이 모르고 있었다 — 2026-09-25 카탈로그 대조가 찾았다), result(`SUCCEEDED`·`REJECTED`·`FAILED`·`UNKNOWN`) — 감사 행의 결과를 **커밋한 뒤에** 센다(CLAUDE.md 「카운터는 커밋 뒤에 센다」). `PENDING` 은 세지 않는다 — 끝나지 않은 커맨드의 수는 카운터가 아니라 `audit_logs` 가 안다 |
+| `dawnline_ops_commands_total` | counter | **ops-api** | action(`RUN_PLAN`·`REASSIGN_STOP`·`CANCEL_ORDER`·`CLOSE_WAVE`·`REQUEUE_OUTBOX`·`ADD_VEHICLE`·`DEACTIVATE_VEHICLE`·`DLQ_REPLAY`·`RESOLVE_AUDIT` — 재처리는 레코드마다 하나. `ADD_VEHICLE`·`DEACTIVATE_VEHICLE` 은 성수기 증차(2026-09-27, ADR-067). `RESOLVE_AUDIT` 는 감사 해소(2026-09-26, ADR-065 — 결과는 `SUCCEEDED`·`REJECTED` 만 난다). `CLOSE_WAVE`·`REQUEUE_OUTBOX` 는 ADR-054·ADR-015 후속 정정이 더했고 이 칸이 모르고 있었다 — 2026-09-25 카탈로그 대조가 찾았다), result(`SUCCEEDED`·`REJECTED`·`FAILED`·`UNKNOWN`) — 감사 행의 결과를 **커밋한 뒤에** 센다(CLAUDE.md 「카운터는 커밋 뒤에 센다」). `PENDING` 은 세지 않는다 — 끝나지 않은 커맨드의 수는 카운터가 아니라 `audit_logs` 가 안다 |
 | `dawnline_internal_token_rejected_total` | counter | 코어 넷(`libs/web`) | reason(`missing`·`mismatch`) — 운영자 쓰기가 내부 토큰 없이·틀린 토큰으로 들어와 401 을 받았다(§10 셋째 층, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)). 정상 운영에서 **0** 이다 — ops-api 는 모든 호출에 싣고 고객·현장 표면은 면제다. 레이트 리밋의 `bypassed` 와 같은 부류: 보상 통제가 뚫리는 것을 센다 |
 | `dawnline_kpi_refresh_age_seconds` | gauge | **ops-api** | 라벨 없음 — 마지막으로 **성공한** KPI 갱신 뒤로 흐른 초. 스크레이프마다 계산하므로 갱신이 멈추면 값이 멈추지 않고 커진다(성공한 적이 없으면 기동부터). 위 둘은 갱신이 죽으면 `NaN` 이고 **`NaN` 에는 어떤 비교 알림도 울리지 않는다** — 그래서 알림은 이 값에 건다(§9.4). `dawnline_shipment_partitions_ahead` 와 같은 모양이다 |
 | `dawnline_kpi_delivery` | gauge | **ops-api** | camp, outcome(completed/failed) — 정시율과 **같은 창 · 같은 스냅숏**의 결과 수(`kpi_delivery_hourly` 24행의 `delivered` · `failed` 합). 정시율의 분모를 둘로 편 것이라 「대시보드의 24행과 게이지가 다를 수 없다」가 여기도 성립한다 — 따로 세는 질의가 아니라 정시율을 낸 그 갱신이 함께 낸다(2026-09-25, 7-1 — §9.4 Delivery 의 「실패」가 대응하는 행 없이 적혀 있던 빈틈). 캠프는 정시율과 같이 창에 처음 나타날 때 등록한다. 창에 결과가 없는 캠프는 **0** 이다 — 정시율이 그때 `NaN` 인 것과 다른 이유는, 0/0 은 정의되지 않지만 「결과 0 건」은 참인 셈이기 때문이다. 갱신 실패 중에는 `NaN` |
@@ -3070,7 +3132,7 @@ ops-api 를 거치지 않으면 감사 없이 적용되는 운영자 쓰기 열 
 |---|---|---|
 | 고객 | order 의 주문 접수 · 취소 | **없음 — 의도된 결정**(아래) |
 | 현장 | tracking 의 기사 스캔 | **없음** — 단말 인증은 범위 밖이다. 기사 시뮬레이터(sim-runner)가 부르는 표면이고, 증명하려는 것(상태 전이·편차 추적)에 단말 인증이 더하는 것이 없다 |
-| 운영자 쓰기 | 코어의 **그 밖의 모든** `POST`·`PUT`·`PATCH`·`DELETE` — 조기 마감, 재계획, 룰 수정, 차량·기사 등록, 재배정, outbox 재큐 | **내부 토큰** `X-Dawnline-Internal` + ops-api 의 JWT·역할·감사 |
+| 운영자 쓰기 | 코어의 **그 밖의 모든** `POST`·`PUT`·`PATCH`·`DELETE` — 조기 마감, 재계획, 룰 수정, 차량·기사 등록, 차량 비활성화, 재배정, outbox 재큐 | **내부 토큰** `X-Dawnline-Internal` + ops-api 의 JWT·역할·감사 |
 
 - 셋째 층은 경로가 아니라 **호출자와 성질**로 정한다: ops-api 만 부르고, 쓰기이며, ops-api 가 감사 행을 남기는
   커맨드. 규칙은 **기본 거부**다 — 면제는 위 두 층의 명시 목록(`@UnauthenticatedWrite`)뿐이고, 새 쓰기 엔드포인트는
@@ -3482,6 +3544,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 064 | **계산은 트랜잭션 밖에서 돈다** — 계획은 읽기(읽기 전용 트랜잭션) → 계산(없음) → 쓰기(트랜잭션 하나) · 정정 전에는 `wave.closed` 의 멱등 트랜잭션이 최적화기를 덮어 커넥션 하나가 계산 시간만큼 `idle in transaction` 이었다(근거: 관측(재현됨), `PlanComputeConnectionIT`) · `peak` 19.9초 · 리스너 동시성 3 이면 풀 10 중 3 · 멱등 게이트는 유스케이스가 받아 쓰기만 감싼다(불변 규칙 2 그대로 — 게이트 앞의 계산은 같은 `eventId` 재전달 한 경우에 낭비) · 계획 카운터는 커밋 뒤로 · 부분 재계획은 아직 안에서 계산한다(재지 않았다 — B13) | [ADR-064](adr/ADR-064-planning-computes-outside-the-transaction.md) |
 | 065 | **감사 해소는 칸이 아니라 행이다** — `POST /api/v1/audit/{auditId}/resolve` 가 `RESOLVE_AUDIT` · `AUDIT` 행을 더하고 대상 `UNKNOWN` 행은 그대로 둔다 · 값은 `APPLIED` · `NOT_APPLIED`(위임 결과의 이름을 빌리지 않는다) · 대상은 `UNKNOWN` 과 5분 넘은 `PENDING`, 한 번만(`FOR UPDATE` 뒤 판정) · 거절도 `REJECTED` 행 · 코어는 `X-Dawnline-Audit-Id` 가 온 요청마다 `MdcFilter` 에서 **수신 줄** 하나 — 줄이 없으면 닿지 않았다 · RB-07 §3 의 SQL `UPDATE` 를 대신한다 | [ADR-065](adr/ADR-065-audit-resolution-is-a-row.md) |
 | 066 | **시뮬레이션은 스케줄이 아니라 시계를 옮긴다** — `dawnline.clock.offset` 이 주입 시계에 더해지고 컷오프 상수 · 도메인 · 파이프라인은 그대로 · 값은 compose 앵커 하나(`DAWNLINE_CLOCK_OFFSET`) · 기동 로그에 유효 시각 한 줄 · 게이지 `dawnline_clock_offset_seconds` 를 `make obs-check` 가 다섯 서비스에서 대조 · 0 이 아닌 오프셋은 프로필 `sim` 에서만(아니면 기동 거부) · 시계는 하나 — 운영 SQL 의 `now()` 셋을 걷어냄(outbox 미발행 나이가 −28,799.95초였다, 관측) · 벽시계로 남는 것의 목록 · 시뮬레이션은 자기 compose 프로젝트에서(시간은 뒤로 가지 않는다) | 실제 23:00 KST 에만(하루 한 번), 컷오프 스케줄을 설정으로(시뮬레이션용 스위치가 도메인에), 조기 마감으로 흉내(`cause=manual` 오염), 배속 시계(p99 가 무엇의 p99 인지 말할 수 없다), DB 시계도 옮기기, 개발 볼륨에서 그대로(오프셋 0 으로 돌아오면 시간이 뒤로 간다) | [ADR-066](adr/ADR-066-simulation-moves-the-clock-not-the-schedule.md) |
+| 067 | **성수기 증차는 운영자 커맨드다 — 기준은 dispatch 가 자기 후보로 낸다** — ops-api 위임 `ADD_VEHICLE` · `DEACTIVATE_VEHICLE`(감사 행) · dispatch 의 읽기 `fleet-feasibility`(통합 후 stop · 계획이 쓸 수 있는 차량 · 조합 × stop·중량·부피 80%, 계산은 `libs/common` — 벤치마크와 같은 코드) · 부족분은 가장 특정한 조합부터(ADR-039 불변식 2 의 거울) · 템플릿이 없으면 `NO_TEMPLATE` 으로 명시하고 실패 · `vehicles.source`(V11, 닫힌 집합) · 비활성화는 끝나지 않은 stop 이 있으면 409(보존과 한 SQL) · 창 시나리오의 기사가 계획의 라우트 수를 전부 기다린다 · 시작 전 활성 `peak-sim` 0 · 시간 예산은 `rm_waves.closed_at`(V9) 대비 어설션 · 미배정 판정은 표에, 종료 코드는 도구에 | 내부 토큰으로 직접(감사 없는 둘째 운영자 — ADR-055), 시드 대수를 늘린다(`overload-day` 가 사라진다), 대수를 yml 에, sim-runner 가 계산(기준의 둘째 사본), 특정하지 않은 조합부터, 템플릿 대체, 코드 접두어로 출처, 출발 전이면 비활성화 허용(배정된 주문이 주인 없이 남는다), grace 설정으로 예산, 미배정 > 0.5% 면 실패 | [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md) |
 | 052 | **위임 클라이언트는 커밋된 계약에서 만든다 — 채택 기준을 먼저 적는다** — 후보 하나(`spring` 생성기 · `spring-http-interface`), 기준 다섯(표준 템플릿 · 문서화된 옵션만 · 생성물 그대로 컴파일 · Jackson 3 왕복 · 새 런타임 의존 없음) — 하나라도 거짓이면 손으로 쓴 인터페이스 + YAML 대조 테스트 — **채택**(7.25.0, 다섯 기준 모두 참 · 왕복 32개) · 토큰은 스크립트가 찍고 ops-api 는 검증만 · 감사 행은 위임 **전에** `PENDING`, 응답을 못 받으면 `UNKNOWN` · 감사 id 를 상관 헤더로 | 계약 없이 컨트롤러 소스에서, 살아 있는 `/v3/api-docs` 에서 생성(입력이 커밋에 남지 않는다), 생성물 커밋(서로를 비추는 목록이 하나 는다), 개발 전용 로그인 엔드포인트(프로필이 꺼져 있다는 조용한 전제), 위임 뒤 한 번만 기록(죽으면 기록이 사라진다) | [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) |
 | 051 | **읽기 모델의 행은 먼저 온 사실이 만든다 — 부재는 값이 아니다** — 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **다섯 번째 자리**이고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓴다**(`rm_orders` 에 여섯 — 2026-09-24 DDL 정정 뒤 일곱 · `rm_waves` 에 넷 · `rm_routes` 에 넷) — 그래서 「이 전이를 받는가」 앞에 **「그 행이 아직 있기는 한가」**가 하나 더 있다 · 핸들러는 전부 **upsert** 이고 「행을 만드는 핸들러」를 두지 않는다(늦게 온 `UPDATE` 는 0 행을 갱신하고 **예외 없이 성공**한다) · **자기 칸만 쓴다** — 모르는 칸에 `NULL`·`0`·`false` 를 넣지 않는다(`false` 는 「위험하지 않다」라는, 아직 아무도 하지 않은 주장이다) · 개수는 증감이 아니라 **집계**다([ADR-025](adr/ADR-025-wave-admission-share-lock.md) 의 「카운터 드리프트가 구조적으로 불가능」과 같은 형태 — `delivery.status` 가 `order.dispatched` 보다 먼저 오면 올릴 라우트가 없다) · 「아직 안 왔다」는 DLQ 도 `rejected` 도 아니다(§4.6) · 관측 근거는 **순서를 뒤섞는 IT** 이고 토픽을 **빼는 방식**으로 돈다([ADR-050](adr/ADR-050-route-departure-is-an-event.md) 이 방금 열한 번째를 더했다 — 열거였다면 그 토픽은 검사 밖이었다) · 근거는 **관측(재현됨)**(2026-09-24 — 기각한 반대안 셋을 임시로 넣자 셋 다 씨 1 에서 사실을 조용히 잃었다) | 정방향 전제 + 어긋나면 DLQ(정상 트래픽을 DLQ 로 보내고 화면의 정확성이 그날의 컨슈머 랙에 걸린다), 행이 없으면 재시도(그 6초가 다른 파티션의 지연과 아무 관계가 없다 — ADR-017 이 같은 제안을 같은 이유로 기각했다), 키별 재정렬 버퍼(**완료 조건이 없다** — 끝내 오지 않는 것이 정상인 토픽이 있고, 지연이 열한 소비자 랙의 최소가 아니라 최대가 된다), 전 토픽 단일 스레드 소비(직렬화는 순서가 아니다 — 아무것도 사지 않고 처리량만 판다), 골격 행에 기본값 채우기(**없는 사실을 지어내는 일** — `NULL` 은 「아직 모른다」라는 참인 말을 하지만 기본값은 거짓인 말을 한다), `rm_*` 없이 동기 조회(불변규칙 4 · ADR-012), ADR 없이 코드에만(이 규칙은 **하지 않는 일**들이라 코드에서 보이지 않는다 — 가장 먼저 「`SET (…) = EXCLUDED.(…)` 로 줄이자」가 들어온다) | [ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) |
 | 050 | **라우트 출발은 이벤트다 — 출발이 첫 편차의 출처이기 때문이다** — `dawnline.delivery.route-departed.v1`(키 `routeId`, 소비자 **ops 뿐**) · 근거는 화면이 아니라 **사실의 가시성**이다: 지금 출발을 아는 것은 tracking 뿐이라(`ScanType.isPublished()` 가 `DEPARTED_CAMP` 를 뺀다) ops 는 첫 `ARRIVED` 가 올 때까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, **그 구간이 운영자가 개입할 수 있는 마지막 창이다**(아직 안 나간 차는 다시 짤 수 있다) · **라우트 하나에 이벤트 하나** — 반복하지 않는다는 이유가 말하지 않을 이유였던 적은 없다([ADR-024](adr/ADR-024-plan-completed-event.md) 의 거울상: 사실의 단위와 토픽의 단위를 맞춘다) · 페이로드 여섯 칸(`routeId`·`campId`·`revision`·`plannedDeparture`·`departedAt`·`stopCount` — 2026-09-24 `stopCount` 를 빼 다섯: 부재를 다른 출처로 메우지 않는다)은 **마이그레이션 없이** 나온다 · `revision` 을 싣는 이유는 「어느 개정본의 계획에 대해 늦었나」를 말해야 하기 때문 · 스키마·예시·토픽·발행은 **소비자가 먼저**(묶음 B, ops 의 `rm_routes`) | 정의하지 않는다(더 단순하지만 그 대가가 **마지막 개입 창을 숨기는 것**이다 — `rm_routes` 는 없는 사실을 만들어 내지 못한다), `delivery.status` 의 `status` 에 `DEPARTED_CAMP` 추가(한 사실이 stop 수만큼 반복된다 — 5-1b 가 발행하지 않기로 한 그 이유), `route.assigned` 에 `departedAt` 을 나중에 채우기(계획 이벤트를 사실로 갱신하면 개정으로 거르는 소비자가 사실을 함께 버린다), ops-api 가 tracking 에 동기 조회(출발은 사건이지 조회 대상이 아니다 — 해상도가 폴링 주기가 된다), 페이로드를 `{routeId, departedAt}` 둘로(편차의 기준선 `plannedDeparture` 가 개정마다 다르다) | [ADR-050](adr/ADR-050-route-departure-is-an-event.md) |
@@ -3547,18 +3610,20 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
 - **시나리오 — 진실은 `tools/sim-runner/src/main/resources/scenarios.yml` 이고 아래 표는 그것을 비춘다** (2026-09-27, 7-4a).
   `ScenariosTableTest` 가 이름 집합(양방향)과 주문 수 · 냉장 비율 · 지연·실패 확률 · 창을 대조한다. 이전의 한 줄 목록은 yml 과
   네 자리에서 갈라져 있었다 — `tiny` · `ops-demo` 가 없었고, `late-injection` 은 지연 15% · 실패 3% 라고 적었지만 yml 은 100% · 5% 였고
-  (구간마다 지연 — at-risk 가 반드시 나야 하는 DoD 시나리오다), 아직 없는 넷을 있는 것처럼 적었다. `—` 는 기사 시뮬레이터가 없다는 뜻이다.
+  (구간마다 지연 — at-risk 가 반드시 나야 하는 DoD 시나리오다), 아직 없는 넷을 있는 것처럼 적었다. 지연 · 실패의 `—` 는 기사 시뮬레이터가
+  없다는 뜻이다. **함대** 칸(2026-09-27, ADR-067)은 yml 의 `fleet` 이다 — `기준` 은 `feasible`(80% 기준이 낸 만큼 증차), `그대로` 는
+  `as-is`(재고 리포트하되 더하지 않는다), `—` 는 함대 단계가 없다.
 
-| 시나리오 | 주문 | 냉장 비율 | 지연 확률 | 실패 확률 | 창(KST) | 무엇을 보나 |
-|---|---|---|---|---|---|---|
-| `smoke` | 200 | 0.25 | — | — | — | 흐름 — CI 스모크 · `make demo` |
-| `tiny` | 10 | 0.5 | — | — | — | 스택이 떠 있는가 |
-| `ops-demo` | 1,200 | 0.25 | — | — | — | 조기 마감 · 재배정 — 라우트가 둘 이상인 웨이브(Phase 6 DoD) |
-| `late-injection` | 60 | 0.25 | 1.0 | 0.05 | — | at-risk → 재계획 → 개정(Phase 5-2 DoD) |
-| `normal-day` | 9,000 | 0.25 | — | — | 22:58–23:58 | 평일 — 하루 3만(§8.2)의 30% 가 DAWN 컷오프 전 1시간에 |
-| `peak-day` | 45,000 | 0.25 | — | — | 22:58–23:58 | 피크 — 하루 15만의 30%, 실현 가능한 함대(아래) |
-| `overload-day` | 45,000 | 0.25 | — | — | 22:58–23:58 | 같은 물량, 함대 그대로(아래) |
-| `cold-heavy` | 9,000 | 0.40 | — | — | 22:58–23:58 | 평일 물량에 냉장 40% — 좌석 예약이 수요 쪽에서 눌린다 |
+| 시나리오 | 주문 | 냉장 비율 | 지연 확률 | 실패 확률 | 창(KST) | 함대 | 무엇을 보나 |
+|---|---|---|---|---|---|---|---|
+| `smoke` | 200 | 0.25 | — | — | — | — | 흐름 — CI 스모크 · `make demo` |
+| `tiny` | 10 | 0.5 | — | — | — | — | 스택이 떠 있는가 |
+| `ops-demo` | 1,200 | 0.25 | — | — | — | — | 조기 마감 · 재배정 — 라우트가 둘 이상인 웨이브(Phase 6 DoD) |
+| `late-injection` | 60 | 0.25 | 1.0 | 0.05 | — | — | at-risk → 재계획 → 개정(Phase 5-2 DoD) |
+| `normal-day` | 9,000 | 0.25 | 0 | 0 | 22:58–23:58 | 그대로 | 평일 — 하루 3만(§8.2)의 30% 가 DAWN 컷오프 전 1시간에 |
+| `peak-day` | 45,000 | 0.25 | 0 | 0 | 22:58–23:58 | 기준 | 피크 — 하루 15만의 30%, 실현 가능한 함대(아래) |
+| `overload-day` | 45,000 | 0.25 | 0 | 0 | 22:58–23:58 | 그대로 | 같은 물량, 함대 그대로(아래) |
+| `cold-heavy` | 9,000 | 0.40 | 0 | 0 | 22:58–23:58 | 그대로 | 평일 물량에 냉장 40% — 좌석 예약이 수요 쪽에서 눌린다 |
 
 - **창은 하나다 — 하루가 아니라 컷오프 전 1시간** (2026-09-26 결정, 7-4a). §8.2 의 「컷오프 직전 1시간에 30% 집중」이 피크의 모양이고,
   `normal-day` 도 **같은 창**으로 돈다 — 비교 축이 같아야 표가 읽힌다. 하루 전체 정시율이 필요해지면 그것은 별도 시나리오다.
@@ -3568,13 +3633,16 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
   속도는 창 전체에 **균일**하다(45,000건 = 12.5 rps). §8.2 의 「최대 ~600 rps」 순간 버스트는 이 도구가 아니라 k6 가 잰다
   (`tools/k6/orders.js` — sim-runner 는 부하 측정기가 아니다). 티어 비율은 `smoke` 와 같다(DAWN 5 · SAME_DAY 3 · NEXT_DAY 2) —
   SAME_DAY 는 다음 날 10:00 웨이브로 가므로 이 창의 측정 밖이다.
-- **기사는 아직 없다.** 네 창 시나리오의 `—` 는 기사 시뮬레이터가 없다는 뜻이다 — 지금의 기사는 「라우트 N 대」를 기다리는데
-  창 시나리오의 라우트 수는 계획이 정한다. §8.1 의 정시율(지연 주입 5%)은 기사가 붙는 날 이 표의 지연 칸과 함께 채운다(7-4).
+- **창의 기사는 계획이 정한 라우트 수를 전부 기다린다** (2026-09-27, ADR-067 결정 6). 원래 7-4 의 일이었는데 ③ 으로 당겼다 — 증차한
+  차량의 비활성화는 끝나지 않은 stop 이 있으면 409 이고(§5.3), 기사 없는 라우트는 끝나지 않는다. 기다릴 수는 설정(`routes`)이 아니라
+  창의 웨이브들의 `route_count` 합이다. 지연 · 실패는 **0** 이다 — §8.1 의 정시율(지연 주입 5%)은 7-4 가 이 칸을 채우며 잰다.
 - **피크는 둘로 돈다 — 실현 가능한 피크와 과부하** (2026-09-25, Phase 7-0). Phase 4 벤치마크의 `peak`/`overload` 분리를 시나리오로
   옮긴 것이다. 캠프당 20대(위 함대)로 하루 15만 건은 **정의상 과부하**다 — 차량당 187 stop 이고([ADR-030](adr/ADR-030-night-shift-seed.md)
   재검토 지점), 그 위에서 잰 정시율·미배정은 SLO 가 아니라 함대 부족을 잰다.
   - `peak-day` 는 **실현 가능성 기준(제약 조합별 수요 ≤ 그 조합 차량 용량의 80%, [ADR-033](adr/ADR-033-constraint-classes.md))이
     정하는 함대**로 돈다 — 성수기 증차는 실제 운영이 하는 일이다. 대수는 고르지 않고 기준이 낸다. §8.1 SLO 는 이 실행에서 잰다.
+    그 기준을 dispatch 가 웨이브의 후보로 내고, sim-runner 가 운영자처럼 ops-api 로 읽고 더한다(§5.6 「성수기 증차」,
+    [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md)) — 더한 차량은 `source=peak-sim` 이고 실행이 끝나면 그것만 비활성화한다.
   - `overload-day` 는 같은 물량을 **함대 그대로** 돈다 — 열화 사다리([ADR-034](adr/ADR-034-degrade-mode.md)) · 미배정 정책
     ([ADR-028](adr/ADR-028-unassigned-policy.md)) · 계획 시간 상한의 판정 데이터다.
   - `peak-day` 는 **콜드 스택에서 시작**하고 첫 계획·첫 소비 처리량을 정상 상태와 분리해 기록한다(Phase 1 의 콜드 스타트,
