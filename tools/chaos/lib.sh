@@ -10,7 +10,10 @@
 
 CHAOS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$CHAOS_ROOT" || exit 1
+# 부르는 쪽이 고른 compose 프로젝트(시뮬레이션 스택 — make sim-up, ADR-066 결정 6)를 .env 의 COMPOSE_PROJECT_NAME 이 덮지 않게.
+caller_project="${COMPOSE_PROJECT_NAME:-}"
 set -a; . deploy/compose/.env; set +a
+COMPOSE_PROJECT_NAME="${caller_project:-$COMPOSE_PROJECT_NAME}"
 
 dc()   { docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.env --profile app --profile obs "$@"; }
 prom() { curl -s "http://localhost:$PROMETHEUS_PORT/api/v1/query" --data-urlencode "query=$1" | jq -c '.data.result[] | [.metric, .value[1]]'; }
