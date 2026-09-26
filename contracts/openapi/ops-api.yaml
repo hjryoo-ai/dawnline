@@ -356,6 +356,69 @@ paths:
                 $ref: "#/components/schemas/ProblemDetail"
       security:
       - opsJwt: []
+  /api/v1/audit/{auditId}/resolve:
+    post:
+      tags:
+      - audit-controller
+      operationId: resolveAudit
+      parameters:
+      - name: auditId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveBody"
+        required: true
+      responses:
+        "200":
+          description: 해소 행이 적혔다 — 대상 행은 그대로다
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 해소 행의 id
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ResolvedView"
+        "400":
+          description: '`resolution` 이 없거나 `reason` 이 비었거나 200자를 넘는다 — 행을 남기지 않는다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 그런 감사 행이 없다 — `REJECTED` 해소 행이 남는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: '`audit-already-resolved`(`resolutionId` — 해소는 한 번이다) 또는 `audit-not-resolvable`(`currentResult`
+            — 대상이 `UNKNOWN` 도 5분 넘은 `PENDING` 도 아니다). `REJECTED` 해소 행이 남는다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
   /api/v1/admin/outbox/{service}/{id}/requeue:
     post:
       tags:
@@ -947,6 +1010,49 @@ components:
       required:
       - orderId
       - status
+    ResolveBody:
+      type: object
+      properties:
+        resolution:
+          type: string
+          enum:
+          - APPLIED
+          - NOT_APPLIED
+        reason:
+          type: string
+          maxLength: 200
+          minLength: 0
+      required:
+      - reason
+      - resolution
+    ResolvedView:
+      type: object
+      properties:
+        auditId:
+          type: string
+          format: uuid
+        targetAuditId:
+          type: string
+          format: uuid
+        resolution:
+          type: string
+          enum:
+          - APPLIED
+          - NOT_APPLIED
+        reason:
+          type: string
+        actor:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - actor
+      - auditId
+      - createdAt
+      - reason
+      - resolution
+      - targetAuditId
     OutboxRequeued:
       type: object
       properties:

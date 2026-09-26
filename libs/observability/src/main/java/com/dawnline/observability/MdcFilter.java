@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -42,10 +44,19 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * 헤더는 누구나 보낼 수 있으므로 <strong>UUID 의 정규 형식일 때만</strong> 받고 아니면 버린다 — 로그
  * 줄에 임의 문자열이 실리지 않게 한다. 넣은 값은 다른 관리 키와 함께 {@code finally} 에서 지워진다.
  *
+ * <h2>수신 줄 (2026-09-26, ADR-065 결정 4)</h2>
+ * <p>그 헤더가 온 요청마다 <strong>처리 전에</strong> INFO 한 줄을 남긴다 — 「운영자 커맨드를 받았습니다: METHOD 경로」. 코어는
+ * 커맨드의 성공만 로그했고 재계획은 그것도 없어서, 감사 {@code UNKNOWN} 을 닫는 사람에게 「그 {@code auditId} 의 줄이 없다」는 닿지
+ * 않았다 · 거절됐다 · 줄 없이 적용됐다를 가르지 못했다(RB-07 §2). 이제 수신 줄이 없으면 닿지 않았다. 처리 전에 남기는 이유: 처리
+ * 중에 프로세스가 죽어도 닿았다는 사실은 남아야 한다. 경로만 싣고 쿼리 스트링은 싣지 않는다(위 「개인정보」). 코어 넷이 이 필터를
+ * 쓰므로 커맨드마다 컨트롤러에 적지 않는다 — 새 커맨드가 빠질 자리가 없다.
+ *
  * <p>등록은 {@code com.dawnline.observability.config.ObservabilityAutoConfiguration} 이
  * 자동으로 한다. 직접 등록할 일은 없다.
  */
 public final class MdcFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(MdcFilter.class);
 
     private final String serviceName;
 
@@ -64,6 +75,7 @@ public final class MdcFilter extends OncePerRequestFilter {
         String auditId = canonicalUuid(request.getHeader(MdcKeys.AUDIT_ID_HEADER));
         if (auditId != null) {
             MDC.put(MdcKeys.AUDIT_ID, auditId);
+            log.info("운영자 커맨드를 받았습니다: {} {}", request.getMethod(), request.getRequestURI());
         }
         try {
             filterChain.doFilter(request, response);

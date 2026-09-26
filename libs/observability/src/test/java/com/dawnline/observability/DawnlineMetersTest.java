@@ -95,7 +95,7 @@ class DawnlineMetersTest {
     void 미리_등록은_닫힌_라벨의_조합_전부를_0_으로_만든다() {
         int registered = DawnlineMeters.preregister(registry, DawnlineMetrics.OPS_COMMANDS);
 
-        assertThat(registered).isEqualTo(6 * 4);
+        assertThat(registered).as("action 일곱(위임 다섯 · DLQ 재처리 · 감사 해소) × result 넷").isEqualTo(7 * 4);
         assertThat(registry.get(DawnlineMetrics.OPS_COMMANDS.meterName())
                 .tag("action", "CLOSE_WAVE").tag("result", "UNKNOWN").counter().count()).isZero();
     }

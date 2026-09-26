@@ -2077,7 +2077,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 이유 | 항목 |
 |---|---|
 | **이미 닫혔다** | **Phase 3 대조표의 `PRIORITY_BOOST` 계약 결손**(⚠️ — 처음 판에는 D6 으로 적었다. Phase 4-11 이 계약 변경 없이 닫았다: 우선도는 받은 사실에서 파생한다, ADR-028 · `LoadCandidateService`. Phase 3 행만 갱신되지 않았다 — 지금 고쳤다) · ADR-015 ①(ADR-055) · ADR-049 ②(규칙 9 가 조건이라는 증명 — #45 의 음성 표본 `OwnShapeAdvice` 가 했다. ops-api 로 한 번 더 하지는 않았다) · ADR-023 의 DLQ 경로 조건(ADR-053 이 §4.4 의 의존 경고로 답했다) · ADR-028 ①②(ADR-033 의 통합 키와 80% 기준) · **ADR-033 「`peak` 은 아직 재지 않았다」**(`DatasetFeasibilityTest` 가 2026-09-12 부터 빼는 방식으로 `peak` 을 포함한다 — ADR 의 문장만 남았다) · ADR-043 ① · ADR-047 ①⑤ · ADR-048 ④ · ADR-050 ③ · ADR-051 ①②③ · ADR-052 ② · **FAST 클러스터 여유 그림자**(`phase4-strategies.md` §7.3 「판정: 닫는다」 — 이득이 비단조. 커밋되지 않은 probe 의 수라는 ⚠️ 가 그 절에 있다) |
-| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · ADR-063(며칠 뒤 웨이브의 조기 마감 · 사유별 카운터) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 · ADR-059(재배송이 들어오면 나이의 전제 — D7 이 범위 밖이다 · 다른 계획의 라우트로 옮기는 재배정 · 측정 문서의 행 수 재검토 지점 넷 — `route_plans` 10만 · `dispatch_candidates` 1,500만 · `route_stops` 2,000만) · ADR-061(`rm_routes` 약 200만 행이면 두 인덱스를 다시 잰다 · 재배송이 들어오면 마지막 결과 시각의 뜻 — `assigned` 의 창은 `void` 가 생겨 닫혔다) · ADR-062(배치 리스너가 들어오면 레코드마다 부모를 여는 자리 · 샘플링을 1.0 아래로 내리면 주문과 계획 트레이스가 따로 뽑힌다) |
+| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · ADR-063(며칠 뒤 웨이브의 조기 마감 · 사유별 카운터) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 · ADR-059(재배송이 들어오면 나이의 전제 — D7 이 범위 밖이다 · 다른 계획의 라우트로 옮기는 재배정 · 측정 문서의 행 수 재검토 지점 넷 — `route_plans` 10만 · `dispatch_candidates` 1,500만 · `route_stops` 2,000만) · ADR-061(`rm_routes` 약 200만 행이면 두 인덱스를 다시 잰다 · 재배송이 들어오면 마지막 결과 시각의 뜻 — `assigned` 의 창은 `void` 가 생겨 닫혔다) · ADR-062(배치 리스너가 들어오면 레코드마다 부모를 여는 자리 · 샘플링을 1.0 아래로 내리면 주문과 계획 트레이스가 따로 뽑힌다) · ADR-065(`audit_logs` 가 수만 행 · 해소의 정정 · 자동 해소 — 셋 다 사건이 연다) |
 | **조건이 켜지지 않았다** | `phase1-orders-k6.md` 판정표의 「`outbox_lag` 상승 → Phase 7 로 넘길지」 행 — Phase 1 의 미달은 콜드 스타트 하나였다 |
 | **메커니즘 조건 — 7-4 의 수가 연다** | ADR-048 ③ 같은 지점으로는 옮기지 않는 규칙(처음 판의 B3, D4) — 후보 한 칸을 건너뛰는 자리라 트리거 단위 outcome 이 아니다. **peak-day 에서 `no-gain` 이 `applied` 보다 잦으면 연다** |
 | **범위 밖으로 닫았다**(D 의 결정) | 재배송 +3(D7 — DESIGN §6.3 우선도 표 · ADR-028 · Phase 5 대조표에 행을 더했다) |
@@ -2231,6 +2231,12 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
    흔적 경로를 되살린다. 7-4 앞 — peak-day 의 운영자 스크립트가 카오스로 생긴 `UNKNOWN` 을 닫는 경로까지 보여야 한다.
    **실제 사례가 생겼다** (2026-09-25, 7-3① `make chaos-db`): fulfillment 의 DB 가 멈춘 동안 보낸 조기 마감 하나가 504 → 감사 `UNKNOWN`. 적용될 수 없었다(그 DB 에
    아무도 들어가지 못했다) — 해소는 `FAILED` 이고 근거는 「그 시각 그 계정은 NOLOGIN 이었다」다. 인위 주입이 아니다.
+   **✅ 7-3b (2026-09-26)** — [ADR-065](adr/ADR-065-audit-resolution-is-a-row.md): `POST /api/v1/audit/{auditId}/resolve` 가 `RESOLVE_AUDIT` 행을 더하고
+   대상 행은 그대로(값은 `APPLIED` · `NOT_APPLIED` — 위임 결과의 이름을 빌리지 않는다, 계획의 「결과 `FAILED`」는 `NOT_APPLIED` 가 됐다) · 코어는
+   `MdcFilter` 에서 수신 줄 하나. **실제 사례는 셋이었다**(12:33 · 21:53 · 00:14 — 가운데는 7-3② 준비 중의 `chaos-db`). 로컬 스택에서 RB-07 을 그대로 밟았다:
+   두 웨이브 모두 이미 `SCHEDULED` 로 닫혀 있음을 먼저 확인(다시 누르기가 마감을 하지 않게) → §1 다시 누르기 409 `wave-not-open` `closeCause=SCHEDULED` →
+   §2 fulfillment 로그에 그 `auditId` 의 수신 줄(거절된 커맨드에도 — 전에는 줄이 없었다) → §3 셋 다 `NOT_APPLIED` 로 해소, 같은 행을 다시 해소하면 409
+   `audit-already-resolved` · RB-07 첫 SQL 0 행 · 카운터 `RESOLVE_AUDIT` SUCCEEDED 3 · REJECTED 1. `audit_logs` 는 로컬 23행 — `target_id` 인덱스 없음이 맞다.
 4a. **peak-day 의 전제**(A27) — 시나리오 넷(`normal-day` · `peak-day` · `overload-day` · `cold-heavy`, 부록 A), 함대 변형
    (`peak-day` 는 80% 기준이 정하는 함대 — D2), sim-runner 이미지, `make peak`. 부록 A 의 목록과 `scenarios.yml` 의
    어긋남도 여기서 맞춘다 — **고치는 것과 함께 검사가 산출물이다**: 진실은 `scenarios.yml` 이고 부록 A 는 그것을 비추는

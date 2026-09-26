@@ -3,12 +3,17 @@ package com.dawnline.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import jakarta.servlet.FilterChain;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -119,5 +124,57 @@ class MdcFilterTest {
 
             assertThat(snapshot.get()).as("[%s]", forged).containsOnlyKeys(MdcKeys.SERVICE);
         }
+    }
+
+    // --- 수신 줄 (ADR-065 결정 4) ------------------------------------------------------------------------------
+
+    @Test
+    void doFilter_감사_id_헤더가_오면_처리_전에_수신_줄_하나를_auditId_와_함께_남긴다() throws Exception {
+        String auditId = "0199a000-0000-7000-8000-00000000a0d2";
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/waves/0199a000-0000-7000-8000-0000000000aa/close");
+        request.setQueryString("reason=secret-address");
+        request.addHeader(MdcKeys.AUDIT_ID_HEADER, auditId);
+        ListAppender<ILoggingEvent> logs = attach();
+        AtomicReference<Integer> linesWhenHandled = new AtomicReference<>();
+        try {
+            filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> linesWhenHandled.set(logs.list.size()));
+        } finally {
+            detach(logs);
+        }
+
+        assertThat(linesWhenHandled.get()).as("처리 전에 남긴다 — 처리 중에 죽어도 닿았다는 사실은 남는다").isOne();
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage())
+                    .isEqualTo("운영자 커맨드를 받았습니다: POST /api/v1/waves/0199a000-0000-7000-8000-0000000000aa/close")
+                    .as("쿼리 스트링은 싣지 않는다(§9.3 개인정보)").doesNotContain("secret");
+            assertThat(event.getMDCPropertyMap()).containsEntry(MdcKeys.AUDIT_ID, auditId);
+        });
+    }
+
+    @Test
+    void doFilter_감사_id_헤더가_없거나_형식이_아니면_수신_줄이_없다() throws Exception {
+        ListAppender<ILoggingEvent> logs = attach();
+        try {
+            filter.doFilter(new MockHttpServletRequest("POST", "/api/v1/orders"), new MockHttpServletResponse(), (req, res) -> { });
+            MockHttpServletRequest forged = new MockHttpServletRequest("POST", "/api/v1/orders/x/cancel");
+            forged.addHeader(MdcKeys.AUDIT_ID_HEADER, "1-1-1-1-1");
+            filter.doFilter(forged, new MockHttpServletResponse(), (req, res) -> { });
+        } finally {
+            detach(logs);
+        }
+
+        assertThat(logs.list).as("운영자 커맨드가 아니다 — 모든 요청에 줄을 남기면 접근 로그가 된다").isEmpty();
+    }
+
+    private static ListAppender<ILoggingEvent> attach() {
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        ((Logger) LoggerFactory.getLogger(MdcFilter.class)).addAppender(logs);
+        return logs;
+    }
+
+    private static void detach(ListAppender<ILoggingEvent> logs) {
+        ((Logger) LoggerFactory.getLogger(MdcFilter.class)).detachAppender(logs);
     }
 }

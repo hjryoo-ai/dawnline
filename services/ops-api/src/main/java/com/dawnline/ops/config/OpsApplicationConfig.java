@@ -15,9 +15,11 @@ import com.dawnline.ops.application.OpsCommandService;
 import com.dawnline.ops.application.QuarantineQueryService;
 import com.dawnline.ops.application.ReadModelProjector;
 import com.dawnline.ops.application.ReadModelQueryService;
+import com.dawnline.ops.application.ResolveAuditService;
 import com.dawnline.ops.application.port.in.ListQuarantinedOutboxUseCase;
 import com.dawnline.ops.application.port.in.ProjectFactUseCase;
 import com.dawnline.ops.application.port.in.QueryReadModelUseCase;
+import com.dawnline.ops.application.port.in.ResolveAuditUseCase;
 import com.dawnline.ops.application.port.in.RunOpsCommandUseCase;
 import com.dawnline.ops.application.port.out.AuditLog;
 import com.dawnline.ops.application.port.out.CoreCommands;
@@ -34,6 +36,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.transaction.PlatformTransactionManager;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -161,6 +164,21 @@ public class OpsApplicationConfig {
     @Bean
     public RunOpsCommandUseCase runOpsCommand(AuditLog audit, CoreCommands core, Clock clock, MeterRegistry registry) {
         return new OpsCommandService(audit, core, clock, registry);
+    }
+
+    /**
+     * 감사 해소 (§5.5 「감사 해소」, ADR-065) — 위임이 없다. 잠금 · 판정 · 삽입이 한 트랜잭션이다.
+     *
+     * @param audit              {@code audit_logs}
+     * @param transactionManager 그 트랜잭션
+     * @param clock              저장 정밀도로 자른 시계
+     * @param registry           카운터 레지스트리
+     * @return 해소 유스케이스
+     */
+    @Bean
+    public ResolveAuditUseCase resolveAudit(AuditLog audit, PlatformTransactionManager transactionManager, Clock clock,
+            MeterRegistry registry) {
+        return new ResolveAuditService(audit, transactionManager, clock, registry);
     }
 
     /**

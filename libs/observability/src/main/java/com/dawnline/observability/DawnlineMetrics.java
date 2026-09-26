@@ -237,7 +237,8 @@ public final class DawnlineMetrics {
     /** 운영자 커맨드의 결과 — 커밋한 뒤에 센다. */
     public static final DawnlineMetric OPS_COMMANDS = counter("dawnline_ops_commands_total",
             "dawnline.ops.commands", "운영자 커맨드 — 감사 행의 결과를 커밋한 뒤에 센다",
-            closed("action", "RUN_PLAN", "REASSIGN_STOP", "CANCEL_ORDER", "CLOSE_WAVE", "REQUEUE_OUTBOX", "DLQ_REPLAY"),
+            closed("action", "RUN_PLAN", "REASSIGN_STOP", "CANCEL_ORDER", "CLOSE_WAVE", "REQUEUE_OUTBOX", "DLQ_REPLAY",
+                    "RESOLVE_AUDIT"),
             closed("result", "SUCCEEDED", "REJECTED", "FAILED", "UNKNOWN"));
 
     /** 마지막으로 성공한 KPI 갱신 뒤로 흐른 초. */

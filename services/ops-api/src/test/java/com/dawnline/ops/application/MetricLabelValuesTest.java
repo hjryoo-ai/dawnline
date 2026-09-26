@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.dawnline.observability.DawnlineMetrics;
 import com.dawnline.ops.application.port.in.OpsCommand;
+import com.dawnline.ops.application.port.in.ResolveAuditUseCase;
 import com.dawnline.ops.domain.AuditResult;
 import com.dawnline.ops.domain.DeliveryOutcome;
 import com.dawnline.ops.domain.RouteProgress;
@@ -21,9 +22,10 @@ import org.junit.jupiter.api.Test;
 class MetricLabelValuesTest {
 
     @Test
-    void 커맨드_action_은_커맨드_전부와_DLQ_재처리다() {
+    void 커맨드_action_은_커맨드_전부와_DLQ_재처리와_감사_해소다() {
         List<String> actions = new ArrayList<>(OpsCommand.ACTIONS);
         actions.add(DlqReplayService.ACTION);
+        actions.add(ResolveAuditUseCase.ACTION);
 
         assertThat(DawnlineMetrics.OPS_COMMANDS.label("action").values()).containsExactlyInAnyOrderElementsOf(actions);
     }

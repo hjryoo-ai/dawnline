@@ -316,5 +316,20 @@ class DlqReplayServiceTest {
             }
             journal.add("close " + result);
         }
+
+        @Override
+        public void record(Entry entry, AuditResult result) {
+            throw new UnsupportedOperationException("이 서비스는 해소 행을 쓰지 않는다");
+        }
+
+        @Override
+        public java.util.Optional<Row> lockForResolution(UUID id) {
+            throw new UnsupportedOperationException("이 서비스는 해소하지 않는다");
+        }
+
+        @Override
+        public java.util.Optional<UUID> findResolution(UUID target) {
+            throw new UnsupportedOperationException("이 서비스는 해소하지 않는다");
+        }
     }
 }
