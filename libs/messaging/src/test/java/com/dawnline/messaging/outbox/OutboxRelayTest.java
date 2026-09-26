@@ -42,7 +42,7 @@ class OutboxRelayTest {
 
     private final MutableClock clock = MutableClock.at(NOW);
     private final EventJson json = EventJson.standard();
-    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository(clock);
+    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository();
     private final TestTransactionManager transactionManager = new TestTransactionManager();
     private final OutboxMetrics metrics = new OutboxMetrics(new SimpleMeterRegistry(), "order-service");
     private final RecordingRecordPublisher publisher = RecordingRecordPublisher.alwaysSucceeding();
@@ -299,7 +299,7 @@ class OutboxRelayTest {
             }
 
             @Override
-            public double unpublishedLagSeconds() {
+            public double unpublishedLagSeconds(Instant now) {
                 throw new IllegalStateException("DB 연결 실패");
             }
 

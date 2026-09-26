@@ -38,7 +38,7 @@ class OutboxBatchPublisherTest {
 
     private final MutableClock clock = MutableClock.at(NOW);
     private final EventJson json = EventJson.standard();
-    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository(clock);
+    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository();
     private final TestTransactionManager transactionManager = new TestTransactionManager();
 
     @Test

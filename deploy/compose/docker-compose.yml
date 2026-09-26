@@ -20,7 +20,11 @@ name: ${COMPOSE_PROJECT_NAME:-dawnline}
 x-service-env: &service-env
   TZ: UTC
   SERVER_PORT: "8080"
-  SPRING_PROFILES_ACTIVE: compose
+  # 시뮬레이션 시계 (DESIGN.md §5.6, ADR-066) — 시뮬레이션은 스케줄이 아니라 시계를 옮긴다. 다섯 서비스(와 sim-runner)가 같은
+  # 오프셋이어야 하므로 이 앵커에 둔다. 0 이 아닌 오프셋은 프로필 sim 에서만 뜬다(아니면 기동 거부). 둘 다 .env 가 아니라
+  # 셸에서 준다 — `make peak` 이 계산해 넘긴다. make obs-check 가 dawnline_clock_offset_seconds 로 다섯이 같은지 대조한다.
+  SPRING_PROFILES_ACTIVE: ${DAWNLINE_SPRING_PROFILES:-compose}
+  DAWNLINE_CLOCK_OFFSET: ${DAWNLINE_CLOCK_OFFSET:-PT0S}
   # 코어 서비스는 kafka 내부 리스너를 쓴다. 호스트 도구만 localhost:29092 를 쓴다.
   SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   # Spring Boot 4.1 은 management.opentelemetry.map-environment-variables=true 가 기본이라

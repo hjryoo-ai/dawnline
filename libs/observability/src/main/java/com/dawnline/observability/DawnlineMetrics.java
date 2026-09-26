@@ -264,6 +264,13 @@ public final class DawnlineMetrics {
             "그 표의 정리가 마지막으로 성공한 뒤로 흐른 초 — 성공한 적이 없으면 기동부터",
             open("table"));
 
+    // --- 시계 (전 서비스, libs/messaging) --------------------------------------
+
+    /** 주입 시계의 오프셋(초) — 0 이 아니면 시뮬레이션이다(ADR-066). 서비스 다섯이 같은 값이어야 한다({@code make obs-check}). */
+    public static final DawnlineMetric CLOCK_OFFSET = gauge("dawnline_clock_offset_seconds",
+            "dawnline.clock.offset.seconds", "주입 시계가 벽시계보다 앞선 초 — 0 이 아니면 시뮬레이션 시각이다(ADR-066)",
+            open("service"));
+
     /**
      * 카탈로그 전부 — §9.1 의 행 수와 같다. 상수만 더하고 이 목록을 잊으면 {@code DawnlineMetricsTest} 가 리플렉션으로 잡는다.
      */
@@ -277,7 +284,7 @@ public final class DawnlineMetrics {
             AT_RISK, AT_RISK_COOLDOWN_BYPASSED, SCAN_AFTER_CANCEL, SCAN_AFTER_RELOCATE, SHIPMENT_PARTITIONS_AHEAD,
             DELIVERY_ON_TIME_RATIO, KPI_EXCLUDED, KPI_DELIVERY, ROUTES, OPS_COMMANDS, KPI_REFRESH_AGE, RM_ORDERS_STUCK,
             INTERNAL_TOKEN_REJECTED,
-            RETENTION_LAST_SUCCESS_AGE);
+            RETENTION_LAST_SUCCESS_AGE, CLOCK_OFFSET);
 
     private static DawnlineMetric counter(String name, String meterName, String help, Label... labels) {
         return new DawnlineMetric(name, Type.COUNTER, meterName, help, List.of(labels));

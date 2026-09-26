@@ -33,7 +33,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 class OutboxQuarantineTest {
 
     private final MutableClock clock = MutableClock.at("2026-09-24T01:00:00Z");
-    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository(clock);
+    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository();
     private final TestTransactionManager transactionManager = new TestTransactionManager();
     private final OutboxQuarantine quarantine = new OutboxQuarantine(repository, transactionManager);
 

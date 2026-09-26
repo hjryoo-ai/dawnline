@@ -1,6 +1,7 @@
 package com.dawnline.ops.config;
 
 import com.dawnline.common.error.DomainException;
+import com.dawnline.messaging.config.MessagingAutoConfiguration;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
@@ -40,7 +41,13 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
  *
  * <h2>무엇을 보나</h2>
  * 서명(HS256) · 발급자({@value #ISSUER}) · 만료(<strong>있어야 한다</strong>) · {@code sub}(감사 행의
- * {@code actor} 가 된다) · 역할 클레임 {@value #ROLES_CLAIM}. 시각은 주입된 {@link Clock} 으로 잰다(불변규칙 12).
+ * {@code actor} 가 된다) · 역할 클레임 {@value #ROLES_CLAIM}.
+ *
+ * <h2>만료는 벽시계로 잰다 — 주입 시계가 아니다 (ADR-066 결정 5)</h2>
+ * 토큰은 {@code tools/ops-token} 이 {@code date +%s} 로 찍는다 — 발급이 벽시계다. 검증을 주입 시계로 하면 시뮬레이션 오프셋
+ * (프로필 {@code sim})이 켜진 스택에서 12시간 토큰이 오프셋만큼 일찍 만료된다 — 오프셋이 12시간을 넘으면 방금 찍은 토큰이 이미
+ * 만료다. JWT 는 <strong>사실의 시각이 아니라 인프라의 시간</strong>이라 발급 · 검증 모두 벽시계다. 테스트는 {@link #decoder} 에
+ * 시계를 넘겨 만료를 본다({@code OpsTokenScriptTest}).
  *
  * <h2>역할</h2>
  * 계층이다: {@code ADMIN} ⊃ {@code OPS_OPERATOR} ⊃ {@code OPS_VIEWER}. {@code GET} 은 {@code OPS_VIEWER},
@@ -110,9 +117,13 @@ class SecurityConfig {
                 .build();
     }
 
+    /**
+     * @param properties 시크릿
+     * @return 벽시계로 만료를 재는 검증기 — 주입 시계(시뮬레이션 오프셋)를 받지 않는다(ADR-066 결정 5)
+     */
     @Bean
-    JwtDecoder opsJwtDecoder(OpsJwtProperties properties, Clock clock) {
-        return decoder(properties, clock);
+    JwtDecoder opsJwtDecoder(OpsJwtProperties properties) {
+        return decoder(properties, MessagingAutoConfiguration.storagePrecisionClock());
     }
 
     /** 테스트가 같은 검증기를 쓰도록 빈 밖에서도 만든다. */
