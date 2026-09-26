@@ -52,7 +52,7 @@ prom_preflight || exit 1
 
 tools/chaos/verify.sh baseline "$STATE" || exit 1
 say "주문 ${EXPECT_ORDERS}건 (SCENARIO=$SCENARIO)"
-make -s smoke SCENARIO="$SCENARIO" > "$OUT/smoke.log" 2>&1 || { echo "smoke 실패 — $OUT/smoke.log" >&2; exit 1; }
+make -s smoke SCENARIO="$SCENARIO" > "$OUT/kill-smoke.log" 2>&1 || { echo "smoke 실패 — $OUT/kill-smoke.log" >&2; exit 1; }
 # 계획할 후보가 다 들어온 뒤에 닫는다 — 덜 들어온 웨이브를 닫으면 늦은 후보가 계획 밖에 남아 이 카오스와 무관한 것을 잰다.
 tools/chaos/verify.sh check "$STATE" --kind "chaos-kill · 마감 전" --wait 300 --expect-orders "$EXPECT_ORDERS" >/dev/null \
   || { echo "주문이 후보까지 가지 않았다 — 카오스 전에 이미 틀렸다" >&2; tools/chaos/verify.sh check "$STATE" --expect-orders "$EXPECT_ORDERS"; exit 1; }

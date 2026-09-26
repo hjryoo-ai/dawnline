@@ -72,6 +72,18 @@ jobs:
       - name: 스택 기동
         run: make up
 
+      # 예열 — RB-06 §3 그대로(재기동 뒤 트래픽 전에 `make smoke` 한 번). 카오스가 재는 것은 장애의 성질이지 콜드 스타트가 아니다 —
+      # 콜드 스타트는 측정 조건이고 7-4 가 콜드 스택에서 따로 잰다(7-0 A2 · D1). 두 번째 실행에서 기동 30초 뒤의 chaos-db 가 주문 둘을
+      # 클라이언트 타임아웃(5초)으로 잃었다: max 5,079.7 ms · p95 77.6 ms(웜 11 ms), 같은 시각 order-service 의 Redis 호출 실패 로그.
+      # 예열 중의 비-201 은 판정이 아니다(그것이 콜드 스타트다). 판정은 그 뒤의 검증 표다 — 받은 주문이 끝까지 가고 DLQ · 격리가 0 인가.
+      - name: 예열 (RB-06 §3)
+        run: |
+          mkdir -p build/chaos
+          tools/chaos/verify.sh baseline build/chaos/warmup.state
+          make -s smoke > build/chaos/warmup-smoke.log 2>&1 \
+            || echo "::notice::예열 중 비-201 — 콜드 스타트(RB-06 §3), 판정이 아니다. build/chaos/warmup-smoke.log"
+          tools/chaos/verify.sh check build/chaos/warmup.state --kind warmup --wait 300 --expect-dlq 0
+
       # 규칙 적재의 전제는 스크립트마다 prom_preflight 가 본다(재적재 · 평가 오류 · reloadConfigSuccess). make obs-check 를 여기
       # 두지 않는 이유: 그 4 · 5(트레이스 · 서비스 그래프)는 발행된 계획을 전제로 해 데모 없이는 빨갛고, 「|| true」로 둔 검사는
       # 실패하지 않는 검사다.
@@ -117,7 +129,12 @@ jobs:
 
       - name: 컨테이너 로그 수집
         if: always()
-        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color > compose-logs.txt
+        # 프로필(app · obs)과 env 파일을 make up 과 같게 준다 — 없으면 서비스 컨테이너가 로그에서 **빠진다**(프로필 서비스는 프로필을
+        # 켠 명령에만 보인다). 2026-09-26 첫 chaos 실행의 로그 아티팩트에 kafka · postgres · redis 만 있어서 smoke 실패의 원인을 볼 수
+        # 없었다. 이 job 이 만든 이후로 늘 그랬다 — 아무도 열어 보지 않은 아티팩트는 꺼 둔 검증과 같은 모양이다(§13).
+        run: |
+          docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.env --profile app --profile obs \
+            logs --no-color --timestamps > compose-logs.txt
 
       - name: 컨테이너 로그 아티팩트
         if: always()

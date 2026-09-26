@@ -378,7 +378,12 @@ jobs:
 
       - name: 컨테이너 로그 수집
         if: always()
-        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color > compose-logs.txt
+        # 프로필(app · obs)과 env 파일을 make up 과 같게 준다 — 없으면 서비스 컨테이너가 로그에서 **빠진다**(프로필 서비스는 프로필을
+        # 켠 명령에만 보인다). 2026-09-26 첫 chaos 실행의 로그 아티팩트에 kafka · postgres · redis 만 있어서 smoke 실패의 원인을 볼 수
+        # 없었다. 이 job 이 만든 이후로 늘 그랬다 — 아무도 열어 보지 않은 아티팩트는 꺼 둔 검증과 같은 모양이다(§13).
+        run: |
+          docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.env --profile app --profile obs \
+            logs --no-color --timestamps > compose-logs.txt
 
       - name: 스모크 로그 아티팩트
         if: always()

@@ -74,7 +74,7 @@ sql admin "ALTER ROLE $ROLE NOLOGIN" >/dev/null
 sql admin "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = '$ROLE'" >/dev/null
 
 say "주문 ${EXPECT_ORDERS}건 (SCENARIO=$SCENARIO)"
-make -s smoke SCENARIO="$SCENARIO" > "$OUT/smoke.log" 2>&1 || { echo "smoke 실패 — $OUT/smoke.log" >&2; exit 1; }
+make -s smoke SCENARIO="$SCENARIO" > "$OUT/db-smoke.log" 2>&1 || { echo "smoke 실패 — $OUT/db-smoke.log" >&2; exit 1; }
 sample "주문 끝"
 
 # 운영자 커맨드 하나 — 장애 중인 코어에 조기 마감을 보낸다. 적용될 수 없다(그 DB 에 아무도 못 들어간다).

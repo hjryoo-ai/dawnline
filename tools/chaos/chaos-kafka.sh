@@ -58,7 +58,7 @@ dc stop kafka >/dev/null 2>&1
 stopped_at=$SECONDS
 
 say "주문 ${EXPECT_ORDERS}건 (SCENARIO=$SCENARIO) — 브로커 없이"
-make -s smoke SCENARIO="$SCENARIO" > "$OUT/smoke.log" 2>&1; smoke=$?
+make -s smoke SCENARIO="$SCENARIO" > "$OUT/kafka-smoke.log" 2>&1; smoke=$?
 sample "주문 끝"
 
 # 운영자 커맨드 하나 — 코어(fulfillment)는 떠 있고 마감은 DB + outbox 라 받아야 한다. wave.closed 는 복구 뒤에 나가 계획까지 간다.
