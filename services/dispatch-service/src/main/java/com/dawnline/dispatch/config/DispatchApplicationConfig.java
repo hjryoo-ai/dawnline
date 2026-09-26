@@ -177,19 +177,22 @@ public class DispatchApplicationConfig {
      * @param distance   거리 제공자
      * @param clock      시각 출처
      * @param properties {@code dawnline.dispatch.plan.*}
+     * @param transactionManager 읽기 · 쓰기 트랜잭션 — 계산은 그 사이에서 트랜잭션 없이 돈다 (ADR-064)
      */
     @Bean
     public RunPlanUseCase runPlanUseCase(RoutePlanRepository plans,
             DispatchCandidateRepository candidates, PlannedRouteRepository routes,
             DispatchEvents events, JdbcReferenceData reference, DistanceProvider distance,
-            DispatchMetrics metrics, Clock clock, DispatchProperties properties) {
+            DispatchMetrics metrics, Clock clock, DispatchProperties properties,
+            PlatformTransactionManager transactionManager) {
 
         return new RunPlanService(plans, candidates, routes, events, reference, reference,
                 distance, metrics, clock, properties.plan().defaultStrategy(),
                 new PlanningBudget(properties.plan().budget(), properties.plan().perRouteBudget()),
                 new PlanModeSelector(properties.degrade().maxBacklogWaves(),
                         properties.degrade().budgetRatio(),
-                        properties.degrade().budgetFactor()));
+                        properties.degrade().budgetFactor()),
+                transactionManager);
     }
 
     /**

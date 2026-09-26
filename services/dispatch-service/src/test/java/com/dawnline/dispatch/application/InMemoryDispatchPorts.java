@@ -37,6 +37,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 /**
  * 유스케이스 단위 테스트의 메모리 포트들.
@@ -66,6 +70,33 @@ final class InMemoryDispatchPorts {
 
     static RuleCatalog rules(RuleSet ruleSet) {
         return campId -> ruleSet;
+    }
+
+    /**
+     * 트랜잭션을 흉내 내지 않고 <strong>기록만</strong> 하는 관리자 — 지금 열려 있는 깊이와, 연 트랜잭션이 읽기 전용이었는지.
+     * 계산이 트랜잭션 밖에서 도는지(ADR-064)를 단위 테스트가 이것으로 본다. 전파는 흉내 내지 않는다: 연 것마다 깊이가 하나 는다.
+     */
+    static final class Transactions implements PlatformTransactionManager {
+
+        int depth;
+        final List<Boolean> opened = new ArrayList<>();
+
+        @Override
+        public TransactionStatus getTransaction(TransactionDefinition definition) {
+            depth++;
+            opened.add(definition != null && definition.isReadOnly());
+            return new SimpleTransactionStatus();
+        }
+
+        @Override
+        public void commit(TransactionStatus status) {
+            depth--;
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
+            depth--;
+        }
     }
 
     /** {@code route_plans} 흉내. {@code wave_id} UNIQUE 를 그대로 지킨다. */

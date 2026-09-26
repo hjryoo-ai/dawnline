@@ -2069,7 +2069,8 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | B9 | 후보가 10,000 건을 넘는가 — 넘으면 프로젝션 읽기를 다시 잰다 | ADR-029 ③ | 웨이브당 후보 수 | |
 | B10 | FAST 첫 단의 대가 — 재삽입 한 번을 더할지 | ADR-041 ① · ADR-043 ④ | FAST 전환 횟수(7-4 가 이미 잰다) × 그 계획의 비용 | 여유(slack) 그림자는 **닫혔다**(표 C) — 이 행은 그것과 다른 물음이다 |
 | B11 | 보존 인덱스 둘의 쓰기 대가 — `updated_at` 이 인덱스 키라 HOT 갱신을 잃는다 | ADR-058 · 7-0b [측정](benchmarks/phase7-retention-indexes.md) §1.4 · §2.4 | peak-day 동안 `shipments` · `rm_orders` 의 `n_tup_hot_upd / n_tup_upd`(`pg_stat_user_tables`) | 7-0b 측정은 채운 직후라 인덱스 없이도 HOT 0 이었다 — 운영 모양의 몫은 **근거: 추정**. 크면 BRIN 을 다시 잰다(PostgreSQL 16 릴리스 노트: BRIN 칸만 바뀌는 갱신은 HOT 을 허용한다 — 이 저장소에서 재지 않았다) |
-| B12 | 계획 트랜잭션이 `max.poll.interval.ms`(300초)에 다가가는가 — 넘기면 컨슈머가 쫓겨나 같은 `wave.closed` 가 다른 소비자에게 가고 두 계획이 한 행을 두고 경합한다(`wave_id` UNIQUE 가 하나를 막는다) | ADR-024 후속 정정 재검토 지점 (2026-09-26 — 계획 하나는 트랜잭션 하나) | `dawnline_plan_duration_seconds` + `dawnline_plan_persist_seconds` 의 최댓값 — 트랜잭션 전체 | 예산 30초는 그 1/10 이다. peak 규모 웨이브에서 영속화까지 합이 60초를 넘으면 다시 본다 |
+| B12 | 계획(리스너 스레드의 계산 + 쓰기 트랜잭션 — ADR-064 뒤로 계산은 트랜잭션 밖이지만 **같은 스레드**다)이 `max.poll.interval.ms`(300초)에 다가가는가 — 넘기면 컨슈머가 쫓겨나 같은 `wave.closed` 가 다른 소비자에게 가고 두 계획이 한 행을 두고 경합한다(`wave_id` UNIQUE 가 하나를 막는다) | ADR-024 후속 정정 재검토 지점 (2026-09-26 — 계획 하나는 트랜잭션 하나) | `dawnline_plan_duration_seconds` + `dawnline_plan_persist_seconds` 의 최댓값 — 트랜잭션 전체 | 예산 30초는 그 1/10 이다. peak 규모 웨이브에서 영속화까지 합이 60초를 넘으면 다시 본다 |
+| B13 | 부분 재계획은 트랜잭션 안에서 계산한다 — 첫 문장(`tryStartReplan`)이 쿨다운 행을 갱신해 **라우트 행 락을 쥔 채** `RelocateSearch` 가 돈다 | ADR-064 재검토 지점 (2026-09-26) | 재계획 소요(지표가 없다 — `dawnline_replan_total` 은 결과만 센다: `at-risk` 소비 스팬의 길이) · 동시 재계획 수 | **재지 않았다.** 초 단위면 ADR-064 의 구조를 다시 본다 — 쿨다운 비교 · 갱신이 한 트랜잭션인 것이 ADR-046 결정 3 의 성질이라 나누는 비용이 계획보다 크다 |
 
 **C. 뺀 것 — Phase 7 에서 판정하지 않는 재검토 지점**
 
@@ -2203,6 +2204,11 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
      `MAX_PUSHES_EXCEEDED` 176 이었다(RB-02 §3) · `make obs-check` 1 이 **규칙 내용 해시**를 견준다(§13 「꺼 둔 검증」 규칙판 — 단일 파일 바인드
      마운트의 inode 도 같은 자리에서 나왔다) · exporter 기준 ③ 은 「모름은 0 도 −1 도 아니다」의 적용(#75 본문)
    - `.github/workflows/chaos.yml` — 수동 실행, 넷을 한 스택에서 차례로, `build/chaos/` 를 아티팩트로
+   **7-3② 후속 (2026-09-26, 리뷰)** — 「계획 하나는 트랜잭션 하나」가 참이면 최적화기가 도는 동안 커넥션을 쥔다. 추정하지 않고 먼저 쟀다:
+   `PlanComputeConnectionIT` 가 계산 안에서 멈춘 동안 `idle in transaction` 백엔드 하나를 봤다(나이 0.29초, 3초 더 멈추자 3.29초 — 같은 트랜잭션).
+   [ADR-064](adr/ADR-064-planning-computes-outside-the-transaction.md) — 읽기(읽기 전용) → 계산(트랜잭션 없음) → 쓰기(멱등 게이트 + 트랜잭션 하나).
+   리뷰의 「캠프 10개 × 풀 10」은 리스너 동시성 3 이 상한이라 풀 10 중 3 이었다 — 다 막지는 않지만 버스트 시각에 30% 를 20초씩. 부분 재계획은
+   아직 안에서 계산한다(B13, 재지 않았다).
 3b. **감사 해소는 칸이 아니라 행이다**(2026-09-25 결정) — 감사 행은 덧붙이지 고치지 않는다. `RESOLVE_AUDIT` 행 하나(대상 = `UNKNOWN`
    행 id, 결과, `reason` 필수, actor)를 ops-api `POST /audit/{id}/resolve` 로 남기고, `UNKNOWN` 행은 그대로 둔다. RB-07 §3 의
    「사건 기록에 남긴다」와 SQL `UPDATE` 가 이 행으로 바뀐다. ADR-052 재검토 지점 4(자동 해소)가 열리면 같은 행을 쓴다. **같은 PR 에
