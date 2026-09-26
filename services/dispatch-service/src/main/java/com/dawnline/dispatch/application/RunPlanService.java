@@ -45,18 +45,26 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 웨이브 하나를 계획하고 발행한다 (DESIGN.md §5.3, §6.5).
  *
- * <h2>한 트랜잭션이다</h2>
- * 계획 저장·후보 상태 전이·세 이벤트의 outbox 적재가 <strong>모두 같은 트랜잭션</strong>이다.
- * 나눠 넣으면 "완료라는데 라우트가 없다" 가 생긴다(ADR-024). 계획 <em>계산</em>은 순수 함수라
- * 트랜잭션 안에서 도는 것이 부담이지만, {@code large} 실측이 674 ms 라 지금 규모에서는
- * 나누는 복잡도가 더 비싸다 — 재검토 지점은 §6.7 의 예산(30초)에 가까워질 때다.
+ * <h2>읽기 · 계산 · 쓰기 — 계산은 트랜잭션 밖이다 (ADR-064)</h2>
+ * <ol>
+ *   <li><strong>읽기</strong> — 읽기 전용 트랜잭션 하나. 기존 계획 · 모드 판단 · 후보 · 룰 · 차량. 아무것도 쓰지 않는다.</li>
+ *   <li><strong>계산</strong> — 트랜잭션 없음. 최적화와 하드 룰 검증. {@code peak} 한 번이 19.9초이고, 그동안 커넥션을 쥐면
+ *       컷오프 직전 버스트(§8.2)에 풀이 그만큼 준다. 정정 전에는 쥐고 있었다(근거: 관측(재현됨), {@code PlanComputeConnectionIT}).</li>
+ *   <li><strong>쓰기</strong> — 게이트 안의 트랜잭션 하나. 계획 저장·후보 상태 전이·세 이벤트의 outbox 적재가 <strong>모두 같은
+ *       트랜잭션</strong>이다. 나눠 넣으면 "완료라는데 라우트가 없다" 가 생긴다(ADR-024). {@code PLANNING} 은 커밋되지 않는다.</li>
+ * </ol>
+ * 원래 판단은 「{@code large} 674 ms 라 나누는 복잡도가 더 비싸다 — 재검토 지점은 예산(30초)에 가까워질 때」였고 {@code peak} 이
+ * 그 지점에 닿았다. 읽기와 쓰기가 한 트랜잭션이 아니게 되어 잃는 것은 없다 — {@code READ COMMITTED} 라 원래도 문장마다 새 스냅샷이었다.
  *
  * <h2>모드는 계획마다 다시 정한다</h2>
  * §6.7 의 열화는 <strong>래치가 아니다</strong>. {@link PlanModeSelector} 가 매번 두 사실을
@@ -104,6 +112,8 @@ public class RunPlanService implements RunPlanUseCase {
     private final String defaultStrategy;
     private final PlanningBudget budget;
     private final PlanModeSelector modeSelector;
+    private final TransactionTemplate reads;
+    private final TransactionTemplate writes;
 
     /**
      * @param plans           계획 저장소
@@ -118,11 +128,13 @@ public class RunPlanService implements RunPlanUseCase {
      * @param defaultStrategy 기본 전략 (§6.6)
      * @param budget          시간 예산 (§6.7)
      * @param modeSelector    열화 판단 (§6.7, ADR-034)
+     * @param transactions    읽기(읽기 전용)와 쓰기 트랜잭션 — 계산은 둘 사이에서 트랜잭션 없이 돈다 (ADR-064)
      */
     public RunPlanService(RoutePlanRepository plans, DispatchCandidateRepository candidates,
             PlannedRouteRepository routes, DispatchEvents events, VehicleCatalog vehicles,
             RuleCatalog rules, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
-            String defaultStrategy, PlanningBudget budget, PlanModeSelector modeSelector) {
+            String defaultStrategy, PlanningBudget budget, PlanModeSelector modeSelector,
+            PlatformTransactionManager transactions) {
 
         this.plans = Objects.requireNonNull(plans, "plans");
         this.candidates = Objects.requireNonNull(candidates, "candidates");
@@ -136,42 +148,106 @@ public class RunPlanService implements RunPlanUseCase {
         this.defaultStrategy = Objects.requireNonNull(defaultStrategy, "defaultStrategy");
         this.budget = Objects.requireNonNull(budget, "budget");
         this.modeSelector = Objects.requireNonNull(modeSelector, "modeSelector");
+        Objects.requireNonNull(transactions, "transactions");
+        this.reads = new TransactionTemplate(transactions);
+        this.reads.setReadOnly(true);
+        this.writes = new TransactionTemplate(transactions);
     }
 
     @Override
-    @Transactional
-    public Outcome run(RunPlanCommand command) {
+    public Outcome run(RunPlanCommand command, WriteGate gate) {
         Objects.requireNonNull(command, "command");
+        Objects.requireNonNull(gate, "gate");
         Instant startedAt = clock.instant();
 
-        RoutePlan plan = openPlan(command);
-        if (plan.status().isTerminal()) {
-            // wave.closed 중복 도착. 멱등 소비자와 wave_id UNIQUE 로 두 겹이다 (§5.3).
+        Snapshot snapshot = Objects.requireNonNull(reads.execute(status -> read(command, startedAt)));
+        if (snapshot.alreadyPublished()) {
+            // wave.closed 중복 도착. 멱등 소비자와 wave_id UNIQUE 로 두 겹이다 (§5.3). 계산하지 않고 끝내되 게이트는
+            // 지난다 — 받은 이벤트는 한 번씩 게이트를 지나야 멱등 기록과 소비 카운터가 이벤트 수와 맞는다.
             log.debug("이미 발행된 웨이브입니다: waveId={}", command.waveId());
-            return Outcome.ALREADY_PUBLISHED;
+            return gate.enter(() -> { }) ? Outcome.ALREADY_PUBLISHED : Outcome.DUPLICATE;
         }
 
-        PlanModeSelector.Decision mode = chooseMode(command);
+        // 여기서부터 쓰기 전까지 트랜잭션이 없다 — 커넥션을 쥐지 않는다 (ADR-064).
+        @Nullable Computed computed = snapshot.plannable().isEmpty() ? null : compute(command, snapshot, startedAt);
 
+        AtomicReference<Written> written = new AtomicReference<>();
+        boolean entered = gate.enter(() -> written.set(writes.execute(status ->
+                write(command, snapshot, computed, startedAt))));
+        if (!entered) {
+            log.info("같은 이벤트를 이미 처리했습니다 — 계산한 결과를 버립니다: waveId={}", command.waveId());
+            return Outcome.DUPLICATE;
+        }
+        Written result = Objects.requireNonNull(written.get(), "게이트가 들어갔다고 했는데 쓰기가 돌지 않았다");
+        // 카운터는 커밋 뒤에 센다 — 게이트가 돌아왔으면 커밋이 끝났다 (ADR-064 결정 5, CLAUDE.md).
+        if (result.published() != null) {
+            metrics.planPublished(result.published(), result.budgetExhausted());
+            metrics.planPersisted(result.published().campId(), result.persisted());
+        }
+        return result.outcome();
+    }
+
+    /** 읽기 — 읽기 전용 트랜잭션 안. 아무것도 쓰지 않는다(계획 행도 쓰기 단계가 넣는다). */
+    private Snapshot read(RunPlanCommand command, Instant startedAt) {
+        Optional<RoutePlan> existing = plans.findByWaveId(command.waveId());
+        if (existing.isPresent() && existing.get().status().isTerminal()) {
+            return Snapshot.published();
+        }
+        // 좌표는 계획 행에 저장돼 있다 — 재실행·부분 재계획은 wave.closed 를 다시 받지 않는다(V2 마이그레이션 주석).
+        GeoPoint depot = existing.isPresent()
+                ? existing.get().depot().orElseThrow(() -> new IllegalStateException(
+                        "캠프 좌표가 없는 계획은 다시 돌릴 수 없습니다: planId=" + existing.get().id()))
+                : Objects.requireNonNull(command.depot(),
+                        "새 계획에는 캠프 좌표가 필요합니다 — wave.closed 의 depot 스냅샷입니다");
+
+        PlanModeSelector.Decision mode = chooseMode(command);
         List<DispatchCandidate> plannable = candidates.findPlannableInWave(command.waveId());
         if (plannable.isEmpty()) {
+            return new Snapshot(false, depot, mode, plannable, RuleSet.empty(), List.of());
+        }
+        List<VehicleSpec> fleet = vehicles.availableAt(command.campId(), startedAt);
+        if (fleet.isEmpty()) {
+            throw new IllegalStateException("캠프에 가용 차량이 없습니다: " + command.campId());
+        }
+        return new Snapshot(false, depot, mode, plannable, rules.forCamp(command.campId()), fleet);
+    }
+
+    /** 계산 — 트랜잭션 없음. 순수 함수와 하드 룰 검증뿐이다. */
+    private Computed compute(RunPlanCommand command, Snapshot snapshot, Instant startedAt) {
+        PlanningProblem problem = problemOf(command, snapshot, startedAt);
+        PlanResult result = DispatchStrategies.create(strategyOf(command)).plan(problem);
+        return new Computed(result, validator.validate(problem, result));
+    }
+
+    /**
+     * 쓰기 — 게이트 안의 트랜잭션 하나. 계산하는 동안 바뀐 것을 여기서 다시 읽는다: 계획 행(다른 경로가 같은 웨이브를 발행했나)과
+     * 취소(ADR-026 분기 2).
+     */
+    private Written write(RunPlanCommand command, Snapshot snapshot, @Nullable Computed computed,
+            Instant startedAt) {
+
+        RoutePlan plan = openPlan(command, snapshot.depot());
+        if (plan.status().isTerminal()) {
+            // 계산하는 동안 다른 경로(다른 eventId 의 wave.closed · 운영자 재실행)가 발행했다 — wave_id UNIQUE 가 받았다.
+            log.info("계산하는 동안 발행된 웨이브입니다 — 결과를 버립니다: waveId={}", command.waveId());
+            return Written.of(Outcome.ALREADY_PUBLISHED);
+        }
+        PlanModeSelector.Decision mode = snapshot.mode();
+
+        if (computed == null) {
             plan.begin(strategyOf(command), mode.mode(), mode.reason(), command.effectiveSeed(), 0,
                     startedAt);
             plan.fail(NO_CANDIDATES, clock.instant());
             plans.update(plan);
             events.planFailed(plan);
-            return Outcome.NO_CANDIDATES;
+            return Written.of(Outcome.NO_CANDIDATES);
         }
 
-        RuleSet ruleSet = rules.forCamp(command.campId());
         plan.begin(strategyOf(command), mode.mode(), mode.reason(), command.effectiveSeed(),
-                ruleSet.version(), startedAt);
+                snapshot.ruleSet().version(), startedAt);
         plans.update(plan);
 
-        PlanningProblem problem = problemOf(command, plan, plannable, ruleSet, startedAt, mode);
-        PlanResult result = DispatchStrategies.create(strategyOf(command)).plan(problem);
-
-        List<PlanValidator.Violation> violations = validator.validate(problem, result);
+        List<PlanValidator.Violation> violations = computed.violations();
         if (!violations.isEmpty()) {
             // 하드 룰을 어긴 계획은 데이터 문제가 아니라 코드 버그다 (§6.5 6단계).
             log.error("계획이 하드 룰을 어겼습니다: waveId={} 위반={}건 첫 위반={}",
@@ -179,20 +255,22 @@ public class RunPlanService implements RunPlanUseCase {
             plan.fail(RULE_VIOLATION, clock.instant());
             plans.update(plan);
             events.planFailed(plan);
-            return Outcome.FAILED;
+            return Written.of(Outcome.FAILED);
         }
 
-        // 계획 중에 취소된 주문을 뺀다 (ADR-026 분기 2) — revision 없이 닫는 유일한 창이다.
-        result = PlanPruner.prune(result, cancelledSince(command.waveId(), plannable));
+        // 계획 중에 취소된 주문을 뺀다 (ADR-026 분기 2) — revision 없이 닫는 유일한 창이다. 그 창은 이제 읽기가 끝난
+        // 때부터 여기까지다(계산 전체).
+        PlanResult result = PlanPruner.prune(computed.result(),
+                cancelledSince(command.waveId(), snapshot.plannable()));
 
         if (result.routes().isEmpty()) {
             plan.fail(NO_CANDIDATES, clock.instant());
             plans.update(plan);
             events.planFailed(plan);
-            return Outcome.FAILED;
+            return Written.of(Outcome.FAILED);
         }
 
-        return publish(command, plan, result, startedAt);
+        return publish(plan, result, startedAt);
     }
 
     /**
@@ -217,9 +295,7 @@ public class RunPlanService implements RunPlanUseCase {
         return decision;
     }
 
-    private Outcome publish(RunPlanCommand command, RoutePlan plan, PlanResult result,
-            Instant startedAt) {
-
+    private Written publish(RoutePlan plan, PlanResult result, Instant startedAt) {
         Instant finishedAt = clock.instant();
         int durationMs = (int) Duration.between(startedAt, finishedAt).toMillis();
         plan.complete(result.totalCost(), result.assignedOrderCount(), result.unassigned().size(),
@@ -248,11 +324,9 @@ public class RunPlanService implements RunPlanUseCase {
         plan.publish(finishedAt);
         plans.update(plan);
         events.planCompleted(plan, result);
-        // 메트릭은 트랜잭션에 참여하지 않는다 — 계획이 롤백되면 이 수치는 남지만, 그것이
-        // 발행을 막는 것보다 낫다 (fulfillment 와 같은 판단).
-        metrics.planPublished(plan, result.budgetExhausted());
-        metrics.planPersisted(plan.campId(), Duration.ofNanos(System.nanoTime() - persistFrom));
-        return Outcome.PUBLISHED;
+        // 메트릭은 여기서 올리지 않는다 — 아직 커밋 전이다. 값만 들고 나가 게이트가 돌아온 뒤에 센다 (ADR-064 결정 5).
+        return new Written(Outcome.PUBLISHED, plan, result.budgetExhausted(),
+                Duration.ofNanos(System.nanoTime() - persistFrom));
     }
 
     /**
@@ -291,8 +365,8 @@ public class RunPlanService implements RunPlanUseCase {
         return cancelled;
     }
 
-    /** 있으면 그것, 없으면 새로 만든다. {@code wave_id} UNIQUE 가 경합을 흡수한다. */
-    private RoutePlan openPlan(RunPlanCommand command) {
+    /** 있으면 그것, 없으면 새로 만든다. {@code wave_id} UNIQUE 가 경합을 흡수한다. 쓰기 트랜잭션 안에서만 부른다. */
+    private RoutePlan openPlan(RunPlanCommand command, GeoPoint depot) {
         Optional<RoutePlan> existing = plans.findByWaveId(command.waveId());
         if (existing.isPresent()) {
             RoutePlan plan = existing.get();
@@ -303,8 +377,6 @@ public class RunPlanService implements RunPlanUseCase {
             }
             return plan;
         }
-        GeoPoint depot = Objects.requireNonNull(command.depot(),
-                "새 계획에는 캠프 좌표가 필요합니다 — wave.closed 의 depot 스냅샷입니다");
         RoutePlan plan = RoutePlan.request(Ids.newId(), command.waveId(), command.campId(), depot);
         if (!plans.insertIfAbsent(plan)) {
             return plans.findByWaveId(command.waveId()).orElseThrow(() ->
@@ -313,30 +385,20 @@ public class RunPlanService implements RunPlanUseCase {
         return plan;
     }
 
-    private PlanningProblem problemOf(RunPlanCommand command, RoutePlan plan,
-            List<DispatchCandidate> plannable, RuleSet ruleSet, Instant startedAt,
-            PlanModeSelector.Decision mode) {
-
-        List<VehicleSpec> fleet = vehicles.availableAt(command.campId(), startedAt);
-        if (fleet.isEmpty()) {
-            throw new IllegalStateException("캠프에 가용 차량이 없습니다: " + command.campId());
-        }
-        List<Candidate> optimizerCandidates = new ArrayList<>(plannable.size());
-        for (DispatchCandidate candidate : plannable) {
+    private PlanningProblem problemOf(RunPlanCommand command, Snapshot snapshot, Instant startedAt) {
+        List<Candidate> optimizerCandidates = new ArrayList<>(snapshot.plannable().size());
+        for (DispatchCandidate candidate : snapshot.plannable()) {
             optimizerCandidates.add(new Candidate(OrderId.of(candidate.orderId()),
                     candidate.location(),
                     new Parcel(candidate.weightG(), candidate.volumeCm3(),
                             candidate.requiresCold(), candidate.hazmat()),
                     candidate.promised(), candidate.serviceSeconds(), candidate.priority()));
         }
-        // 좌표는 계획 행에 저장돼 있다 — 재실행·부분 재계획은 wave.closed 를 다시
-        // 받지 않는다(V2 마이그레이션 주석).
-        GeoPoint point = plan.depot().orElseThrow(() -> new IllegalStateException(
-                "캠프 좌표가 없는 계획은 다시 돌릴 수 없습니다: planId=" + plan.id()));
+        PlanModeSelector.Decision mode = snapshot.mode();
         return new PlanningProblem(
                 new WaveRef(command.waveId(), command.campId(), "SAME_DAY", startedAt),
-                new CampDepot(command.campId(), point), optimizerCandidates, fleet, ruleSet, cost,
-                distance, budget, mode.mode(), mode.budgetFactor(), startedAt,
+                new CampDepot(command.campId(), snapshot.depot()), optimizerCandidates, snapshot.fleet(),
+                snapshot.ruleSet(), cost, distance, budget, mode.mode(), mode.budgetFactor(), startedAt,
                 command.effectiveSeed());
     }
 
@@ -350,5 +412,54 @@ public class RunPlanService implements RunPlanUseCase {
 
     private String strategyOf(RunPlanCommand command) {
         return command.strategy() != null ? command.strategy() : defaultStrategy;
+    }
+
+    /**
+     * 읽기 단계가 모은 것. {@code alreadyPublished} 면 나머지는 비어 있다.
+     *
+     * @param alreadyPublished 이미 발행된 웨이브 — 계산하지 않는다
+     * @param depot            캠프 좌표 (기존 계획의 것이 명령의 것을 이긴다 — 재실행 경로)
+     * @param mode             모드 판단
+     * @param plannable        계획할 후보. 비면 계산하지 않는다
+     * @param ruleSet          룰셋
+     * @param fleet            가용 차량
+     */
+    private record Snapshot(boolean alreadyPublished, @Nullable GeoPoint depot,
+            PlanModeSelector.@Nullable Decision mode, List<DispatchCandidate> plannable, RuleSet ruleSet,
+            List<VehicleSpec> fleet) {
+
+        static Snapshot published() {
+            return new Snapshot(true, null, null, List.of(), RuleSet.empty(), List.of());
+        }
+
+        @Override
+        public GeoPoint depot() {
+            return Objects.requireNonNull(depot, "발행된 웨이브의 스냅샷에는 좌표가 없다");
+        }
+
+        @Override
+        public PlanModeSelector.Decision mode() {
+            return Objects.requireNonNull(mode, "발행된 웨이브의 스냅샷에는 모드가 없다");
+        }
+    }
+
+    /** 계산 단계의 결과. */
+    private record Computed(PlanResult result, List<PlanValidator.Violation> violations) {
+    }
+
+    /**
+     * 쓰기 단계의 결과 — 발행했으면 커밋 뒤에 셀 값을 함께 든다.
+     *
+     * @param outcome         결과
+     * @param published       발행한 계획. 발행하지 않았으면 {@code null}
+     * @param budgetExhausted 계획이 예산에 잘렸나
+     * @param persisted       영속화 시간 (ADR-029)
+     */
+    private record Written(Outcome outcome, @Nullable RoutePlan published, boolean budgetExhausted,
+            Duration persisted) {
+
+        static Written of(Outcome outcome) {
+            return new Written(outcome, null, false, Duration.ZERO);
+        }
     }
 }
