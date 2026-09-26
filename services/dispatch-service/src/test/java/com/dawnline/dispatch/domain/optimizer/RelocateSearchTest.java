@@ -157,6 +157,51 @@ class RelocateSearchTest {
         assertThat(outcome.moves()).hasSizeLessThanOrEqualTo(RelocateSearch.MAX_MOVES);
     }
 
+    // ------------------------------------------------------------ 평가 상한에 걸렸는가 (§6.8, 7-0 D4)
+
+    @Test
+    void 짝을_다_보고_이득이_없으면_잘린_것이_아니다() {
+        // 짝 둘(stop 둘 × 라우트 하나)에 상한 둘 — 마지막 짝에서 정확히 닿았지만 다음 라운드가 없다(국소 최적).
+        RelocateSearch.RouteInput source = route(big(), line(1, 2), 0, START);
+        RelocateSearch.RouteInput target = route(big(), stops(north(20), north(21)), 0, START);
+
+        RelocateSearch.Outcome outcome = capped(2).search(RuleSet.empty(), source, List.of(target));
+
+        assertThat(outcome.moved()).isFalse();
+        assertThat(outcome.truncated()).as("「다 봤는데 없다」 — no-gain").isFalse();
+    }
+
+    @Test
+    void 짝을_다_못_보고_이득이_없으면_잘린_것이다() {
+        // 같은 입력에 상한 하나 — 둘째 짝을 보지 못했다. 「이득 없음」이 아니라 「모름」이다.
+        RelocateSearch.RouteInput source = route(big(), line(1, 2), 0, START);
+        RelocateSearch.RouteInput target = route(big(), stops(north(20), north(21)), 0, START);
+
+        RelocateSearch.Outcome outcome = capped(1).search(RuleSet.empty(), source, List.of(target));
+
+        assertThat(outcome.moved()).isFalse();
+        assertThat(outcome.truncated()).isTrue();
+    }
+
+    @Test
+    void 이동을_찾았어도_다음_라운드를_못_열면_잘린_것이다() {
+        // 편차 두 시간 — 늦은 라우트의 stop 을 옮기는 것이 이득이다(아래 「편차」 테스트와 같은 입력).
+        TimeWindow tight = new TimeWindow(START, START.plus(Duration.ofMinutes(90)));
+        RelocateSearch.RouteInput late = late(tight, Duration.ofHours(2));
+        RelocateSearch.RouteInput onTime = onTime(tight);
+        RelocateSearch.Outcome full = search.search(RuleSet.of(
+                List.of(new TimeWindowPenaltyRule("TIME_WINDOW_PENALTY", 1, 2_000L)), 1), late, List.of(onTime));
+        assertThat(full.moved()).as("전제 — 상한이 없으면 옮긴다").isTrue();
+        assertThat(full.truncated()).as("전제 — 기본 상한 안에서 끝난다").isFalse();
+
+        // 첫 라운드의 짝 둘을 다 보고 이동 하나를 골랐지만, 둘째 라운드는 시작하지 못했다.
+        RelocateSearch.Outcome outcome = capped(2).search(RuleSet.of(
+                List.of(new TimeWindowPenaltyRule("TIME_WINDOW_PENALTY", 1, 2_000L)), 1), late, List.of(onTime));
+
+        assertThat(outcome.moves()).hasSize(1);
+        assertThat(outcome.truncated()).as("더 좋은 이동을 못 본 채 고른 것 — searchTruncated").isTrue();
+    }
+
     @Test
     void 원_라우트를_후보로_주면_거절한다() {
         // 자기에게 옮기는 것은 이동이 아니라 순서 바꾸기이고, 그것은 §6.8 이 금지한 재편이다.
@@ -170,6 +215,10 @@ class RelocateSearchTest {
     }
 
     // ------------------------------------------------------------ 픽스처
+
+    private RelocateSearch capped(int maxEvaluations) {
+        return new RelocateSearch(distance, new CostModel(), maxEvaluations);
+    }
 
     /** 늦은 라우트 — 동쪽으로 간다. */
     private RelocateSearch.RouteInput late(TimeWindow promised, Duration deviation) {

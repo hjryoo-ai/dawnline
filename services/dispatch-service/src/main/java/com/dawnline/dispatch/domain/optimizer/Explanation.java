@@ -108,14 +108,19 @@ public record Explanation(OrderId orderId, Outcome outcome, String ruleName, Veh
      * @param fromRouteId 떠난 라우트
      * @param toRouteId   받은 라우트
      * @param gainKrw     이 이동이 줄인 <strong>두 라우트 합</strong>의 비용
+     * @param truncated   탐색이 평가 상한에 걸렸다 — 참이면 {@code searchTruncated: true} 를 싣는다. 「왜 이 이동인가」에
+     *                    「더 좋은 이동을 못 본 채 고른 것」이 붙어야 설명이 정직하다(§6.8, 7-0 D4). 거짓이면 칸이 없다
      */
     public static Explanation relocated(OrderId orderId, VehicleId vehicle, java.util.UUID fromRouteId,
-            java.util.UUID toRouteId, long gainKrw) {
+            java.util.UUID toRouteId, long gainKrw, boolean truncated) {
 
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("fromRouteId", Objects.requireNonNull(fromRouteId, "fromRouteId").toString());
         detail.put("toRouteId", Objects.requireNonNull(toRouteId, "toRouteId").toString());
         detail.put("gainKrw", gainKrw);
+        if (truncated) {
+            detail.put("searchTruncated", true);
+        }
         return new Explanation(orderId, Outcome.ASSIGNED, RELOCATED_BY_AT_RISK, vehicle, detail);
     }
 

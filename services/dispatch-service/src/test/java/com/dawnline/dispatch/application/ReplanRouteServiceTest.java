@@ -163,7 +163,38 @@ class ReplanRouteServiceTest {
         assertThat(first.detail())
                 .containsEntry("fromRouteId", fixture.atRisk().toString())
                 .containsEntry("toRouteId", fixture.spare().toString())
-                .containsKey("gainKrw");
+                .containsKey("gainKrw")
+                .as("상한 안에서 끝난 탐색에는 칸이 없다").doesNotContainKey("searchTruncated");
+    }
+
+    // ------------------------------------------------------------ 평가 상한 (§6.8, 7-0 D4)
+
+    @Test
+    void 상한에_걸려_이동을_못_찾으면_no_gain_이_아니라_truncated_다() {
+        // 기사가 제시간에 닿았다 — 어느 짝도 이득이 없다. 상한이 넉넉하면 no-gain, 짝 둘(남은 stop 둘 × 받을 라우트 하나)을
+        // 다 보기 전에 멈추면 truncated. 「다 봤는데 없다」와 「다 못 봤다」가 한 값으로 접히지 않는다.
+        Fixture onTime = fixture();
+        routes.row(onTime.atRisk(), 1).actualAt = routes.row(onTime.atRisk(), 1).arrival;
+        assertThat(service.replan(command(onTime, Duration.ZERO))).as("전제 — 상한이 넉넉하면 이득 없음")
+                .isEqualTo(Outcome.NO_GAIN);
+
+        Fixture again = fixture();
+        routes.row(again.atRisk(), 1).actualAt = routes.row(again.atRisk(), 1).arrival;
+
+        // 세는 것은 커밋 뒤의 리스너다(AtRiskListener) — 여기서는 갈래를 본다.
+        assertThat(capped(1).replan(command(again, Duration.ZERO))).isEqualTo(Outcome.TRUNCATED);
+        assertThat(events.revised).as("옮긴 것이 없다").isEmpty();
+    }
+
+    @Test
+    void 이동을_찾았어도_상한에_걸렸으면_설명이_그것을_싣는다() {
+        // 첫 라운드의 짝 둘을 다 보고 이동 하나를 골랐지만 둘째 라운드는 열지 못했다 — 「더 좋은 이동을 못 본 채 고른 것」.
+        Fixture fixture = fixture();
+
+        assertThat(capped(2).replan(command(fixture, LATE))).isEqualTo(Outcome.APPLIED);
+
+        assertThat(saved.explanations).isNotEmpty()
+                .allSatisfy(reason -> assertThat(reason.detail()).containsEntry("searchTruncated", true));
     }
 
     @Test
@@ -226,6 +257,14 @@ class ReplanRouteServiceTest {
                 events, new HaversineDistance(1.3d, 25.0d), metrics,
                 Clock.fixed(NOW.plus(LATE).plus(COOLDOWN).plusSeconds(1), ZoneOffset.UTC),
                 COOLDOWN, TOLERANCE);
+    }
+
+    /** 평가 상한을 준 같은 서비스. */
+    private ReplanRouteService capped(int maxEvaluations) {
+        return new ReplanRouteService(routes, plans, saved, fleet,
+                InMemoryDispatchPorts.rules(RuleSet.of(
+                        List.of(new TimeWindowPenaltyRule("TIME_WINDOW_PENALTY", 1, 2_000L)), 1)),
+                events, new HaversineDistance(1.3d, 25.0d), metrics, clock, COOLDOWN, TOLERANCE, maxEvaluations);
     }
 
     private double mismatchCount() {

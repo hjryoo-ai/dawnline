@@ -566,7 +566,7 @@
     {
       "type": "timeseries",
       "title": "재계획 — 트리거 하나에 한 일 (쌓음)",
-      "description": "다섯 갈래를 쌓는다 — 합이 트리거 수라는 것이 한눈에 보여야 한다(§9.4, ADR-048 결정 5). no-anchor 는 편차를 모른 것이고 no-gain 과 다르다.",
+      "description": "여섯 갈래를 쌓는다 — 합이 트리거 수라는 것이 한눈에 보여야 한다(§9.4, ADR-048 결정 5). no-anchor 는 편차를 모른 것이고 truncated 는 평가 상한에 걸려 다 못 본 것이다 — 둘 다 no-gain 과 다르다.",
       "datasource": {
         "type": "prometheus",
         "uid": "dawnline-prometheus"
