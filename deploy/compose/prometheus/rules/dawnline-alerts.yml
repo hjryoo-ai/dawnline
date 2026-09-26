@@ -164,3 +164,15 @@ groups:
           severity: ticket
         annotations:
           summary: "{{ $labels.service }} 의 {{ $labels.table }} 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"
+
+      - alert: DawnlineAgeNegative
+        # 열린 카운터(gauge) — 부재를 다루는 식. 나이 게이지를 등록할 때 0 으로 함께 태어나지만, 라벨이 열린 이상 식은 규약을 따른다.
+        # 이 알림이 우는 동안 그 게이지는 NaN 이고 그 게이지에 걸린 알림은 조용하다(§9.1 「음수 나이는 값이 아니라 결함이다」).
+        expr: |
+          increase(dawnline_age_negative_total[10m]) > 0
+            or
+          (dawnline_age_negative_total unless dawnline_age_negative_total offset 10m)
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }} 의 {{ $labels.gauge }} 가 음수 나이를 읽었다 — 두 시각이 서로 다른 시계에서 왔고, 그 게이지의 알림은 그동안 모름이다"

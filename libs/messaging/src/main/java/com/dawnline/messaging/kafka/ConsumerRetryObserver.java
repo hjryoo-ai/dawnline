@@ -72,7 +72,7 @@ public class ConsumerRetryObserver
         this.consumer = Objects.requireNonNull(consumer, "consumer");
         this.clock = Objects.requireNonNull(clock, "clock");
         DawnlineMeters.preregister(meters, DawnlineMetrics.EVENT_RETRY, MessagingMetrics.TAG_CONSUMER, consumer);
-        DawnlineMeters.gauge(meters, DawnlineMetrics.EVENT_RETRY_AGE_SECONDS, this, ConsumerRetryObserver::ageSeconds,
+        DawnlineMeters.ageGauge(meters, DawnlineMetrics.EVENT_RETRY_AGE_SECONDS, this, ConsumerRetryObserver::ageSeconds,
                 MessagingMetrics.TAG_CONSUMER, consumer);
     }
 

@@ -414,3 +414,31 @@ tests:
               table: outbox_events
             exp_annotations:
               summary: "dispatch-service 의 outbox_events 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"
+
+  # --- 음수 나이 — 게이지와 같이 0 으로 태어난 카운터가 오른다 (7-4a, §13 축 16) --------------------------------------
+  # 음수인 동안 그 게이지는 NaN 이라 DawnlineOutboxLag(> 30)는 조용하다 — 그 빈자리를 이 알림이 말한다.
+  - interval: 1m
+    input_series:
+      - series: 'dawnline_age_negative_total{service="order-service", gauge="dawnline_outbox_lag_seconds", instance="o"}'
+        values: '0 0 0 6 12'
+      - series: 'dawnline_outbox_lag_seconds{service="order-service", instance="o"}'
+        values: '0 0 0 NaN NaN'
+      - series: 'dawnline_age_negative_total{service="ops-api", gauge="dawnline_kpi_refresh_age_seconds", instance="p"}'
+        values: '0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DawnlineAgeNegative
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DawnlineOutboxLag
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DawnlineAgeNegative
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: order-service
+              gauge: dawnline_outbox_lag_seconds
+              instance: o
+            exp_annotations:
+              summary: "order-service 의 dawnline_outbox_lag_seconds 가 음수 나이를 읽었다 — 두 시각이 서로 다른 시계에서 왔고, 그 게이지의 알림은 그동안 모름이다"

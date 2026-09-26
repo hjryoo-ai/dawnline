@@ -44,7 +44,7 @@ public class OutboxMetrics {
         // 상태(AtomicLong)는 이 객체가 들고, 헬퍼가 강한 참조로 등록한다(ADR-060) — 이 객체가 GC 돼도 게이지는 살아 있다.
         DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_UNPUBLISHED, unpublished, AtomicLong::doubleValue,
                 MessagingMetrics.TAG_SERVICE, serviceName);
-        DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_LAG_SECONDS, lagMillis,
+        DawnlineMeters.ageGauge(registry, DawnlineMetrics.OUTBOX_LAG_SECONDS, lagMillis,
                 millis -> millis.doubleValue() / 1000.0, MessagingMetrics.TAG_SERVICE, serviceName);
         DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_FAILED, failed, AtomicLong::doubleValue,
                 MessagingMetrics.TAG_SERVICE, serviceName);

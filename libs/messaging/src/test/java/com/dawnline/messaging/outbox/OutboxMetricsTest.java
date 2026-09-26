@@ -56,6 +56,16 @@ class OutboxMetricsTest {
         assertThat(gauge(DawnlineMetrics.OUTBOX_FAILED.meterName())).isZero();
     }
 
+    @Test
+    void refresh_음수_나이는_NaN_으로_내고_센다() {
+        // 오프셋 8시간 아래 DB 시계로 잰 나이가 이 값이었다(ADR-066 결정 4) — 그대로 나가면 DawnlineOutboxLag(> 30)는 조용하다.
+        metrics.refresh(1L, -28_799.95, 0L);
+
+        assertThat(gauge(DawnlineMetrics.OUTBOX_LAG_SECONDS.meterName())).isNaN();
+        assertThat(registry.get(DawnlineMetrics.AGE_NEGATIVE.meterName())
+                .tag("gauge", DawnlineMetrics.OUTBOX_LAG_SECONDS.name()).counter().count()).isEqualTo(1.0);
+    }
+
     private double gauge(String name) {
         return registry.get(name).tag(MessagingMetrics.TAG_SERVICE, "order-service").gauge().value();
     }
