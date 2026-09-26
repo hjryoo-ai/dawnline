@@ -69,6 +69,23 @@ SLO 파괴다(§7.2).
   없이 후보까지 · outbox 0/0) ② 장애 중 `max(dawnline_outbox_lag_seconds)` 의 최댓값 **≤ 5초**(5초마다 잰다 — 알림 문턱 30초의 1/6, 릴레이는
   100 ms 마다 돈다) ③ `DawnlineRateLimitBypassed` 가 실제 Prometheus 에서 울고 GEO `bypassed` 가 오른다 — 폴백은 조용하면 안 된다 ④ 복구 뒤
   레이트 리밋이 다시 판정한다(`bypassed` 그대로 · `allowed` 가 오른다) · 검증 표 V1–V7(DLQ 0).
+- **복구 뒤의 검증 표** — `bash tools/chaos/verify.sh check <baseline 파일> --expect-dlq 0`(만드는 법은 [RB-01](RB-01-kafka-recovery.md) §2.3).
+
+## 4. 검증 — `make chaos-redis` (2026-09-26 로컬, 근거: 관측(재현됨))
+
+Redis 를 5분 멈춘 채(`docker compose stop redis`) 주문 **1,200**건(ops-demo)과 운영자 조기 마감 하나. 위 기준 넷 전부 ✅:
+
+| 기준 | 값 |
+|---|---|
+| ① 발행이 멈추지 않는다 | 주문이 끝나고 **12초** 뒤, 장애 한가운데에서 검증 표 ✅ — 1,200 = 후보 1,199 + 배차 불가 1(`OUT_OF_STOCK`, 시드) · outbox 전부 0/0 · DLQ 0 |
+| ② 지연이 오르지 않는다 | `max(dawnline_outbox_lag_seconds)` 최대 **0.110초**(5초마다 60번) — 기준 5초. 브로커 장애(RB-01 §3)의 298초와 나란히 놓으면 릴레이가 Redis 와 무관하다는 것이 보인다 |
+| ③ 폴백이 보인다 | `DawnlineRateLimitBypassed` firing(주문 1,200 = `bypassed` 1,200 — 요청마다 건너뛴다) · GEO `bypassed` 204 → 2,604 |
+| ④ 복구 뒤 | 레이트 리밋 `bypassed` 1,862 그대로 · `allowed` 2,938 → 2,948(주문 10) · 검증 표 전부 ✅ |
+| 운영자 조기 마감 | 200 · 감사 `SUCCEEDED` — 수동 마감은 Redis 락을 쓰지 않는다(ADR-054) |
+
+**복구 뒤에 늦는 것 하나** — `dawnline_geo_index_loaded` 는 Redis 가 돌아온 뒤에도 0 이었다가 약 3분 뒤 1 로 돌아왔다. Redis 가 새로 떠 `geo:*`
+키가 없고, 적재는 `dawnline.fulfillment.geo.reload-interval-ms`(기본 5분)마다 다시 시도한다. **그동안은 폴백(DB 조회)이 정확하게 돈다** —
+§1 의 「돌아오면 저절로 되는 것」은 맞지만 「곧」이 아니라 **최대 5분**이다. 알림 `DawnlineRateLimitBypassed` 는 10분 창이 지나야 풀린다.
 
 ## 참조
 

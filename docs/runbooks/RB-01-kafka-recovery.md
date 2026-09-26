@@ -111,8 +111,33 @@ dc exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server loca
 - `sum by (consumergroup, topic) (kafka_consumergroup_lag >= 0)` 이 1,000 아래로 내려온다(브로커 기준 — 클라이언트 지표 `records_lag` 는 재시도에 막힌 레코드를 세지 않는다, §2.1).
 - `dawnline_event_retry_age_seconds` 가 0 이다 — 재시도 중인 파티션이 없다.
 - 처리율의 `dlq` 가 0 이다. 0 이 아니면 그 레코드는 [RB-05](RB-05-dlq-and-outbox-quarantine.md) §2 로 간다.
-- **검증 SQL** — 브로커 중단 뒤 불변식(주문 수 = 후보 수 + 취소 수 · 라우트 stop 주문 중복 0 · `processed_events` 중복 0)은 카오스
-  스크립트(`make chaos-kafka`, 7-3)가 자동으로 돌리고, 그 문장을 이 절에 옮긴다. 이 런북은 그 스크립트보다 먼저 썼다.
+- **검증 표** — 복구 뒤에 돌린다. 카오스와 같은 표다(V1–V7 — 유실 · 사유별 배차 불가 · 라우트 stop 주문 중복 · `processed_events` 의 PK ·
+  감사 `UNKNOWN` · DLQ 증가 · outbox 미발행/격리):
+
+  ```bash
+  bash tools/chaos/verify.sh baseline /tmp/rb01.state        # 장애를 알아챈 때 — 이 시각 뒤의 주문과 DLQ 증가를 본다
+  bash tools/chaos/verify.sh check /tmp/rb01.state --wait 600 --expect-dlq 0
+  ```
+
+  모든 줄이 ✅ 여야 한다(종료 코드 0). V1 이 「빠진 주문 N」이면 아직 따라오는 중이다 — `--wait` 가 그만큼 기다린다. V7 의 격리가 0 이
+  아니면 브로커 부재가 아닌 다른 원인이다 — 브로커 부재는 일시적이라 격리되지 않는다([RB-05](RB-05-dlq-and-outbox-quarantine.md)).
+
+## 3. 검증 — `make chaos-kafka` (2026-09-26 로컬, 근거: 관측(재현됨))
+
+브로커를 5분 멈춘 채(`docker compose stop kafka`) 주문 **1,200**건(ops-demo)과 운영자 조기 마감 하나:
+
+| | 값 |
+|---|---|
+| 주문 API | 1,200 전부 201 · p99 14.0 ms — 레디니스에 브로커가 없다(ADR-016) |
+| outbox | 미발행이 1,201 까지 쌓였다(주문 1,200 + 마감 1). 가장 오래된 미발행의 나이가 58 → 298초로 자랐다 |
+| 알림 | `DawnlineOutboxLag` 가 주문이 끝나기 전에 실제 Prometheus 에서 firing |
+| 릴레이 리더 | 5 그대로 — 브로커 부재는 리더십과 무관하다(리더십은 자기 DB 의 advisory lock, ADR-027 후속 정정) |
+| 운영자 조기 마감 | 200 · 감사 `SUCCEEDED` — 코어는 DB + outbox 로 받는다. `wave.closed` 는 복구 뒤에 나가 계획까지 갔다 |
+| 장애 중의 검증 표 | V1 빠진 주문 1,200 · V5 「모름」(브로커가 없어 DLQ 끝 오프셋을 못 읽는다 — 0 으로 접지 않는다) · V7 order 1200/0 — **검사가 유실을 볼 수 있다** |
+| 복구 뒤 | 40초 안에 미발행 0 · 알림 꺼짐. 검증 표 전부 ✅ — 1,200 = 후보 1,199 + 배차 불가 1(`OUT_OF_STOCK`, 시드) · DLQ 0 · outbox 격리 0 |
+
+**읽는 법** — 브로커가 없으면 쌓이는 것은 **outbox** 이지 주문이 아니다. 그래서 첫 신호는 소비 랙이 아니라 `DawnlineOutboxLag` 다(랙은 브로커와
+함께 보이지 않는다 — exporter 도 브로커에 묻는다). 복구 뒤의 일은 따라오는지 보는 것 하나다 — 재처리할 것이 없다.
 
 ## 참조
 
