@@ -70,7 +70,7 @@ max_lag=0
 ( while :; do promv 'max(dawnline_outbox_lag_seconds)'; sleep 5; done ) > "$OUT/redis-lag.txt" &
 sampler=$!
 say "주문 ${EXPECT_ORDERS}건 (SCENARIO=$SCENARIO) — Redis 없이"
-make -s smoke SCENARIO="$SCENARIO" > "$OUT/smoke.log" 2>&1; smoke=$?
+make -s smoke SCENARIO="$SCENARIO" > "$OUT/redis-smoke.log" 2>&1; smoke=$?
 sample "주문 끝"
 
 wave=$(earliest_open_wave)
@@ -105,7 +105,7 @@ rl_2=$(bypassed_rate_limit)
 # 복구 뒤의 요청 — 레이트 리밋이 다시 판정하는지 보려면 요청이 있어야 한다. 주문 하나(시나리오 tiny)가 아니라 조회로 충분하지 않다 —
 # 레이트 리밋은 주문 접수에만 있다. bypassed 가 멈췄다는 것은 요청이 없어도 참이므로 allowed 가 오르는 것까지 본다.
 allowed_1=$(promv 'sum(dawnline_rate_limit_decisions_total{outcome="allowed"})')
-make -s smoke SCENARIO=tiny > "$OUT/smoke-after.log" 2>&1
+make -s smoke SCENARIO=tiny > "$OUT/redis-smoke-after.log" 2>&1
 sleep 20
 allowed_2=$(promv 'sum(dawnline_rate_limit_decisions_total{outcome="allowed"})')
 rl_3=$(bypassed_rate_limit)

@@ -70,9 +70,14 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # 서비스 사이에 JOIN 이 없으므로(불변규칙 3) id 집합을 뽑아 빼고, 어느 끝에도 없는 주문을 센다.
 v1() {
   sqlv order       "SELECT id FROM orders WHERE placed_at >= '$t0' ORDER BY 1" > "$tmp/orders"
-  sqlv dispatch    "SELECT order_id FROM dispatch_candidates WHERE created_at >= '$t0' ORDER BY 1" > "$tmp/cand"
+  # 하류의 행은 T0 주문 집합과 교집합한다 — 자기 시각(created_at)만으로 거르면 T0 **전**에 들어와 T0 **뒤**에 처리된 주문(앞 시나리오가
+  # 남긴 밀림)이 끼어든다. 2026-09-26 첫 chaos 워크플로에서 chaos-db 가 중간에 끝나 남긴 주문이 chaos-kafka 의 T0 직후 처리되어
+  # OUT_OF_STOCK 집합 비교가 1 ↔ 2 로 빨갰다(근거: 관측(재현됨) — 그 실행의 보고). created_at >= T0 은 상위집합이라 미리 거르는 데만 쓴다.
+  sqlv dispatch    "SELECT order_id FROM dispatch_candidates WHERE created_at >= '$t0' ORDER BY 1" > "$tmp/cand_t0"
+  comm -12 "$tmp/orders" "$tmp/cand_t0" > "$tmp/cand"
   sqlv order       "SELECT id FROM orders WHERE placed_at >= '$t0' AND status = 'CANCELLED' ORDER BY 1" > "$tmp/cancel_all"
-  sqlv fulfillment "SELECT order_id FROM fulfillment_orders WHERE created_at >= '$t0' AND status = 'UNSERVICEABLE' ORDER BY 1" > "$tmp/unsv_all"
+  sqlv fulfillment "SELECT order_id FROM fulfillment_orders WHERE created_at >= '$t0' AND status = 'UNSERVICEABLE' ORDER BY 1" > "$tmp/unsv_t0"
+  comm -12 "$tmp/orders" "$tmp/unsv_t0" > "$tmp/unsv_all"
   comm -23 "$tmp/cancel_all" "$tmp/cand" > "$tmp/cancel"
   sort -u "$tmp/cand" "$tmp/cancel" > "$tmp/c_or_x"
   comm -23 "$tmp/unsv_all" "$tmp/c_or_x" > "$tmp/unsv"
