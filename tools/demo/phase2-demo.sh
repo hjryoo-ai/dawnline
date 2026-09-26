@@ -20,7 +20,10 @@ cd "$ROOT"
 ENV_FILE="deploy/compose/.env"
 COMPOSE=(docker compose -f deploy/compose/docker-compose.yml --env-file "$ENV_FILE")
 
+# 부르는 쪽이 고른 compose 프로젝트(시뮬레이션 스택 — make sim-up, ADR-066 결정 6)를 .env 의 COMPOSE_PROJECT_NAME 이 덮지 않게.
+caller_project="${COMPOSE_PROJECT_NAME:-}"
 set -a; . "$ENV_FILE"; set +a
+COMPOSE_PROJECT_NAME="${caller_project:-$COMPOSE_PROJECT_NAME}"
 
 DEMO_TIMEOUT="${DEMO_TIMEOUT:-120}"
 SCENARIO="${SCENARIO:-smoke}"

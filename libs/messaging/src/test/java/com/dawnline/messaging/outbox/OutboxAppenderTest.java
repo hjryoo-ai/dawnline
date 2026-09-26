@@ -35,7 +35,7 @@ class OutboxAppenderTest {
 
     private final MutableClock clock = MutableClock.at(NOW);
     private final EventJson json = EventJson.standard();
-    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository(clock);
+    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository();
 
     @Test
     void append_행을_기록하고_eventId를_돌려준다() {

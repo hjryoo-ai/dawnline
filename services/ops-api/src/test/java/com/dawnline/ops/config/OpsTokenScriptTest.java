@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -79,6 +80,16 @@ class OpsTokenScriptTest {
                 .as("actor 는 JSON 에 그대로 들어간다 — 따옴표를 받지 않는다").isEqualTo(2);
         assertThat(run(SECRET, List.of("OPS_VIEWER"), Map.of("OPS_TOKEN_TTL_SECONDS", "43201")).exitCode())
                 .as("만료는 줄일 수만 있다").isEqualTo(2);
+    }
+
+    @Test
+    void 빈의_검증기는_주입_시계를_받지_않는다_발급이_벽시계라서() {
+        // 시뮬레이션 오프셋(ADR-066)은 주입 시계에 닿는다. 검증기가 그 시계를 받으면 오프셋만큼 일찍 만료되고, 오프셋이 12시간을
+        // 넘으면 방금 찍은 토큰이 이미 만료다. 발급(ops-token.sh 의 date +%s)이 벽시계이니 검증도 벽시계다(결정 5).
+        assertThat(Arrays.stream(SecurityConfig.class.getDeclaredMethods())
+                        .filter(m -> m.getName().equals("opsJwtDecoder")))
+                .as("전제 — 빈 메서드가 있다").hasSize(1)
+                .allSatisfy(m -> assertThat(m.getParameterTypes()).doesNotContain(Clock.class));
     }
 
     private static JwtDecoder decoder(String secret, Clock clock) {

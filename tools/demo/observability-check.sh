@@ -2,7 +2,7 @@
 # =============================================================================
 # make obs-check — 떠 있는 스택의 관측성이 설계서대로 섰는가 (DESIGN.md §9.4, ADR-060)
 #
-# Compose 스모크가 `make demo` 뒤에 돌린다. 다섯을 본다:
+# Compose 스모크가 `make demo` 뒤에 돌린다. 여섯을 본다:
 #   1. Prometheus 가 **지금 파일에 있는 규칙**을 적재했고 평가에 실패한 규칙이 없다 — 이름이 아니라 내용을 대조한다.
 #      그룹마다 규칙의 (종류 · 이름 · 식 · for · keep_firing_for · 라벨 · 주석)을 양쪽에서 같은 꼴로 만들어 해시를 견준다.
 #      식은 Prometheus 의 /api/v1/format_query 로 양쪽 다 정규화한다 — 적재된 식은 파서가 다시 쓴 문자열이라 파일의 글자와 다르다.
@@ -23,6 +23,8 @@
 #      「간선의 양 끝이 코어 넷을 덮는다」로 조였다가 되돌렸다(2026-09-25, #72 의 CI): 소비자가 여럿인 토픽에서
 #      발행 스팬 하나는 한 소비자와만 짝지어지는 것으로 보이고(추정), dispatch→tracking 은 route.assigned 를 함께 받는
 #      ops-api 와의 경합에서 이긴 때만 나온다. 4 가 같은 실행에서 tracking 을 봤다 — 결손이 아니라 짝짓기의 우연이다.
+#   6. 시계 (ADR-066) — 서비스 다섯이 dawnline_clock_offset_seconds 를 내고 값이 하나다. 시뮬레이션은 시계를 옮기고, 서비스마다
+#      다른 오프셋은 어느 서비스의 결함으로도 보이는 모순(주문은 23:00, 웨이브는 22:00 에 닫힘)을 만든다.
 #
 # 3 이 따로 있는 이유: dawnline_* 이름은 단위 테스트가 §9.1 과 대조하지만(DashboardsConsistencyTest), 플랫폼 지표는
 # 대조할 표가 없다 — 이름이 틀리면 패널이 조용히 비어 있다. 버킷도 같다: 계획 시간의 버킷은 속성 파일의 키가 미터 이름과
@@ -34,7 +36,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 ENV_FILE="deploy/compose/.env"
+# 부르는 쪽이 고른 compose 프로젝트(시뮬레이션 스택 — make sim-up, ADR-066 결정 6)를 .env 의 COMPOSE_PROJECT_NAME 이 덮지 않게.
+caller_project="${COMPOSE_PROJECT_NAME:-}"
 set -a; . "$ENV_FILE"; set +a
+COMPOSE_PROJECT_NAME="${caller_project:-$COMPOSE_PROJECT_NAME}"
 
 OBS_TIMEOUT="${OBS_TIMEOUT:-90}"
 COMPOSE=(docker compose -f deploy/compose/docker-compose.yml --env-file "$ENV_FILE")
@@ -209,4 +214,18 @@ def core_edge_is_scraped():
     shown = ", ".join(f"{c}→{s}" + (f"({t})" if t else "") for c, s, t in edges) or "없음"
     return bool(core), f"코어 사이 간선 없음 · 간선 {shown}"
 until("서비스 그래프에 코어 사이 간선이 긁힌다", core_edge_is_scraped)
+
+# 6. 시계 (ADR-066) — 서비스 다섯이 모두 오프셋 게이지를 내고 값이 하나다. 같은 앵커에서 읽으니 같을 것이라는 문장은 적어 둔
+#    문장일 뿐이다. 인스턴스가 둘 이상이어도 시계열마다 본다(서비스 이름으로 접지 않는다).
+FIVE = CORE | {"ops-api"}
+def one_clock():
+    result = get(PROM + "/api/v1/query?query=" + urllib.parse.quote("dawnline_clock_offset_seconds"))["data"]["result"]
+    series = [(r["metric"].get("service", "?"), r["metric"].get("instance", "?"), float(r["value"][1])) for r in result]
+    services = {s for s, _, _ in series}
+    values = {v for _, _, v in series}
+    if services >= FIVE and len(values) == 1:
+        print(f"    (오프셋 {values.pop():.0f}초 · 시계열 {len(series)}개)")
+        return True, ""
+    return False, f"시계열 {series} — 빠진 서비스 {sorted(FIVE - services)} · 값 {sorted(values)}"
+until("시계 — 서비스 다섯이 같은 오프셋이다(dawnline_clock_offset_seconds)", one_clock)
 PY

@@ -3,7 +3,6 @@ package com.dawnline.messaging.support;
 import com.dawnline.messaging.outbox.OutboxEvent;
 import com.dawnline.messaging.outbox.OutboxRepository;
 import com.dawnline.messaging.outbox.QuarantinedOutboxEvent;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -23,15 +22,7 @@ import java.util.UUID;
 public final class InMemoryOutboxRepository implements OutboxRepository {
 
     private final List<OutboxEvent> rows = new ArrayList<>();
-    private final Clock clock;
     private int lockCalls;
-
-    /**
-     * @param clock 지연 계산 기준 시각
-     */
-    public InMemoryOutboxRepository(Clock clock) {
-        this.clock = Objects.requireNonNull(clock, "clock");
-    }
 
     @Override
     public void append(OutboxEvent event) {
@@ -60,12 +51,12 @@ public final class InMemoryOutboxRepository implements OutboxRepository {
     }
 
     @Override
-    public double unpublishedLagSeconds() {
+    public double unpublishedLagSeconds(Instant now) {
         return rows.stream()
                 .filter(row -> !row.isPublished() && !row.isQuarantined())
                 .map(OutboxEvent::createdAt)
                 .min(Comparator.naturalOrder())
-                .map(oldest -> Duration.between(oldest, clock.instant()).toMillis() / 1000.0)
+                .map(oldest -> Duration.between(oldest, now).toMillis() / 1000.0)
                 .orElse(0.0);
     }
 

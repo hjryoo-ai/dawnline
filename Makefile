@@ -40,7 +40,7 @@ SERVICE       ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls obs-check \
-        topics psql redis-cli config demo peak chaos-kafka chaos-redis chaos-kill chaos-db chaos-verify clean-volumes \
+        topics psql redis-cli config demo peak sim-up sim-down chaos-kafka chaos-redis chaos-kill chaos-db chaos-verify clean-volumes \
         k6-orders k6-rate-limit smoke token
 
 # -----------------------------------------------------------------------------
@@ -77,6 +77,9 @@ help:
 	@printf '    make chaos-redis    Redis 정지 → 발행이 멈추지 않고 지연이 오르지 않는다 [HOLD=300]      [7-3]\n'
 	@printf '    make chaos-kill     dispatch 가 계획 중에 죽는다 → 남는 행 0 · 재전달로 PUBLISHED          [7-3]\n'
 	@printf '    make chaos-verify   검증 표만 — STATE=<baseline 파일> [VERIFY_ARGS=…]                    [7-3]\n\n'
+	@printf '  \033[1m시뮬레이션 스택\033[0m (ADR-066 — 시계를 옮긴다, 자기 프로젝트 dawnline-sim)\n'
+	@printf '    make sim-up [SIM_AT=22:40]  개발 스택이 내려가 있어야 한다. 기동 순간의 유효 시각이 SIM_AT(KST)\n'
+	@printf '    make sim-down       시뮬레이션 스택의 컨테이너만 내린다(볼륨 유지)\n\n'
 	@printf '  \033[1m시나리오\033[0m (아직 미구현 — 해당 Phase 에서 채운다)\n'
 	@printf '    make peak           피크 시나리오                [Phase 7]\n\n'
 
@@ -238,7 +241,8 @@ topics:
 	$(COMPOSE) exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 
 psql: env
-	@set -a; . $(ENV_FILE); set +a; \
+	@caller_project="$${COMPOSE_PROJECT_NAME:-}"; set -a; . $(ENV_FILE); set +a; \
+	COMPOSE_PROJECT_NAME="$${caller_project:-$$COMPOSE_PROJECT_NAME}"; \
 	$(COMPOSE) exec -e PGPASSWORD="$$POSTGRES_SUPERUSER_PASSWORD" postgres \
 	psql -U "$$POSTGRES_SUPERUSER" -d "$$POSTGRES_DB"
 
@@ -312,6 +316,17 @@ demo: env
 # Compose 스모크가 demo 뒤에 돌린다(데모가 만든 요청 · 계획이 있어야 버킷과 HTTP 지표가 있다).
 obs-check: env
 	@bash tools/demo/observability-check.sh
+
+# 시뮬레이션 스택 (DESIGN.md §5.6 「시뮬레이션 시계」, ADR-066). 로직은 tools/sim/sim-stack.sh — 자기 compose 프로젝트(dawnline-sim)
+# 에서 돌고(오프셋을 켜고 쓴 사실은 미래라 개발 볼륨에 두지 않는다), 기동 순간의 유효 시각이 SIM_AT(KST)이 되는 오프셋을 다섯
+# 서비스에 같은 값으로 준다.
+SIM_AT ?= 22:40
+
+sim-up: env check-images
+	@SIM_AT=$(SIM_AT) bash tools/sim/sim-stack.sh up
+
+sim-down: env
+	@bash tools/sim/sim-stack.sh down
 
 peak:
 	@echo ""

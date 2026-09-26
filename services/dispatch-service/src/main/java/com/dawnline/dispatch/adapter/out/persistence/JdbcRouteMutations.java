@@ -15,6 +15,7 @@ import com.dawnline.dispatch.domain.optimizer.Stop;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -40,12 +41,15 @@ import org.jspecify.annotations.Nullable;
 public class JdbcRouteMutations implements RouteMutations {
 
     private final EntityManager entityManager;
+    private final Clock clock;
 
     /**
      * @param entityManager 공유 EntityManager 프록시
+     * @param clock         새 stop 의 자리표시 시각 (불변규칙 12 — SQL 의 {@code now()} 가 아니다, ADR-066 결정 4)
      */
-    public JdbcRouteMutations(EntityManager entityManager) {
+    public JdbcRouteMutations(EntityManager entityManager, Clock clock) {
         this.entityManager = Objects.requireNonNull(entityManager, "entityManager");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     @Override
@@ -179,6 +183,9 @@ public class JdbcRouteMutations implements RouteMutations {
             @Nullable Instant promisedStart, @Nullable Instant promisedEnd) {
 
         UUID stopId = Ids.newId();
+        // 도착 · 출발은 자리표시자다 — 부르는 쪽(재배정 · 재계획)이 같은 트랜잭션에서 rewrite 로 덮는다. 그래도 DB 의 벽시계가
+        // 아니라 주입 시계다: 다른 모든 시각 칸과 같은 시계여야 오프셋 아래에서도 한 행 안의 시각이 서로 어긋나지 않는다.
+        Instant placeholder = clock.instant();
         Number maxSeq = (Number) entityManager.createNativeQuery(
                         "SELECT COALESCE(max(seq), 0) FROM route_stops WHERE route_id = ?")
                 .setParameter(1, routeId).getSingleResult();
@@ -186,12 +193,13 @@ public class JdbcRouteMutations implements RouteMutations {
                 INSERT INTO route_stops (id, route_id, seq, lat, lng, planned_arrival,
                                          planned_departure, service_s, status,
                                          promised_start, promised_end)
-                VALUES (?, ?, ?, ?, ?, now(), now(), ?, 'PLANNED', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', ?, ?)
                 """)
                 .setParameter(1, stopId).setParameter(2, routeId)
                 .setParameter(3, (short) (maxSeq.intValue() + 1))
-                .setParameter(4, lat).setParameter(5, lng).setParameter(6, serviceSeconds)
-                .setParameter(7, promisedStart).setParameter(8, promisedEnd)
+                .setParameter(4, lat).setParameter(5, lng)
+                .setParameter(6, placeholder).setParameter(7, placeholder).setParameter(8, serviceSeconds)
+                .setParameter(9, promisedStart).setParameter(10, promisedEnd)
                 .executeUpdate();
         return stopId;
     }

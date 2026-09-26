@@ -43,7 +43,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 class OutboxAdminControllerTest {
 
     private final MutableClock clock = MutableClock.at("2026-09-24T01:00:00Z");
-    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository(clock);
+    private final InMemoryOutboxRepository repository = new InMemoryOutboxRepository();
 
     private final WebApplicationContextRunner runner = new WebApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class,

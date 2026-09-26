@@ -50,9 +50,10 @@ public class JpaOutboxRepository implements OutboxRepository {
      * 미발행이 없으면 {@code min()} 이 NULL 이고 {@code EXTRACT} 도 NULL 이므로 0 으로 바꾼다.
      * 타임스탬프를 자바로 꺼내지 않는 이유는 {@code timestamptz} 의 JDBC 매핑 타입이
      * 드라이버·Hibernate 버전에 따라 달라져 캐스팅이 불안정하기 때문이다. 숫자로 받으면 흔들릴 곳이 없다.
+     * 「현재」는 파라미터다 — {@code created_at} 을 적은 주입 시계의 값이다(ADR-066 결정 4, DB 시계를 쓰지 않는다).
      */
     private static final String LAG_SECONDS_SQL = """
-            SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(created_at))), 0)
+            SELECT COALESCE(EXTRACT(EPOCH FROM (CAST(:now AS timestamptz) - min(created_at))), 0)
               FROM outbox_events
              WHERE published_at IS NULL AND failed_at IS NULL
             """;
@@ -122,8 +123,9 @@ public class JpaOutboxRepository implements OutboxRepository {
     }
 
     @Override
-    public double unpublishedLagSeconds() {
-        return ((Number) entityManager.createNativeQuery(LAG_SECONDS_SQL).getSingleResult()).doubleValue();
+    public double unpublishedLagSeconds(Instant now) {
+        return ((Number) entityManager.createNativeQuery(LAG_SECONDS_SQL).setParameter("now", now)
+                .getSingleResult()).doubleValue();
     }
 
     @Override

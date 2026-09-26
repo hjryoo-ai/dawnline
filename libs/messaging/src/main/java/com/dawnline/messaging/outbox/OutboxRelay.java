@@ -139,7 +139,8 @@ public class OutboxRelay implements AutoCloseable {
     public void refreshMetrics() {
         try {
             readOnlyTransactions.executeWithoutResult(status -> metrics.refresh(
-                    repository.countUnpublished(), repository.unpublishedLagSeconds(), repository.countFailed()));
+                    repository.countUnpublished(), repository.unpublishedLagSeconds(clock.instant()),
+                    repository.countFailed()));
         } catch (RuntimeException e) {
             log.warn("outbox 메트릭 갱신 실패", e);
         }

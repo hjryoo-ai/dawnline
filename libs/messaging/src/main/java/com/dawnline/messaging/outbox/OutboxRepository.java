@@ -54,11 +54,14 @@ public interface OutboxRepository {
     /**
      * 가장 오래된 미발행 행이 만들어진 뒤 흐른 시간(초). 미발행이 없으면 0.
      *
-     * <p>애플리케이션 시계가 아니라 <strong>DB 시계</strong>로 계산한다. 릴레이 인스턴스가 여러 대일 때
-     * 인스턴스별 시계 오차가 그대로 지표 노이즈가 되는 것을 피하기 위해서다.
-     * {@code dawnline_outbox_lag_seconds} 게이지의 값 (§9.1).
+     * <p><strong>행의 {@code created_at} 을 적은 시계와 같은 시계로 잰다</strong> — 주입된 시계의 {@code now} 를 받는다.
+     * 처음 판은 DB 의 {@code now()} 로 쟀다(인스턴스별 시계 오차가 지표 노이즈가 되는 것을 피하려고). 그런데 {@code created_at}
+     * 은 처음부터 인스턴스의 주입 시계가 적는다 — 두 시계를 섞은 것이었고, 시뮬레이션 오프셋 아래에서 그 차이가 **음수 나이**
+     * (−28,799.95초, {@code OutboxLagIT})로 드러났다(ADR-066 결정 4). {@code dawnline_outbox_lag_seconds} 게이지의 값 (§9.1).
+     *
+     * @param now 주입된 시계의 현재 시각
      */
-    double unpublishedLagSeconds();
+    double unpublishedLagSeconds(Instant now);
 
     /**
      * 발행된 지 오래된 행을 지운다 (§7.1 — 파티셔닝 대신 삭제).

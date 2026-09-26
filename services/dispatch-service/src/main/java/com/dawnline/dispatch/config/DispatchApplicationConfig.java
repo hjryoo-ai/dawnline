@@ -208,20 +208,22 @@ public class DispatchApplicationConfig {
 
     /**
      * @param entityManagerFactory EMF
+     * @param clock                새 stop 의 자리표시 시각 (ADR-066 결정 4)
      */
     @Bean
-    public RouteMutations routeMutations(EntityManagerFactory entityManagerFactory) {
+    public RouteMutations routeMutations(EntityManagerFactory entityManagerFactory, Clock clock) {
         return new JdbcRouteMutations(
-                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory), clock);
     }
 
     /**
      * @param entityManagerFactory EMF
+     * @param clock                룰 {@code updated_at} (ADR-066 결정 4)
      */
     @Bean
-    public ReferenceAdmin referenceAdmin(EntityManagerFactory entityManagerFactory) {
+    public ReferenceAdmin referenceAdmin(EntityManagerFactory entityManagerFactory, Clock clock) {
         return new JdbcReferenceAdmin(
-                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory));
+                SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory), clock);
     }
 
     /**

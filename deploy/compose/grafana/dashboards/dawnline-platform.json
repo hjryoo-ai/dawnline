@@ -949,7 +949,7 @@
       "gridPos": {
         "x": 0,
         "y": 44,
-        "w": 12,
+        "w": 9,
         "h": 8
       }
     },
@@ -1019,9 +1019,62 @@
       ],
       "id": 18,
       "gridPos": {
-        "x": 12,
+        "x": 9,
         "y": 44,
-        "w": 12,
+        "w": 9,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "시계 오프셋 — 0 이 아니면 시뮬레이션 시각",
+      "description": "주입 시계가 벽시계보다 앞선 초(ADR-066). 이 대시보드의 x 축은 실제 시각이다 — 사실의 시각(컷오프 · 주문 시각)은 x 에 이 값을 더한 것. 서비스 다섯이 한 값이어야 한다(make obs-check 6).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dawnline-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dawnline-prometheus"
+          },
+          "expr": "max by (service) (dawnline_clock_offset_seconds)",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "id": 26,
+      "gridPos": {
+        "x": 18,
+        "y": 44,
+        "w": 6,
         "h": 8
       }
     },

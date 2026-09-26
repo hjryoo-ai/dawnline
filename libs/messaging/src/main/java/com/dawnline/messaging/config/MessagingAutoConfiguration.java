@@ -34,7 +34,7 @@ import org.springframework.core.env.Environment;
  * <p>모든 빈에 {@code @ConditionalOnMissingBean} 이 붙어 있어 서비스가 자기 것으로 갈아끼울 수 있다.
  */
 @AutoConfiguration
-@EnableConfigurationProperties(DawnlineMessagingProperties.class)
+@EnableConfigurationProperties({DawnlineMessagingProperties.class, DawnlineClockProperties.class})
 public class MessagingAutoConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(MessagingAutoConfiguration.class);
@@ -68,21 +68,69 @@ public class MessagingAutoConfiguration {
      * <p>그래서 저장소가 담을 수 있는 정밀도로 잘라서 내려준다. 잘린 값은 왕복해도 그대로다.
      * 서비스가 자기 {@code Clock} 빈을 등록하면 그쪽이 이긴다(테스트의 고정 시계 등) — 그때는
      * 같은 이유로 마이크로초 이하를 넣지 않는 것이 낫다.
+     *
+     * <h2>오프셋 (ADR-066)</h2>
+     * {@code dawnline.clock.offset} 이 0 이 아니면 벽시계에 그만큼 더한다 — 시뮬레이션은 스케줄이 아니라 시계를 옮긴다.
+     * 프로필 {@code sim} 밖에서는 기동하지 않는다({@link ClockAnnouncement#requireAllowed}).
+     *
+     * @param clock       {@code dawnline.clock.*}
+     * @param environment 프로필 조회
      */
     @Bean
     @ConditionalOnMissingBean
-    public Clock dawnlineClock() {
-        return storagePrecisionClock();
+    public Clock dawnlineClock(DawnlineClockProperties clock, Environment environment) {
+        return storagePrecisionClock(ClockAnnouncement.requireAllowed(clock, environment));
     }
 
     /**
-     * {@link #dawnlineClock()} 과 같은 시계를 빈 없이 만든다.
+     * 기동 거부 · 유효 시각 한 줄 · 오프셋 게이지 (ADR-066 결정 2 · 3). 시계 빈이 갈아끼워져도 뜬다 — 검사가 빠지지 않게.
+     *
+     * @param properties  {@code dawnline.messaging.*} — {@code service} 태그
+     * @param clock       {@code dawnline.clock.*}
+     * @param clocks      이 컨텍스트의 시계 빈 (없으면 저장 정밀도의 시스템 UTC)
+     * @param environment 프로필 · 애플리케이션 이름
+     * @param meters      게이지 레지스트리 (없으면 내지 않는다)
+     * @return 기동 때 한 번 말하는 빈
+     */
+    @Bean
+    public ClockAnnouncement dawnlineClockAnnouncement(DawnlineMessagingProperties properties,
+            DawnlineClockProperties clock, ObjectProvider<Clock> clocks, Environment environment,
+            ObjectProvider<MeterRegistry> meters) {
+        return new ClockAnnouncement(clock, clocks.getIfAvailable(MessagingAutoConfiguration::storagePrecisionClock),
+                environment, meters.getIfAvailable(), serviceTag(properties, environment));
+    }
+
+    /**
+     * 게이지의 {@code service} 값 — {@link #resolveProducer} 와 같은 순서지만 없다고 기동을 막지 않는다. 발행자 이름은 outbox 가
+     * 요구하는 것이고, 시계는 outbox 없는 구성에도 있다.
+     */
+    private static String serviceTag(DawnlineMessagingProperties properties, Environment environment) {
+        String configured = properties.producer();
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        return environment.getProperty("spring.application.name", "unknown");
+    }
+
+    /**
+     * {@link #dawnlineClock(DawnlineClockProperties, Environment)} 의 오프셋 0 과 같은 시계를 빈 없이 만든다.
      *
      * <p>{@code ObjectProvider<Clock>} 의 폴백으로 쓴다. 폴백이 {@code Clock.systemUTC()} 면
      * 빈이 없는 구성에서 나노초가 다시 들어오고, 그것은 이 클래스가 고치려던 바로 그 문제다.
      */
     public static Clock storagePrecisionClock() {
-        return Clock.tick(Clock.systemUTC(), STORAGE_RESOLUTION);
+        return storagePrecisionClock(Duration.ZERO);
+    }
+
+    /**
+     * 벽시계에 오프셋을 더하고 저장 정밀도로 자른다 — 자르기가 바깥이라 오프셋에 마이크로초 아래가 있어도 값에는 없다.
+     *
+     * @param offset 더할 기간 (ADR-066)
+     * @return 시계
+     */
+    public static Clock storagePrecisionClock(Duration offset) {
+        Clock wall = Clock.systemUTC();
+        return Clock.tick(offset.isZero() ? wall : Clock.offset(wall, offset), STORAGE_RESOLUTION);
     }
 
     /**

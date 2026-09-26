@@ -27,7 +27,7 @@ class OutboxAdminAutoConfigurationTest {
 
     @Test
     void outbox_가_있는_서블릿_웹_앱이면_서비스가_아무것도_적지_않아도_붙는다() {
-        web.withBean(OutboxRepository.class, () -> new InMemoryOutboxRepository(MutableClock.at("2026-09-24T00:00:00Z")))
+        web.withBean(OutboxRepository.class, () -> new InMemoryOutboxRepository())
                 .withBean(PlatformTransactionManager.class, TestTransactionManager::new)
                 .run(context -> {
                     assertThat(context).hasSingleBean(OutboxQuarantine.class);
@@ -45,7 +45,7 @@ class OutboxAdminAutoConfigurationTest {
     void 웹이_아니면_붙지_않는다() {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OutboxAdminAutoConfiguration.class))
-                .withBean(OutboxRepository.class, () -> new InMemoryOutboxRepository(MutableClock.at("2026-09-24T00:00:00Z")))
+                .withBean(OutboxRepository.class, () -> new InMemoryOutboxRepository())
                 .withBean(PlatformTransactionManager.class, TestTransactionManager::new)
                 .run(context -> {
                     assertThat(context).hasSingleBean(OutboxRepository.class);
@@ -56,7 +56,7 @@ class OutboxAdminAutoConfigurationTest {
     @Test
     void admin_api_를_끄면_outbox_가_있어도_붙지_않는다() {
         // ops-api 의 자리다 — 조건은 맞지만 감사 없는 재큐가 생긴다(결정 4).
-        web.withBean(OutboxRepository.class, () -> new InMemoryOutboxRepository(MutableClock.at("2026-09-24T00:00:00Z")))
+        web.withBean(OutboxRepository.class, () -> new InMemoryOutboxRepository())
                 .withBean(PlatformTransactionManager.class, TestTransactionManager::new)
                 .withPropertyValues("dawnline.messaging.outbox.admin-api=false")
                 .run(context -> {
