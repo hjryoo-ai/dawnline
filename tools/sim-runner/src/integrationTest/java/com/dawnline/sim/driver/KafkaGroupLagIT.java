@@ -34,7 +34,8 @@ class KafkaGroupLagIT {
     private static final String TOPIC = "lag-probe";
     private static final String GROUP = "lag-probe-group";
 
-    private static final KafkaContainer KAFKA = new KafkaContainer(SimDriverIT.KAFKA_IMAGE);
+    private static final KafkaContainer KAFKA = new KafkaContainer(SimDriverIT.KAFKA_IMAGE)
+            .withStartupAttempts(3); // 기동 중에 죽으면 새로 띄운다 — DESIGN §13 「Kafka 컨테이너는 기동에 세 번까지」
 
     private static Admin admin;
 

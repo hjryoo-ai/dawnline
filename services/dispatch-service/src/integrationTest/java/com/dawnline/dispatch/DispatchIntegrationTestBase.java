@@ -35,7 +35,8 @@ public abstract class DispatchIntegrationTestBase {
             .withPassword("dawnline");
 
     private static final KafkaContainer KAFKA = new KafkaContainer(KAFKA_IMAGE)
-            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false");
+            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
+            .withStartupAttempts(3); // 기동 중에 죽으면 새로 띄운다 — DESIGN §13 「Kafka 컨테이너는 기동에 세 번까지」
 
     static {
         POSTGRES.start();

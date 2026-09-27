@@ -3571,6 +3571,16 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 
 **결정론**: 최적화 테스트는 seed 고정. 시간은 `Clock` 주입으로 제어. Testcontainers 재사용(`testcontainers.reuse.enable=true`)으로 로컬 실행 시간 단축.
 
+**Kafka 컨테이너는 기동에 세 번까지 새로 띄운다 — 기다림을 늘리지 않는다**(2026-09-27, #93 의 CI). `KafkaGroupLagIT` 가 한 번
+`initializationError` 로 빨갰고, 메시지는 「Timed out waiting for log output … RECOVERY to RUNNING」 이었지만 그 위 줄이 원인이다 —
+**`Container exited with code 126`**. 컨테이너가 기동 중에 죽었고, 타임아웃은 죽은 컨테이너의 로그를 기다린 결과다(근거: 관측 — CI 로그).
+그래서 대기를 늘리는 것은 처방이 아니다. Testcontainers 2.0.5 의 `KafkaContainer` 는 `while [ ! -f /tmp/testcontainers_start.sh ]; do sleep 0.1; done;
+/tmp/testcontainers_start.sh` 로 뜨고 스크립트는 기동 뒤에 복사된다 — 파일이 생긴 순간과 다 쓰인 순간 사이에 실행하면 126 이 난다는 것이
+가장 가까운 설명이지만 **재현하지 못했다**(같은 순서를 `docker cp` 로 200번, 126 은 0번 — 근거: 재현 시도했으나 실패). 기제가 무엇이든 기동 중에
+죽은 컨테이너에 맞는 처방은 **새 컨테이너**이고, `withStartupAttempts(3)` 이 그것이다 — 검사 자체는 매번 돈다(재시도는 테스트가 아니라 기동을
+되풀이한다). 시도마다 Testcontainers 가 실패를 ERROR 로 남기므로 빈도는 CI 로그에 보인다. 규칙은 **모든** `KafkaContainer` 에 걸린다 —
+`KafkaContainerStartupTest` 가 저장소의 IT 소스에서 `new KafkaContainer(` 를 전부 찾아 뺀 것 없이 대조한다.
+
 **시계는 하나다**(불변규칙 12). 도메인 전이가 `Clock` 에서 받은 시각으로 `updated_at` 을 옮기면,
 어댑터에 두 번째 시계를 두지 않는다 — JPA `@PreUpdate`·`@UpdateTimestamp` 도, DB `DEFAULT now()`
 도 쓰지 않는다. 시계가 둘이면 "그 주문에 마지막으로 무슨 일이 있었나" 의 답이 저장 시각으로

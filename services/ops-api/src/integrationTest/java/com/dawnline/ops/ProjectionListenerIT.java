@@ -55,7 +55,8 @@ class ProjectionListenerIT extends OpsIntegrationTestBase {
 
     /** 자동 토픽 생성을 끈다 — compose 의 브로커와 같다. 켜 두면 토픽 이름 오타가 여기서 통과한다. */
     private static final KafkaContainer KAFKA = new KafkaContainer(KAFKA_IMAGE)
-            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false");
+            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
+            .withStartupAttempts(3); // 기동 중에 죽으면 새로 띄운다 — DESIGN §13 「Kafka 컨테이너는 기동에 세 번까지」
 
     static {
         KAFKA.start();

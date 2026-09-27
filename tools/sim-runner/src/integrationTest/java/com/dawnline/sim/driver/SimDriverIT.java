@@ -68,7 +68,8 @@ class SimDriverIT {
      * 테스트에서는 조용히 통과한다.
      */
     private static final KafkaContainer KAFKA = new KafkaContainer(KAFKA_IMAGE)
-            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false");
+            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
+            .withStartupAttempts(3); // 기동 중에 죽으면 새로 띄운다 — DESIGN §13 「Kafka 컨테이너는 기동에 세 번까지」
 
     /**
      * 계획 출발 시각. 리터럴로 적지 않는다 — 벽시계와 비교되는 경로는 없지만, 날짜를 박아 두면
