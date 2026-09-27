@@ -334,7 +334,12 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         // 「약속창 없이 개정을 발행할 수 없습니다」로 터졌다. 여기서 안 보였던 이유는 이쪽의
         // 발행이 PlannedRoute(도메인)에서 페이로드를 만들기 때문이다 — 그쪽에는 창이 있다.
         // DB 를 읽는 발행 경로는 §6.10 취소와 §6.8 재계획이고, 둘 다 나중에 온다.
-        TwoRoutes routes = twoRoutes();
+        //
+        // 2026-09-27 부터 «새» stop 은 합쳐진 stop 에서 하나를 뗄 때만 생긴다 — 혼자 실린 stop 은 행이 옮겨 간다(ADR-068 후속 B).
+        // 그래서 픽스처가 짝으로 합친다.
+        TwoRoutes routes = twoRoutes(true);
+        UUID source = tx().execute(status -> mutations.findStopOf(routes.fromRouteId(), routes.orderId())).orElseThrow();
+        assertThat(ordersOfStop(source)).as("전제 — 합쳐진 stop 에서 뗀다").hasSize(2);
         long before = stopCount(routes.toRouteId());
 
         reassign.reassign(routes.fromRouteId(), routes.orderId(), routes.toRouteId());
@@ -342,8 +347,31 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         assertThat(stopCount(routes.toRouteId()))
                 .as("이 테스트는 «새» stop 이 생기는 경우를 본다 — 합쳐지면 검사할 것이 없다")
                 .isEqualTo(before + 1);
+        assertThat(ordersOfStop(source)).as("원래 행은 남은 주문과 함께 남는다 — 지우지 않는다").hasSize(1);
         // 열거하지 않고 전체에서 뺀다 — stop 이 생기는 경로가 늘어도 이 검사가 따라온다.
         assertThat(stopsWithoutWindow()).isZero();
+    }
+
+    @Test
+    void 혼자_실린_stop_은_행_그대로_옮겨_간다() {
+        // ADR-068 후속 B — 정정 전에는 주문 연결을 대상의 새 stop 으로 옮기고 비워진 원래 행을 지웠다. 그 행의 락을 기다리던
+        // 상태 반영은 커밋 뒤 0 행을 고친다(재계획의 (나)와 같다). 행이 옮겨 가면 같은 id 를 고친다.
+        TwoRoutes routes = twoRoutes();
+        UUID stopId = tx().execute(status -> mutations.findStopOf(routes.fromRouteId(), routes.orderId())).orElseThrow();
+        assertThat(ordersOfStop(stopId)).as("전제 — 그 주문뿐인 stop").containsExactly(routes.orderId());
+
+        reassign.reassign(routes.fromRouteId(), routes.orderId(), routes.toRouteId());
+
+        Optional<UUID> moved = tx().execute(status -> mutations.findStopOf(routes.toRouteId(), routes.orderId()));
+        assertThat(moved)
+                .as("같은 행이 대상 라우트에 있다 — 새로 만들지도, 지우지도 않았다").contains(stopId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<UUID> ordersOfStop(UUID stopId) {
+        return tx().execute(status -> (List<UUID>) entityManager.createNativeQuery(
+                        "SELECT order_id FROM route_stop_orders WHERE stop_id = ?")
+                .setParameter(1, stopId).getResultList());
     }
 
     private long stopCount(UUID routeId) {
@@ -606,8 +634,16 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
     }
 
     private TwoRoutes twoRoutes() {
+        return twoRoutes(false);
+    }
+
+    /**
+     * @param paired 참이면 지점마다 주문 둘을 2 m 떨어뜨려 둔다 — 계획이 한 stop 으로 합친다(§6.5 1단계, geohash7). 무게를 반으로
+     *               나눠 stop 하나의 짐은 짝이 없을 때와 같다
+     */
+    private TwoRoutes twoRoutes(boolean paired) {
         UUID waveId = Ids.newId();
-        seedCandidates(waveId, 40);
+        seedCandidates(waveId, paired ? 80 : 40, paired);
         runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         assertThat(plan.routes()).as("재배정을 보려면 라우트가 둘 이상이어야 한다").hasSizeGreaterThan(1);
@@ -639,6 +675,10 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
      * 것은 재배정 규칙이지 <em>지금 몇 시인가</em>가 아니다.
      */
     private List<UUID> seedCandidates(UUID waveId, int count) {
+        return seedCandidates(waveId, count, false);
+    }
+
+    private List<UUID> seedCandidates(UUID waveId, int count, boolean paired) {
         Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)),
                 now.plus(Duration.ofHours(5)));
@@ -647,10 +687,13 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
             for (int i = 0; i < count; i++) {
                 UUID orderId = Ids.newId();
                 orderIds.add(orderId);
+                int point = paired ? i / 2 : i;
+                double nudge = paired ? 0.00002d * (i % 2) : 0.0d;
+                int share = paired ? 2 : 1;
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
-                        GeoPoint.of(CAMP.lat() + 0.004d * (i % 8 + 1),
-                                CAMP.lng() + 0.005d * (i / 8 + 1)),
-                        40_000, 80_000, false, false, window, 60, false, 0, now));
+                        GeoPoint.of(CAMP.lat() + 0.004d * (point % 8 + 1) + nudge,
+                                CAMP.lng() + 0.005d * (point / 8 + 1)),
+                        40_000 / share, 80_000 / share, false, false, window, 60, false, 0, now));
             }
         });
         return orderIds;

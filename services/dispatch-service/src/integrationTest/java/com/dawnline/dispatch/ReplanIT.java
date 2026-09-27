@@ -288,6 +288,31 @@ class ReplanIT extends DispatchIntegrationTestBase {
                 .as("옮겨 간 짝이 한 행에 있다 — 주문마다 흩어지지 않았다").hasSize(1);
     }
 
+    @Test
+    void 끝난_라우트는_받지_않는다_받을_라우트가_없으면_no_candidate() {
+        // ADR-068 후속 A — 두 번째 peak-day 에서 앞 stop 을 전부 끝낸 라우트 둘이 stop 을 받았다. 이미 복귀한 기사의 stop 이라
+        // 스캔되지 않았고 그 차량은 비활성화 409 로 남았다. 같은 계획의 다른 라우트를 전부 끝내 두면 받을 곳이 없다.
+        Planned planned = plannedRoute();
+        tightenWindows(planned.routeId());
+        arriveLate(planned);
+        int finished = tx().execute(status -> entityManager.createNativeQuery("""
+                UPDATE route_stops SET status = 'COMPLETED', actual_at = planned_arrival
+                 WHERE route_id IN (SELECT id FROM routes
+                                     WHERE plan_id = (SELECT plan_id FROM routes WHERE id = ?) AND id <> ?)
+                """).setParameter(1, planned.routeId()).setParameter(2, planned.routeId()).executeUpdate());
+        assertThat(finished).as("전제 — 끝낼 다른 라우트가 있다").isPositive();
+        UUID spare = otherRoute(planned.routeId());
+        double noCandidate = replanCount(Outcome.NO_CANDIDATE);
+        double total = replanTotal();
+
+        sendAtRisk(planned, deviationSeconds(planned));
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(replanTotal()).isEqualTo(total + 1.0d));
+        assertThat(replanCount(Outcome.NO_CANDIDATE)).as("갈래별: %s", outcomes()).isEqualTo(noCandidate + 1.0d);
+        assertThat(revisionOf(spare)).as("끝난 라우트는 개정되지 않았다").isEqualTo(1);
+    }
+
     // --- 보내기 --------------------------------------------------------------
 
     private void sendAtRisk(Planned planned, long deviationSeconds) {

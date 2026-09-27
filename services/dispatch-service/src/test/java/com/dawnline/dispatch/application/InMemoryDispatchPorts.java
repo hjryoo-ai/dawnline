@@ -256,7 +256,7 @@ final class InMemoryDispatchPorts {
             int seq;
             final GeoPoint point;
             final int serviceSeconds;
-            /** {@code moveOrder} 가 줄이고 늘린다. */
+            /** {@code moveOrder} 가 합쳐진 stop 에서 떼고 목적지의 stop 에 붙인다. */
             final List<UUID> orderIds;
             /** 이 stop 의 약속창. 개정 발행이 required 로 싣는다 (§5.3, Phase 5-1a). */
             final TimeWindow promised;
@@ -333,10 +333,18 @@ final class InMemoryDispatchPorts {
         }
 
         @Override
-        public List<RouteHeader> routesOfPlan(UUID planId) {
+        public List<RouteHeader> unfinishedRoutesOfPlan(UUID planId) {
+            // 실물과 같다 — 끝나지 않은 stop 이 하나라도 있는 라우트(ADR-068 후속 A).
             return headers.values().stream()
                     .filter(header -> header.planId().equals(planId))
+                    .filter(header -> rows.getOrDefault(header.routeId(), List.of()).stream()
+                            .anyMatch(row -> !row.status.isTerminal()))
                     .toList();
+        }
+
+        @Override
+        public boolean lockUnfinishedStop(UUID routeId) {
+            return rows.getOrDefault(routeId, List.of()).stream().anyMatch(row -> !row.status.isTerminal());
         }
 
         @Override
@@ -457,6 +465,11 @@ final class InMemoryDispatchPorts {
             StopRow from = rows.values().stream().flatMap(List::stream)
                     .filter(row -> row.id.equals(fromStopId)).findFirst().orElseThrow();
             DispatchCandidate candidate = candidates.findById(orderId).orElseThrow();
+            if (from.orderIds.equals(List.of(orderId))) {
+                // 실물과 같다 — 그 주문뿐이면 행을 옮긴다(ADR-068 후속 B).
+                relocateStop(fromStopId, targetRouteId);
+                return;
+            }
             from.orderIds.remove(orderId);
 
             List<StopRow> target = rows.computeIfAbsent(targetRouteId, id -> new ArrayList<>());
@@ -473,9 +486,6 @@ final class InMemoryDispatchPorts {
                         return created;
                     });
             into.orderIds.add(orderId);
-            // 비워진 stop 은 지운다 — 남겨 두면 seq 재부여가 유령 지점을 셈에 넣는다.
-            rows.get(routeOf(from)).removeIf(row -> row.id.equals(fromStopId)
-                    && row.orderIds.isEmpty());
         }
 
         private UUID routeOf(StopRow row) {
@@ -518,7 +528,8 @@ final class InMemoryDispatchPorts {
         @Override
         public Map<UUID, Integer> revisionsOfPlan(UUID planId) {
             Map<UUID, Integer> revisionsOf = new LinkedHashMap<>();
-            routesOfPlan(planId).forEach(header -> revisionsOf.put(header.routeId(), revisions.get(header.routeId())));
+            headers.values().stream().filter(header -> header.planId().equals(planId))
+                    .forEach(header -> revisionsOf.put(header.routeId(), revisions.get(header.routeId())));
             return revisionsOf;
         }
 

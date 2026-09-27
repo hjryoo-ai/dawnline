@@ -75,7 +75,12 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
-        public List<RouteHeader> routesOfPlan(UUID planId) {
+        public List<RouteHeader> unfinishedRoutesOfPlan(UUID planId) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다");
+        }
+
+        @Override
+        public boolean lockUnfinishedStop(UUID routeId) {
             throw new UnsupportedOperationException("이 페이크는 재계획을 모른다");
         }
 
