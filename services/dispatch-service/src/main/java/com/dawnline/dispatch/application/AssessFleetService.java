@@ -1,6 +1,5 @@
 package com.dawnline.dispatch.application;
 
-import com.dawnline.common.TimeWindow;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.common.fleet.FleetFeasibility;
 import com.dawnline.dispatch.application.port.in.AssessFleetUseCase;
@@ -14,12 +13,13 @@ import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.dispatch.domain.DispatchErrorCode;
 import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
+import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.dispatch.domain.optimizer.StopMerger;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
+import com.dawnline.dispatch.domain.optimizer.WaveFleet;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -35,8 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>계획이 볼 것을 잰다 — 후보는 계획의 질의({@code findPlannableInWave})와 변환({@link OptimizerCandidates})을 그대로 쓰고,
  * {@link StopMerger} 를 한 번 돌린 <strong>통합 후 stop</strong> 이다. 차량은 계획이 받는 함대({@link VehicleCatalog#availableAt},
- * 활성만 · 지금 시각에 붙인 근무창) 가운데 근무창이 후보 약속창의 합과 겹치는 것이다 — 계획 자신은 거르지 않고 근무창 룰이 stop
- * 마다 거절하지만, 주간조를 새벽 웨이브의 용량으로 세면 부족분이 조용히 사라진다.
+ * 활성만 · 지금 시각에 붙인 근무창) 가운데 이 웨이브가 쓸 수 있는 것 — <strong>계획과 같은 함수</strong>({@link WaveFleet#usable},
+ * ADR-039 후속)다. 주간조를 새벽 웨이브의 용량으로 세면 부족분이 조용히 사라지고, 기준과 계획이 집합을 따로 적으면 「기준이 센
+ * 차량」과 「계획이 쓴 차량」이 갈라진다.
  */
 public class AssessFleetService implements AssessFleetUseCase {
 
@@ -80,20 +81,20 @@ public class AssessFleetService implements AssessFleetUseCase {
         UUID campId = plannable.getFirst().campId();
         Instant now = clock.instant();
 
-        TimeWindow promised = span(plannable);
+        List<Candidate> optimizerCandidates = OptimizerCandidates.of(plannable);
         Map<UUID, ResourceViews.VehicleView> rows = admin.listVehicles(campId).stream()
                 .collect(Collectors.toMap(ResourceViews.VehicleView::id, Function.identity()));
         List<FleetFeasibility.Vehicle> fleet = new ArrayList<>();
-        for (VehicleSpec spec : vehicles.availableAt(campId, now)) {
+        for (VehicleSpec spec : WaveFleet.usable(vehicles.availableAt(campId, now), optimizerCandidates)) {
             ResourceViews.VehicleView row = rows.get(spec.id().value());
-            if (row == null || !spec.shift().overlaps(promised)) {
+            if (row == null) {
                 continue;
             }
             fleet.add(new FleetFeasibility.Vehicle(row.id().toString(), row.code(), row.cold(), row.allowsHazmat(),
                     row.maxWeightG(), row.maxVolumeCm3(), row.fixedCostKrw()));
         }
 
-        List<FleetFeasibility.Stop> stops = StopMerger.merge(OptimizerCandidates.of(plannable)).stream()
+        List<FleetFeasibility.Stop> stops = StopMerger.merge(optimizerCandidates).stream()
                 .map(stop -> new FleetFeasibility.Stop(stop.parcel().requiresCold(), stop.parcel().hazmat(),
                         stop.parcel().weightG(), stop.parcel().volumeCm3()))
                 .toList();
@@ -117,12 +118,5 @@ public class AssessFleetService implements AssessFleetUseCase {
                 combination.label(), line.status(), line.demand().stops(), line.demand().weightG(),
                 line.demand().volumeCm3(), line.vehicles(), line.capacity().stops(), line.capacity().weightG(),
                 line.capacity().volumeCm3(), line.shortfall(), template);
-    }
-
-    /** 후보 약속창의 합 — 가장 이른 시작부터 가장 늦은 끝까지. */
-    private static TimeWindow span(List<DispatchCandidate> plannable) {
-        Instant start = plannable.stream().map(c -> c.promised().start()).min(Comparator.naturalOrder()).orElseThrow();
-        Instant end = plannable.stream().map(c -> c.promised().end()).max(Comparator.naturalOrder()).orElseThrow();
-        return new TimeWindow(start, end);
     }
 }

@@ -56,6 +56,10 @@ public final class GreedyAssigner {
     static final Feasibility DEADLINE = Feasibility.violated(
             "plan-deadline", "계획 마감 시간이 지나 배정을 시도하지 못했습니다");
 
+    /** 어떤 라우트도 거절하지 않았는데 남았거나, 라우트가 하나도 없다 — 이 웨이브가 쓸 수 있는 차량이 0대인 경우 (§6.2). */
+    static final Feasibility NO_FEASIBLE_VEHICLE = Feasibility.violated(
+            "no-feasible-vehicle", "실을 수 있는 차량이 없습니다");
+
     private final NearestNeighborSequencer sequencer;
 
     /**
@@ -97,22 +101,30 @@ public final class GreedyAssigner {
             }
             unassigned.addAll(place(cluster, routes, distance, cost, refusals, seats));
         }
-        unassigned.forEach(stop -> refusals.putIfAbsent(stop, lastRefusalFor(stop, routes)));
+        unassigned.forEach(stop -> refusals.putIfAbsent(stop, closestRefusalFor(stop, routes)));
         return List.copyOf(unassigned);
     }
 
     /**
-     * 이 stop 을 마지막으로 거절한 사유. 설명(§6.3)이 "실을 차가 없다" 로만 남지 않게 한다.
+     * 이 stop 을 거절한 라우트들 가운데 <strong>통과에 가장 가까웠던</strong> 것의 사유 (§6.3, ADR-039 후속). 설명이
+     * "실을 차가 없다" 로만 남지 않게 한다.
+     *
+     * <p>가까움은 {@link RuleSet#closestFirst()} 가 정한다 — 평가 순서에서 더 멀리 간 거절, 같은 룰이면 폭이 작은 것. 동률은
+     * 앞 라우트다(차량 순서, 불변규칙 12). 전에는 차량 코드 순 <em>마지막</em> 라우트의 거절이었고, 새벽 웨이브에서 그 차는 늘
+     * 주간조였다 — 사유가 그 차에 대해서만 참이었다.
      *
      * <p>{@link SavingsClarkeWright} 도 이것을 쓴다 — 「미배정에 사유를 붙이는 방법」은 전략이
      * 아니라 §6.3 의 정책이고, 두 벌로 두면 같은 상황에 두 가지 답이 나온다.
      */
-    static Feasibility lastRefusalFor(Stop stop, List<RouteAccumulator> routes) {
+    static Feasibility closestRefusalFor(Stop stop, List<RouteAccumulator> routes) {
+        if (routes.isEmpty()) {
+            return NO_FEASIBLE_VEHICLE;
+        }
         return routes.stream()
                 .map(route -> route.check(stop))
                 .filter(feasibility -> !feasibility.feasible())
-                .reduce((first, second) -> second)
-                .orElse(Feasibility.violated("no-feasible-vehicle", "실을 수 있는 차량이 없습니다"));
+                .min(routes.getFirst().rules().closestFirst())
+                .orElse(NO_FEASIBLE_VEHICLE);
     }
 
     private List<Stop> place(List<Stop> cluster, List<RouteAccumulator> routes,

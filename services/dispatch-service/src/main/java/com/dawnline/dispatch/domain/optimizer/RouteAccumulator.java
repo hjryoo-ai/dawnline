@@ -57,6 +57,11 @@ public final class RouteAccumulator {
         return new RouteAccumulator(rules, vehicle, state, softPenalty);
     }
 
+    /** 이 라우트가 판정에 쓰는 룰 묶음 — 계획의 것과 같다. */
+    public RuleSet rules() {
+        return rules;
+    }
+
     /** 이 stop 을 넣을 수 있는가 (하드 룰). */
     public Feasibility check(Stop stop) {
         return rules.check(stop, vehicle, state);

@@ -21,6 +21,7 @@ import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DispatchStrategies;
 import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
+import com.dawnline.dispatch.domain.optimizer.PlanAssembler;
 import com.dawnline.dispatch.domain.optimizer.PlanPruner;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlanValidator;
@@ -29,8 +30,10 @@ import com.dawnline.dispatch.domain.optimizer.PlannedStop;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
 import com.dawnline.dispatch.domain.optimizer.PlanningProblem;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
+import com.dawnline.dispatch.domain.optimizer.StopMerger;
 import com.dawnline.dispatch.domain.optimizer.VehicleId;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
+import com.dawnline.dispatch.domain.optimizer.WaveFleet;
 import com.dawnline.dispatch.domain.optimizer.WaveRef;
 import java.time.Clock;
 import java.time.Duration;
@@ -214,7 +217,11 @@ public class RunPlanService implements RunPlanUseCase {
     /** 계산 — 트랜잭션 없음. 순수 함수와 하드 룰 검증뿐이다. */
     private Computed compute(RunPlanCommand command, Snapshot snapshot, Instant startedAt) {
         PlanningProblem problem = problemOf(command, snapshot, startedAt);
-        PlanResult result = DispatchStrategies.create(strategyOf(command)).plan(problem);
+        // 이 웨이브가 쓸 수 있는 차량이 0대다(캠프에 활성 차량은 있다 — 읽기 단계가 봤다). 전략은 차량 없는 문제를 받지 않으므로
+        // 부르지 않고 전부 미배정으로 조립한다 — 전 차량이 거절하던 때와 같은 끝(라우트 없음 → 실패)이다(ADR-039 후속).
+        PlanResult result = problem.vehicles().isEmpty()
+                ? PlanAssembler.assemble(problem, List.of(), StopMerger.merge(problem.candidates()), Map.of(), List.of())
+                : DispatchStrategies.create(strategyOf(command)).plan(problem);
         return new Computed(result, validator.validate(problem, result));
     }
 
@@ -384,12 +391,17 @@ public class RunPlanService implements RunPlanUseCase {
         return plan;
     }
 
+    /**
+     * 계획의 입력. 차량은 <strong>이 웨이브가 쓸 수 있는 것</strong>만이다({@link WaveFleet#usable}, ADR-039 후속) — 예약의
+     * 라운드로빈 · 배정 시도 · 미배정 설명의 {@code triedVehicles} 가 모두 이 목록을 보므로 거르는 자리가 여기 하나다.
+     */
     private PlanningProblem problemOf(RunPlanCommand command, Snapshot snapshot, Instant startedAt) {
         List<Candidate> optimizerCandidates = OptimizerCandidates.of(snapshot.plannable());
         PlanModeSelector.Decision mode = snapshot.mode();
         return new PlanningProblem(
                 new WaveRef(command.waveId(), command.campId(), "SAME_DAY", startedAt),
-                new CampDepot(command.campId(), snapshot.depot()), optimizerCandidates, snapshot.fleet(),
+                new CampDepot(command.campId(), snapshot.depot()), optimizerCandidates,
+                WaveFleet.usable(snapshot.fleet(), optimizerCandidates),
                 snapshot.ruleSet(), cost, distance, budget, mode.mode(), mode.budgetFactor(), startedAt,
                 command.effectiveSeed());
     }

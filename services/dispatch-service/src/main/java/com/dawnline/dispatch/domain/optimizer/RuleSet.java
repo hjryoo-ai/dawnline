@@ -149,6 +149,26 @@ public final class RuleSet {
                 .min();
     }
 
+    /**
+     * 거절들을 <strong>통과에 가까운 것부터</strong> 세우는 순서 (§6.3 미배정 설명, ADR-039 후속).
+     *
+     * <p>첫 키는 <strong>평가 순서에서 얼마나 멀리 갔는가</strong>다. {@link #check} 는 첫 위반에서 멈추므로, 뒤쪽 룰에 걸린
+     * 거절은 그 앞의 하드 룰을 <em>모두 통과했다</em> — {@code late-hard-limit} 에 걸린 라우트는 냉장 · 용량 · stop 상한 ·
+     * 근무창을 다 만족했다. 둘째 키는 같은 룰 안에서의 {@linkplain Feasibility#excess() 위반 폭}이다. 폭의 단위가 룰마다 달라서
+     * (분 · ‰) <strong>다른 룰끼리는 폭을 견주지 않는다</strong> — 그래서 평가 순서가 먼저다.
+     *
+     * <p>이 묶음의 하드 룰이 아닌 사유({@code plan-deadline} 따위)는 가장 멀다. 동률은 이 순서가 깨지 않는다 — 호출부의 순서
+     * (차량 순서)가 깬다.
+     */
+    public Comparator<Feasibility> closestFirst() {
+        java.util.Map<String, Integer> stage = new java.util.HashMap<>();
+        for (int i = 0; i < hard.size(); i++) {
+            stage.putIfAbsent(hard.get(i).name(), i);
+        }
+        return Comparator.comparingInt((Feasibility refusal) -> -stage.getOrDefault(refusal.ruleName(), -1))
+                .thenComparingLong(Feasibility::excess);
+    }
+
     /** 하드 룰들 (우선순위 순). {@link PlanValidator} 가 최종 라우트에 다시 돌린다. */
     public List<HardRule> hardRules() {
         return hard;

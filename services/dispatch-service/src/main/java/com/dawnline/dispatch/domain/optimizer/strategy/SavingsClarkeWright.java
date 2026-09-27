@@ -165,7 +165,7 @@ public final class SavingsClarkeWright implements DispatchStrategy {
             unassigned.addAll(place(problem, route, routes, taken, seats));
         }
         unassigned.forEach(stop ->
-                refusals.putIfAbsent(stop, GreedyAssigner.lastRefusalFor(stop, routes)));
+                refusals.putIfAbsent(stop, GreedyAssigner.closestRefusalFor(stop, routes)));
         return List.copyOf(unassigned);
     }
 

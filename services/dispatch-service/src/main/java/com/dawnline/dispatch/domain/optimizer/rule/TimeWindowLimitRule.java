@@ -42,6 +42,7 @@ public record TimeWindowLimitRule(String name, int priority, int hardLimitMinute
         }
         long late = Duration.between(stop.promised().end(), arrival).toMinutes();
         return Feasibility.violated(name,
-                "지각 %d분이 상한 %d분을 넘깁니다".formatted(late, hardLimitMinutes));
+                "지각 %d분이 상한 %d분을 넘깁니다".formatted(late, hardLimitMinutes),
+                Duration.between(limit, arrival).toMinutes());
     }
 }
