@@ -122,7 +122,7 @@ class ScenarioRunnerTest {
                         new com.dawnline.sim.order.CancelPlan(cancel, random), orderId -> {
                             boolean published = ops.commands.contains("CLOSE_WAVE");
                             cancelCalls.add(published ? "after-close" : "before-close");
-                            return published ? OrderClient.Response.of(409, "order-not-cancellable")
+                            return published ? OrderClient.Response.of(409, "illegal-state-transition")
                                     : OrderClient.Response.of(200, null);
                         }, nanos -> { }, FROZEN_CLOCK, cancel.ratePerSecond()));
     }
@@ -150,7 +150,7 @@ class ScenarioRunnerTest {
                 .containsOnly("before-close");
         assertThat(cancelCalls.subList(report.beforePlanDecided(), cancelCalls.size())).as("발행 뒤 취소는 계획이 끝난 뒤에 나갔다")
                 .hasSize(report.afterPublishDecided()).containsOnly("after-close");
-        assertThat(report.afterPublish()).containsEntry("409 order-not-cancellable", report.afterPublishDecided());
+        assertThat(report.afterPublish()).containsEntry("409 illegal-state-transition", report.afterPublishDecided());
         assertThat(report.notSent()).isZero();
     }
 
