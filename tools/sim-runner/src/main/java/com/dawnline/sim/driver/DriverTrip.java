@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory;
  * 있지만, 그러면 「깨운 이유가 개정인가 종료인가」를 인터럽트 플래그 하나로 구별해야 한다.
  * 큐는 값을 함께 가져오므로 그 질문이 없다.
  *
- * <h2>404 재시도에는 상한이 있다</h2>
+ * <h2>404 재시도에는 상한이 있다 — 전송 실패의 재전송도 같은 상한이다</h2>
  * 404 의 원인은 경합이다 — tracking 과 이 도구가 같은 {@code route.assigned} 를 <strong>서로 다른
  * 컨슈머 그룹</strong>으로 읽으므로, 이 도구가 먼저 읽으면 tracking 에는 아직 그 라우트가 없다.
  * 그래서 다시 보내면 된다. 다만 <strong>조용히 무한 재시도하는 도구는 시나리오 결과를
@@ -32,7 +32,7 @@ public final class DriverTrip implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(DriverTrip.class);
 
-    /** 404 재시도 간격. 상한에 비해 충분히 짧아 여러 번 시도된다. */
+    /** 재시도 · 재전송 간격. 상한에 비해 충분히 짧아 여러 번 시도된다. */
     private static final long RETRY_INTERVAL_NANOS = 1_000_000_000L;
 
     private final UUID routeId;
@@ -57,7 +57,7 @@ public final class DriverTrip implements Runnable {
      * @param pacer           배속. 여정당 하나여야 한다 (앵커를 들고 있다)
      * @param sleeper         재시도 대기
      * @param nanoTime        단조 시계
-     * @param retryLimitNanos 404 재시도 상한
+     * @param retryLimitNanos 404 · 409 재시도와 전송 실패 재전송의 상한
      * @param tally           집계
      */
     public DriverTrip(UUID routeId, DriverSimulator simulator, ScanClient scans, TripPacer pacer,
@@ -125,8 +125,9 @@ public final class DriverTrip implements Runnable {
     }
 
     /**
-     * 스캔 하나를 보낸다. 404(아직 모른다)와 409 {@code shipment-contended}(겹쳐서 적용되지 않았다)면 상한까지 다시 보낸다 —
-     * 둘 다 계약이 「같은 요청을 다시 보내도 된다」고 말한다.
+     * 스캔 하나를 보낸다. 404(아직 모른다)와 409 {@code shipment-contended}(겹쳐서 적용되지 않았다), 그리고 <strong>전송 실패</strong>
+     * (응답을 받지 못했다)면 같은 상한까지 다시 보낸다 — 앞의 둘은 계약이 「같은 요청을 다시 보내도 된다」고 말하고, 뒤의 것은 스캔이
+     * 서버에서 멱등이라서다. 멱등은 서버의 성질이고 도구가 다시 보내지 않으면 쓰이지 않는다(ADR-067 후속 — B14 의 전제).
      *
      * @return 포기했으면 {@code false}
      */
@@ -135,12 +136,22 @@ public final class DriverTrip implements Runnable {
         while (true) {
             ScanClient.Response response = scans.report(routeId, call);
             tally.scanSent();
-            if (!response.isNotYetKnown() && !response.isContended()) {
+            if (!response.isNotYetKnown() && !response.isContended() && !response.isTransportFailure()) {
                 tally.record(response);
                 return true;
             }
+            if (response.isTransportFailure() && Thread.currentThread().isInterrupted()) {
+                // 종료다 — 다시 보낼 것이 아니다. 클라이언트가 플래그를 되살려 두었다.
+                throw new InterruptedException("스캔 전송 중 중단");
+            }
             if (nanoTime.getAsLong() >= deadline) {
                 tally.record(response);
+                if (response.isTransportFailure()) {
+                    log.warn("tracking 에 {}초 동안 닿지 못했다({}) — 포기한다. routeId={}, revision={}, seq={}, type={}",
+                            retryLimitNanos / 1_000_000_000L, response.failure(), routeId, route.revision(),
+                            call.stopSeq(), call.type());
+                    return false;
+                }
                 if (response.isContended()) {
                     log.warn("tracking 이 이 스캔을 {}초 동안 매번 겹침으로 거절했다(409 shipment-contended) — 포기한다. "
                             + "routeId={}, revision={}, seq={}, type={}", retryLimitNanos / 1_000_000_000L, routeId,
@@ -157,7 +168,11 @@ public final class DriverTrip implements Runnable {
                         call.stopSeq(), call.type());
                 return false;
             }
-            tally.scanRetried();
+            if (response.isTransportFailure()) {
+                tally.scanResent();
+            } else {
+                tally.scanRetried();
+            }
             sleeper.sleepNanos(RETRY_INTERVAL_NANOS);
         }
     }

@@ -55,6 +55,15 @@ public interface ScanClient {
         }
 
         /**
+         * 응답을 받지 못했다 — 연결 거부 · 타임아웃. 요청이 서버에 닿았는지 모르므로 다시 보낸다: 스캔은 서버에서 멱등이다
+         * ({@code (orderIds, type)} + 상태 머신이 중복을 {@code STALE} 로 흡수한다, DESIGN.md §8.5). 다시 보내지 않으면 서버에 닿지
+         * 못한 스캔이 조용히 사라진다 — 두 번째 {@code peak-day} 에서 라우트 하나의 꼬리 stop 넷이 그렇게 남았다(근거: 추정).
+         */
+        public boolean isTransportFailure() {
+            return status == 0;
+        }
+
+        /**
          * 아직 그 라우트를 모른다 — 재시도해도 되는 404 다.
          *
          * <p>이 도구에서 404 가 나는 이유는 하나다: 같은 토픽을 <strong>두 컨슈머 그룹</strong>이
