@@ -3455,7 +3455,7 @@ Phase 4 마감에 일곱째(검사 대상 집합)가, **Phase 5-0 에 여덟째(
 
 **release.yml (태그 `v*`)**: 이미지 GHCR 푸시(태그·`latest`), SBOM 생성, GitHub Release 노트.
 
-**로컬 실행**: `make up`(전체 스택), `make demo`, `make peak`(피크 시나리오), `make down`. Makefile은 Compose 명령 래퍼다. 시뮬레이션은 `make sim-up`(자기 compose 프로젝트 `dawnline-sim` · 오프셋 시계, §5.6 · ADR-066) — 개발 스택과 함께 뜨지 않는다(컨테이너 이름이 같다).
+**로컬 실행**: `make up`(전체 스택), `make demo`, `make peak`(창 시나리오 — `make sim-up` 뒤에 호스트의 sim-runner 가 같은 오프셋으로 돈다, 부록 A · ADR-067), `make down`. Makefile은 Compose 명령 래퍼다. 시뮬레이션은 `make sim-up`(자기 compose 프로젝트 `dawnline-sim` · 오프셋 시계, §5.6 · ADR-066) — 개발 스택과 함께 뜨지 않는다(컨테이너 이름이 같다).
 
 `make demo` 는 시드 확인 → 주문 200건(sim-runner smoke) → 웨이브 편입 → 컷오프 → `wave.closed` 까지를
 **DB 와 브로커 양쪽에서** 확인하고 URL 을 출력한다(`tools/demo/phase2-demo.sh`). 두 곳을 다 보는 이유는

@@ -2114,7 +2114,6 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 | 파일 | 줄 | 행 |
 |---|---|---|
 | `.github/workflows/ci.yml` | 4 | A25 |
-| `Makefile` | 2 | A27 |
 | `README.md` | 8 | A4 · A22 · A23 · A24 · A27 |
 | `docs/DESIGN.md` | 11 | A1 · A2 · A8 · A13 · A14 · A26 · D2 · D7 |
 | `docs/IMPLEMENTATION_PLAN.md` | 20 | A1 · A2 · A3 · A4 · A5 · A9 · A10 · A11 · A12 · A13 · C · D5 · D7 |
@@ -2259,6 +2258,9 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
    ops-api 로 읽어 운영자처럼 증차한다(`ADD_VEHICLE` · 감사 행, `source=peak-sim`). 시간 예산은 `rm_waves.closed_at` 대비 어설션, 리포트 머리에
    계산값과 실제 미배정을 나란히. 비활성화는 끝나지 않은 stop 이 있으면 409(엄격) — 그래서 **창의 기사를 7-4 에서 당겼다**(계획의
    `route_count` 합을 기다린다), 시작 전 활성 `peak-sim` 0 이 전제 어설션. `routes.status` 는 쓰는 쪽이 없다(A31).
+   `make peak [PEAK=peak-day]` 은 자리표시를 걷어냈다 — sim-runner 는 **호스트에서** `make sim-up` 이 적은 오프셋(`build/sim-offset`)과
+   프로필 `sim` 으로 돈다(`tools/sim/peak.sh`, 운영자 토큰은 그 자리에서 찍는다). 그래서 **sim-runner 이미지는 이 경로에 필요하지 않다** —
+   이미지를 켤지는 7-7(컨테이너 이미지 job)에서 정한다. D3(정해진 시각의 운영자 커맨드)는 아직이다.
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
    **같은 물량을 `overload-day` 로 한 번 더**(D2) — 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터. **`normal-day`
    열을 옆에 둔다.** 측정 헤더에 한 줄: **콜드 스택에서 시작했다**, 첫 계획·첫 소비 처리량은 정상 상태와 갈라 적는다(D1).
