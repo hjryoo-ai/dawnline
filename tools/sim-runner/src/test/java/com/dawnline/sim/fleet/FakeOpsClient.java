@@ -30,7 +30,20 @@ public final class FakeOpsClient implements OpsClient {
     /** 비활성화의 답 — 차량마다 앞에서 하나씩 꺼내고, 비면 200. */
     public final Map<UUID, Deque<Integer>> deactivateStatus = new LinkedHashMap<>();
 
+    /** 조기 마감의 답 — 비면 200. */
+    public final Deque<Reply> closeAnswers = new ArrayDeque<>();
+    /** 웨이브의 라우트 — 읽기 모델. */
+    public List<RouteSummary> routes = List.of();
+    /** 라우트의 stop. */
+    public final Map<UUID, List<RouteStop>> stops = new LinkedHashMap<>();
+    /** 재배정의 답 — 비면 200. */
+    public final Deque<Integer> reassignStatus = new ArrayDeque<>();
+
     public final List<NewVehicle> addedBodies = new ArrayList<>();
+    public final List<String> closeCalls = new ArrayList<>();
+    public final List<List<UUID>> reassignCalls = new ArrayList<>();
+    /** 커맨드의 순서 — 「증차 뒤에 마감」을 본다. */
+    public final List<String> commands = new ArrayList<>();
     public final List<UUID> deactivateCalls = new ArrayList<>();
     public int campsCalls;
     private int audit;
@@ -60,6 +73,7 @@ public final class FakeOpsClient implements OpsClient {
     @Override
     public Reply addVehicle(NewVehicle vehicle) {
         addedBodies.add(vehicle);
+        commands.add("ADD_VEHICLE");
         return new Reply(200, nextAudit(), null, UUID.nameUUIDFromBytes(vehicle.code().getBytes()));
     }
 
@@ -72,6 +86,38 @@ public final class FakeOpsClient implements OpsClient {
                 : new Reply(status, nextAudit(), status == 409 ? "vehicle-in-service" : "internal", null);
     }
 
+    @Override
+    public Reply closeWave(UUID waveId, String reason) {
+        closeCalls.add(reason);
+        commands.add("CLOSE_WAVE");
+        Reply answer = closeAnswers.pollFirst();
+        return answer != null ? answer : new Reply(200, nextAudit(), null, null);
+    }
+
+    @Override
+    public List<RouteSummary> waveRoutes(UUID waveId) {
+        return routes;
+    }
+
+    @Override
+    public List<RouteStop> routeStops(UUID routeId) {
+        return stops.getOrDefault(routeId, List.of());
+    }
+
+    @Override
+    public Reply reassign(UUID routeId, UUID orderId, UUID targetRouteId) {
+        reassignCalls.add(List.of(routeId, orderId, targetRouteId));
+        commands.add("REASSIGN_STOP");
+        Integer status = reassignStatus.pollFirst();
+        return status == null || status == 200 ? new Reply(200, nextAudit(), null, null)
+                : new Reply(status, nextAudit(), status == 409 ? "stop-not-planned" : "core-error", null);
+    }
+
+    /** 감사 id 를 하나 낸다 — 미리 정한 답에 싣는다. */
+    public String audit() {
+        return nextAudit();
+    }
+
     /** 첫 등록이 만든 차량 id — 비활성화의 답을 미리 정할 때 쓴다. */
     public UUID deactivateCallsTarget() {
         return UUID.nameUUIDFromBytes(addedBodies.getFirst().code().getBytes());
@@ -82,6 +128,22 @@ public final class FakeOpsClient implements OpsClient {
     }
 
     // --- 픽스처 --------------------------------------------------------------------------------------------
+
+    public static final UUID LIGHT = UUID.fromString("0199a000-0000-7000-8000-0000000000b1");
+    public static final UUID HEAVY = UUID.fromString("0199a000-0000-7000-8000-0000000000b2");
+    public static final UUID MIDDLE = UUID.fromString("0199a000-0000-7000-8000-0000000000b3");
+    /** 가장 많이 실은 라우트의 마지막 PLANNED stop 의 주문. */
+    public static final UUID LAST_PLANNED = UUID.fromString("0199a000-0000-7000-8000-0000000000c3");
+
+    /** 계획의 라우트 셋 — 가장 많이 실은 것(stop 넷)의 앞은 끝났고 뒤 둘은 PLANNED, 마지막 것은 이미 닿았다. */
+    public void threeRoutes() {
+        routes = List.of(new RouteSummary(MIDDLE, 2), new RouteSummary(HEAVY, 4), new RouteSummary(LIGHT, 1));
+        stops.put(HEAVY, List.of(
+                new RouteStop(1, "COMPLETED", List.of(UUID.fromString("0199a000-0000-7000-8000-0000000000c1"))),
+                new RouteStop(2, "PLANNED", List.of(UUID.fromString("0199a000-0000-7000-8000-0000000000c2"))),
+                new RouteStop(3, "PLANNED", List.of(LAST_PLANNED)),
+                new RouteStop(4, "ARRIVED", List.of(UUID.fromString("0199a000-0000-7000-8000-0000000000c4")))));
+    }
 
     /** 시드 야간조 모양의 밴(일반). */
     public static Vehicle van(String source, boolean active) {

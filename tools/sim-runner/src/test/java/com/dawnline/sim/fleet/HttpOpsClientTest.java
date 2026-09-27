@@ -153,4 +153,35 @@ class HttpOpsClientTest {
         assertThat(refused).isEqualTo(new OpsClient.Reply(409, "audit-2", "vehicle-in-service", null));
         assertThat(received.getFirst().get("body")).contains("\"source\":\"peak-sim\"", "\"shiftStart\":\"23:00:00\"");
     }
+
+    @Test
+    void 조기_마감과_재배정은_계약의_본문을_싣고_라우트는_이름_있는_칸에서_읽는다() {
+        UUID route = UUID.fromString("0199a000-0000-7000-8000-0000000000b2");
+        UUID target = UUID.fromString("0199a000-0000-7000-8000-0000000000b1");
+        UUID order = UUID.fromString("0199a000-0000-7000-8000-0000000000c3");
+        answers.put("/api/v1/waves/" + WAVE + "/close", new Answer(200, "{\"waveId\":\"" + WAVE + "\",\"status\":\"CLOSED\","
+                + "\"closeCause\":\"MANUAL\",\"closedAt\":\"2026-09-27T14:58:05Z\"}", "audit-3"));
+        answers.put("/api/v1/waves/" + WAVE + "/routes", new Answer(200, "{\"waveId\":\"" + WAVE + "\",\"planId\":null,"
+                + "\"depot\":null,\"routes\":[{\"routeId\":\"" + route + "\",\"vehicleId\":null,\"stopCount\":4,"
+                + "\"atRisk\":false}]}", ""));
+        answers.put("/api/v1/routes/" + route, new Answer(200, "{\"routeId\":\"" + route + "\",\"stops\":[{\"seq\":1,"
+                + "\"lat\":37.5,\"lng\":127.0,\"plannedArrival\":\"2026-09-27T16:00:00Z\",\"status\":\"PLANNED\","
+                + "\"orderIds\":[\"" + order + "\"]}]}", ""));
+        answers.put("/api/v1/routes/" + route + "/stops/" + order + "/reassign",
+                new Answer(409, "{\"code\":\"stop-not-planned\",\"stopStatus\":\"COMPLETED\"}", "audit-4"));
+        HttpOpsClient ops = client();
+
+        OpsClient.Reply closed = ops.closeWave(WAVE, "성수기 증차 완료");
+        List<OpsClient.RouteSummary> routes = ops.waveRoutes(WAVE);
+        List<OpsClient.RouteStop> stops = ops.routeStops(route);
+        OpsClient.Reply reassigned = ops.reassign(route, order, target);
+
+        assertThat(closed).isEqualTo(new OpsClient.Reply(200, "audit-3", null, null));
+        assertThat(routes).containsExactly(new OpsClient.RouteSummary(route, 4));
+        assertThat(stops).containsExactly(new OpsClient.RouteStop(1, "PLANNED", List.of(order)));
+        assertThat(reassigned).isEqualTo(new OpsClient.Reply(409, "audit-4", "stop-not-planned", null));
+        assertThat(received.getFirst().get("body")).isEqualTo("{\"reason\":\"성수기 증차 완료\"}");
+        assertThat(received.getLast().get("body")).isEqualTo("{\"targetRouteId\":\"" + target + "\"}");
+        assertThat(received).extracting(request -> request.get("method")).containsExactly("POST", "GET", "GET", "POST");
+    }
 }

@@ -19,11 +19,13 @@ import org.jspecify.annotations.Nullable;
  * @param rows        캠프 × 조합 — 계산 부족분과 추가 대수
  * @param added       더한 차량
  * @param deactivated 비활성화한 차량
- * @param auditRows   받은 감사 행 id 수(등록 + 비활성화, 거절 포함)
+ * @param auditRows   받은 감사 행 id 수(전부, 거절 포함)
+ * @param audit       캠프 × 커맨드 — 감사 행의 기대와 받은 수(ADR-067 결정 9 — 세는 것이 아니라 대조한다)
+ * @param reassigns   조기 마감한 웨이브마다의 재배정 결과
  * @param failures    도구 쪽 결함 — 비어 있어야 성공이다
  */
 public record FleetReport(Fleet mode, List<WaveLine> waves, List<Row> rows, int added, int deactivated, int auditRows,
-        List<String> failures) {
+        List<AuditLine> audit, List<Reassign> reassigns, List<String> failures) {
 
     /** §6.7 「미배정률 ≤ 0.5%(정상 용량)」 — 천분율 5. */
     static final long UNASSIGNED_PERMILLE_LIMIT = 5;
@@ -33,7 +35,54 @@ public record FleetReport(Fleet mode, List<WaveLine> waves, List<Row> rows, int 
     public FleetReport {
         waves = List.copyOf(waves);
         rows = List.copyOf(rows);
+        audit = List.copyOf(audit);
+        reassigns = List.copyOf(reassigns);
         failures = List.copyOf(failures);
+    }
+
+    /** 운영자 커맨드 — ops-api 의 {@code audit_logs.action} 가운데 함대 단계가 보내는 것. */
+    public enum Action {
+        ADD_VEHICLE, CLOSE_WAVE, REASSIGN_STOP, DEACTIVATE_VEHICLE
+    }
+
+    /**
+     * 캠프 × 커맨드의 감사 행 대조 한 줄.
+     *
+     * @param campId    캠프
+     * @param action    커맨드
+     * @param expected  기대 — 증차는 판정의 부족분 합, 조기 마감 · 재배정은 1(옮길 곳이 없으면 0), 비활성화는 성공 수의 기대(더한 대수)
+     * @param received  받은 감사 id 수 — 비활성화는 409 재시도를 포함한 시도 전부
+     * @param succeeded 비활성화의 성공 수 — 다른 커맨드는 {@code null}
+     */
+    public record AuditLine(UUID campId, Action action, int expected, int received, @Nullable Integer succeeded) {
+
+        /** @return 기대와 같다 — 비활성화는 성공 수로 본다 */
+        public boolean matches() {
+            return (succeeded == null ? received : succeeded) == expected;
+        }
+    }
+
+    /**
+     * 재배정 한 번.
+     *
+     * @param campId  캠프
+     * @param waveId  웨이브
+     * @param status  HTTP 상태 — 보내지 않았으면 {@code null}
+     * @param code    거절의 코드
+     * @param skipped 보내지 않은 이유
+     */
+    public record Reassign(UUID campId, UUID waveId, @Nullable Integer status, @Nullable String code,
+            @Nullable String skipped) {
+
+        String describe() {
+            if (skipped != null) {
+                return "보내지 않음 — " + skipped;
+            }
+            if (status != null && status >= 200 && status < 300) {
+                return "옮겼다";
+            }
+            return "%s %s%s".formatted(status, code, "stop-not-planned".equals(code) ? " — 기사가 먼저 닿았다(늦었다)" : "");
+        }
     }
 
     /** @return 도구 쪽 결함이 없다 */
@@ -83,6 +132,19 @@ public record FleetReport(Fleet mode, List<WaveLine> waves, List<Row> rows, int 
         line(out, "시간 예산(증차 완료 < 마감)", budget());
         for (String failure : failures) {
             line(out, "✗ 실패", failure);
+        }
+
+        if (!audit.isEmpty()) {
+            out.append("\n| 캠프 | 커맨드 | 기대 | 받은 감사 id | 대조 |\n|---|---|---:|---:|---|\n");
+            for (AuditLine row : audit) {
+                out.append("| %s | %s | %d | %s | %s |\n".formatted(PeakFleet.short8(row.campId()), row.action(),
+                        row.expected(), row.succeeded() == null ? String.valueOf(row.received())
+                                : "%d (성공 %d)".formatted(row.received(), row.succeeded()),
+                        row.matches() ? "✅" : "✗"));
+            }
+        }
+        for (Reassign reassign : reassigns) {
+            line(out, "재배정 " + PeakFleet.short8(reassign.waveId()), reassign.describe());
         }
 
         List<Row> interesting = rows.stream()
