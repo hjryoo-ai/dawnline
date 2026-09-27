@@ -90,7 +90,7 @@
 | 042 | savings 의 병합은 제약 조합을 안다 — 좌석 불변식을 구성 단계로 | ✅ Accepted (2026-09-17) | [ADR-042](ADR-042-savings-merges-are-class-aware.md) |
 | 041 | 「차 한 대 몲」에는 stop 슬롯이 들어간다 (그리고 클러스터 수 상한은 남긴다) | ✅ Accepted (2026-09-12) | [ADR-041](ADR-041-cluster-target-counts-stop-slots.md) |
 | 040 | `priority-boost` 는 순번이 아니라 **시각**으로 감쇠한다 (τ = 12분) | ✅ Accepted (2026-09-12) | [ADR-040](ADR-040-priority-boost-decays-in-time.md) |
-| 039 | 좌석은 능력이 아니라 **제약 조합**에 예약한다 — 예약은 배정 단계의 것이라 미배정의 사유가 될 수 없다 | ✅ Accepted (2026-09-12) | [ADR-039](ADR-039-reserve-seats-by-constraint-class.md) |
+| 039 | 좌석은 능력이 아니라 **제약 조합**에 예약한다 — 예약은 배정 단계의 것이라 미배정의 사유가 될 수 없다 | ✅ Accepted (2026-09-12) + **후속**(2026-09-27) — 예약은 계획이 실제로 쓸 수 있는 집합 위에서만(근무창이 약속창의 합과 겹치는 차량, 문제를 만드는 곳에서 한 번) · 미배정 설명은 코드 순 마지막이 아니라 가장 가까웠던 거절 | [ADR-039](ADR-039-reserve-seats-by-constraint-class.md) |
 
 - 이 표는 `docs/DESIGN.md` §16과 **같은 내용**이며 함께 갱신한다. 문서 열이 `—` 인 행은 아직 파일이 없다.
 - **013·014는 §16 표에 없던 항목**으로, Phase 0 스캐폴딩 중에 확정되어 새로 추가했다.
