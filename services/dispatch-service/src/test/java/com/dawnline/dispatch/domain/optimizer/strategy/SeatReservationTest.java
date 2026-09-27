@@ -153,6 +153,37 @@ class SeatReservationTest {
     }
 
     @Test
+    void 좌석은_차량마다_자기_상한으로_센다() {
+        // ADR-039 후속 2 — 근무창이 허락하는 stop 수는 차량마다 다르다. 짧은 차는 자기 상한까지만 예약을 받고, 문도 그 상한에서
+        // 자유석을 센다. 120 으로 센 「자유석」이 시간이 허락하지 않는 자리였던 것이 두 번째 peak-day 의 미배정 595건이다.
+        VehicleSpec shortShift = vehicle(true, false);
+        VehicleSpec longShift = vehicle(true, false);
+
+        SeatReservation seats = SeatReservation.of(
+                List.of(stop(COLD), stop(COLD), stop(COLD), stop(COLD), stop(COLD)),
+                List.of(shortShift, longShift),
+                vehicle -> OptionalInt.of(vehicle == shortShift ? 1 : 10));
+
+        assertThat(seats.reservedFor(shortShift.id(), COLD)).as("자기 상한 1 까지만").isEqualTo(1);
+        assertThat(seats.reservedFor(longShift.id(), COLD)).as("남은 수요는 긴 차가 받는다").isEqualTo(4);
+        SeatGate gate = seats.gateFor(RouteState.empty(shortShift, DEPOT, DISTANCE, START));
+        assertThat(gate.admits(stop(NONE)).feasible())
+                .as("짧은 차의 자유석은 1 − 예약 1 = 0 이다 — 긴 차의 상한으로 셌다면 9 자리가 남는다")
+                .isFalse();
+    }
+
+    @Test
+    void 상한을_모르는_차가_하나라도_있으면_예약이_없다() {
+        VehicleSpec known = vehicle(true, true);
+        VehicleSpec unknown = vehicle(true, true);
+
+        SeatReservation seats = SeatReservation.of(List.of(stop(COMBO)), List.of(known, unknown),
+                vehicle -> vehicle == known ? OptionalInt.of(5) : OptionalInt.empty());
+
+        assertThat(seats.active()).as("자리를 셀 수 없는 차가 섞이면 집계 불변식이 서지 않는다").isFalse();
+    }
+
+    @Test
     void 조합_수요는_자기_버킷이_소진된_뒤에만_냉장_예약에_앉는다() {
         VehicleSpec combo = vehicle(true, true);
         SeatReservation seats = SeatReservation.of(

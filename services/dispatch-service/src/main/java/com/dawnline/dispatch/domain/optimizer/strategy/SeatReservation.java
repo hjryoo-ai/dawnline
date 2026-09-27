@@ -66,7 +66,8 @@ final class SeatReservation {
     /** 더 특정한 조합부터. 예약을 걷을 때도, 예약을 나눌 때도 이 순서다. */
     private static final int[] MOST_SPECIFIC_FIRST = order(Comparator.reverseOrder());
 
-    private final int stopCap;
+    /** 차량마다의 stop 상한 — 근무창이 허락하는 stop 수가 차량과 출발에 달렸다(ADR-039 후속 2). */
+    private final Map<VehicleId, Integer> stopCaps;
     private final Map<VehicleId, int[]> reserved;
 
     /**
@@ -77,34 +78,53 @@ final class SeatReservation {
      */
     private final Set<Stop> blocked = new LinkedHashSet<>();
 
-    private SeatReservation(int stopCap, Map<VehicleId, int[]> reserved) {
-        this.stopCap = stopCap;
+    private SeatReservation(Map<VehicleId, Integer> stopCaps, Map<VehicleId, int[]> reserved) {
+        this.stopCaps = stopCaps;
         this.reserved = reserved;
     }
 
     /** 아무 자리도 예약하지 않는다. 룰이 stop 상한을 말하지 않으면 이것이다. */
     static SeatReservation none() {
-        return new SeatReservation(0, Map.of());
+        return new SeatReservation(Map.of(), Map.of());
+    }
+
+    /** 모든 차량이 같은 상한인 예약 — 교대가 하나인 웨이브와 같다. */
+    static SeatReservation of(List<Stop> stops, List<VehicleSpec> vehicles, OptionalInt stopCap) {
+        Objects.requireNonNull(stopCap, "stopCap");
+        return of(stops, vehicles, vehicle -> stopCap);
     }
 
     /**
      * 수요와 함대에서 예약을 계산한다 — <strong>계획 시작 시점 스냅샷</strong>이다.
      *
      * <p>상한이 없으면 예약도 없다. 자리를 세지 않는 축에서는 좌석이 희소할 수 없기 때문이다 —
-     * 중량·부피로 차는 차량은 이 축이 아니라 [ADR-038] 의 다른 축에서 막힌다.
+     * 중량·부피로 차는 차량은 이 축이 아니라 [ADR-038] 의 다른 축에서 막힌다. 상한을 모르는 차가 하나라도 있으면 자리를 셀 수 없다.
      *
-     * @param stops    통합 후 stop 들
-     * @param vehicles 차량들. 예약을 나누는 순서가 이 목록의 순서다
-     * @param stopCap  룰셋이 말하는 라우트당 stop 상한 ([ADR-038])
+     * <p><strong>좌석은 차량마다 자기 상한으로 센다</strong>(ADR-039 후속 2). 120 으로 센 「자유석」은 시간이 허락하지 않는 자리였다 —
+     * 근무창이 허락하는 stop 수를 {@code SHIFT_WINDOW} 가 답하고, 룰셋이 차량마다 그 min 을 낸다.
+     *
+     * @param stops     통합 후 stop 들
+     * @param vehicles  차량들. 예약을 나누는 순서가 이 목록의 순서다
+     * @param stopCapOf 차량마다 룰셋이 말하는 라우트당 stop 상한 ([ADR-038], {@code PlanningProblem#stopCapOf})
      */
-    static SeatReservation of(List<Stop> stops, List<VehicleSpec> vehicles, OptionalInt stopCap) {
+    static SeatReservation of(List<Stop> stops, List<VehicleSpec> vehicles,
+            java.util.function.Function<VehicleSpec, OptionalInt> stopCapOf) {
         Objects.requireNonNull(stops, "stops");
         Objects.requireNonNull(vehicles, "vehicles");
-        Objects.requireNonNull(stopCap, "stopCap");
-        if (stopCap.isEmpty() || stopCap.getAsInt() <= 0) {
+        Objects.requireNonNull(stopCapOf, "stopCapOf");
+        int[] caps = new int[vehicles.size()];
+        Map<VehicleId, Integer> stopCaps = new LinkedHashMap<>();
+        for (int v = 0; v < vehicles.size(); v++) {
+            OptionalInt cap = stopCapOf.apply(vehicles.get(v));
+            if (cap.isEmpty()) {
+                return none();
+            }
+            caps[v] = Math.max(0, cap.getAsInt());
+            stopCaps.put(vehicles.get(v).id(), caps[v]);
+        }
+        if (IntStream.of(caps).allMatch(cap -> cap == 0)) {
             return none();
         }
-        int cap = stopCap.getAsInt();
 
         int[] demand = new int[CLASSES.size()];
         for (Stop stop : stops) {
@@ -121,14 +141,14 @@ final class SeatReservation {
             if (klass.isNone() || demand[k] == 0) {
                 continue;
             }
-            spread(klass, demand[k], vehicles, cap, used, reserved, k);
+            spread(klass, demand[k], vehicles, caps, used, reserved, k);
         }
-        return new SeatReservation(cap, Map.copyOf(reserved));
+        return new SeatReservation(Map.copyOf(stopCaps), Map.copyOf(reserved));
     }
 
-    /** 한 바퀴에 한 자리씩, 차량 인덱스 순으로. 수요를 다 나눴거나 자리가 없으면 멈춘다. */
+    /** 한 바퀴에 한 자리씩, 차량 인덱스 순으로. 수요를 다 나눴거나 자리가 없으면 멈춘다. 차량마다 자기 상한까지다. */
     private static void spread(ConstraintClass klass, int demand, List<VehicleSpec> vehicles,
-            int cap, int[] used, Map<VehicleId, int[]> reserved, int classIndex) {
+            int[] caps, int[] used, Map<VehicleId, int[]> reserved, int classIndex) {
 
         int need = demand;
         boolean progressed = true;
@@ -136,7 +156,7 @@ final class SeatReservation {
             progressed = false;
             for (int v = 0; v < vehicles.size() && need > 0; v++) {
                 VehicleSpec vehicle = vehicles.get(v);
-                if (used[v] >= cap || !klass.carriedBy(vehicle)) {
+                if (used[v] >= caps[v] || !klass.carriedBy(vehicle)) {
                     continue;
                 }
                 reserved.computeIfAbsent(vehicle.id(), id -> new int[CLASSES.size()])[classIndex]++;
@@ -193,7 +213,7 @@ final class SeatReservation {
         for (PlannedStop planned : state.stops()) {
             seated[INDEX.get(ConstraintClass.of(planned.stop()))]++;
         }
-        return new Gate(seated, seats, stopCap, blocked);
+        return new Gate(seated, seats, stopCaps.get(state.vehicle().id()), blocked);
     }
 
     private static int[] order(Comparator<Integer> bySpecificity) {

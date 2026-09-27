@@ -24,7 +24,9 @@ INSERT INTO dispatch_rules (id, camp_id, name, type, severity, params, priority,
   ('01a06edd-6c00-7000-8003-000000000004', NULL, 'max-stops', 'MAX_STOPS_PER_ROUTE', 'HARD',
    '{"max":120}'::jsonb, 20, TRUE, 1, TIMESTAMPTZ '2026-09-05 00:00:00+09'),
   ('01a06edd-6c00-7000-8003-000000000005', NULL, 'shift-window', 'SHIFT_WINDOW', 'HARD',
-   '{"bufferMinutes":30}'::jsonb, 25, TRUE, 1, TIMESTAMPTZ '2026-09-05 00:00:00+09'),
+   -- 근무창이 허락하는 stop 수를 답하는 상수 셋 (ADR-039 후속 2). 두 번째 peak-day 실측 — 출처와 다시 볼 조건은
+   -- DESIGN §6.3 표. 룰이 답하는 것이 늘었으므로 rule_version 을 올린다.
+   '{"bufferMinutes":30,"serviceSeconds":158,"legSeconds":76,"depotLegsSeconds":827}'::jsonb, 25, TRUE, 2, TIMESTAMPTZ '2026-09-27 00:00:00+09'),
   ('01a06edd-6c00-7000-8003-000000000006', NULL, 'late-hard-limit', 'TIME_WINDOW_LIMIT', 'HARD',
    '{"hardLimitMinutes":60}'::jsonb, 30, TRUE, 1, TIMESTAMPTZ '2026-09-05 00:00:00+09'),
   ('01a06edd-6c00-7000-8003-000000000007', NULL, 'late-penalty', 'TIME_WINDOW_PENALTY', 'SOFT',
