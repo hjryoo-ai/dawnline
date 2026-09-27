@@ -1,6 +1,7 @@
 package com.dawnline.ops.application.port.in;
 
 import com.dawnline.ops.domain.CoreService;
+import java.time.LocalTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,7 +24,7 @@ public sealed interface OpsCommand {
      * (DESIGN.md §9.1 「없는 시계열은 0 으로 보인다」). 허용된 하위 타입과 같은지는 {@code OpsCommandTest} 가 본다.
      */
     List<String> ACTIONS = List.of(RunPlan.ACTION, ReassignStop.ACTION, CancelOrder.ACTION, CloseWave.ACTION,
-            RequeueOutbox.ACTION);
+            RequeueOutbox.ACTION, AddVehicle.ACTION, DeactivateVehicle.ACTION);
 
     /** @return {@code audit_logs.action} */
     String action();
@@ -219,6 +220,99 @@ public sealed interface OpsCommand {
         @Override
         public Map<String, Object> arguments() {
             return present("service", service.path(), "id", id);
+        }
+    }
+
+    /**
+     * 차량 등록 — dispatch {@code POST /vehicles} (성수기 증차, ADR-067 결정 1).
+     *
+     * <p>대상은 <strong>캠프</strong>다 — 차량 id 는 코어가 만들고 감사 행은 위임 전에 쓰므로 그 순간에는 없다. 만들어진 id 는
+     * 응답과 코어 로그({@code auditId})에 있다. 인자는 등록 본문 전부다 — 증차는 「무엇을 몇 대」가 곧 결정이다.
+     *
+     * @param campId        캠프
+     * @param code          이름
+     * @param type          차종
+     * @param maxWeightG    최대 중량(g)
+     * @param maxVolumeCm3  최대 부피(㎤)
+     * @param cold          냉장
+     * @param allowsHazmat  위험물 허용
+     * @param fixedCostKrw  고정비
+     * @param costPerKmKrw  km 당 비용
+     * @param costPerMinKrw 분당 비용
+     * @param shiftStart    근무 시작
+     * @param shiftEnd      근무 종료
+     * @param source        출처({@code operator} · {@code peak-sim}), 없으면 코어의 기본({@code operator})
+     */
+    record AddVehicle(UUID campId, String code, String type, int maxWeightG, int maxVolumeCm3, boolean cold,
+            boolean allowsHazmat, int fixedCostKrw, int costPerKmKrw, int costPerMinKrw, LocalTime shiftStart,
+            LocalTime shiftEnd, @Nullable String source) implements OpsCommand {
+        public AddVehicle {
+            Objects.requireNonNull(campId, "campId");
+            Objects.requireNonNull(code, "code");
+            Objects.requireNonNull(type, "type");
+            Objects.requireNonNull(shiftStart, "shiftStart");
+            Objects.requireNonNull(shiftEnd, "shiftEnd");
+        }
+
+        /** {@code audit_logs.action} — {@link OpsCommand#ACTIONS} 가 이 값을 든다. */
+        public static final String ACTION = "ADD_VEHICLE";
+
+        @Override
+        public String action() {
+            return ACTION;
+        }
+
+        @Override
+        public String targetType() {
+            return "CAMP";
+        }
+
+        @Override
+        public UUID targetId() {
+            return campId;
+        }
+
+        /** 시각은 {@code HH:mm:ss} 문자열로 — JSONB 에 들어간다. */
+        @Override
+        public Map<String, Object> arguments() {
+            return present("campId", campId, "code", code, "type", type, "maxWeightG", maxWeightG,
+                    "maxVolumeCm3", maxVolumeCm3, "cold", cold, "allowsHazmat", allowsHazmat,
+                    "fixedCostKrw", fixedCostKrw, "costPerKmKrw", costPerKmKrw, "costPerMinKrw", costPerMinKrw,
+                    "shiftStart", shiftStart.toString(), "shiftEnd", shiftEnd.toString(), "source", source);
+        }
+    }
+
+    /**
+     * 차량 비활성화 — dispatch {@code POST /vehicles/{vehicleId}/deactivate} (ADR-067 결정 5).
+     *
+     * @param vehicleId 차량
+     */
+    record DeactivateVehicle(UUID vehicleId) implements OpsCommand {
+        public DeactivateVehicle {
+            Objects.requireNonNull(vehicleId, "vehicleId");
+        }
+
+        /** {@code audit_logs.action} — {@link OpsCommand#ACTIONS} 가 이 값을 든다. */
+        public static final String ACTION = "DEACTIVATE_VEHICLE";
+
+        @Override
+        public String action() {
+            return ACTION;
+        }
+
+        @Override
+        public String targetType() {
+            return "VEHICLE";
+        }
+
+        @Override
+        public UUID targetId() {
+            return vehicleId;
+        }
+
+        @Override
+        public Map<String, Object> arguments() {
+            return present("vehicleId", vehicleId);
         }
     }
 

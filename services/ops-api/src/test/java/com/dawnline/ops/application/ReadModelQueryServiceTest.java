@@ -161,6 +161,14 @@ class ReadModelQueryServiceTest {
         assertThat(service.route(UUID.randomUUID())).isInstanceOf(CoreReply.Unknown.class);
     }
 
+    @Test
+    void 함대_판정과_차량_목록도_어댑터_예외를_모름으로_접는다() {
+        core.failing = true;
+
+        assertThat(service.fleetFeasibility(UUID.randomUUID())).isInstanceOf(CoreReply.Unknown.class);
+        assertThat(service.vehicles(UUID.randomUUID())).isInstanceOf(CoreReply.Unknown.class);
+    }
+
     private static final class FakeViews implements ReadModelViews {
         final List<CancelledButDelivered> exceptions = new ArrayList<>();
         int wavesLimit;
@@ -220,6 +228,20 @@ class ReadModelQueryServiceTest {
 
         @Override
         public CoreReply route(UUID routeId) {
+            return answer();
+        }
+
+        @Override
+        public CoreReply fleetFeasibility(UUID waveId) {
+            return answer();
+        }
+
+        @Override
+        public CoreReply vehicles(UUID campId) {
+            return answer();
+        }
+
+        private CoreReply answer() {
             if (failing) {
                 throw new IllegalStateException("어댑터 결함");
             }

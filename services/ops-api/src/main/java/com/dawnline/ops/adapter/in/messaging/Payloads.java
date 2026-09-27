@@ -67,10 +67,11 @@ final class Payloads {
     }
 
     record WaveClosed(UUID waveId, UUID campId, String serviceTier, Instant cutoffAt, Depot depot,
-            @Nullable String campCode) implements ToFact {
+            @Nullable String campCode, Instant closedAt) implements ToFact {
         @Override
         public Fact toFact(EventEnvelope<?> envelope) {
-            return new Fact.WaveClosed(waveId, campId, serviceTier, cutoffAt, depot.lat(), depot.lng(), campCode);
+            return new Fact.WaveClosed(waveId, campId, serviceTier, cutoffAt, depot.lat(), depot.lng(), campCode,
+                    closedAt);
         }
 
         /** 창고 좌표 (계약 필수). */

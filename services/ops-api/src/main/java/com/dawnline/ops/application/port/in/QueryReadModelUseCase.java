@@ -67,6 +67,22 @@ public interface QueryReadModelUseCase {
      */
     CoreReply route(UUID routeId);
 
+    /**
+     * dispatch 의 함대 판정 — 조회 위임(ADR-067 결정 2). 예외를 던지지 않는다.
+     *
+     * @param waveId 웨이브
+     * @return 코어의 답
+     */
+    CoreReply fleetFeasibility(UUID waveId);
+
+    /**
+     * dispatch 의 캠프 차량 — 조회 위임(ADR-067 결정 6). 예외를 던지지 않는다.
+     *
+     * @param campId 캠프
+     * @return 코어의 답
+     */
+    CoreReply vehicles(UUID campId);
+
     /** @param camps 캠프 id 순 */
     record CampList(List<CampSummary> camps) {
         public CampList {

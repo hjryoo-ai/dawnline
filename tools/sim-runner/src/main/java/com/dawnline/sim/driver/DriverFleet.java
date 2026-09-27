@@ -5,13 +5,15 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.DoubleSupplier;
 import java.util.function.LongSupplier;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,7 +39,18 @@ public final class DriverFleet implements AutoCloseable {
     private final long retryLimitNanos;
     private final DriverTally tally;
     private final ExecutorService drivers = Executors.newVirtualThreadPerTaskExecutor();
-    private final CountDownLatch finished;
+    private final int expectedRoutes;
+
+    /** 끝난 여정 — 웨이브별. 웨이브를 모르는 개정은 {@link #NO_WAVE} 에 센다. {@link #progress} 가 지킨다. */
+    private final Map<UUID, Integer> finishedByWave = new HashMap<>();
+    private static final UUID NO_WAVE = new UUID(0L, 0L);
+
+    /**
+     * 끝난 여정의 자물쇠 — {@link #assign} 의 모니터와 따로 둔다. 기다림은 {@link Condition#awaitNanos} 로 잰다: 남은 시간을
+     * 조건 변수가 돌려주므로 주입된 시계(테스트에서는 멈춰 있다)를 읽지 않는다.
+     */
+    private final ReentrantLock progress = new ReentrantLock();
+    private final Condition changed = progress.newCondition();
 
     /** routeId → 이 라우트를 도는 기사. 최초 확정에서 만든다. */
     private final Map<UUID, DriverTrip> trips = new HashMap<>();
@@ -46,7 +59,8 @@ public final class DriverFleet implements AutoCloseable {
     private final Map<UUID, Integer> seenRevisions = new HashMap<>();
 
     /**
-     * @param expectedRoutes  기다릴 라우트 수
+     * @param expectedRoutes  기다릴 라우트 수 — 설정이 정한 것. 창 시나리오는 계획이 정하므로 0 이고
+     *                        {@link #awaitRoutes(Set, int, Duration)} 로 기다린다
      * @param simulator       순수 시뮬레이터
      * @param scans           스캔 API
      * @param speed           배속. 여정마다 {@link TripPacer} 를 새로 만들 때 읽는다
@@ -64,7 +78,7 @@ public final class DriverFleet implements AutoCloseable {
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.retryLimitNanos = retryLimitNanos;
         this.tally = Objects.requireNonNull(tally, "tally");
-        this.finished = new CountDownLatch(Math.max(0, expectedRoutes));
+        this.expectedRoutes = Math.max(0, expectedRoutes);
     }
 
     /**
@@ -90,11 +104,12 @@ public final class DriverFleet implements AutoCloseable {
             trips.put(route.routeId(), trip);
             tally.routeStarted();
             DriverTrip started = trip;
+            UUID wave = route.waveId() == null ? NO_WAVE : route.waveId();
             drivers.execute(() -> {
                 try {
                     started.run();
                 } finally {
-                    finished.countDown();
+                    finished(wave);
                 }
             });
         }
@@ -109,7 +124,53 @@ public final class DriverFleet implements AutoCloseable {
      * @throws InterruptedException 대기 중 인터럽트
      */
     public boolean awaitRoutes(Duration timeout) throws InterruptedException {
-        return finished.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
+        return await(null, expectedRoutes, timeout);
+    }
+
+    /**
+     * 그 웨이브들의 라우트가 {@code expected} 대 끝날 때까지 기다린다 — 창 시나리오, 수는 계획이 낸다(ADR-067 결정 6).
+     * 다른 웨이브의 라우트는 세지 않는다.
+     *
+     * @param waves    셀 웨이브
+     * @param expected 기다릴 수 — 그 웨이브들의 {@code route_count} 합
+     * @param timeout  상한
+     * @return 다 끝났으면 {@code true}
+     * @throws InterruptedException 대기 중 인터럽트
+     */
+    public boolean awaitRoutes(Set<UUID> waves, int expected, Duration timeout) throws InterruptedException {
+        return await(Set.copyOf(waves), expected, timeout);
+    }
+
+    private void finished(UUID wave) {
+        progress.lock();
+        try {
+            finishedByWave.merge(wave, 1, Integer::sum);
+            changed.signalAll();
+        } finally {
+            progress.unlock();
+        }
+    }
+
+    private boolean await(@Nullable Set<UUID> waves, int expected, Duration timeout) throws InterruptedException {
+        progress.lock();
+        try {
+            long left = timeout.toNanos();
+            while (finishedIn(waves) < expected) {
+                if (left <= 0) {
+                    return false;
+                }
+                left = changed.awaitNanos(left);
+            }
+            return true;
+        } finally {
+            progress.unlock();
+        }
+    }
+
+    private int finishedIn(@Nullable Set<UUID> waves) {
+        return finishedByWave.entrySet().stream()
+                .filter(entry -> waves == null || waves.contains(entry.getKey()))
+                .mapToInt(Map.Entry::getValue).sum();
     }
 
     @Override

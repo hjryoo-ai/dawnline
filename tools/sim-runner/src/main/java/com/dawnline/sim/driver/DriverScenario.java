@@ -2,6 +2,8 @@ package com.dawnline.sim.driver;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,7 +54,24 @@ public final class DriverScenario implements AutoCloseable {
      * @throws InterruptedException 대기 중 인터럽트
      */
     public DriverReport awaitAndReport(String name) throws InterruptedException {
-        boolean all = fleet.awaitRoutes(timeout);
+        return report(name, expectedRoutes, fleet.awaitRoutes(timeout));
+    }
+
+    /**
+     * 창 시나리오 — 기다릴 라우트는 설정이 아니라 계획이 낸다: 그 웨이브들의 {@code route_count} 합(ADR-067 결정 6).
+     *
+     * @param name     시나리오 이름 (보고용)
+     * @param waves    창의 웨이브
+     * @param expected 그 웨이브들의 라우트 수 합
+     * @return 결과
+     * @throws InterruptedException 대기 중 인터럽트
+     */
+    public DriverReport awaitAndReport(String name, Set<UUID> waves, int expected) throws InterruptedException {
+        log.info("기사 시뮬레이터: 창의 웨이브 {}개 · 라우트 {}대 — 계획이 낸 수", waves.size(), expected);
+        return report(name, expected, fleet.awaitRoutes(waves, expected, timeout));
+    }
+
+    private DriverReport report(String name, int expectedRoutes, boolean all) {
         if (!all) {
             log.error("""
                     {}초 안에 라우트 {}대를 끝내지 못했다. \

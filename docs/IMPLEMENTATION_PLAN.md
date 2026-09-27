@@ -2026,7 +2026,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 |---|---|---|---|---|---|
 | A1 | 전역 `Bulkhead`(+ Resilience4j 도입 판단) | Phase 1 이월 · §8.3 판정 기록 · §11 기술 스택 표 | **웜** 상태에서 `hikaricp_connections_pending` > 0 이고 원인이 풀 포화 | peak-day 의 `pending`·주문 API p99 | 7-4 |
 | A2 | 콜드 스타트(기동 80초 p99 2~4초, 재현됨) | 위 인용 · `phase1-orders-k6.md` 6절 | 이미 켜졌다 — 코드가 아니라 **측정 조건**이다(D1) | peak-day 를 콜드 스택에서 시작해 첫 계획·첫 소비 처리량을 정상 상태와 갈라 적는다 | 측정 7-4 · 예열 항목 7-5(RB-06) — **예열 ✅** `caa6043`: RB-06 §3(재기동을 컷오프 창에서 멀리 · `make smoke` 로 데운 뒤 확인 · GC 종류는 `jvm_gc_pause_seconds_count{gc}` — 로컬은 다섯 서비스 모두 Serial). 80초는 Phase 1 의 값이고 7-4 의 콜드 스택 측정이 나오면 바꾼다 |
-| A3 | lag-aware grace | Phase 2 이월 · ADR-020 결정 5 | `dawnline_promise_revised_total` 이 컷오프 직후 **뭉친다** | 그 카운터의 시간축 | 7-4 |
+| A3 | lag-aware grace | Phase 2 이월 · ADR-020 결정 5 | `dawnline_promise_revised_total` 이 컷오프 직후 **뭉친다** | 그 카운터의 시간축 — **`cause="scheduled"` 는 `overload-day` · `normal-day` 가 낸다**: `peak-day` 의 창 웨이브는 증차 직후 운영자가 닫는다(D3, 2026-09-27) | 7-4 |
 | A4 | 4-20 구성의 수락 기준 · ADR-043 「`small` 회복」 · ADR-004 조건 (a) | Phase 4 대조표 20 · ADR-043 ② · ADR-044 ③ · ADR-004 | `small` 에서 `savings-cw+ls` ≤ 기본 전략 — **다섯 데이터셋 전부** | peak-day 의 `peak` 규모 웨이브 + 벤치마크 다섯 | 7-4 |
 | A5 | `cancel_too_late_total{camp}` 알림식 | §9.1 「없는 시계열」 · Phase 6 이월 | 라벨이 열린 집합 — 식이 첫 표본을 증가로 읽는다 | 규칙 파일 + 컨테이너 | 7-1 ✅ `ef0b0a5` — `increase(x[w]) > 0 or (x unless x offset w)`. **같은 모양이 하나 더 있었다**(DLQ 신규 — `consumer`·`eventType`). 판정은 카탈로그의 라벨 칸이 한다(ADR-060 결정 3) |
 | A6 | §9.4 알림 규칙 전체 · 대시보드 4종 · Phase 5 카운터 넷의 패널 | §9.4 · 7-1 · `deploy/compose` 의 빈 자리 셋 | — (산출물) | — | 7-1 ✅ `ef0b0a5` · `3e7a5e7` — 규칙 14 · 대시보드 넷, §9.1 의 행이 전부 패널이나 규칙에 나온다(`DashboardsConsistencyTest`). Delivery 의 「실패 · 라우트 진행」은 처음에 §9.1 에 메트릭이 없어 텍스트 패널이었다 — 설계서의 빈틈이라 두 행을 더했다(`dawnline_kpi_delivery` · `dawnline_routes`, 41행). 텍스트 자리표시는 「꺼 둔 검증」의 패널판이라 두지 않는다. 라우트 진행의 완료는 처음에 읽을 때 판정하고 전부를 KPI 창으로 잘랐다 — 창 밖의 진행 중 라우트가 빠졌다. 쓸 때 판정으로 옮겼다(`a415c5a` · `b5d6c2a`, ADR-061 — `rm_routes.completed_at`, 끝나지 않은 것은 창 없음). 할 일이 없는 라우트는 완료가 아니라 다섯째 값 `void` 다 — 첫 판이 빈 라우트에 계획 출발을 완료 시각으로 적은 것을 리뷰가 되돌렸다(`b1ef80d` · `5a2528c`, `rm_routes.live_count`, `assigned` 도 창 없음). 클래스 이름도 `KpiGauges` 로(`41ba688`) |
@@ -2048,12 +2048,15 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A22 | 런북 — **계획서의 「RB-01~06」은 낡았다**: RB-05 는 있고(Phase 6) RB-07 이 §9.5 에 있다 | 7-5 · §9.5 | — | — | 7-5 ✅ `caa6043` · `6400ebf` — RB-01~04 · 06 · 07 과 **알림 14 × 대응 표**(`docs/runbooks/README.md`) · 알림 밖 절차 셋. 대조 검사 `RunbooksConsistencyTest`(표 ↔ 규칙 파일 ↔ §9.5, 첫 줄은 메트릭 · 로그 · SQL). 쓰며 드러난 셋: 보존 알림이 서비스를 접었다(`d27103c`) · 코어는 커맨드의 성공만 로그한다(§9.5 정정) · §8.4 의 `pause` 는 구현되지 않았다(RB-02 §3, 결정 필요) |
 | A23 | 포스트모템(가상 장애, 실제 측정치 기반) | 7-5 | 7-4 의 수치 | 7-4 리포트 | 7-5 — **7-4 뒤로** (2026-09-25): 런북은 7-3 · 7-4 보다 먼저 썼고 포스트모템은 「실제 측정치 기반」이라 peak-day 의 수치가 입력이다. 여는 조건 그대로 |
 | A24 | README — 그림 · 데모 GIF · Tempo 스크린샷 · 피크 SLO 표 · 카오스 결과 · 정시율 리포트 | README 「측정해서 채울 자리」 넷 | — | 7-2 · 7-3 · 7-4 | 7-6 |
-| A25 | release.yml(GHCR · SBOM) · CI 의 「컨테이너 이미지 빌드 (Phase 7)」 job · **ops-web 의 nginx 이미지는 따로**(ADR-057) | 7-7 · `ci.yml` · ADR-057 | — | — | 7-7 |
+| A25 | release.yml(GHCR · SBOM) · CI 의 「컨테이너 이미지 빌드 (Phase 7)」 job · **ops-web 의 nginx 이미지는 따로**(ADR-057) · **sim-runner 이미지**(A27 에서 옮겼다 — 아래) | 7-7 · `ci.yml` · ADR-057 | — | — | 7-7 — sim-runner 이미지는 2026-09-27 에 A27 에서 왔다: **호스트 실행이 측정 경로**다(`make peak` → `tools/sim/peak.sh` 가 호스트에서 `bootRun`, 오프셋은 `build/sim-offset`). 이미지의 쓸모는 릴리스 · k8s 이고 7-4 의 측정에는 없다 |
 | A26 | (선택) `deploy/k8s` + kind 스모크 · ADR-011 static membership | 7-7 · ADR-011 | — | — | 7-7 |
-| A27 | **peak-day 의 전제** — 시나리오가 없다(`scenarios.yml` 은 smoke · tiny · ops-demo · late-injection), sim-runner 이미지는 꺼져 있다(「Phase 7 피크에서 다시 켠다」), `make peak` 은 자리표시다. 그리고 **부록 A 의 목록과 `scenarios.yml` 이 어긋난다** — `tiny`·`ops-demo` 는 목록에 없고, `late-injection` 은 목록이 「지연 15% · 실패 3%」, 파일이 `delay-probability: 1.0` · `failure-probability: 0.05` 다 | `tools/sim-runner` · `Makefile` · 부록 A | — | — | 7-4a |
+| A27 | **peak-day 의 전제** — 시나리오가 없다(`scenarios.yml` 은 smoke · tiny · ops-demo · late-injection), sim-runner 이미지는 꺼져 있다(「Phase 7 피크에서 다시 켠다」), `make peak` 은 자리표시다. 그리고 **부록 A 의 목록과 `scenarios.yml` 이 어긋난다** — `tiny`·`ops-demo` 는 목록에 없고, `late-injection` 은 목록이 「지연 15% · 실패 3%」, 파일이 `delay-probability: 1.0` · `failure-probability: 0.05` 다 | `tools/sim-runner` · `Makefile` · 부록 A | — | — | 7-4a — **sim-runner 이미지만 7-7 로**(A25, 2026-09-27 사용자 결정): 호스트 실행이 측정 경로라 이 경로에 이미지가 필요 없다 |
 | A28 | 사건은 지나갔고 재검토 기록이 없는 셋 — ADR-029 ①(4-1 이후 예산 배분) · ②(부분 저장의 배치 단위) · ADR-047 ④(relocate 가 돌기 시작한 뒤 「덮음」의 빈도) | 표 C 에 있던 행 | — (소급) | 판정이 다른 곳에 있는지부터 찾는다 | 7-6 |
-| A29 | `cause="manual"` 이 일상이 되는가 | ADR-054 재검토 지점 1 | 조기 마감이 드문 결정이라는 가정이 틀렸다 | `promise_revised_total{cause}` · 감사 행 — peak-day 가 정해진 시각에 커맨드를 섞으므로(D3) 0 이 아니다 | 7-4 |
+| A29 | `cause="manual"` 이 일상이 되는가 | ADR-054 재검토 지점 1 | 조기 마감이 드문 결정이라는 가정이 틀렸다 | `CLOSE_WAVE` 감사 행 · `promise_revised_total{cause}` — **`peak-day` 의 `cause="manual"` 은 기대 0**(2026-09-27, D3): 창이 23:58 에 끝나고 조기 마감은 그 뒤 증차가 끝난 직후라, 마감 뒤에 도착하는 주문이 없다. 0 이 아니면 그것은 운영자의 대가가 아니라 **fulfillment 의 소비 지연이 증차 시간보다 길었다**는 뜻이다 — 23:58 전에 받은 주문이 마감 뒤에 소비됐다(A32 의 「기준 후보 수 < 마감 주문 수」와 같은 현상). 카운터가 살아 있다는 것은 Phase 6 데모 · 7-3 카오스가 이미 보였고 **만들지 않는다** | 7-4 |
 | A30 | `DawnlineMetricsTest` 가 「§9.1 표를 그대로 옮긴 것」이라고 말하지만 **문서를 읽지 않는** 11개 고정 목록이다 — 표에는 그 뒤로 게이지·카운터가 여럿 늘었고(`dawnline_retention_last_success_age_seconds` · `*_stuck` 셋 등) 검사는 초록이다. 「서로를 비추는 목록」이 대조 없이 갈라진 모양(CLAUDE.md) | 7-0c 에서 §9.1 에 `dawnline_route_plans_stuck` 을 더하며 발견(2026-09-25) | — (이미 어긋나 있다) | §9.1 표 ↔ 코드의 메트릭 이름 — 문서에서 전부 읽고 빼는 방식으로 대조, `docs/DESIGN.md` 를 태스크 입력으로 | 7-1 ✅ `2c14d63` — 카탈로그(`DawnlineMetrics`)가 §9.1 의 행마다 항목을 들고 `DawnlineMetricsTest` 가 표를 읽어 이름 · 타입 · 라벨 집합을 양방향으로 대조한다(ADR-060). 처음 돌며 넷을 찾았다 — 히스토그램 버킷 없음 · action 둘 · cause `unknown` · tier `NEXT_DAY` · `geo_lookups` 의 index 둘 |
+| A31 | **`routes.status` 는 쓰는 쪽이 없다** — `PLANNED` 로 INSERT 된 뒤 바꾸는 문장이 없는데(`UPDATE routes` 여섯 중 0, 코드 읽기) `GET /routes/{routeId}` 가 그 칸을 내보낸다. 쓰는 쪽이 없는 칸은 읽는 쪽이 믿는 순간 거짓이 된다. 지금은 보존과 비활성화 409 가 `route_stops` 에서 「끝나지 않은 stop」 정의를 한 번 공유해 맞다(한 SQL, 두 호출자) | ADR-067 재검토 지점 2 (2026-09-27, 7-4a ③ 에서 발견) | — (이미 어긋나 있다) | 「`rm_routes.completed_at` 처럼 사건 시점 재계산으로 쓰거나 칸을 지운다」 — 7-4 의 기사가 라우트를 끝까지 돌린 뒤의 `route_stops` 로 어느 쪽인지 정한다 | 7-4 뒤 |
+| A32 | **80% 가 「미배정 ≤ 0.5%」를 내는가** — §6.7 의 「정상 용량」을 ADR-033 의 기준으로 옮긴 문장이 실제 파이프라인에서 참인가. 그리고 계산의 기준 후보 수가 마감 주문 수와 같은가(창 뒤의 소비 지연만큼 덜 잰다) | ADR-067 재검토 지점 3 · 4 | `peak-day` 리포트 머리의 ✗, 또는 기준 후보 수 < 마감 주문 수가 부족분을 바꿀 만큼 | `peak-day` 리포트 머리(계산 부족분 · 추가 대수 · 실제 미배정 · 두 수) | 7-4 |
+| A33 | **읽기 시점의 함대로 계획을 쓴다** — 계획은 시작할 때 차량을 읽고 계산은 트랜잭션 밖이다(ADR-064). 그 사이 비활성화된 차량은 409 가 막지 못한다 — 그 차량에는 아직 stop 이 없다. 그래서 비활성 차량의 라우트가 발행될 수 있다(근거: 추정 — 코드 읽기, 재현하지 않았다) | ADR-067 재검토 지점 6 (2026-09-27, 7-4a ③ 리뷰) | — (창이 있다 — 증차 · 비활성화가 계획과 겹치는 날) | 답은 비활성화의 409 확대가 아니라 **발행 직전 재검증(ADR-026 분기 2, §6.5 6단계)에 차량 활성 여부를 넣는 것**이다 — 비활성 차량의 라우트는 발행하지 않고 그 stop 을 미배정으로(사유 `VEHICLE_DEACTIVATED`). 취소가 계획 중에 닫히는 자리와 같은 자리다 | 7-4 뒤 |
 
 **B. Phase 7 표기는 없지만 peak-day 가 판정 데이터를 내는 것** — 적어 두지 않으면 7-4 가 그 수를 재고도 판정하지 않는다
 
@@ -2077,7 +2080,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | 이유 | 항목 |
 |---|---|
 | **이미 닫혔다** | **Phase 3 대조표의 `PRIORITY_BOOST` 계약 결손**(⚠️ — 처음 판에는 D6 으로 적었다. Phase 4-11 이 계약 변경 없이 닫았다: 우선도는 받은 사실에서 파생한다, ADR-028 · `LoadCandidateService`. Phase 3 행만 갱신되지 않았다 — 지금 고쳤다) · ADR-015 ①(ADR-055) · ADR-049 ②(규칙 9 가 조건이라는 증명 — #45 의 음성 표본 `OwnShapeAdvice` 가 했다. ops-api 로 한 번 더 하지는 않았다) · ADR-023 의 DLQ 경로 조건(ADR-053 이 §4.4 의 의존 경고로 답했다) · ADR-028 ①②(ADR-033 의 통합 키와 80% 기준) · **ADR-033 「`peak` 은 아직 재지 않았다」**(`DatasetFeasibilityTest` 가 2026-09-12 부터 빼는 방식으로 `peak` 을 포함한다 — ADR 의 문장만 남았다) · ADR-043 ① · ADR-047 ①⑤ · ADR-048 ④ · ADR-050 ③ · ADR-051 ①②③ · ADR-052 ② · **FAST 클러스터 여유 그림자**(`phase4-strategies.md` §7.3 「판정: 닫는다」 — 이득이 비단조. 커밋되지 않은 probe 의 수라는 ⚠️ 가 그 절에 있다) |
-| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · ADR-063(며칠 뒤 웨이브의 조기 마감 · 사유별 카운터) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 · ADR-059(재배송이 들어오면 나이의 전제 — D7 이 범위 밖이다 · 다른 계획의 라우트로 옮기는 재배정 · 측정 문서의 행 수 재검토 지점 넷 — `route_plans` 10만 · `dispatch_candidates` 1,500만 · `route_stops` 2,000만) · ADR-061(`rm_routes` 약 200만 행이면 두 인덱스를 다시 잰다 · 재배송이 들어오면 마지막 결과 시각의 뜻 — `assigned` 의 창은 `void` 가 생겨 닫혔다) · ADR-062(배치 리스너가 들어오면 레코드마다 부모를 여는 자리 · 샘플링을 1.0 아래로 내리면 주문과 계획 트레이스가 따로 뽑힌다) · ADR-065(`audit_logs` 가 수만 행 · 해소의 정정 · 자동 해소 — 셋 다 사건이 연다) · ADR-066(벽시계 경계의 하나가 사실의 판정에 들어오는 변경 · 인스턴스 둘 이상 — A16 과 같은 날) |
+| **사건 조건 — 일정이 없다**(요구·규모·버전이 바뀌는 날) | ADR-004 (b)(c) · ADR-013 · ADR-015 ② · ADR-028 ④ · ADR-030 ①(로스터 모델) · ADR-031 · ADR-032 · ADR-034(대안 표의 재검토 조건 둘) · ADR-035 ② · ADR-036 · ADR-037 · ADR-038 · ADR-039 · ADR-040 · ADR-041 ②③ · ADR-042 · ADR-043 ③⑤ · ADR-044 ②④ · ADR-045 ②(분할 배송) · ADR-047 ② · ADR-049 ① · ADR-052 ①③ · ADR-053 · ADR-054 ② · ADR-055 · ADR-056(생성기 버전) · ADR-063(며칠 뒤 웨이브의 조기 마감 · 사유별 카운터) · §17 `[결정 필요]` 4(Valkey) · §5.5 `rm_routes` 100만 행 · ADR-059(재배송이 들어오면 나이의 전제 — D7 이 범위 밖이다 · 다른 계획의 라우트로 옮기는 재배정 · 측정 문서의 행 수 재검토 지점 넷 — `route_plans` 10만 · `dispatch_candidates` 1,500만 · `route_stops` 2,000만) · ADR-061(`rm_routes` 약 200만 행이면 두 인덱스를 다시 잰다 · 재배송이 들어오면 마지막 결과 시각의 뜻 — `assigned` 의 창은 `void` 가 생겨 닫혔다) · ADR-062(배치 리스너가 들어오면 레코드마다 부모를 여는 자리 · 샘플링을 1.0 아래로 내리면 주문과 계획 트레이스가 따로 뽑힌다) · ADR-065(`audit_logs` 가 수만 행 · 해소의 정정 · 자동 해소 — 셋 다 사건이 연다) · ADR-066(벽시계 경계의 하나가 사실의 판정에 들어오는 변경 · 인스턴스 둘 이상 — A16 과 같은 날) · ADR-067 ①(출발 전 차량 고장 — 비활성화가 §6.8 relocate 를 부르는 흐름이 생기는 날) · ⑤(야간조에 차종이 늘면 템플릿을 용량당 고정비로) |
 | **조건이 켜지지 않았다** | `phase1-orders-k6.md` 판정표의 「`outbox_lag` 상승 → Phase 7 로 넘길지」 행 — Phase 1 의 미달은 콜드 스타트 하나였다 |
 | **메커니즘 조건 — 7-4 의 수가 연다** | ADR-048 ③ 같은 지점으로는 옮기지 않는 규칙(처음 판의 B3, D4) — 후보 한 칸을 건너뛰는 자리라 트리거 단위 outcome 이 아니다. **peak-day 에서 `no-gain` 이 `applied` 보다 잦으면 연다** |
 | **범위 밖으로 닫았다**(D 의 결정) | 재배송 +3(D7 — DESIGN §6.3 우선도 표 · ADR-028 · Phase 5 대조표에 행을 더했다) |
@@ -2088,7 +2091,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 |---|---|---|---|
 | D1 | 콜드 스타트 | A2 | **코드가 아니라 측정 조건이다.** peak-day 는 콜드 스택에서 시작하고 첫 계획·첫 소비 처리량을 정상 상태와 갈라 적는다(7-4 의 측정 헤더 한 줄). RB-06 에 예열 항목(7-5 ✅ `caa6043` — RB-06 §3) |
 | D2 | 함대 규모 대 §8.1 물량 | ADR-030 · B6 | **둘로 돈다** — Phase 4 의 `peak`/`overload` 분리를 시나리오로. `peak-day` 는 실현 가능성 기준(80%)이 정하는 함대(성수기 증차), `overload-day` 는 같은 물량을 함대 그대로. 대수는 고르지 않고 기준이 낸다(부록 A) |
-| D3 | 운영자 없는 시뮬레이션 | A19 · A29 | **넣되 최소로.** peak-day 중 정해진 시각에 조기 마감·재배정을 몇 번(스크립트). `UNKNOWN` 은 peak-day 가 아니라 **7-3 카오스가 낸다** — 인위 주입은 하지 않는다 |
+| D3 | 운영자 없는 시뮬레이션 | A19 · A29 | **넣되 최소로.** ~~peak-day 중 정해진 시각에 조기 마감·재배정을 몇 번(스크립트).~~ **시각이 아니라 순서다**(2026-09-27 정정, ADR-067 결정 9): 창 종료 → 증차 → **증차가 끝난 직후 그 캠프의 DAWN 웨이브 조기 마감** → 계획 → 재배정. 실제 운영자도 물량을 보고 증차한 **뒤에** 닫는다. 창 안의 정해진 시각이면 「웨이브는 컷오프 + grace 에 닫힌다」(ADR-067 결정 7 의 전제)와 충돌하고, 창 밖의 웨이브를 닫는 것은 뜻이 없는 커맨드다. 그래서 조기 마감은 「컷오프 + grace 를 기다리지 않고 계획을 앞당긴다」는 실제 뜻을 갖고, 시간 예산은 구조로 지켜진다(마감이 증차 뒤라 `closed_at` 이 항상 뒤). `cause="manual"` 은 기대 0(A29). `UNKNOWN` 은 peak-day 가 아니라 **7-3 카오스가 낸다** — 인위 주입은 하지 않는다 |
 | D4 | 셀 칸이 없는 둘 | ADR-048 ③ · ⑤ | **relocate 상한(⑤)**: 평가 상한 2,000회에 걸려 이동을 하나도 못 찾으면 지금은 `no-gain` 으로 접힌다 — 판정 불가를 값으로 접지 않는다. `dawnline_replan_total{outcome}` 에 **`truncated`** 를 더한다(합이 트리거 수라는 성질은 그대로). 이동을 찾았는데 상한에 걸린 경우는 `applied` 로 두되, **그 계획의 설명 행(`AT_RISK_RELOCATE`)에 `searchTruncated: true`** — 「왜 이 이동인가」에 「더 좋은 이동을 못 본 채 고른 것」이 붙어야 §6.3 의 설명이 정직하다. 메트릭은 늘리지 않는다. 7-4a. **같은 지점 제외(③)**: 후보 한 칸을 건너뛰는 자리라 outcome 의 모양이 아니다 — 표 C, 여는 조건은 「`no-gain` 이 `applied` 보다 잦을 때」(메커니즘 조건) |
 | D5 | 보존 정책 | ADR-045 · ADR-047 · §5.5 | **7-0b** 로 7-1 앞에 — ADR-023 의 두 축 그대로: `shipments` 30일(`updated_at`), `route_revisions` 90일(상위, 삭제 순서는 두 기간이 보장하되 `NOT EXISTS` 가드), `rm_*` 90일(조사 가능성 — 예외 목록의 상한). 정리 배치는 기존 패턴, 인덱스는 EXPLAIN. **→ [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md)** (2026-09-25 승인 — 덧붙은 넷: 보존 표 ↔ 설정 기본값 대조 · 모든 정리의 `dawnline_retention_last_success_age_seconds{table}` · 비종결 `rm_orders` 는 세고 365일 상한 · dispatch 는 7-0c 에서 `plan_explanations` 30일. `audit_logs` 무기한) |
 | D6 | ~~`PRIORITY_BOOST` 계약 결손~~ | Phase 3 대조표 | **잘못 뽑은 행이었다** — Phase 4-11 에서 이미 닫혔다(표 C) |
@@ -2112,7 +2115,6 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 | 파일 | 줄 | 행 |
 |---|---|---|
 | `.github/workflows/ci.yml` | 4 | A25 |
-| `Makefile` | 2 | A27 |
 | `README.md` | 8 | A4 · A22 · A23 · A24 · A27 |
 | `docs/DESIGN.md` | 11 | A1 · A2 · A8 · A13 · A14 · A26 · D2 · D7 |
 | `docs/IMPLEMENTATION_PLAN.md` | 20 | A1 · A2 · A3 · A4 · A5 · A9 · A10 · A11 · A12 · A13 · C · D5 · D7 |
@@ -2246,16 +2248,27 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
    벽시계로 하루 한 번이다. 스케줄이 아니라 **주입 시계를 옮긴다**(`dawnline.clock.offset`, 프로필 `sim` 에서만, compose 앵커 하나 ·
    유효 시각 한 줄 · `make obs-check` 6 이 다섯 서비스의 게이지를 대조). 시계는 하나 — 운영 SQL 의 `now()` 셋을 걷어냈고 그중 outbox 미발행
    나이는 오프셋 아래에서 −28,799.95초였다(관측, `OutboxLagIT`). 남은 것: ② 시나리오 넷 · 부록 A 대조 · D4 ③ 함대 기준(`libs/common`) · 시뮬레이션
-   프로젝트 · sim 이미지 · `make peak` · D3.
+   프로젝트 · sim 이미지(→ 7-7, A25) · `make peak` · D3.
    **② 시나리오 넷 · 부록 A 대조 · D4 ✅ (2026-09-27)** — 창은 하나(DAWN 컷오프 앞 22:58–23:58 유효 시각, `start-at` 까지 sim-runner 가
    주입 시계로 기다리고 상한 1시간을 넘으면 보내지 않고 실패한다): `normal-day` 9,000 · `peak-day` · `overload-day` 45,000 · `cold-heavy` 9,000(냉장 40%).
    부록 A 는 표가 됐고 `ScenariosTableTest` 가 이름 집합 · 주문 · 냉장 · 지연·실패 · 창을 대조한다(처음 대조에서 네 자리가 갈라져 있었다).
    D4: `dawnline_replan_total{outcome="truncated"}` · 설명 행 `searchTruncated`. **창 시나리오의 기사는 아직 없다** — 지금의 기사는
    「라우트 N 대」를 기다리는데 창의 라우트 수는 계획이 정한다. §8.1 정시율(지연 5%)을 재려면 7-4 에서 「창의 라우트 전부」를 기다리는 기사가 필요하다.
+   **③ 함대 기준 · 성수기 증차 — [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md) (2026-09-27 결정, 진행 중)** — (A): dispatch 가
+   자기 후보(통합 후 stop)와 `libs/common` 의 `FleetFeasibility`(벤치마크와 같은 코드)로 웨이브별 조합 부족 대수를 내고, sim-runner 가 창 끝에
+   ops-api 로 읽어 운영자처럼 증차한다(`ADD_VEHICLE` · 감사 행, `source=peak-sim`). 시간 예산은 `rm_waves.closed_at` 대비 어설션, 리포트 머리에
+   계산값과 실제 미배정을 나란히. 비활성화는 끝나지 않은 stop 이 있으면 409(엄격) — 그래서 **창의 기사를 7-4 에서 당겼다**(계획의
+   `route_count` 합을 기다린다), 시작 전 활성 `peak-sim` 0 이 전제 어설션. `routes.status` 는 쓰는 쪽이 없다(A31).
+   `make peak [PEAK=peak-day]` 은 자리표시를 걷어냈다 — sim-runner 는 **호스트에서** `make sim-up` 이 적은 오프셋(`build/sim-offset`)과
+   프로필 `sim` 으로 돈다(`tools/sim/peak.sh`, 운영자 토큰은 그 자리에서 찍는다). 그래서 **sim-runner 이미지는 이 경로에 필요하지 않다** —
+   7-7 로 옮겼다(A25 — 호스트 실행이 측정 경로다). 「읽기 시점의 함대로 계획을 쓴다」 틈은 A33(7-4 뒤).
+   **④ D3 — 조기 마감은 증차 뒤의 순서다 (2026-09-27 결정)** — 창 종료 → 증차 → 그 캠프의 DAWN 웨이브 조기 마감(`CLOSE_WAVE`) → 계획 →
+   재배정(`REASSIGN_STOP`). 시각을 정하지 않으므로 시간 예산이 구조로 지켜진다. `peak-day` 의 `cause="manual"` 은 기대 0 이다(A29).
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
    **같은 물량을 `overload-day` 로 한 번 더**(D2) — 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터. **`normal-day`
    열을 옆에 둔다.** 측정 헤더에 한 줄: **콜드 스택에서 시작했다**, 첫 계획·첫 소비 처리량은 정상 상태와 갈라 적는다(D1).
-   정해진 시각의 운영자 커맨드(D3)로 `cause="manual"` 과 감사 행이 0 이 아니다. **7-0 표의 A·B 에서 닫히는 곳이 7-4 인
+   증차 뒤의 운영자 커맨드(D3)로 감사 행(`ADD_VEHICLE` · `CLOSE_WAVE` · `REASSIGN_STOP` · `DEACTIVATE_VEHICLE`)이 0 이 아니고,
+   `cause="manual"` 은 **기대 0** 이다(A29 — 0 이 아니면 소비 지연이 증차 시간을 넘었다). **7-0 표의 A·B 에서 닫히는 곳이 7-4 인
    행을 전부 여기서 판정한다** — 판정하지 못한 행은 이유와 함께 남긴다.
    **이 항목이 Phase 4-20 을 다시 연다** (2026-09-18 이월 — 「구성이 거리만 보는 것」).
    peak-day 는 `peak` 규모의 웨이브를 **실제 파이프라인에서** 도는 첫 자리이고, 4-20 의 판정

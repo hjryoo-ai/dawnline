@@ -116,4 +116,46 @@ public class ReadModelController {
     public ResponseEntity<?> route(@PathVariable UUID routeId, HttpServletRequest request) {
         return CommandResponses.ofQuery(queries.route(routeId), request.getRequestURI());
     }
+
+    /**
+     * 웨이브의 함대 실현 가능성 — dispatch 에 조회 위임(ADR-067 결정 2). 성수기 증차의 대수를 여기서 읽는다.
+     *
+     * @param waveId 웨이브
+     * @return dispatch 의 판정, 또는 코어의 거절 그대로, 또는 502·504
+     */
+    @GetMapping("/waves/{waveId}/fleet-feasibility")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "조합마다 수요 · 용량 · 부족 대수 · 템플릿 — dispatch 에 조회를 위임한다(감사 없음)",
+                    content = @Content(schema = @Schema(implementation = CoreReply.FleetFeasibility.class))),
+            @ApiResponse(responseCode = "404", description = "그 웨이브에 계획 대상 후보가 없다 — 코어의 본문 그대로",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409", description = "`wave-already-planned` — 발행된 계획이 있다. 코어의 본문 그대로",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "502", description = "`core-unreachable` 또는 `core-error`",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "504", description = "`core-timeout`",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
+    public ResponseEntity<?> fleetFeasibility(@PathVariable UUID waveId, HttpServletRequest request) {
+        return CommandResponses.ofQuery(queries.fleetFeasibility(waveId), request.getRequestURI());
+    }
+
+    /**
+     * 캠프의 차량 — dispatch 에 조회 위임(ADR-067 결정 6). 증차한 차량(`source=peak-sim`)이 남았는지 여기서 본다.
+     *
+     * @param campId 캠프
+     * @return dispatch 의 목록, 또는 코어의 거절 그대로, 또는 502·504
+     */
+    @GetMapping("/vehicles")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "코드 순 — dispatch 에 조회를 위임한다(감사 없음)",
+                    content = @Content(schema = @Schema(implementation = CoreReply.VehicleList.class))),
+            @ApiResponse(responseCode = "400", description = "`campId` 가 없거나 UUID 형식이 아니다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "502", description = "`core-unreachable` 또는 `core-error`",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "504", description = "`core-timeout`",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
+    public ResponseEntity<?> vehicles(@RequestParam UUID campId, HttpServletRequest request) {
+        return CommandResponses.ofQuery(queries.vehicles(campId), request.getRequestURI());
+    }
 }

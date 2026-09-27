@@ -11,8 +11,9 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>tracking 의 {@code RouteAssignedPayload} 와 읽는 필드가 다르다. 그것이 소비자 주도 계약의
  * 요점이다 — tracking 은 약속창을 읽고 좌표를 버리지만, 기사는 좌표로 움직이고 약속창은 보지
- * 않는다. {@code planId}·{@code waveId}·{@code vehicleId}·{@code strategy}·{@code costKrw} 는
- * 어느 쪽도 읽지 않아 양쪽 모두에 없다.
+ * 않는다. {@code planId}·{@code vehicleId}·{@code strategy}·{@code costKrw} 는 어느 쪽도 읽지 않아 양쪽 모두에 없다.
+ * {@code waveId} 는 2026-09-27 부터 읽는다 — 창 시나리오의 기사는 「창의 웨이브의 라우트」만 세어 계획이 낸 수를 기다린다
+ * (ADR-067 결정 6). 다른 웨이브의 라우트가 섞이면 수가 먼저 차고, 기다린 것이 아닌 것이 끝났다고 말한다.
  *
  * <p><strong>{@code cancelledOrderIds} 도 읽지 않는다.</strong> 기사에게 중요한 것은 「이 지점에
  * 가야 하는가」 하나이고, 그 답은 stop 의 {@code status} 가 말한다. 주문 일부만 취소된 stop 은
@@ -24,15 +25,22 @@ import org.jspecify.annotations.Nullable;
  *                 Phase 6 의 지도이고, 그때 이 값이 필요해진다. 지금은 로그의 라벨이다
  * @param summary  요약. 여기서 읽는 것은 {@code plannedDeparture} 하나다
  * @param stops    방문 순서대로의 stop 들
+ * @param waveId   웨이브 — 계약 필수. 창의 라우트를 세는 키다
  */
 public record AssignedRoute(UUID routeId, int revision, @Nullable UUID driverId,
-        @Nullable Summary summary, List<PlannedStop> stops) {
+        @Nullable Summary summary, List<PlannedStop> stops, @Nullable UUID waveId) {
 
     /** {@code status} 의 취소 값 (ADR-026). */
     static final String CANCELLED = "CANCELLED";
 
     public AssignedRoute {
         stops = stops == null ? List.of() : List.copyOf(stops);
+    }
+
+    /** 웨이브를 세지 않는 자리(기사 한 명의 여정) — 테스트 픽스처가 쓴다. */
+    public AssignedRoute(UUID routeId, int revision, @Nullable UUID driverId, @Nullable Summary summary,
+            List<PlannedStop> stops) {
+        this(routeId, revision, driverId, summary, stops, null);
     }
 
     /**

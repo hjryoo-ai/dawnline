@@ -98,6 +98,196 @@ paths:
                 $ref: "#/components/schemas/ProblemDetail"
       security:
       - opsJwt: []
+  /api/v1/vehicles:
+    get:
+      tags:
+      - read-model-controller
+      operationId: vehicles
+      parameters:
+      - name: campId
+        in: query
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 코드 순 — dispatch 에 조회를 위임한다(감사 없음)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VehicleList"
+        "400":
+          description: '`campId` 가 없거나 UUID 형식이 아니다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable` 또는 `core-error`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+    post:
+      tags:
+      - ops-command-controller
+      operationId: addVehicle
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VehicleBody"
+        required: true
+      responses:
+        "200":
+          description: 새 차량 id
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 감사 행 id — 모든 결과에 온다
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VehicleAdded"
+        "400":
+          description: "필수 칸이 없다(감사 행 없음), 또는 코어의 거절 그대로(용량 · 비용 · 길이 · `source`)"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: 코어의 거절 그대로 — `vehicle-code-taken`(같은 코드의 차량이 있다 — `vehicleId`)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의
+            5xx — 감사 `UNKNOWN`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "503":
+          description: 감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 같은 본문으로 다시 누르면 409
+            `vehicle-code-taken` 이 있는 차량을 말한다(RB-07)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
+  /api/v1/vehicles/{vehicleId}/deactivate:
+    post:
+      tags:
+      - ops-command-controller
+      operationId: deactivateVehicle
+      parameters:
+      - name: vehicleId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 비활성화한 뒤의 차량 — 이미 비활성이면 그대로
+          headers:
+            X-Dawnline-Audit-Id:
+              description: 감사 행 id — 모든 결과에 온다
+              style: simple
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/Vehicle"
+        "404":
+          description: 코어의 거절 그대로 — 없는 차량
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: 코어의 거절 그대로 — `vehicle-in-service`(끝나지 않은 stop 이 있다 — `unfinishedStops`)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의
+            5xx — 감사 `UNKNOWN`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "503":
+          description: 감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 다시 누르기가 먼저다 — 비활성화는
+            멱등이다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
   /api/v1/routes/{routeId}/stops/{orderId}/reassign:
     post:
       tags:
@@ -585,6 +775,64 @@ paths:
                 $ref: "#/components/schemas/ProblemDetail"
       security:
       - opsJwt: []
+  /api/v1/waves/{waveId}/fleet-feasibility:
+    get:
+      tags:
+      - read-model-controller
+      operationId: fleetFeasibility
+      parameters:
+      - name: waveId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 조합마다 수요 · 용량 · 부족 대수 · 템플릿 — dispatch 에 조회를 위임한다(감사 없음)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/FleetFeasibility"
+        "404":
+          description: 그 웨이브에 계획 대상 후보가 없다 — 코어의 본문 그대로
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: '`wave-already-planned` — 발행된 계획이 있다. 코어의 본문 그대로'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "502":
+          description: '`core-unreachable` 또는 `core-error`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "504":
+          description: '`core-timeout`'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 토큰이 없거나 유효하지 않다 — `unauthenticated`. 토큰을 다시 넣는다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "403":
+          description: "역할이 모자란다 — `forbidden`. 조회는 `OPS_VIEWER`, 커맨드는 `OPS_OPERATOR`\
+            \ 이상"
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - opsJwt: []
   /api/v1/routes/{routeId}:
     get:
       tags:
@@ -947,6 +1195,126 @@ components:
           type: string
           description: "오류 코드 — `type` 의 마지막 세그먼트와 같다. 모든 오류에 실린다. 그 밖의 확장 멤버(`retryAfterSeconds`,\
             \ 검증 오류, 도메인 예외의 상세)도 이 칸처럼 최상위에 온다"
+    VehicleBody:
+      type: object
+      properties:
+        campId:
+          type: string
+          format: uuid
+        code:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          minLength: 1
+        maxWeightG:
+          type: integer
+          format: int32
+        maxVolumeCm3:
+          type: integer
+          format: int32
+        cold:
+          type: boolean
+        allowsHazmat:
+          type: boolean
+        fixedCostKrw:
+          type: integer
+          format: int32
+        costPerKmKrw:
+          type: integer
+          format: int32
+        costPerMinKrw:
+          type: integer
+          format: int32
+        shiftStart:
+          type: string
+          format: time-local
+        shiftEnd:
+          type: string
+          format: time-local
+        source:
+          type:
+          - string
+          - "null"
+      required:
+      - allowsHazmat
+      - campId
+      - code
+      - cold
+      - costPerKmKrw
+      - costPerMinKrw
+      - fixedCostKrw
+      - maxVolumeCm3
+      - maxWeightG
+      - shiftEnd
+      - shiftStart
+      - type
+    VehicleAdded:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+      required:
+      - id
+    Vehicle:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        campId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        type:
+          type: string
+        maxWeightG:
+          type: integer
+          format: int32
+        maxVolumeCm3:
+          type: integer
+          format: int32
+        cold:
+          type: boolean
+        allowsHazmat:
+          type: boolean
+        fixedCostKrw:
+          type: integer
+          format: int32
+        costPerKmKrw:
+          type: integer
+          format: int32
+        costPerMinKrw:
+          type: integer
+          format: int32
+        shiftStart:
+          type: string
+          format: time-local
+        shiftEnd:
+          type: string
+          format: time-local
+        active:
+          type: boolean
+        source:
+          type: string
+      required:
+      - active
+      - allowsHazmat
+      - campId
+      - code
+      - cold
+      - costPerKmKrw
+      - costPerMinKrw
+      - fixedCostKrw
+      - id
+      - maxVolumeCm3
+      - maxWeightG
+      - shiftEnd
+      - shiftStart
+      - source
+      - type
     ReassignBody:
       type: object
       properties:
@@ -1243,6 +1611,116 @@ components:
       required:
       - routes
       - waveId
+    FleetFeasibility:
+      type: object
+      properties:
+        waveId:
+          type: string
+          format: uuid
+        campId:
+          type: string
+          format: uuid
+        assessedAt:
+          type: string
+          format: date-time
+        candidates:
+          type: integer
+          format: int32
+        stops:
+          type: integer
+          format: int32
+        fleet:
+          type: integer
+          format: int32
+        maxStopsPerRoute:
+          type:
+          - integer
+          - "null"
+          format: int32
+        headroomPercent:
+          type: integer
+          format: int32
+        feasible:
+          type: boolean
+        combinations:
+          type: array
+          items:
+            $ref: "#/components/schemas/FleetLine"
+      required:
+      - assessedAt
+      - campId
+      - candidates
+      - combinations
+      - feasible
+      - fleet
+      - headroomPercent
+      - stops
+      - waveId
+    FleetLine:
+      type: object
+      properties:
+        cold:
+          type: boolean
+        hazmat:
+          type: boolean
+        large:
+          type: boolean
+        label:
+          type: string
+        status:
+          type: string
+        demandStops:
+          type: integer
+          format: int64
+        demandWeightG:
+          type: integer
+          format: int64
+        demandVolumeCm3:
+          type: integer
+          format: int64
+        vehicles:
+          type: integer
+          format: int32
+        capacityStops:
+          type: integer
+          format: int64
+        capacityWeightG:
+          type: integer
+          format: int64
+        capacityVolumeCm3:
+          type: integer
+          format: int64
+        shortfall:
+          type:
+          - integer
+          - "null"
+          format: int32
+        template:
+          anyOf:
+          - $ref: "#/components/schemas/Vehicle"
+          - type: "null"
+      required:
+      - capacityStops
+      - capacityVolumeCm3
+      - capacityWeightG
+      - cold
+      - demandStops
+      - demandVolumeCm3
+      - demandWeightG
+      - hazmat
+      - label
+      - large
+      - status
+      - vehicles
+    VehicleList:
+      type: object
+      properties:
+        vehicles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vehicle"
+      required:
+      - vehicles
     RouteDetail:
       type: object
       properties:
@@ -1476,6 +1954,11 @@ components:
           - integer
           - "null"
           format: int32
+        closedAt:
+          type:
+          - string
+          - "null"
+          format: date-time
       required:
       - waveId
     CancelledButDelivered:

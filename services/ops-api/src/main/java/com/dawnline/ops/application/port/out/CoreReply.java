@@ -2,6 +2,7 @@ package com.dawnline.ops.application.port.out;
 
 import com.dawnline.ops.domain.AuditResult;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -35,7 +36,7 @@ public sealed interface CoreReply {
 
         /** 코어의 성공 본문. 주소 같은 개인정보는 옮기지 않는다(§10). */
         public sealed interface Body permits PlanRun, StopReassigned, OrderCancelled, WaveClosed, OutboxRequeued,
-                QuarantinedOutbox, RouteDetail {
+                QuarantinedOutbox, RouteDetail, VehicleAdded, Vehicle, VehicleList, FleetFeasibility {
         }
     }
 
@@ -203,5 +204,94 @@ public sealed interface CoreReply {
         public RouteStop {
             orderIds = List.copyOf(orderIds);
         }
+    }
+
+    /**
+     * 차량 등록 — dispatch 가 만든 id (ADR-067 결정 1). 감사 행은 위임 전에 쓰므로 이 id 는 행의 {@code target_id} 가 아니라
+     * 응답과 코어 로그({@code auditId})에 있다 — 대상은 캠프다.
+     *
+     * @param id 새 차량 id
+     */
+    record VehicleAdded(UUID id) implements Applied.Body {
+    }
+
+    /**
+     * dispatch 의 차량 한 대 — 비활성화의 답이고, 목록 · 템플릿의 원소다.
+     *
+     * @param id            차량
+     * @param campId        캠프
+     * @param code          운영자가 부르는 이름
+     * @param type          차종
+     * @param maxWeightG    최대 중량(g)
+     * @param maxVolumeCm3  최대 부피(㎤)
+     * @param cold          냉장
+     * @param allowsHazmat  위험물 허용
+     * @param fixedCostKrw  고정비 (불변규칙 9)
+     * @param costPerKmKrw  km 당 비용
+     * @param costPerMinKrw 분당 비용
+     * @param shiftStart    근무 시작 (벽시계)
+     * @param shiftEnd      근무 종료
+     * @param active        가용한가
+     * @param source        누가 넣었나 — {@code seed} · {@code operator} · {@code peak-sim}
+     */
+    record Vehicle(UUID id, UUID campId, String code, String type, int maxWeightG, int maxVolumeCm3, boolean cold,
+            boolean allowsHazmat, int fixedCostKrw, int costPerKmKrw, int costPerMinKrw, LocalTime shiftStart,
+            LocalTime shiftEnd, boolean active, String source) implements Applied.Body {
+    }
+
+    /**
+     * 캠프의 차량 — dispatch 의 배열을 이름 있는 칸에 담는다(본문의 최상위를 배열로 두지 않는다 — 칸을 더할 자리가 없다).
+     *
+     * @param vehicles 코드 순
+     */
+    record VehicleList(List<Vehicle> vehicles) implements Applied.Body {
+        public VehicleList {
+            vehicles = List.copyOf(vehicles);
+        }
+    }
+
+    /**
+     * 웨이브의 함대 실현 가능성 — dispatch 의 판정 그대로 (§5.3 「함대」, ADR-067 결정 2).
+     *
+     * @param waveId           웨이브
+     * @param campId           캠프
+     * @param assessedAt       잰 시각(dispatch 의 주입 시계)
+     * @param candidates       계획 대상 후보 수
+     * @param stops            통합 후 stop 수
+     * @param fleet            계획이 쓸 수 있는 차량 수
+     * @param maxStopsPerRoute stop 축의 상한. {@code null} 이면 재지 않았다
+     * @param headroomPercent  여유(%)
+     * @param feasible         모든 조합이 여유 안이다
+     * @param combinations     조합마다 한 줄, 가장 특정한 조합부터
+     */
+    record FleetFeasibility(UUID waveId, UUID campId, Instant assessedAt, int candidates, int stops, int fleet,
+            @Nullable Integer maxStopsPerRoute, int headroomPercent, boolean feasible, List<FleetLine> combinations)
+            implements Applied.Body {
+        public FleetFeasibility {
+            combinations = List.copyOf(combinations);
+        }
+    }
+
+    /**
+     * 조합 한 줄.
+     *
+     * @param cold              냉장
+     * @param hazmat            위험물
+     * @param large             대형
+     * @param label             사람이 읽을 이름
+     * @param status            {@code FEASIBLE} · {@code SHORTFALL} · {@code NO_TEMPLATE}
+     * @param demandStops       수요 stop
+     * @param demandWeightG     수요 중량(g)
+     * @param demandVolumeCm3   수요 부피(㎤)
+     * @param vehicles          이 조합을 모두 갖춘 차량 수
+     * @param capacityStops     그 stop 슬롯
+     * @param capacityWeightG   그 중량 용량(g)
+     * @param capacityVolumeCm3 그 부피 용량(㎤)
+     * @param shortfall         더할 대수. {@code NO_TEMPLATE} 이면 {@code null}
+     * @param template          더할 차량의 원본. 없으면 {@code null}
+     */
+    record FleetLine(boolean cold, boolean hazmat, boolean large, String label, String status, long demandStops,
+            long demandWeightG, long demandVolumeCm3, int vehicles, long capacityStops, long capacityWeightG,
+            long capacityVolumeCm3, @Nullable Integer shortfall, @Nullable Vehicle template) {
     }
 }

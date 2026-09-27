@@ -33,7 +33,7 @@ public class JdbcReadModelViews implements ReadModelViews {
 
     static final String WAVES_SQL = """
             SELECT wave_id, service_tier, cutoff_at, status, order_count, plan_id, plan_duration_ms,
-                   total_cost_krw, unassigned_count, route_count
+                   total_cost_krw, unassigned_count, route_count, closed_at
               FROM rm_waves
              WHERE camp_id = ? AND cutoff_at >= ? AND cutoff_at < ?
              ORDER BY cutoff_at, service_tier, wave_id
@@ -91,7 +91,8 @@ public class JdbcReadModelViews implements ReadModelViews {
                         rs.getObject("plan_duration_ms", Integer.class),
                         rs.getObject("total_cost_krw", Long.class),
                         rs.getObject("unassigned_count", Integer.class),
-                        rs.getObject("route_count", Integer.class)),
+                        rs.getObject("route_count", Integer.class),
+                        instantOf(rs, "closed_at")),
                 campId, utc(from), utc(to), limit);
     }
 

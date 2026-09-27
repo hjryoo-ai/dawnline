@@ -47,6 +47,11 @@ dawnline:
     # 요청 하나의 타임아웃. order-service 의 p99 목표(200ms, §8.1)보다 한참 크게 둔다 —
     # 여기서 자르면 서비스가 느린 것과 도구가 성급한 것을 구별할 수 없다.
     request-timeout-ms: 5000
+    # 함대 단계(ADR-067) — 창 시나리오가 ops-api 를 운영자의 토큰으로 부른다. dispatch 에 직접 닿지 않는다(감사 행이 남아야 한다).
+    # 토큰은 저장소에 두지 않는다: DAWNLINE_SIM_OPS_TOKEN=$(make token ROLE=OPS_OPERATOR) — 비었으면 함대 단계가 시작하지 않고 실패한다.
+    ops:
+      base-url: ${DAWNLINE_SIM_OPS_BASE_URL:http://localhost:8085}
+      token: ${DAWNLINE_SIM_OPS_TOKEN:}
 
 logging:
   level:

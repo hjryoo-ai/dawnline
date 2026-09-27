@@ -79,9 +79,8 @@ help:
 	@printf '    make chaos-verify   검증 표만 — STATE=<baseline 파일> [VERIFY_ARGS=…]                    [7-3]\n\n'
 	@printf '  \033[1m시뮬레이션 스택\033[0m (ADR-066 — 시계를 옮긴다, 자기 프로젝트 dawnline-sim)\n'
 	@printf '    make sim-up [SIM_AT=22:40]  개발 스택이 내려가 있어야 한다. 기동 순간의 유효 시각이 SIM_AT(KST)\n'
-	@printf '    make sim-down       시뮬레이션 스택의 컨테이너만 내린다(볼륨 유지)\n\n'
-	@printf '  \033[1m시나리오\033[0m (아직 미구현 — 해당 Phase 에서 채운다)\n'
-	@printf '    make peak           피크 시나리오                [Phase 7]\n\n'
+	@printf '    make sim-down       시뮬레이션 스택의 컨테이너만 내린다(볼륨 유지)\n'
+	@printf '    make peak [PEAK=peak-day]   창 시나리오 — 22:58 까지 기다려 한 시간, 증차 · 계획 · 기사 · 정리 (ADR-067)\n\n'
 
 # -----------------------------------------------------------------------------
 # .env 준비 — 이미 있으면 절대 덮어쓰지 않는다.
@@ -328,12 +327,12 @@ sim-up: env check-images
 sim-down: env
 	@bash tools/sim/sim-stack.sh down
 
-peak:
-	@echo ""
-	@echo "make peak 는 아직 구현되지 않았다."
-	@echo "  필요한 것: sim-runner 의 peak-day 시나리오 (IMPLEMENTATION_PLAN.md Phase 7)"
-	@echo ""
-	@exit 2
+# 창 시나리오(부록 A)를 시뮬레이션 스택에 — 로직은 tools/sim/peak.sh. sim-runner 는 호스트에서 서비스와 같은 오프셋으로 돌고,
+# 함대 단계(ADR-067)는 여기서 찍은 운영자 토큰으로 ops-api 를 부른다.
+PEAK ?= peak-day
+
+peak: env
+	@PEAK=$(PEAK) bash tools/sim/peak.sh
 
 # -----------------------------------------------------------------------------
 # 카오스 (DESIGN.md §13 「카오스」, tools/chaos). 끝에 검증 표 V1–V7 을 낸다 — 카오스 종류와 무관하게 같은 표이고 7-4 peak-day 도

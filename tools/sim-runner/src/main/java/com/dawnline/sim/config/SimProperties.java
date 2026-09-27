@@ -20,16 +20,19 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param baseUrl          order-service 주소
  * @param requestTimeoutMs 요청 하나의 타임아웃(ms)
  * @param scenarios        이름 → 시나리오
+ * @param ops              ops-api — 함대 단계가 운영자의 토큰으로 부른다(ADR-067)
  */
 @ConfigurationProperties(prefix = "dawnline.sim")
 public record SimProperties(
         @DefaultValue("smoke") String scenario,
         @DefaultValue("http://localhost:8081") String baseUrl,
         @DefaultValue("5000") long requestTimeoutMs,
-        @DefaultValue Map<String, Scenario> scenarios) {
+        @DefaultValue Map<String, Scenario> scenarios,
+        @DefaultValue Ops ops) {
 
     public SimProperties {
         scenarios = scenarios == null ? Map.of() : Map.copyOf(scenarios);
+        ops = ops == null ? new Ops("http://localhost:8085", "", 60_000, 900, 120, 5) : ops;
         if (requestTimeoutMs < 1) {
             throw new IllegalArgumentException("dawnline.sim.request-timeout-ms 는 1 이상이어야 합니다");
         }
@@ -76,6 +79,8 @@ public record SimProperties(
      *                      그래야 {@code smoke} 가 브로커 없이 돈다
      * @param startAt       창의 시작 — 유효 시각(주입 시계)의 KST {@code HH:mm}. 있으면 그 시각까지 기다린 뒤 보낸다
      *                      (부록 A 「창은 하나다」, ADR-066). 없으면 곧바로 보낸다
+     * @param fleet         함대 단계 — {@code feasible}(80% 기준이 낸 만큼 증차) · {@code as-is}(재고 리포트하되 더하지 않는다).
+     *                      없으면 함대 단계가 없다. 창({@code start-at})이 있어야 한다 — 증차는 창의 DAWN 웨이브에 한다(ADR-067)
      */
     public record Scenario(
             @DefaultValue("200") int orders,
@@ -85,7 +90,8 @@ public record SimProperties(
             @DefaultValue("0.25") double coldRatio,
             @DefaultValue Map<String, Integer> tierWeights,
             @Nullable Driver driver,
-            @Nullable String startAt) {
+            @Nullable String startAt,
+            @Nullable Fleet fleet) {
 
         public Scenario {
             if (orders < 1) {
@@ -100,6 +106,13 @@ public record SimProperties(
                 } catch (DateTimeParseException e) {
                     throw new IllegalArgumentException("start-at 은 HH:mm 이어야 합니다: " + startAt, e);
                 }
+            }
+            if (fleet != null && startAt == null) {
+                throw new IllegalArgumentException("fleet 은 창(start-at)이 있는 시나리오에만 둔다 — 증차는 창의 DAWN 웨이브에 한다");
+            }
+            if (driver != null && driver.routes() == null && fleet == null) {
+                throw new IllegalArgumentException(
+                        "driver.routes 가 없으면 계획이 수를 낸다 — 그 수를 읽는 함대 단계(fleet)가 있어야 한다");
             }
             if (customers < 1) {
                 throw new IllegalArgumentException("customers 는 1 이상이어야 합니다");
@@ -120,6 +133,14 @@ public record SimProperties(
             tierWeights = Map.copyOf(tierWeights);
         }
 
+        /** 함대 단계 (ADR-067). */
+        public enum Fleet {
+            /** 80% 기준(FleetFeasibility)이 낸 부족 대수만큼 증차한다 — {@code peak-day}. */
+            FEASIBLE,
+            /** 재고 리포트하되 더하지 않는다 — 「증차 없음」, {@code overload-day} 와 평일 셋. */
+            AS_IS
+        }
+
         /** @return 창의 시작(KST), 없으면 {@code null} */
         public @Nullable LocalTime windowStart() {
             return startAt == null ? null : LocalTime.parse(startAt);
@@ -132,7 +153,8 @@ public record SimProperties(
          * 주입이 같은 seed 에서 나와야 "이 시나리오" 하나가 재현된다 (불변규칙 12).
          *
          * @param routes                 기다릴 라우트 수. 이만큼 끝나야 성공이다 — 적게 온 것도
-         *                               실패다({@code DriverReport.isSuccess})
+         *                               실패다({@code DriverReport.isSuccess}). <strong>없으면 계획이 낸다</strong> —
+         *                               창의 웨이브들의 {@code route_count} 합(창 시나리오, ADR-067 결정 6)
          * @param speed                  배속. 시뮬레이션 초 ÷ 벽시계 초. 0 이하면 대기 없이 돈다.
          *                               <strong>at-risk 쿨다운 TTL 은 벽시계 5분</strong>이므로
          *                               배속이 크면 라우트당 at-risk 가 한 번만 보인다 —
@@ -148,7 +170,7 @@ public record SimProperties(
          *                               지연 원인이고, 첫 도착 스캔 전에 이미 알 수 있는 위험이다
          */
         public record Driver(
-                @DefaultValue("1") int routes,
+                @Nullable Integer routes,
                 @DefaultValue("600") double speed,
                 @DefaultValue("300") long timeoutSeconds,
                 @DefaultValue("30") long scanRetrySeconds,
@@ -159,7 +181,7 @@ public record SimProperties(
                 @DefaultValue("0") long departureDelaySeconds) {
 
             public Driver {
-                if (routes < 1) {
+                if (routes != null && routes < 1) {
                     throw new IllegalArgumentException("driver.routes 는 1 이상이어야 합니다");
                 }
                 if (timeoutSeconds < 1) {
@@ -183,6 +205,37 @@ public record SimProperties(
                 if (!(value >= 0.0 && value <= 1.0)) {
                     throw new IllegalArgumentException("%s 는 0.0 ~ 1.0 이어야 합니다: %s".formatted(name, value));
                 }
+            }
+        }
+    }
+
+    /**
+     * ops-api — 함대 단계가 부르는 곳 (ADR-067). sim-runner 는 dispatch 에 직접 닿지 않는다: 증차는 운영자의 커맨드이고 감사 행이
+     * 남아야 한다(ADR-055 가 닫은 경로를 다시 열지 않는다).
+     *
+     * @param baseUrl               ops-api 주소
+     * @param token                 운영자 JWT({@code OPS_OPERATOR} — {@code make token ROLE=OPS_OPERATOR}). 비었으면 함대 단계가
+     *                              시작하지 않고 실패한다 — 전제를 볼 수 없다
+     * @param requestTimeoutMs      요청 하나의 타임아웃(ms). 함대 판정은 웨이브 후보 전부를 통합한다 — ops-api 의 dispatch 읽기
+     *                              타임아웃(60초)과 같게 둔다
+     * @param planTimeoutSeconds    창의 웨이브가 전부 계획되기를 기다리는 상한(초)
+     * @param releaseTimeoutSeconds 비활성화의 409({@code vehicle-in-service})를 다시 시도하는 상한(초) — 기사가 끝낸 stop 을
+     *                              dispatch 가 소비하기까지의 지연
+     * @param pollSeconds           웨이브 상태 · 비활성화 재시도의 간격(초)
+     */
+    public record Ops(
+            @DefaultValue("http://localhost:8085") String baseUrl,
+            @DefaultValue("") String token,
+            @DefaultValue("60000") long requestTimeoutMs,
+            @DefaultValue("900") long planTimeoutSeconds,
+            @DefaultValue("120") long releaseTimeoutSeconds,
+            @DefaultValue("5") long pollSeconds) {
+
+        public Ops {
+            baseUrl = Objects.requireNonNull(baseUrl, "ops.base-url");
+            token = token == null ? "" : token.strip();
+            if (requestTimeoutMs < 1 || planTimeoutSeconds < 1 || releaseTimeoutSeconds < 0 || pollSeconds < 1) {
+                throw new IllegalArgumentException("dawnline.sim.ops 의 시간 값이 올바르지 않다");
             }
         }
     }

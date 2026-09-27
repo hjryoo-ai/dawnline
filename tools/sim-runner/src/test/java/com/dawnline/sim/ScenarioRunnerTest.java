@@ -12,14 +12,17 @@ import com.dawnline.sim.driver.DriverTally;
 import com.dawnline.sim.driver.Jitter;
 import com.dawnline.sim.driver.RouteFeed;
 import com.dawnline.sim.driver.ScanClient;
+import com.dawnline.sim.fleet.FakeOpsClient;
+import com.dawnline.sim.fleet.FleetReport;
+import com.dawnline.sim.fleet.PeakFleet;
 import com.dawnline.sim.order.OrderClient;
 import com.dawnline.sim.order.ScenarioReport;
 import com.dawnline.sim.order.SmokeScenario;
 import com.dawnline.sim.order.WindowStart;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -34,13 +37,13 @@ import org.junit.jupiter.api.Test;
 class ScenarioRunnerTest {
 
     private static final SimProperties.Scenario SMOKE = new SimProperties.Scenario(
-            5, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1), null, null);
+            5, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1), null, null, null);
 
     /** 기사까지 도는 시나리오. 기다릴 라우트는 0 이라 대기 없이 끝난다. */
     private static final SimProperties.Scenario WITH_DRIVER = new SimProperties.Scenario(
             3, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1),
             new SimProperties.Scenario.Driver(1, 0.0, 1, 0, "http://localhost:8084",
-                    0.0, 0.0, 0.0, 0), null);
+                    0.0, 0.0, 0.0, 0), null, null);
 
     private static final LongSupplier FROZEN_CLOCK = () -> 1_000_000_000L;
 
@@ -48,14 +51,29 @@ class ScenarioRunnerTest {
     private static final Clock AT_2240_KST = Clock.fixed(Instant.parse("2026-09-27T13:40:00Z"), ZoneOffset.UTC);
 
     private static SimProperties.Scenario windowAt(String startAt) {
-        return new SimProperties.Scenario(5, 1000, 20260927L, 10, 0.25, Map.of("DAWN", 1), null, startAt);
+        return new SimProperties.Scenario(5, 1000, 20260927L, 10, 0.25, Map.of("DAWN", 1), null, startAt, null);
     }
 
     private static SimProperties properties(String selected) {
+        return properties(selected, "");
+    }
+
+    /** 함대 단계가 있는 창 시나리오 둘 — 증차(feasible)와 증차 없음(as-is). 기사는 없다(라우트 수는 계획이 낸다). */
+    private static SimProperties properties(String selected, String token) {
         return new SimProperties(selected, "http://localhost:8081", 5000,
                 Map.of("smoke", SMOKE, "with-driver", WITH_DRIVER,
-                        "window-ahead", windowAt("22:58"), "window-missed", windowAt("22:30")));
+                        "window-ahead", windowAt("22:58"), "window-missed", windowAt("22:30"),
+                        "peak", fleetAt(SimProperties.Scenario.Fleet.FEASIBLE),
+                        "overload", fleetAt(SimProperties.Scenario.Fleet.AS_IS)),
+                new SimProperties.Ops("http://localhost:8085", token, 60_000, 60, 20, 5));
     }
+
+    private static SimProperties.Scenario fleetAt(SimProperties.Scenario.Fleet fleet) {
+        return new SimProperties.Scenario(5, 1000, 20260928L, 10, 0.25, Map.of("DAWN", 1), null, "22:58", fleet);
+    }
+
+    /** 이 테스트의 ops-api — 테스트마다 새로. */
+    private FakeOpsClient ops = new FakeOpsClient();
 
     /** 켜졌는지를 기억하는 피드. 순서를 보는 테스트가 쓴다. */
     private static final class RecordingFeed implements RouteFeed {
@@ -82,15 +100,97 @@ class ScenarioRunnerTest {
         return new DriverScenario(feed, fleet, tally, 0, Duration.ofSeconds(1));
     }
 
-    private static ScenarioRunner runner(SimProperties properties, OrderClient client) {
+    private ScenarioRunner runner(SimProperties properties, OrderClient client) {
         return runner(properties, client, RouteFeed.NONE);
     }
 
-    private static ScenarioRunner runner(SimProperties properties, OrderClient client, RouteFeed feed) {
+    private ScenarioRunner runner(SimProperties properties, OrderClient client, RouteFeed feed) {
         SmokeScenario smoke = new SmokeScenario(client, nanos -> { }, FROZEN_CLOCK);
         return new ScenarioRunner(properties, smoke, driverScenario(feed),
                 seed -> RandomGeneratorFactory.of("L64X128MixRandom").create(seed),
-                () -> "run-fixed", new WindowStart(AT_2240_KST, nanos -> { }));
+                () -> "run-fixed", new WindowStart(AT_2240_KST, nanos -> { }),
+                new PeakFleet(ops, AT_2240_KST, nanos -> { }, Duration.ofSeconds(5), Duration.ofSeconds(60),
+                        Duration.ofSeconds(20), () -> "T3ST01"));
+    }
+
+    // --- 함대 단계 (ADR-067) ---------------------------------------------------------------------------------
+
+    /** 창(22:58) 뒤의 DAWN 컷오프 — 2026-09-28 00:00 KST. */
+    private static final Instant CUTOFF = Instant.parse("2026-09-27T15:00:00Z");
+
+    @Test
+    void 함대_단계가_있는데_운영자_토큰이_없으면_보내지_않고_실패한다() throws InterruptedException {
+        List<String> keys = new ArrayList<>();
+        ScenarioRunner runner = runner(properties("peak"), (order, key) -> {
+            keys.add(key);
+            return OrderClient.Response.of(201, null);
+        });
+
+        runner.run();
+
+        assertThat(runner.getExitCode()).isEqualTo(ScenarioRunner.FAILURE_EXIT_CODE);
+        assertThat(keys).isEmpty();
+        assertThat(ops.campsCalls).as("전제를 볼 수 없다 — 부르지도 않는다").isZero();
+    }
+
+    @Test
+    void 앞_실행이_남긴_활성_peak_sim_이_있으면_창을_기다리지_않고_실패한다() throws InterruptedException {
+        ops.vehicles.put(FakeOpsClient.CAMP, List.of(FakeOpsClient.van("peak-sim", true)));
+        List<String> keys = new ArrayList<>();
+        ScenarioRunner runner = runner(properties("overload", "jwt"), (order, key) -> {
+            keys.add(key);
+            return OrderClient.Response.of(201, null);
+        });
+
+        runner.run();
+
+        assertThat(runner.getExitCode()).isEqualTo(ScenarioRunner.FAILURE_EXIT_CODE);
+        assertThat(keys).as("남은 차량이 섞인 overload-day 는 과부하가 아니다 — 보내지 않는다").isEmpty();
+        assertThat(runner.lastFleetReport()).isNotNull();
+        assertThat(runner.lastFleetReport().failures()).singleElement().asString().contains("전제(시작 전)");
+    }
+
+    @Test
+    void 창이_끝나면_증차하고_계획을_기다려_비활성화한_뒤_리포트_머리를_낸다() throws InterruptedException {
+        ops.waveAnswers.add(List.of(FakeOpsClient.wave(CUTOFF, "OPEN", null, null)));
+        ops.waveAnswers.add(List.of(FakeOpsClient.wave(CUTOFF, "PLANNED", 3, CUTOFF.plusSeconds(90))));
+        ops.feasibility = waveId -> FakeOpsClient.assessment(
+                FakeOpsClient.line("일반", "SHORTFALL", 2, FakeOpsClient.van("seed", true)));
+        ScenarioRunner runner = runner(properties("peak", "jwt"), (order, key) -> OrderClient.Response.of(201, null));
+
+        runner.run();
+
+        assertThat(runner.getExitCode()).isZero();
+        assertThat(ops.addedBodies).hasSize(2);
+        assertThat(ops.deactivateCalls).hasSize(2);
+        FleetReport report = runner.lastFleetReport();
+        assertThat(report).isNotNull();
+        assertThat(report.isSuccess()).isTrue();
+        assertThat(report.waves()).singleElement().satisfies(wave -> {
+            assertThat(wave.added()).isEqualTo(2);
+            assertThat(wave.closedAt()).isEqualTo(CUTOFF.plusSeconds(90));
+        });
+    }
+
+    @Test
+    void 창_뒤의_DAWN_컷오프는_다음_날_00시_KST_다() {
+        assertThat(ScenarioRunner.dawnCutoffAfter(Instant.parse("2026-09-27T13:58:00Z"))).isEqualTo(CUTOFF);
+    }
+
+    @Test
+    void 시간_예산을_넘겨도_더한_차량은_비활성화하고_실패로_끝낸다() throws InterruptedException {
+        // 마감이 22:00 KST — 증차(22:40 KST, 이 테스트의 시계)보다 앞이다.
+        ops.waveAnswers.add(List.of(FakeOpsClient.wave(CUTOFF, "OPEN", null, null)));
+        ops.waveAnswers.add(List.of(FakeOpsClient.wave(CUTOFF, "PLANNED", 3, Instant.parse("2026-09-27T13:00:00Z"))));
+        ops.feasibility = waveId -> FakeOpsClient.assessment(
+                FakeOpsClient.line("일반", "SHORTFALL", 1, FakeOpsClient.van("seed", true)));
+        ScenarioRunner runner = runner(properties("peak", "jwt"), (order, key) -> OrderClient.Response.of(201, null));
+
+        runner.run();
+
+        assertThat(runner.getExitCode()).isEqualTo(ScenarioRunner.FAILURE_EXIT_CODE);
+        assertThat(ops.deactivateCalls).as("정리는 실패 뒤에도 돈다 — 남으면 다음 실행에 섞인다").hasSize(1);
+        assertThat(runner.lastFleetReport().failures()).singleElement().asString().contains("시간 예산");
     }
 
     @Test

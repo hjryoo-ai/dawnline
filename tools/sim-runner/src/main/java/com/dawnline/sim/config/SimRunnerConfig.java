@@ -15,6 +15,9 @@ import com.dawnline.sim.driver.RouteAssignedListener;
 import com.dawnline.sim.driver.RouteFeed;
 import com.dawnline.sim.driver.ScanClient;
 import com.dawnline.sim.driver.SeededJitter;
+import com.dawnline.sim.fleet.HttpOpsClient;
+import com.dawnline.sim.fleet.OpsClient;
+import com.dawnline.sim.fleet.PeakFleet;
 import com.dawnline.sim.order.HttpOrderClient;
 import com.dawnline.sim.order.OrderClient;
 import com.dawnline.sim.order.Sleeper;
@@ -174,7 +177,7 @@ public class SimRunnerConfig {
     public DriverFleet driverFleet(SimProperties properties, DriverSimulator simulator, ScanClient scans,
             DriverTally tally) {
         Driver driver = driverOf(properties);
-        int routes = driver == null ? 0 : driver.routes();
+        int routes = driver == null || driver.routes() == null ? 0 : driver.routes();
         long retryNanos = driver == null ? 0L : driver.scanRetrySeconds() * NANOS_PER_SECOND;
         double speed = driver == null ? 0.0 : driver.speed();
         return new DriverFleet(routes, simulator, scans, () -> speed, Sleeper.REAL, System::nanoTime,
@@ -226,8 +229,46 @@ public class SimRunnerConfig {
             DriverTally tally) {
         Driver driver = driverOf(properties);
         return new DriverScenario(feed, fleet, tally,
-                driver == null ? 0 : driver.routes(),
+                driver == null || driver.routes() == null ? 0 : driver.routes(),
                 Duration.ofSeconds(driver == null ? 1 : driver.timeoutSeconds()));
+    }
+
+    // -------------------------------------------------------------------------
+    // 함대 단계 (ADR-067)
+    //
+    // 기사와 같은 이유로 빈은 언제나 만든다 — 함대가 없는 시나리오에서는 부르지 않는다. 토큰이 비었는지는 실행 시점에
+    // ScenarioRunner 가 말한다(기동 실패로 나타나면 그 안내가 스택 트레이스 아래로 묻힌다).
+    // -------------------------------------------------------------------------
+
+    /**
+     * ops-api 클라이언트 — 운영자의 토큰으로 부른다.
+     *
+     * @param properties 설정
+     */
+    @Bean
+    public OpsClient opsClient(SimProperties properties) {
+        HttpClient http = HttpClient.newBuilder()
+                .connectTimeout(CONNECT_TIMEOUT)
+                .build();
+        SimProperties.Ops ops = properties.ops();
+        return new HttpOpsClient(http, EventJson.standardMapper(), ops.baseUrl(), ops.token(),
+                Duration.ofMillis(ops.requestTimeoutMs()));
+    }
+
+    /**
+     * 성수기 증차.
+     *
+     * @param properties 설정
+     * @param ops        ops-api
+     * @param clock      주입 시계 — 서비스들과 같은 오프셋이라 증차 완료 시각을 {@code closed_at} 과 한 축에서 비교한다
+     */
+    @Bean
+    public PeakFleet peakFleet(SimProperties properties, OpsClient ops, Clock clock) {
+        SimProperties.Ops settings = properties.ops();
+        // 코드는 전역 UNIQUE 이고 앞 실행의 비활성 차량이 남는다 — 실행마다 다른 표지(UUIDv7 의 끝 6자, 무작위 부분).
+        return new PeakFleet(ops, clock, Sleeper.REAL, Duration.ofSeconds(settings.pollSeconds()),
+                Duration.ofSeconds(settings.planTimeoutSeconds()), Duration.ofSeconds(settings.releaseTimeoutSeconds()),
+                () -> UUID.randomUUID().toString().substring(30).toUpperCase(java.util.Locale.ROOT));
     }
 
     /** 고른 시나리오의 기사 설정. 없으면 {@code null}. */

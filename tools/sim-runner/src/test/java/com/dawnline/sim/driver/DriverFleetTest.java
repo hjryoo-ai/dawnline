@@ -104,6 +104,26 @@ class DriverFleetTest {
         }
     }
 
+    @Test
+    void 창의_기다림은_그_웨이브의_라우트만_센다() throws InterruptedException {
+        // 창 시나리오는 계획이 낸 수를 기다린다(ADR-067 결정 6). 다른 웨이브의 라우트가 섞이면 수가 먼저 차고,
+        // 기다린 것이 아닌 것이 끝났다고 말한다.
+        UUID window = UUID.fromString("0199a000-0000-7000-8000-0000000000a1");
+        UUID other = UUID.fromString("0199a000-0000-7000-8000-0000000000a2");
+        try (DriverFleet fleet = fleet(0)) {
+            fleet.assign(new AssignedRoute(OTHER_ROUTE, 1, DRIVER, new AssignedRoute.Summary(DEPARTURE),
+                    List.of(stop(1, 20, 5, null)), other));
+
+            assertThat(fleet.awaitRoutes(java.util.Set.of(window), 1, Duration.ofMillis(300)))
+                    .as("다른 웨이브의 라우트는 창의 수가 아니다").isFalse();
+
+            fleet.assign(new AssignedRoute(DriverFixtures.ROUTE, 1, DRIVER, new AssignedRoute.Summary(DEPARTURE),
+                    List.of(stop(1, 20, 5, null)), window));
+
+            assertThat(fleet.awaitRoutes(java.util.Set.of(window), 1, Duration.ofSeconds(10))).isTrue();
+        }
+    }
+
     private static AssignedRoute revision(int revision) {
         return new AssignedRoute(DriverFixtures.ROUTE, revision, DRIVER,
                 new AssignedRoute.Summary(DEPARTURE), List.of(stop(1, 20, 5, null)));

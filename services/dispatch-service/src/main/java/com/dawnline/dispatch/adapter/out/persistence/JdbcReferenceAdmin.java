@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.ObjectMapper;
@@ -20,6 +21,11 @@ import tools.jackson.databind.ObjectMapper;
 public class JdbcReferenceAdmin implements ReferenceAdmin {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /** {@link #vehicleView} 가 읽는 순서. */
+    private static final String VEHICLE_COLUMNS = """
+            id, camp_id, code, type, max_weight_g, max_volume_cm3, is_cold, allows_hazmat, fixed_cost_krw,
+            cost_per_km_krw, cost_per_min_krw, shift_start, shift_end, active, source""";
 
     private final EntityManager entityManager;
     private final Clock clock;
@@ -78,21 +84,53 @@ public class JdbcReferenceAdmin implements ReferenceAdmin {
     @Override
     @SuppressWarnings("unchecked")
     public List<ResourceViews.VehicleView> listVehicles(UUID campId) {
-        List<Object[]> rows = entityManager.createNativeQuery("""
-                SELECT id, camp_id, code, type, max_weight_g, max_volume_cm3, is_cold,
-                       allows_hazmat, fixed_cost_krw, cost_per_km_krw, cost_per_min_krw,
-                       shift_start, shift_end, active
-                  FROM vehicles WHERE camp_id = ? ORDER BY code
-                """).setParameter(1, campId).getResultList();
+        List<Object[]> rows = entityManager.createNativeQuery(
+                "SELECT " + VEHICLE_COLUMNS + " FROM vehicles WHERE camp_id = ? ORDER BY code")
+                .setParameter(1, campId).getResultList();
         List<ResourceViews.VehicleView> views = new ArrayList<>(rows.size());
         for (Object[] row : rows) {
-            views.add(new ResourceViews.VehicleView((UUID) row[0], (UUID) row[1], (String) row[2],
-                    (String) row[3], ((Number) row[4]).intValue(), ((Number) row[5]).intValue(),
-                    (Boolean) row[6], (Boolean) row[7], ((Number) row[8]).intValue(),
-                    ((Number) row[9]).intValue(), ((Number) row[10]).intValue(),
-                    localTime(row[11]), localTime(row[12]), (Boolean) row[13]));
+            views.add(vehicleView(row));
         }
         return List.copyOf(views);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<ResourceViews.VehicleView> lockVehicle(UUID vehicleId) {
+        List<Object[]> rows = entityManager.createNativeQuery(
+                "SELECT " + VEHICLE_COLUMNS + " FROM vehicles WHERE id = ? FOR UPDATE")
+                .setParameter(1, vehicleId).getResultList();
+        return rows.isEmpty() ? Optional.empty() : Optional.of(vehicleView(rows.getFirst()));
+    }
+
+    @Override
+    public long unfinishedStops(UUID vehicleId) {
+        return ((Number) entityManager.createNativeQuery("""
+                SELECT count(*) FROM routes r JOIN route_stops s ON s.route_id = r.id
+                 WHERE r.vehicle_id = ? AND""" + " " + JdbcDispatchRetention.UNFINISHED_STOP)
+                .setParameter(1, vehicleId).getSingleResult()).longValue();
+    }
+
+    @Override
+    public void deactivate(UUID vehicleId) {
+        entityManager.createNativeQuery("UPDATE vehicles SET active = FALSE WHERE id = ?")
+                .setParameter(1, vehicleId).executeUpdate();
+    }
+
+    private static ResourceViews.VehicleView vehicleView(Object[] row) {
+        return new ResourceViews.VehicleView((UUID) row[0], (UUID) row[1], (String) row[2],
+                (String) row[3], ((Number) row[4]).intValue(), ((Number) row[5]).intValue(),
+                (Boolean) row[6], (Boolean) row[7], ((Number) row[8]).intValue(),
+                ((Number) row[9]).intValue(), ((Number) row[10]).intValue(),
+                localTime(row[11]), localTime(row[12]), (Boolean) row[13], (String) row[14]);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<UUID> vehicleIdByCode(String code) {
+        List<UUID> found = entityManager.createNativeQuery("SELECT id FROM vehicles WHERE code = ?")
+                .setParameter(1, code).getResultList();
+        return found.isEmpty() ? Optional.empty() : Optional.of(found.getFirst());
     }
 
     @Override
@@ -101,8 +139,8 @@ public class JdbcReferenceAdmin implements ReferenceAdmin {
         entityManager.createNativeQuery("""
                 INSERT INTO vehicles (id, camp_id, code, type, max_weight_g, max_volume_cm3,
                                       is_cold, allows_hazmat, fixed_cost_krw, cost_per_km_krw,
-                                      cost_per_min_krw, shift_start, shift_end, active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+                                      cost_per_min_krw, shift_start, shift_end, active, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)
                 """)
                 .setParameter(1, id).setParameter(2, request.campId())
                 .setParameter(3, request.code()).setParameter(4, request.type())
@@ -112,6 +150,7 @@ public class JdbcReferenceAdmin implements ReferenceAdmin {
                 .setParameter(11, request.costPerMinKrw())
                 .setParameter(12, Time.valueOf(request.shiftStart()))
                 .setParameter(13, Time.valueOf(request.shiftEnd()))
+                .setParameter(14, request.effectiveSource())
                 .executeUpdate();
         return id;
     }

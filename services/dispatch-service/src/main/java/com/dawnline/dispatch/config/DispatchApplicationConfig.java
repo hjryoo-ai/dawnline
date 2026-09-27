@@ -24,11 +24,13 @@ import com.dawnline.dispatch.application.DispatchRetentionCleaner;
 import com.dawnline.dispatch.application.LoadCandidateService;
 import com.dawnline.dispatch.domain.CandidatePriority;
 import com.dawnline.dispatch.domain.PlanModeSelector;
+import com.dawnline.dispatch.application.AssessFleetService;
 import com.dawnline.dispatch.application.ManageResourcesService;
 import com.dawnline.dispatch.application.ReassignStopService;
 import com.dawnline.dispatch.application.RunPlanService;
 import com.dawnline.dispatch.application.port.in.CancelOrderUseCase;
 import com.dawnline.dispatch.application.port.in.LoadCandidateUseCase;
+import com.dawnline.dispatch.application.port.in.AssessFleetUseCase;
 import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
 import com.dawnline.dispatch.application.port.in.ReassignStopUseCase;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
@@ -234,6 +236,21 @@ public class DispatchApplicationConfig {
     @Bean
     public ManageResourcesUseCase manageResourcesUseCase(ReferenceAdmin admin) {
         return new ManageResourcesService(admin);
+    }
+
+    /**
+     * 함대 실현 가능성 (§5.3 「함대」, ADR-067). 계획과 같은 질의 · 같은 함대를 읽는다.
+     *
+     * @param candidates 후보
+     * @param plans      계획
+     * @param reference  함대 · 룰
+     * @param admin      차량 행
+     * @param clock      지금 — 근무창을 붙이는 기준
+     */
+    @Bean
+    public AssessFleetUseCase assessFleetUseCase(DispatchCandidateRepository candidates, RoutePlanRepository plans,
+            JdbcReferenceData reference, ReferenceAdmin admin, Clock clock) {
+        return new AssessFleetService(candidates, plans, reference, reference, admin, clock);
     }
 
     /**

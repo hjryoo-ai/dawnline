@@ -70,6 +70,31 @@ class OpsCommandTest {
     }
 
     @Test
+    void 차량_등록은_캠프를_가리키고_본문_전부를_싣는다() {
+        OpsCommand add = new OpsCommand.AddVehicle(A, "PS-0001", "VAN", 400_000, 1_200_000, true, false, 45_000, 600,
+                250, java.time.LocalTime.of(23, 0), java.time.LocalTime.of(8, 0), "peak-sim");
+        OpsCommand bare = new OpsCommand.AddVehicle(A, "V-9", "VAN", 1, 1, false, false, 0, 0, 0,
+                java.time.LocalTime.of(9, 0), java.time.LocalTime.of(18, 0), null);
+
+        assertThat(add.action()).isEqualTo("ADD_VEHICLE");
+        assertThat(add.targetType()).as("차량 id 는 코어가 만든다 — 감사 행은 위임 전에 쓴다").isEqualTo("CAMP");
+        assertThat(add.targetId()).isEqualTo(A);
+        assertThat(add.arguments()).containsEntry("source", "peak-sim").containsEntry("shiftStart", "23:00")
+                .containsEntry("cold", true).hasSize(13);
+        assertThat(bare.arguments()).as("주지 않은 출처는 null 로 적지 않는다").doesNotContainKey("source");
+    }
+
+    @Test
+    void 차량_비활성화는_차량을_가리킨다() {
+        OpsCommand deactivate = new OpsCommand.DeactivateVehicle(B);
+
+        assertThat(deactivate.action()).isEqualTo("DEACTIVATE_VEHICLE");
+        assertThat(deactivate.targetType()).isEqualTo("VEHICLE");
+        assertThat(deactivate.targetId()).isEqualTo(B);
+        assertThat(deactivate.arguments()).containsExactly(java.util.Map.entry("vehicleId", B));
+    }
+
+    @Test
     void 경로의_service_는_넷_중_하나이고_그_밖은_없다() {
         assertThat(CoreService.fromPath("fulfillment")).contains(CoreService.FULFILLMENT);
         assertThat(CoreService.fromPath("ops-api")).as("ops-api 의 outbox 관리 경로는 꺼져 있다").isEmpty();

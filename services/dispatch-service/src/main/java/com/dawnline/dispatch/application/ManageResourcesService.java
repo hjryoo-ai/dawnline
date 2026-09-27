@@ -1,8 +1,10 @@
 package com.dawnline.dispatch.application;
 
+import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
 import com.dawnline.dispatch.application.port.in.ResourceViews;
 import com.dawnline.dispatch.application.port.out.ReferenceAdmin;
+import com.dawnline.dispatch.domain.DispatchErrorCode;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -47,10 +49,41 @@ public class ManageResourcesService implements ManageResourcesUseCase {
         return admin.listVehicles(campId);
     }
 
+    /**
+     * 같은 코드가 있으면 409 {@code vehicle-code-taken} — UNIQUE 제약에 맡기면 500 이다. 동시에 온 둘은 제약이 막는다(드물다 —
+     * 운영자 커맨드다).
+     */
     @Override
     @Transactional
     public UUID createVehicle(ResourceViews.NewVehicle request) {
+        admin.vehicleIdByCode(request.code()).ifPresent(existing -> {
+            throw DispatchErrorCode.vehicleCodeTaken(request.code(), existing);
+        });
         return admin.createVehicle(request);
+    }
+
+    /**
+     * 잠그고 · 세고 · 쓴다 — 한 트랜잭션. 판정은 여기 있다: 「끝나지 않은 stop 이 있으면 빼지 않는다」는 운영 규칙이지
+     * SQL 의 모양이 아니다(ADR-067 결정 5).
+     *
+     * <p>알고 두는 창 하나: 계획은 읽기 단계의 함대 스냅샷으로 계산하고 쓴다(ADR-064) — 그 사이에 비활성화된 차량에도
+     * 라우트가 생길 수 있다. 시뮬레이터는 창의 계획이 끝난 뒤에만 비활성화하므로 닿지 않는다. 운영에서 닿으면 이 판정이
+     * 다음 비활성화에서 그 라우트를 409 로 말한다.
+     */
+    @Override
+    @Transactional
+    public ResourceViews.VehicleView deactivateVehicle(UUID vehicleId) {
+        ResourceViews.VehicleView vehicle = admin.lockVehicle(vehicleId)
+                .orElseThrow(() -> NotFoundException.of("Vehicle", vehicleId.toString()));
+        if (!vehicle.active()) {
+            return vehicle;
+        }
+        long unfinished = admin.unfinishedStops(vehicleId);
+        if (unfinished > 0) {
+            throw DispatchErrorCode.vehicleInService(vehicleId, unfinished);
+        }
+        admin.deactivate(vehicleId);
+        return admin.lockVehicle(vehicleId).orElseThrow();
     }
 
     @Override
