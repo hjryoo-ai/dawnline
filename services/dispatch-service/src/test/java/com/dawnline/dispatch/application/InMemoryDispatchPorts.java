@@ -439,6 +439,16 @@ final class InMemoryDispatchPorts {
         }
 
         @Override
+        public Optional<StopOfOrder> lockStopOf(UUID routeId, UUID orderId) {
+            boolean cancelled = candidates.findById(orderId)
+                    .map(candidate -> candidate.status() == CandidateStatus.CANCELLED).orElse(false);
+            return rows.getOrDefault(routeId, List.of()).stream()
+                    .filter(row -> row.orderIds.contains(orderId))
+                    .map(row -> new StopOfOrder(row.id, cancelled ? RouteStopStatus.CANCELLED : row.status))
+                    .findFirst();
+        }
+
+        @Override
         public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
             StopRow from = rows.values().stream().flatMap(List::stream)
                     .filter(row -> row.id.equals(fromStopId)).findFirst().orElseThrow();

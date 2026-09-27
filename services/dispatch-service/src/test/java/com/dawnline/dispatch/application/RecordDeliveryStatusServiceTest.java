@@ -101,6 +101,11 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
+        public Optional<StopOfOrder> lockStopOf(UUID routeId, UUID orderId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
             throw new UnsupportedOperationException();
         }

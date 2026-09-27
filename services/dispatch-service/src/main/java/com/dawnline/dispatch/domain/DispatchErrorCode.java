@@ -44,7 +44,16 @@ public enum DispatchErrorCode implements ErrorCode {
      * <p>제약에 맡기면 500 이고, ops-api 는 코어의 5xx 를 「적용됐는지 모름」({@code UNKNOWN})으로 접는다 — 타임아웃 뒤
      * 다시 누른 등록이 모름을 하나 더 만든다. 409 가 <strong>있는 차량의 id</strong> 를 말하면 다시 누르기가 곧 해소다(RB-07).
      */
-    VEHICLE_CODE_TAKEN("vehicle-code-taken", 409, "같은 코드의 차량이 이미 있습니다");
+    VEHICLE_CODE_TAKEN("vehicle-code-taken", 409, "같은 코드의 차량이 이미 있습니다"),
+
+    /**
+     * 옮기려는 주문의 stop 이 {@code PLANNED} 가 아니다 (DESIGN.md §5.3 「재배정은 {@code PLANNED} 인 것만 옮긴다」).
+     *
+     * <p>끝난 stop 을 옮기면 배송된 주문이 대상 라우트의 새 {@code PLANNED} stop 으로 되살아났다 — 이 코드가 생기기 전의
+     * 200 이다(§13 축 17). 취소된 주문도 같다. 본문의 {@code stopStatus} 가 지금 상태다 — 기사가 먼저 닿았으면
+     * 「늦었다」이고, 할 일은 다른 주문을 고르는 것이다.
+     */
+    STOP_NOT_PLANNED("stop-not-planned", 409, "계획 상태가 아닌 stop 은 옮길 수 없습니다");
 
     private final String code;
     private final int status;
@@ -107,6 +116,20 @@ public enum DispatchErrorCode implements ErrorCode {
     public static DomainException vehicleCodeTaken(String code, UUID vehicleId) {
         return new DomainException(VEHICLE_CODE_TAKEN, "코드 %s 의 차량이 이미 있습니다".formatted(code),
                 Map.of("code", code, "vehicleId", vehicleId.toString()));
+    }
+
+    /**
+     * 옮기려는 주문의 stop 이 {@code PLANNED} 가 아니다.
+     *
+     * @param routeId    옮기려던 라우트
+     * @param orderId    주문
+     * @param stopStatus 지금 상태 — 그 주문이 취소됐으면 {@code CANCELLED}
+     * @return {@link #STOP_NOT_PLANNED}
+     */
+    public static DomainException stopNotPlanned(UUID routeId, UUID orderId, RouteStopStatus stopStatus) {
+        return new DomainException(STOP_NOT_PLANNED,
+                "주문의 stop 이 %s 라 옮길 수 없습니다 — PLANNED 인 것만 옮깁니다".formatted(stopStatus),
+                Map.of("routeId", routeId.toString(), "orderId", orderId.toString(), "stopStatus", stopStatus.name()));
     }
 
     /**
