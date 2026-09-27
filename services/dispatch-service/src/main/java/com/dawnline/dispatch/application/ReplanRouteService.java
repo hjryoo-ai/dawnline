@@ -99,6 +99,15 @@ public class ReplanRouteService implements ReplanRouteUseCase {
             PlannedRouteRepository explanations, VehicleCatalog vehicles, RuleCatalog rules,
             DispatchEvents events, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
             Duration cooldown, Duration deviationTolerance) {
+        this(routes, plans, explanations, vehicles, rules, events, distance, metrics, clock, cooldown,
+                deviationTolerance, RelocateSearch.MAX_EVALUATIONS);
+    }
+
+    /** 평가 상한을 준 서비스 — 상한에 걸리는 두 갈래(truncated · searchTruncated)를 작은 픽스처로 보는 테스트가 쓴다. */
+    ReplanRouteService(RouteMutations routes, RoutePlanRepository plans,
+            PlannedRouteRepository explanations, VehicleCatalog vehicles, RuleCatalog rules,
+            DispatchEvents events, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
+            Duration cooldown, Duration deviationTolerance, int maxEvaluations) {
 
         this.routes = Objects.requireNonNull(routes, "routes");
         this.plans = Objects.requireNonNull(plans, "plans");
@@ -111,7 +120,7 @@ public class ReplanRouteService implements ReplanRouteUseCase {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.cooldown = Objects.requireNonNull(cooldown, "cooldown");
         this.deviationTolerance = Objects.requireNonNull(deviationTolerance, "deviationTolerance");
-        this.search = new RelocateSearch(distance, cost);
+        this.search = new RelocateSearch(distance, cost, maxEvaluations);
     }
 
     @Override
@@ -169,6 +178,12 @@ public class ReplanRouteService implements ReplanRouteUseCase {
 
         RelocateSearch.Outcome found = search.search(ruleSet, source, candidates);
         if (!found.moved()) {
+            if (found.truncated()) {
+                // 이득이 없는 것이 아니라 다 못 봤다 — 상한이 걸리는 규모라는 사실이 이 줄과 카운터에 남는다(§6.8).
+                log.info("평가 상한에 걸려 이동을 찾지 못했다(다 못 봤다). routeId={}, 후보 라우트 {}대",
+                        command.routeId(), candidates.size());
+                return Outcome.TRUNCATED;
+            }
             log.debug("옮겨도 총비용이 줄지 않는다. routeId={}", command.routeId());
             return Outcome.NO_GAIN;
         }
@@ -263,7 +278,7 @@ public class ReplanRouteService implements ReplanRouteUseCase {
                     routeId -> routes.findHeader(routeId).orElseThrow().vehicleId());
             move.orderIds().forEach(orderId -> reasons.add(Explanation.relocated(orderId,
                     fleet.get(vehicleId).id(), move.fromRouteId(), move.toRouteId(),
-                    move.gainKrw())));
+                    move.gainKrw(), found.truncated())));
         }
 
         found.sequences().forEach((routeId, stops) ->

@@ -76,7 +76,16 @@ public interface ReplanRouteUseCase {
         NO_CANDIDATE,
 
         /** 옮겨도 <strong>두 라우트 총비용</strong>이 줄지 않는다 (§6.1 목적함수 그대로). */
-        NO_GAIN;
+        NO_GAIN,
+
+        /**
+         * 평가 상한에 걸려 이동을 하나도 찾지 못했다 — <strong>다 못 봤다</strong> (§6.8, 7-0 D4).
+         *
+         * <p>{@link #NO_GAIN} 과 따로 있는 이유는 {@link #NO_ANCHOR} 와 같다: 「다 봤는데 없다」와 「다 못 봤다」는 다른 말이고,
+         * 접으면 상한이 걸리는 규모(peak)에서 재계획이 무엇을 못 했는지가 사라진다. 이동을 찾았는데 걸린 것은 {@link #APPLIED}
+         * 이고 설명 행이 {@code searchTruncated} 를 싣는다.
+         */
+        TRUNCATED;
 
         /** 메트릭 라벨 값 — {@code NO_ANCHOR} → {@code no-anchor}. */
         public String label() {

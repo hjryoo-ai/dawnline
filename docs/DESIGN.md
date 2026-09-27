@@ -2324,17 +2324,24 @@ stop 마다 살아 있는 상태를 이미 돌려주므로 위임 조회도 그 
 라우트가 첫 stop 을 받는 순간 그 비용이 총합에 **저절로** 나타난다.
 
 **탐색에는 상한이 있다.** 한 번의 재계획이 옮기는 stop 수와 평가 횟수에 상수 상한을 둔다 —
-「대규모 재편 금지」가 성능의 문장이기도 하기 때문이다. 상한에 닿는지는 [ADR-048] 재검토 지점 3 이다.
+「대규모 재편 금지」가 성능의 문장이기도 하기 때문이다. 상한에 닿는지는 [ADR-048] 재검토 지점 5 이다.
+**평가 상한에 닿은 탐색은 「이득 없음」이 아니다** (2026-09-27, 7-4a — 7-0 D4). 평가 상한(2,000회)에 걸려 이동을 하나도
+못 찾으면 `truncated` 로 센다 — `no-gain` 으로 접으면 「다 봤는데 없다」와 「다 못 봤다」가 한 값이 된다(상한이 있는 조회로
+부재를 결론 내지 않는다, §13 축 14). 이동을 찾았는데 상한에 걸렸으면 `applied` 로 두고 **그 설명 행에 `searchTruncated: true`**
+— 「왜 이 이동인가」에 「더 좋은 이동을 못 본 채 고른 것」이 붙어야 §6.3 의 설명이 정직하다. 「걸렸다」는 **그 라운드에 평가하지
+못한 (stop, 라우트) 짝이 남았다**는 뜻이다: 마지막 짝에서 정확히 상한에 닿았고 다음 라운드가 없으면(이동 5개를 채웠거나 국소
+최적) 걸린 것이 아니다. 이동 상한(5개)에 닿는 것은 잘림이 아니라 설계된 멈춤이다(대규모 재편 금지). 메트릭은 늘리지 않는다 —
+라벨 값 하나다.
 
 **결과는 outcome 으로 갈린다 — 실패해도 DLQ 로 보내지 않는다.** `dawnline_replan_total{outcome}`
-의 다섯 갈래는 `applied` · `cooldown` · `no-anchor` · `no-candidate` · `no-gain` 이다(§9.1).
+의 여섯 갈래는 `applied` · `cooldown` · `no-anchor` · `no-candidate` · `no-gain` · `truncated` 이다(§9.1).
 DLQ 로 보내면 <em>고칠 수 없는 것</em>이 재시도된다 — 「후보가 없다」는 재시도로 달라지지 않고,
 사람이 열어도 할 일이 없다. **`no-gain` 의 기준은 소프트 룰까지 포함한 두 라우트의 총비용**이다:
 지각 페널티가 줄어도 거리·시간이 더 늘면 옮기지 않는다(§6.1 목적함수 그대로).
 
 **`applied` 는 설명을 남긴다.** `plan_explanations` 에 `rule_name = 'AT_RISK_RELOCATE'`,
 `outcome = ASSIGNED`, `detail` 에 「어느 주문이 어느 라우트에서 어느 라우트로, Δ비용 얼마」를
-주문 한 건에 한 행씩. §6.3 이 룰을 데이터로 둔 이유가 「왜 이 주문이 이 차인가」에 답하기
+주문 한 건에 한 행씩 — 탐색이 평가 상한에 걸렸으면 `searchTruncated: true` 가 더 붙는다(위). §6.3 이 룰을 데이터로 둔 이유가 「왜 이 주문이 이 차인가」에 답하기
 위해서였고, **운영자가 그것을 가장 많이 묻는 자리가 재계획이다** — 기사에게서 전화가 오는
 자리이기 때문이다. 최초 계획에만 설명이 있으면 그 물음의 답은 「계획 때는 A 차였습니다」로 끝난다.
 
@@ -2870,7 +2877,7 @@ ADR-060 맥락 1) — §9.4 의 p95 알림이 읽을 것이 없었다.
 | `dawnline_scan_after_cancel_total` | counter | tracking, **dispatch** | 라벨 없음 — `CANCELLED` 인 shipment 에 도착해 **무시한** 기사 스캔 (§5.4). 기사가 취소를 못 받고 배송한 것이다. dispatch 의 `dawnline_cancel_too_late_total` 과 **한 쌍**이고 둘은 같은 경합 창의 양 끝이다 — 저쪽은 「배송된 주문에 취소가 왔다」, 이쪽은 「취소된 주문이 배송됐다」. camp 라벨을 붙이지 않는 이유는 `shipments` 에 칸이 없기 때문이다 — `dawnline_at_risk_total` 이 camp 를 갖게 되는 시점에 같이 붙인다. **dispatch 도 같은 이름으로 센다**(2026-09-22, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md)): `CANCELLED` 인 `route_stops` 행에 도착한 `delivery.status` 다. 자리는 `job` 으로 갈리고, **둘이 갈리는 것이 정보다** — 개정이 tracking 에 닿기 전에는 dispatch 쪽만 오른다. 저쪽이 「취소된 배송이 스캔됐다」이면 이쪽은 「계획에서 뺀 지점에 배송이 일어났다」이고, 뒤쪽은 다음 계획을 틀리게 할 수 있다 |
 | `dawnline_status_after_relocate_total` | counter | dispatch | 라벨 없음 — 이벤트가 말한 라우트가 아니라 **다른 라우트**의 stop 에 적용한 `delivery.status` ([ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 결정 2). 재계획이 주문을 옮기는 동안 기사가 옛 라우트에서 배송을 끝낸 것이다. **`dawnline_event_stale_total` 과 섞지 않는다** — 저쪽은 버린 것이고 이쪽은 <em>적용한</em> 것이며, 이 값이 §6.8 재계획의 **경합 창의 크기**다. 0 이 정상이 아니라 재계획이 도는 동안 조금씩 오르는 값이고, 급히 오르면 볼 곳은 dispatch 가 아니라 `delivery.status` 컨슈머 랙이다. `dawnline_cancel_too_late_total` 과 같은 종류의 수치다 — 이상이 아니라 **폭** |
 | `dawnline_scan_after_relocate_total` | counter | tracking | 라벨 없음 — 기사가 찍은 `(routeId, stopSeq)` 가 **지금 tracking 이 아는 자리와 다른** 스캔 ([ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 결정 1). 단말은 개정 r 의 번호로 찍고 tracking 은 r+1 을 이미 적용한 창이다. 무시하지 않는다 — `orderIds` 로 풀어 **적용하고** 센다. dispatch 의 `dawnline_status_after_relocate_total` 과 **한 쌍**이고 같은 경합의 양 끝이다: 이쪽은 「기사가 옛 계획으로 찍었다」, 저쪽은 「옛 계획으로 찍힌 사실이 dispatch 에 닿았다」. **이쪽이 먼저 오른다** — 기사가 개정을 늦게 받는 것이 원인이면 이쪽만 오르고, dispatch 의 컨슈머 랙이 원인이면 저쪽만 오른다. 둘이 갈리는 것이 그 구별이다 |
-| `dawnline_replan_total` | counter | dispatch | outcome(applied/cooldown/no-anchor/no-candidate/no-gain) — §6.8 부분 재계획이 `delivery.at-risk` 하나를 받고 **무엇을 했는가**([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 5). 다섯 갈래를 한 카운터의 라벨로 두는 이유는 **합이 곧 트리거 수**여야 하기 때문이다 — 나누면 「받았는데 아무 갈래에도 안 들어간 것」이 보이지 않는다. 실패를 DLQ 로 보내지 않으므로 이 라벨이 그 자리를 대신한다: `no-candidate`·`no-gain` 은 재시도로 달라지지 않는 <em>결과</em>이고 DLQ 는 「처리하지 못했다」의 자리다(§4.6). **`no-anchor` 가 `no-gain` 과 따로 있는 이유**는 모름이 0 이 아니기 때문이다 — 편차를 모른 채 0 으로 두면 출발 지연 라우트가 「옮겨도 이득 없음」으로 조용히 닫힌다(`PlanModeReason.LAG_UNKNOWN` 과 같은 규칙) |
+| `dawnline_replan_total` | counter | dispatch | outcome(applied/cooldown/no-anchor/no-candidate/no-gain/truncated) — §6.8 부분 재계획이 `delivery.at-risk` 하나를 받고 **무엇을 했는가**([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 5). 여섯 갈래를 한 카운터의 라벨로 두는 이유는 **합이 곧 트리거 수**여야 하기 때문이다 — 나누면 「받았는데 아무 갈래에도 안 들어간 것」이 보이지 않는다. 실패를 DLQ 로 보내지 않으므로 이 라벨이 그 자리를 대신한다: `no-candidate`·`no-gain` 은 재시도로 달라지지 않는 <em>결과</em>이고 DLQ 는 「처리하지 못했다」의 자리다(§4.6). **`no-anchor` 가 `no-gain` 과 따로 있는 이유**는 모름이 0 이 아니기 때문이다 — 편차를 모른 채 0 으로 두면 출발 지연 라우트가 「옮겨도 이득 없음」으로 조용히 닫힌다(`PlanModeReason.LAG_UNKNOWN` 과 같은 규칙). **`truncated` 가 `no-gain` 과 따로 있는 이유도 같다** — 평가 상한에 걸려 이동을 못 찾은 것은 「이득 없음」이 아니라 「다 못 봤다」다(2026-09-27, 7-4a — §6.8) |
 | `dawnline_at_risk_deviation_mismatch_total` | counter | dispatch | 라벨 없음 — dispatch 가 자기 `route_stops.actual_at` 으로 계산한 편차와 `delivery.at-risk` 페이로드의 `deviationSeconds` 가 **60초 넘게 갈린** 횟수 ([ADR-048](adr/ADR-048-replan-reads-its-own-db.md) 결정 2). 페이로드는 입력이 아니라 **대조값**이고, 이 값이 오른다는 것은 tracking 과 dispatch 가 같은 라우트를 다르게 보고 있다는 뜻이다 — 원인은 `delivery.status` 컨슈머 랙 · 개정이 한쪽에만 닿음 · 기사 단말의 밀린 스캔 중 하나다. 셋을 이 카운터 혼자 가르지는 못하지만 **갈린다는 사실 자체가 먼저 필요하다.** 허용 오차를 둔 이유: 두 값은 서로 다른 시각 원천에서 오므로(스캔의 `occurredAt` 과 저장 정밀도로 자른 `Clock`) 초 단위 일치를 요구하면 이 카운터는 늘 켜져 있어 아무 말도 하지 않는다 |
 | `dawnline_shipment_partitions_ahead` | gauge | tracking | 라벨 없음 — 오늘을 포함해 앞으로 덮여 있는 `shipment_events` 일 파티션 수 (§5.4). 생성 스케줄러가 죽으면 날마다 1씩 줄고 **0 에서 스캔 INSERT 가 실패한다**. 마지막 성공한 실행이 남긴 최대 파티션 날짜에서 스크레이프 시점의 오늘을 뺀 값이라, 스케줄러가 멈추면 값이 그대로 멈추는 것이 아니라 줄어든다 — 멈춘 게이지는 건강해 보이기 때문이다 |
 | `dawnline_delivery_on_time_ratio` | gauge | **ops-api** | camp, basis(promised/revised) — §8.1 참고. 두 값을 <em>따로</em> 낸다. 창은 「직전 24시간」이 아니라 **현재 버킷 포함 UTC 정시 버킷 24개**(`kpi_delivery_hourly` 의 24행 합 — 현재 버킷은 늘 부분이라 23시간 남짓~24시간)이고 1분마다 다시 센다. 분모는 완료 + **실패**, 취소·배차 불가는 뺀다(§5.5 「KPI — 두 축, 뷰」). 결과가 없는 캠프와 갱신 실패 중에는 `NaN` — 0 도 마지막 값도 아니다. 약속을 모르는 결과도 빠지고, 그 수는 아래 `dawnline_kpi_excluded` 가 낸다 |
@@ -2999,7 +3006,7 @@ id 를 붙여 diff 를 뜻 없이 키운다. 그래서 대조는 파일이 아�
 - `dawnline_*` 가 아닌 이름(플랫폼 지표 — `kafka_*` · `hikaricp_*` · `jvm_*` · `http_server_requests_*`)은 표가 없다. 그
   이름이 **실제로 있다**는 것은 Compose 스모크가 데모 뒤의 Prometheus 에서 확인한다.
 
-**Phase 5 카운터 넷의 패널** (2026-09-23 이월): `dawnline_replan_total{outcome}` 은 다섯 갈래를 **쌓아** 그린다 — 합이 트리거
+**Phase 5 카운터 넷의 패널** (2026-09-23 이월): `dawnline_replan_total{outcome}` 은 여섯 갈래를 **쌓아** 그린다 — 합이 트리거
 수라는 것이 한눈에 보여야 한다. `dawnline_status_after_relocate_total` · `dawnline_scan_after_relocate_total` ·
 `dawnline_at_risk_deviation_mismatch_total` 은 **한 패널에 겹쳐** 놓는다 — 쌍이 *갈리는 것*이 정보다(§9.1). 따로 그리면 사람이
 눈으로 겹쳐야 하고, 장애 중에 그 일은 일어나지 않는다.
@@ -3537,7 +3544,32 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
   서울이라 캠프가 서울에 몰린다.
 - 시드는 Flyway `R__seed_*.sql` 로 넣는다(Phase 2 확정). `sim-runner` 는 §5.6 대로 REST 전용으로
   남아 남의 서비스 DB 에 쓰지 않는다(불변규칙 3).
-- 시나리오 YAML: `smoke`(200 주문, 1 캠프), `normal-day`(30k), `peak-day`(150k, 컷오프 전 버스트), `overload-day`(150k, 함대 그대로), `cold-heavy`(냉장 40%), `late-injection`(지연 확률 15%, 실패 3%).
+- **시나리오 — 진실은 `tools/sim-runner/src/main/resources/scenarios.yml` 이고 아래 표는 그것을 비춘다** (2026-09-27, 7-4a).
+  `ScenariosTableTest` 가 이름 집합(양방향)과 주문 수 · 냉장 비율 · 지연·실패 확률 · 창을 대조한다. 이전의 한 줄 목록은 yml 과
+  네 자리에서 갈라져 있었다 — `tiny` · `ops-demo` 가 없었고, `late-injection` 은 지연 15% · 실패 3% 라고 적었지만 yml 은 100% · 5% 였고
+  (구간마다 지연 — at-risk 가 반드시 나야 하는 DoD 시나리오다), 아직 없는 넷을 있는 것처럼 적었다. `—` 는 기사 시뮬레이터가 없다는 뜻이다.
+
+| 시나리오 | 주문 | 냉장 비율 | 지연 확률 | 실패 확률 | 창(KST) | 무엇을 보나 |
+|---|---|---|---|---|---|---|
+| `smoke` | 200 | 0.25 | — | — | — | 흐름 — CI 스모크 · `make demo` |
+| `tiny` | 10 | 0.5 | — | — | — | 스택이 떠 있는가 |
+| `ops-demo` | 1,200 | 0.25 | — | — | — | 조기 마감 · 재배정 — 라우트가 둘 이상인 웨이브(Phase 6 DoD) |
+| `late-injection` | 60 | 0.25 | 1.0 | 0.05 | — | at-risk → 재계획 → 개정(Phase 5-2 DoD) |
+| `normal-day` | 9,000 | 0.25 | — | — | 22:58–23:58 | 평일 — 하루 3만(§8.2)의 30% 가 DAWN 컷오프 전 1시간에 |
+| `peak-day` | 45,000 | 0.25 | — | — | 22:58–23:58 | 피크 — 하루 15만의 30%, 실현 가능한 함대(아래) |
+| `overload-day` | 45,000 | 0.25 | — | — | 22:58–23:58 | 같은 물량, 함대 그대로(아래) |
+| `cold-heavy` | 9,000 | 0.40 | — | — | 22:58–23:58 | 평일 물량에 냉장 40% — 좌석 예약이 수요 쪽에서 눌린다 |
+
+- **창은 하나다 — 하루가 아니라 컷오프 전 1시간** (2026-09-26 결정, 7-4a). §8.2 의 「컷오프 직전 1시간에 30% 집중」이 피크의 모양이고,
+  `normal-day` 도 **같은 창**으로 돈다 — 비교 축이 같아야 표가 읽힌다. 하루 전체 정시율이 필요해지면 그것은 별도 시나리오다.
+  창은 **유효 시각**(주입 시계)이다: 시나리오의 `start-at` 까지 sim-runner 가 자기 시계로 기다리고, 시뮬레이션 스택
+  (`make sim-up`, [ADR-066](adr/ADR-066-simulation-moves-the-clock-not-the-schedule.md))이 그 시각을 아무 때나 만든다. 22:58 에
+  시작해 한 시간 — 끝이 DAWN 컷오프(00:00)보다 **2분 앞**인 것은 보내는 쪽이 밀려도 마지막 주문이 컷오프를 넘지 않게 하는 여유다.
+  속도는 창 전체에 **균일**하다(45,000건 = 12.5 rps). §8.2 의 「최대 ~600 rps」 순간 버스트는 이 도구가 아니라 k6 가 잰다
+  (`tools/k6/orders.js` — sim-runner 는 부하 측정기가 아니다). 티어 비율은 `smoke` 와 같다(DAWN 5 · SAME_DAY 3 · NEXT_DAY 2) —
+  SAME_DAY 는 다음 날 10:00 웨이브로 가므로 이 창의 측정 밖이다.
+- **기사는 아직 없다.** 네 창 시나리오의 `—` 는 기사 시뮬레이터가 없다는 뜻이다 — 지금의 기사는 「라우트 N 대」를 기다리는데
+  창 시나리오의 라우트 수는 계획이 정한다. §8.1 의 정시율(지연 주입 5%)은 기사가 붙는 날 이 표의 지연 칸과 함께 채운다(7-4).
 - **피크는 둘로 돈다 — 실현 가능한 피크와 과부하** (2026-09-25, Phase 7-0). Phase 4 벤치마크의 `peak`/`overload` 분리를 시나리오로
   옮긴 것이다. 캠프당 20대(위 함대)로 하루 15만 건은 **정의상 과부하**다 — 차량당 187 stop 이고([ADR-030](adr/ADR-030-night-shift-seed.md)
   재검토 지점), 그 위에서 잰 정시율·미배정은 SLO 가 아니라 함대 부족을 잰다.

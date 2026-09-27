@@ -19,7 +19,9 @@ import com.dawnline.sim.order.HttpOrderClient;
 import com.dawnline.sim.order.OrderClient;
 import com.dawnline.sim.order.Sleeper;
 import com.dawnline.sim.order.SmokeScenario;
+import com.dawnline.sim.order.WindowStart;
 import java.net.http.HttpClient;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.function.LongSupplier;
@@ -51,6 +53,17 @@ public class SimRunnerConfig {
     private static final Duration ASSIGNMENT_TIMEOUT = Duration.ofSeconds(30);
 
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
+
+    /**
+     * 창의 시작까지 기다림 — 주입 시계로 (부록 A 「창은 하나다」). 시계는 {@code libs/messaging} 의 빈이다 — 시뮬레이션 스택에서는
+     * 서비스 다섯과 같은 앵커의 오프셋을 받는다(ADR-066).
+     *
+     * @param clock 주입 시계
+     */
+    @Bean
+    public WindowStart windowStart(Clock clock) {
+        return new WindowStart(clock, Sleeper.REAL);
+    }
 
     /**
      * 주문 접수 클라이언트.

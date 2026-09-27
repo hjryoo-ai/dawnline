@@ -52,14 +52,31 @@ public final class RelocateSearch {
 
     private final DistanceProvider distance;
     private final CostModel cost;
+    private final int maxEvaluations;
 
     /**
      * @param distance 거리 제공자
      * @param cost     비용 산식
      */
     public RelocateSearch(DistanceProvider distance, CostModel cost) {
+        this(distance, cost, MAX_EVALUATIONS);
+    }
+
+    /**
+     * 평가 상한을 준 탐색. 운영 배선은 위의 생성자({@link #MAX_EVALUATIONS})를 쓴다 — 이 자리는 상한에 걸리는 경계를 작은 픽스처로
+     * 보는 테스트가 쓴다(2,000회를 채우는 픽스처는 무엇을 보는지 읽히지 않는다).
+     *
+     * @param distance       거리 제공자
+     * @param cost           비용 산식
+     * @param maxEvaluations 평가 상한
+     */
+    public RelocateSearch(DistanceProvider distance, CostModel cost, int maxEvaluations) {
         this.distance = Objects.requireNonNull(distance, "distance");
         this.cost = Objects.requireNonNull(cost, "cost");
+        if (maxEvaluations < 1) {
+            throw new IllegalArgumentException("평가 상한은 1 이상이어야 합니다: " + maxEvaluations);
+        }
+        this.maxEvaluations = maxEvaluations;
     }
 
     /**
@@ -108,11 +125,13 @@ public final class RelocateSearch {
     /**
      * 탐색 결과.
      *
-     * @param moves     적용할 이동들 (적용 순서). 비어 있으면 이득이 없었다
+     * @param moves     적용할 이동들 (적용 순서). 비어 있으면 이득이 없었거나 — {@code truncated} 면 — 다 못 봤다
      * @param sequences 달라진 라우트들의 <strong>최종 방문 순서</strong>. 저장이 이 순서를 쓴다
      * @param gainKrw   줄인 비용의 합
+     * @param truncated 평가 상한에 걸렸다 — 평가하지 못한 (stop, 라우트) 짝이 남은 채 멈췄다(§6.8, 7-0 D4). 이동이 없으면
+     *                  「이득 없음」이 아니라 「모름」이고, 있으면 「더 좋은 이동을 못 본 채 고른 것」이다
      */
-    public record Outcome(List<Move> moves, Map<UUID, List<Stop>> sequences, long gainKrw) {
+    public record Outcome(List<Move> moves, Map<UUID, List<Stop>> sequences, long gainKrw, boolean truncated) {
 
         public Outcome {
             moves = List.copyOf(Objects.requireNonNull(moves, "moves"));
@@ -158,13 +177,21 @@ public final class RelocateSearch {
         Map<UUID, List<Stop>> changed = new LinkedHashMap<>();
         long total = 0L;
         int evaluations = 0;
+        // 「걸렸다」는 평가하지 못한 짝이 남았다는 뜻이다 — 상한에 닿은 순간이 아니라 그다음 짝을 건너뛸 때 선다.
+        // 마지막 짝에서 정확히 닿고 다음 라운드가 없으면(이동 상한 · 국소 최적) 다 본 것이다.
+        boolean truncated = false;
 
-        for (int round = 0; round < MAX_MOVES && evaluations < MAX_EVALUATIONS; round++) {
+        for (int round = 0; round < MAX_MOVES; round++) {
+            if (evaluations >= maxEvaluations) {
+                truncated = true;                       // 다음 라운드를 시작하지 못했다
+                break;
+            }
             Best best = null;
             List<Stop> from = current.get(source.routeId());
-            for (int index = source.frozen(); index < from.size(); index++) {
+            for (int index = source.frozen(); index < from.size() && !truncated; index++) {
                 for (RouteInput target : candidates) {
-                    if (evaluations >= MAX_EVALUATIONS) {
+                    if (evaluations >= maxEvaluations) {
+                        truncated = true;               // 이 라운드에 남은 짝이 있다
                         break;
                     }
                     evaluations++;
@@ -176,7 +203,7 @@ public final class RelocateSearch {
                 }
             }
             if (best == null) {
-                break;                                  // 국소 최적 — 더 줄일 이동이 없다
+                break;                                  // 국소 최적 — 또는 걸려서 못 찾았다(truncated)
             }
             List<Stop> shrunk = current.get(source.routeId());
             Stop moved = shrunk.remove(best.index());
@@ -185,8 +212,11 @@ public final class RelocateSearch {
             changed.put(best.targetId(), List.copyOf(current.get(best.targetId())));
             moves.add(new Move(source.routeId(), best.targetId(), moved.orderIds(), best.gain()));
             total += best.gain();
+            if (truncated) {
+                break;                                  // 걸린 라운드의 최선까지만 — 남은 짝은 보지 못했다
+            }
         }
-        return new Outcome(moves, changed, total);
+        return new Outcome(moves, changed, total, truncated);
     }
 
     /**

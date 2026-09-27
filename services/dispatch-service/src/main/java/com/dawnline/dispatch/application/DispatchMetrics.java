@@ -71,7 +71,7 @@ public class DispatchMetrics {
      */
     public DispatchMetrics(MeterRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "registry");
-        // 다섯 갈래를 기동에서 등록한다. 「0 이다」와 「그런 지표가 없다」는 다른 말이고,
+        // 갈래 전부를 기동에서 등록한다. 「0 이다」와 「그런 지표가 없다」는 다른 말이고,
         // 재계획이 한 번도 돌지 않은 새벽에 대시보드가 그 둘을 구별하지 못하면 안 된다.
         for (ReplanRouteUseCase.Outcome outcome : ReplanRouteUseCase.Outcome.values()) {
             replanCounter(outcome);
