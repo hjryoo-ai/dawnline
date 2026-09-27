@@ -66,5 +66,14 @@ public interface ScanClient {
         public boolean isNotYetKnown() {
             return status == 404;
         }
+
+        /**
+         * 같은 배송을 바꾸는 다른 쓰기와 겹쳐 적용되지 않았다 — 같은 요청을 그대로 다시 보내면 되는 409 다
+         * (tracking 계약의 {@code shipment-contended}, DESIGN.md §5.4). 상태 전이 409({@code illegal-state-transition})는
+         * 다시 보내도 같으므로 여기 들지 않는다.
+         */
+        public boolean isContended() {
+            return status == 409 && "shipment-contended".equals(problemCode);
+        }
     }
 }

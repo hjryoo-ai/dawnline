@@ -125,7 +125,8 @@ public final class DriverTrip implements Runnable {
     }
 
     /**
-     * 스캔 하나를 보낸다. 404 면 상한까지 다시 보낸다.
+     * 스캔 하나를 보낸다. 404(아직 모른다)와 409 {@code shipment-contended}(겹쳐서 적용되지 않았다)면 상한까지 다시 보낸다 —
+     * 둘 다 계약이 「같은 요청을 다시 보내도 된다」고 말한다.
      *
      * @return 포기했으면 {@code false}
      */
@@ -134,12 +135,18 @@ public final class DriverTrip implements Runnable {
         while (true) {
             ScanClient.Response response = scans.report(routeId, call);
             tally.scanSent();
-            if (!response.isNotYetKnown()) {
+            if (!response.isNotYetKnown() && !response.isContended()) {
                 tally.record(response);
                 return true;
             }
             if (nanoTime.getAsLong() >= deadline) {
                 tally.record(response);
+                if (response.isContended()) {
+                    log.warn("tracking 이 이 스캔을 {}초 동안 매번 겹침으로 거절했다(409 shipment-contended) — 포기한다. "
+                            + "routeId={}, revision={}, seq={}, type={}", retryLimitNanos / 1_000_000_000L, routeId,
+                            route.revision(), call.stopSeq(), call.type());
+                    return false;
+                }
                 // 주소도 주문 id 도 남기지 않는다 (§9.3).
                 log.warn("""
                         tracking 이 이 라우트를 모른다. {}초를 기다렸고 포기한다. \

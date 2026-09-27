@@ -86,6 +86,35 @@ class DriverTripTest {
     }
 
     @Test
+    void 겹쳐서_적용되지_않은_스캔은_다시_보낸다() {
+        // tracking 계약의 409 shipment-contended — 적용되지 않았고, 같은 요청을 그대로 다시 보내면 된다(DESIGN.md §5.4).
+        ScanClient.Response contended = ScanClient.Response.of(409, "shipment-contended", Map.of());
+        int[] calls = {0};
+        DriverTrip trip = trip((routeId, call) -> calls[0]++ < 1 ? contended : OK, Duration.ofSeconds(30).toNanos());
+        trip.revise(route(1));
+
+        trip.run();
+
+        assertThat(report().completedRoutes()).isEqualTo(1);
+        assertThat(report().retries()).isEqualTo(1);
+        assertThat(report().failures()).isEmpty();
+    }
+
+    @Test
+    void 상태_전이_409_는_다시_보내지_않는다() {
+        // 다시 보내도 같은 답이다 — 다시 보내면 부하만 는다.
+        ScanClient.Response illegal = ScanClient.Response.of(409, "illegal-state-transition", Map.of());
+        int[] calls = {0};
+        DriverTrip trip = trip((routeId, call) -> calls[0]++ < 1 ? illegal : OK, Duration.ofSeconds(30).toNanos());
+        trip.revise(route(1));
+
+        trip.run();
+
+        assertThat(report().retries()).isZero();
+        assertThat(report().failures()).containsEntry("illegal-state-transition", 1L);
+    }
+
+    @Test
     void 상한을_넘기면_그_라우트를_포기한다() {
         // 조용히 무한 재시도하는 도구는 시나리오 결과를 오염시킨다 — tracking 이 이벤트를 아예
         // 못 받은 경우와 늦게 받은 경우가 구별되지 않고, 실행은 끝나지 않는다.

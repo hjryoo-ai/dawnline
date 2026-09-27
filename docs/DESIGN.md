@@ -1061,6 +1061,13 @@ ops-api 의 계약은 이 409 를 이미 약속하고 있었고 ops-web 은 화�
 - ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17). 부호를 지우지 않는다 — 일찍 도착하면 음수로 당겨진다. 「늦은 것만 민다」로 적으면 앞서 가는 라우트의 ETA 가 낡은 채로 남고 ops 화면이 그 값을 읽는다.
 - **`DEPARTED_CAMP` 는 라우트의 사건이다** (Phase 5-1b). 경로의 `{seq}` 를 무시하고 그 라우트의 배송 <em>전부</em>를 `OUT_FOR_DELIVERY` 로 옮긴다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다. stop 하나만 옮기면 나머지는 `SCHEDULED` 로 남아 「아직 출발하지 않은 배송」처럼 보인다. 그리고 이 갈래가 **첫 편차의 출처**다: 기준값은 `route_revisions.planned_departure`(= `route.assigned.v1` 의 `summary.plannedDeparture`, required)이고, 늦은 출발은 가장 흔한 지연 원인이면서 **첫 `ARRIVED` 스캔 전에 이미 알 수 있다.** 브로커로는 나가지 않는다 — 한 사실을 stop 수만큼 반복해 말하는 것이고 order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다(`ScanType.isPublished()`). 운영자가 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 **첫 소비자가 나타나는 Phase 6 에서 소비자 주도로** 정한다. **정했다** ([ADR-050](adr/ADR-050-route-departure-is-an-event.md), 2026-09-23, Phase 6-0b — §4.1 표와 그 아래 문단). 근거는 화면이 아니라 이 갈래가 *첫 편차의 출처*라는 것이다: 그 편차를 아는 것이 tracking 뿐이면 ops 는 첫 `ARRIVED` 까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, 그 구간이 운영자가 개입할 수 있는 마지막 창이다. **발행이 이 자리에 붙었다**(2026-09-24) — 배송을 실제로 옮긴 출발 스캔에만, 라우트에 한 건.
 - **편차 전파는 애그리거트 밖이다** (`EtaPropagator`). 편차는 <em>라우트</em>의 성질이다 — 어느 stop 에서 얼마가 벌어졌고 그것이 누구에게 옮겨 가는지는 방문 순서를 아는 쪽만 안다. `Shipment` 는 주문 하나만 알고, 받는 것은 결과값 하나(`projectEta`)다. 종결 상태를 옮기지 않는 판단만 애그리거트의 것이다 — 「어디서 움직이는가」의 답이 하나여야 한다.
+- **스캔이 다른 쓰기와 겹치면 다시 한다 — 세 번 뒤에는 409 `shipment-contended`** (2026-09-27, 7-4 첫 `peak-day` 의 발견 3). 스캔은 찍은 배송과
+  편차 전파가 옮기는 뒤따르는 배송들을 갱신하고, 그 행들은 개정 반영(`route.assigned`)과 같은 라우트의 다른 스캔도 건드린다. `shipments.version`
+  (낙관적 락)이 늦은 쪽을 실패시키는데, 그 실패가 **500** 으로 나갔다(근거: 관측 — 첫 실행에서 2건, ETA 전파 중). 500 은 「적용됐는지 모름」이라
+  단말이 할 일을 말하지 않는다. 그런데 스캔은 멱등이다(상태 머신 — 아래 §8.5 문단) — 그래서 유스케이스 밖에서 **새 트랜잭션으로 최대 3회**
+  다시 하고(`ContendedScanRetry`), 그래도 지면 409 `shipment-contended` + `Retry-After: 1` 이다: 적용되지 않았고, 같은 요청을 그대로 다시
+  보내면 된다. JPA 의 낙관적 락 예외는 어댑터(`@Repository` 번역)와 커밋(`JpaTransactionManager`)에서 스프링의
+  `OptimisticLockingFailureException` 하나로 모인다 — 재시도가 `jakarta.persistence` 를 알지 않는다.
 - **at-risk 규칙**: 어떤 stop의 `eta > promised_end − 15분`이면 `delivery.at-risk` 1회 발행(라우트당 5분 쿨다운, Redis `SET NX`). 페이로드에 남은 stop 목록·편차 포함.
   **이것은 사건이지 상태가 아니다**([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 위험이 계속되면 다시 알리고(쿨다운이 그 주기다) **사라지는 경우는 알리지 않는다** — dispatch 가 이미 시작한 재계획을 취소할 방법이 없고, 해소된 ETA 는 ops 의 읽기 모델(§5.5)이 그대로 보여 준다. 소비자는 「위험 해제」를 기다리지 않는다.
   페이로드의 `remainingStops` 에는 **위험한 stop 만이 아니라 남은 전부**가 들어간다 — §6.8 이 다시 푸는 대상은 남은 구간이다. stop 마다 `atRisk` 를 함께 싣는 이유는 여유(15분)가 tracking 의 정책이기 때문이다: 소비자가 다시 계산하면 두 곳이 갈라진다. `campId` 도 싣는다 — dispatch 는 자기 `routes` 로 알 수 있지만 ops 는 이 이벤트만 본다(불변규칙 4).
