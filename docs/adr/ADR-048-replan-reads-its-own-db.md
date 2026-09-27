@@ -217,6 +217,12 @@ dispatch 가 자기 테이블에 갖고 있다. 스냅샷 규칙이 허락하는
 - ADR-047 재검토 지점 ① 이 처음으로 **재현 가능**해진다 — 재계획 직전에 완료된 stop 이 늦게
   도착하는 경우다. 그 ADR 이 「근거: 추정」으로 적어 둔 자리이고, 여기서 IT 가 된다.
 
+## 후속 (2026-09-28) — 출발도 앵커다
+
+결정 1 의 「닿은 stop 이 없으면 «모름»」은 출발 지연에서 첫 stop 전에 발화하는 at-risk 를 전부 `no-anchor` 로 만들었다(7-4 의 29/32 · 24/28, 7-0 B1).
+닿은 stop 이 없으면 출발(`routes.departed_at − routes.planned_departure`)이 앵커다 — dispatch 가 `delivery.route-departed` 를 소비해 그 사실을 자기 DB 에
+둔다([ADR-072](ADR-072-departure-is-an-anchor.md)). 「소속도 시각도 자기 DB 에서」는 그대로다.
+
 ## 재검토 지점
 
 1. ~~**`no-anchor` 가 얼마나 자주 나는가.**~~ **절반 닫혔다 —
