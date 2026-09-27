@@ -70,6 +70,16 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
+        public boolean markDeparted(UUID routeId, java.time.Instant departedAt) {
+            throw new UnsupportedOperationException("이 페이크는 출발을 모른다");
+        }
+
+        @Override
+        public java.util.Optional<java.time.Duration> departureDeviation(UUID routeId) {
+            throw new UnsupportedOperationException("이 페이크는 출발을 모른다");
+        }
+
+        @Override
         public Optional<SettledStop> lastSettledStop(UUID routeId) {
             throw new UnsupportedOperationException();
         }

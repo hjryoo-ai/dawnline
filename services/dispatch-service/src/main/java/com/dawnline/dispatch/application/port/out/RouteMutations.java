@@ -278,6 +278,23 @@ public interface RouteMutations {
     Optional<SettledStop> lastSettledStop(UUID routeId);
 
     /**
+     * 라우트가 캠프를 떠났다 — 처음 온 값만 남긴다 ({@code routes.departed_at}, ADR-072).
+     *
+     * @param routeId    라우트 id
+     * @param departedAt 떠난 시각 ({@code delivery.route-departed} 의 {@code departedAt})
+     * @return 라우트가 있었으면 참. 없으면(보존이 지웠다) 거짓 — 부르는 쪽이 철 지난 사건으로 센다
+     */
+    boolean markDeparted(UUID routeId, Instant departedAt);
+
+    /**
+     * 출발의 편차 — {@code departed_at − planned_departure} (ADR-072). 닿은 stop 이 없을 때의 재계획 앵커다.
+     *
+     * @param routeId 라우트 id
+     * @return 편차. 아직 떠나지 않았거나 계획 출발이 없으면(V7 이전 행) 빈 값 — <strong>«모름»</strong>이다
+     */
+    Optional<Duration> departureDeviation(UUID routeId);
+
+    /**
      * 재배정이 옮길 주문의 stop 과 그 주문의 지금 상태 ({@link #lockStopOf}).
      *
      * @param stopId stop id

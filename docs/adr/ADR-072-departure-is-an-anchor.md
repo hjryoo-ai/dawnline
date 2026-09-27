@@ -62,7 +62,13 @@
 
 | 표본 | 기대 | 결과 |
 |---|---|---|
-| 리스너 IT — `delivery.route-departed` 예시를 발행 | `routes.departed_at` 이 적힌다, 두 번째(다른 시각)는 덮지 않는다, 같은 이벤트 두 번은 한 번 | (구현 커밋에서 채운다) |
-| 재계획 단위 — 닿은 stop 없음 + 출발 있음 | 앵커 = 출발 편차, `no-anchor` 아님 | (구현 커밋에서 채운다) |
-| 재계획 단위 — 닿은 stop 있음 + 출발 있음 | 앵커 = 닿은 stop(더 최근의 사실) | (구현 커밋에서 채운다) |
-| 재계획 단위 — 둘 다 없음 | `no-anchor` | (구현 커밋에서 채운다) |
+| `RouteDepartedIT` — 계약 봉투로 발행 | `routes.departed_at` 이 적힌다, 다른 사건의 늦은 출발은 덮지 않는다 | ✅ |
+| 같은 IT — 없는 라우트의 출발 | 처리되고(`processed_events`) `dawnline_event_stale_total{eventType="delivery.route-departed"}` +1 | ✅ |
+| `ReplanRouteServiceTest` — 닿은 stop 없음 + 출발(늦음) | `APPLIED`, 대조 카운터 0 (앵커 = 출발의 편차 = 페이로드) | ✅ |
+| 같은 테스트 — 닿은 stop 있음 + 정시 출발 | 앵커 = 닿은 stop — 대조 카운터 0 (출발이었다면 갈렸다) | ✅ |
+| 같은 테스트 — 둘 다 없음 | `NO_ANCHOR` (기존 테스트 그대로) | ✅ |
+| `RouteDepartedPayloadTest` — 계약 예시 · 토픽 · 소비자 이름 · 메트릭 태그 | 두 칸을 읽는다 | ✅ |
+| 음성 표본 N1 — 앵커의 출발 갈래를 뺀다 | 「출발이 있으면」 테스트 빨강 | ✅ 그것 하나 (`NO_ANCHOR`) |
+| 음성 표본 N2 — `COALESCE` 를 뺀다 | 「두 번째 출발은 덮지 않는다」 빨강 | ✅ 그것 하나 (00:17 이 00:12 를 덮었다) |
+
+두 음성 표본 모두 복원 뒤 `cmp` 일치. dispatch 단위 · 통합(138) 초록.

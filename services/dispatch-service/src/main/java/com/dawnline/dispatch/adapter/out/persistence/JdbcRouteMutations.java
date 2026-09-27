@@ -446,6 +446,25 @@ public class JdbcRouteMutations implements RouteMutations {
     }
 
     @Override
+    public boolean markDeparted(UUID routeId, Instant departedAt) {
+        // 처음 온 값만 — actual_at 과 같은 규칙이다(ADR-048 결정 1 · ADR-072). 라우트 행 하나만 잡는다: 교착의 고리에 들지 않는다(ADR-068 결정 2).
+        return entityManager.createNativeQuery("""
+                UPDATE routes SET departed_at = COALESCE(departed_at, ?) WHERE id = ?
+                """).setParameter(1, departedAt).setParameter(2, routeId).executeUpdate() == 1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<Duration> departureDeviation(UUID routeId) {
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT planned_departure, departed_at FROM routes
+                 WHERE id = ? AND planned_departure IS NOT NULL AND departed_at IS NOT NULL
+                """).setParameter(1, routeId).getResultList();
+        return rows.isEmpty() ? Optional.empty()
+                : Optional.of(Duration.between((Instant) rows.getFirst()[0], (Instant) rows.getFirst()[1]));
+    }
+
+    @Override
     public boolean cancelStopIfAllOrdersCancelled(UUID stopId) {
         // 술어를 리터럴로 적는다 (CLAUDE.md 코딩 컨벤션). 여기서는 부분 인덱스 때문이 아니라
         // 상태 문자열이 스키마의 값이고 파라미터로 받을 이유가 없기 때문이다.
