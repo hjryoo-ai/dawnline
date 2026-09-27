@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.dawnline.common.Ids;
 import com.dawnline.common.error.ConflictException;
 import com.dawnline.common.error.NotFoundException;
+import com.dawnline.dispatch.application.port.in.AssessFleetUseCase;
 import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
 import com.dawnline.dispatch.application.port.in.PlanView;
 import com.dawnline.dispatch.application.port.in.ReassignStopUseCase;
@@ -20,6 +21,7 @@ import com.dawnline.dispatch.application.port.in.ResourceViews;
 import com.dawnline.dispatch.application.port.in.RouteView;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
+import com.dawnline.dispatch.domain.DispatchErrorCode;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.util.List;
@@ -61,6 +63,9 @@ class DispatchApiTest {
 
     @MockitoBean
     private ManageResourcesUseCase resources;
+
+    @MockitoBean
+    private AssessFleetUseCase fleet;
 
     private static PlanView planView(UUID planId, UUID waveId, UUID campId) {
         return new PlanView(planId, waveId, campId, "PUBLISHED", "sweep-greedy-nn", "FULL", 1,
@@ -244,11 +249,60 @@ class DispatchApiTest {
         UUID campId = Ids.newId();
         when(resources.listVehicles(campId)).thenReturn(List.of(new ResourceViews.VehicleView(
                 Ids.newId(), campId, "V-0001", "VAN", 400_000, 1_200_000, true, false, 45_000,
-                600, 250, LocalTime.of(6, 0), LocalTime.of(22, 0), true)));
+                600, 250, LocalTime.of(6, 0), LocalTime.of(22, 0), true, "seed")));
 
         mvc.perform(get("/api/v1/vehicles").param("campId", campId.toString()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].shiftStart").value("06:00:00"));
+                .andExpect(jsonPath("$[0].shiftStart").value("06:00:00"))
+                .andExpect(jsonPath("$[0].source").value("seed"));
+    }
+
+    @Test
+    void 차량_등록의_출처는_seed_를_받지_않는다() throws Exception {
+        // 시드는 마이그레이션만 쓴다 — 운영자가 seed 를 적으면 「시드가 아닌데 시드인 행」이 생긴다(ADR-067 결정 4).
+        mvc.perform(post("/api/v1/vehicles").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"campId":"%s","code":"V-9003","type":"VAN","maxWeightG":400000,
+                         "maxVolumeCm3":1200000,"cold":false,"allowsHazmat":false,
+                         "fixedCostKrw":45000,"costPerKmKrw":600,"costPerMinKrw":250,
+                         "shiftStart":"23:00:00","shiftEnd":"08:00:00","source":"seed"}
+                        """.formatted(Ids.newId())))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void 차량_등록의_출처는_peak_sim_을_받는다() throws Exception {
+        when(resources.createVehicle(any())).thenReturn(Ids.newId());
+
+        mvc.perform(post("/api/v1/vehicles").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"campId":"%s","code":"PS-0001","type":"VAN","maxWeightG":400000,
+                         "maxVolumeCm3":1200000,"cold":false,"allowsHazmat":false,
+                         "fixedCostKrw":45000,"costPerKmKrw":600,"costPerMinKrw":250,
+                         "shiftStart":"23:00:00","shiftEnd":"08:00:00","source":"peak-sim"}
+                        """.formatted(Ids.newId())))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void 끝나지_않은_stop_이_있는_차량의_비활성화는_409_vehicle_in_service_다() throws Exception {
+        UUID vehicleId = Ids.newId();
+        when(resources.deactivateVehicle(vehicleId)).thenThrow(DispatchErrorCode.vehicleInService(vehicleId, 3));
+
+        mvc.perform(post("/api/v1/vehicles/{vehicleId}/deactivate", vehicleId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("vehicle-in-service"))
+                .andExpect(jsonPath("$.unfinishedStops").value(3));
+    }
+
+    @Test
+    void 발행된_계획이_있는_웨이브의_함대_판정은_409_wave_already_planned_다() throws Exception {
+        UUID waveId = Ids.newId();
+        UUID planId = Ids.newId();
+        when(fleet.assess(waveId)).thenThrow(DispatchErrorCode.waveAlreadyPlanned(waveId, planId));
+
+        mvc.perform(get("/api/v1/waves/{waveId}/fleet-feasibility", waveId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("wave-already-planned"))
+                .andExpect(jsonPath("$.planId").value(planId.toString()));
     }
 
     @Test

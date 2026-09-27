@@ -28,13 +28,21 @@ import org.springframework.jdbc.core.JdbcTemplate;
 public class JdbcDispatchRetention implements DispatchRetention {
 
     /**
+     * stop {@code s} 가 <strong>끝나지 않았다</strong> — 종결 목록 밖이다(결정 2 — 모름은 종결이 아니다).
+     *
+     * <p>두 호출자가 이 한 조각을 쓴다: 보존({@link #SETTLED})과 차량 비활성화의 409({@code JdbcReferenceAdmin}, ADR-067 결정 5).
+     * 「끝났다」를 두 곳에 따로 적으면 갈라진다 — 그리고 {@code routes.status} 는 쓰는 쪽이 없어 이 뜻을 말하지 못한다(7-0 A31).
+     */
+    public static final String UNFINISHED_STOP = "s.status NOT IN ('CANCELLED', 'COMPLETED', 'FAILED')";
+
+    /**
      * 계획 {@code p} 가 종결이다 — 발행됐거나 실패했고, 끝나지 않은 stop 이 하나도 없다.
      */
     public static final String SETTLED = """
             p.status IN ('PUBLISHED', 'FAILED')
                    AND NOT EXISTS (SELECT 1 FROM routes r JOIN route_stops s ON s.route_id = r.id
                                     WHERE r.plan_id = p.id
-                                      AND s.status NOT IN ('CANCELLED', 'COMPLETED', 'FAILED'))""";
+                                      AND""" + " " + UNFINISHED_STOP + ")";
 
     /** 설명 단계의 고르기. 설명이 이미 없는 계획은 다시 고르지 않는다 — {@code EXISTS} 는 {@code ix_expl_plan_order} 의 앞머리다. */
     public static final String SELECT_WITH_EXPLANATIONS_SQL = """

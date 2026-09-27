@@ -32,6 +32,15 @@ public interface ManageResourcesUseCase {
     UUID createVehicle(ResourceViews.NewVehicle request);
 
     /**
+     * 차량을 비활성화한다 (ADR-067 결정 5). 끝나지 않은 stop 이 있으면 409 {@code vehicle-in-service}, 없는 차량은 404,
+     * 이미 비활성이면 바꾸는 것 없이 그대로 돌려준다.
+     *
+     * @param vehicleId 차량
+     * @return 비활성화한 뒤의 차량
+     */
+    ResourceViews.VehicleView deactivateVehicle(UUID vehicleId);
+
+    /**
      * @param campId 캠프
      */
     List<ResourceViews.DriverView> listDrivers(UUID campId);

@@ -121,6 +121,53 @@ paths:
                 $ref: "#/components/schemas/ProblemDetail"
       security:
       - internalToken: []
+  /api/v1/vehicles/{vehicleId}/deactivate:
+    post:
+      tags:
+      - resource-controller
+      operationId: deactivateVehicle
+      parameters:
+      - name: vehicleId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 비활성화한 뒤의 차량. 이미 비활성이면 바뀐 것 없이 그대로
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VehicleView"
+        "400":
+          description: id 가 UUID 형식이 아니다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 없는 차량
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: '`vehicle-in-service` — 그 차량의 라우트에 끝나지 않은 stop 이 있다(`vehicleId`
+            · `unfinishedStops`). 라우트가 끝난 뒤 다시 누른다'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
+            운영자는 ops-api 를 거친다 (ADR-055)
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+      security:
+      - internalToken: []
   /api/v1/routes/{routeId}/stops/{orderId}/reassign:
     post:
       tags:
@@ -344,6 +391,43 @@ paths:
                 $ref: "#/components/schemas/ProblemDetail"
       security:
       - internalToken: []
+  /api/v1/waves/{waveId}/fleet-feasibility:
+    get:
+      tags:
+      - resource-controller
+      operationId: fleetFeasibility
+      parameters:
+      - name: waveId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        "200":
+          description: 조합마다 수요 · 용량 · 부족 대수 · 템플릿. 가장 특정한 조합부터
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/FleetFeasibilityView"
+        "400":
+          description: id 가 UUID 형식이 아니다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: 그 웨이브에 계획 대상 후보가 없다
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: '`wave-already-planned` — 발행된 계획이 있다(`waveId` · `planId`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
   /api/v1/rules:
     get:
       tags:
@@ -541,6 +625,9 @@ components:
         shiftEnd:
           type: string
           format: time-local
+        source:
+          type: string
+          pattern: operator|peak-sim
       required:
       - campId
       - code
@@ -553,6 +640,48 @@ components:
         id:
           type: string
           format: uuid
+    VehicleView:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        campId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        type:
+          type: string
+        maxWeightG:
+          type: integer
+          format: int32
+        maxVolumeCm3:
+          type: integer
+          format: int32
+        cold:
+          type: boolean
+        allowsHazmat:
+          type: boolean
+        fixedCostKrw:
+          type: integer
+          format: int32
+        costPerKmKrw:
+          type: integer
+          format: int32
+        costPerMinKrw:
+          type: integer
+          format: int32
+        shiftStart:
+          type: string
+          format: time-local
+        shiftEnd:
+          type: string
+          format: time-local
+        active:
+          type: boolean
+        source:
+          type: string
     ReassignRequest:
       type: object
       properties:
@@ -621,46 +750,82 @@ components:
           type: string
         topic:
           type: string
-    VehicleView:
+    FleetFeasibilityView:
       type: object
       properties:
-        id:
+        waveId:
           type: string
           format: uuid
         campId:
           type: string
           format: uuid
-        code:
+        assessedAt:
           type: string
-        type:
-          type: string
-        maxWeightG:
+          format: date-time
+        candidates:
           type: integer
           format: int32
-        maxVolumeCm3:
+        stops:
           type: integer
           format: int32
+        fleet:
+          type: integer
+          format: int32
+        maxStopsPerRoute:
+          type: integer
+          format: int32
+        headroomPercent:
+          type: integer
+          format: int32
+        feasible:
+          type: boolean
+        combinations:
+          type: array
+          items:
+            $ref: "#/components/schemas/FleetLineView"
+    FleetLineView:
+      type: object
+      properties:
         cold:
           type: boolean
-        allowsHazmat:
+        hazmat:
           type: boolean
-        fixedCostKrw:
-          type: integer
-          format: int32
-        costPerKmKrw:
-          type: integer
-          format: int32
-        costPerMinKrw:
-          type: integer
-          format: int32
-        shiftStart:
-          type: string
-          format: time-local
-        shiftEnd:
-          type: string
-          format: time-local
-        active:
+        large:
           type: boolean
+        label:
+          type: string
+        status:
+          type: string
+          enum:
+          - FEASIBLE
+          - SHORTFALL
+          - NO_TEMPLATE
+        demandStops:
+          type: integer
+          format: int64
+        demandWeightG:
+          type: integer
+          format: int64
+        demandVolumeCm3:
+          type: integer
+          format: int64
+        vehicles:
+          type: integer
+          format: int32
+        capacityStops:
+          type: integer
+          format: int64
+        capacityWeightG:
+          type: integer
+          format: int64
+        capacityVolumeCm3:
+          type: integer
+          format: int64
+        shortfall:
+          type: integer
+          format: int32
+        template:
+          $ref: "#/components/schemas/VehicleView"
     RuleView:
       type: object
       properties:

@@ -1,6 +1,7 @@
 package com.dawnline.dispatch.adapter.in.web;
 
 import com.dawnline.dispatch.application.port.in.ResourceViews;
+import com.dawnline.dispatch.application.port.in.AssessFleetUseCase;
 import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -41,12 +42,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class ResourceController {
 
     private final ManageResourcesUseCase resources;
+    private final AssessFleetUseCase fleet;
 
     /**
      * @param resources 자원·룰 관리 유스케이스
+     * @param fleet     함대 실현 가능성 (ADR-067)
      */
-    public ResourceController(ManageResourcesUseCase resources) {
+    public ResourceController(ManageResourcesUseCase resources, AssessFleetUseCase fleet) {
         this.resources = Objects.requireNonNull(resources, "resources");
+        this.fleet = Objects.requireNonNull(fleet, "fleet");
     }
 
     /**
@@ -108,6 +112,43 @@ public class ResourceController {
         UUID id = resources.createVehicle(request);
         return ResponseEntity.created(URI.create("/api/v1/vehicles/" + id))
                 .body(new CreatedId(id));
+    }
+
+    /**
+     * 차량 비활성화 (ADR-067 결정 5). 다음 계획부터 빠지고 과거 라우트는 그대로다.
+     *
+     * @param vehicleId 차량
+     */
+    @PostMapping("/vehicles/{vehicleId}/deactivate")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "비활성화한 뒤의 차량. 이미 비활성이면 바뀐 것 없이 그대로"),
+            @ApiResponse(responseCode = "400", description = "id 가 UUID 형식이 아니다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "없는 차량",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409", description = "`vehicle-in-service` — 그 차량의 라우트에 끝나지 않은 stop 이 있다"
+                    + "(`vehicleId` · `unfinishedStops`). 라우트가 끝난 뒤 다시 누른다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
+    public ResourceViews.VehicleView deactivateVehicle(@PathVariable UUID vehicleId) {
+        return resources.deactivateVehicle(vehicleId);
+    }
+
+    /**
+     * 웨이브의 함대 실현 가능성 (DESIGN.md §5.3 「함대」, ADR-067 결정 2). 읽기다 — 성수기 증차의 대수를 여기서 읽는다.
+     *
+     * @param waveId 웨이브
+     */
+    @GetMapping("/waves/{waveId}/fleet-feasibility")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "조합마다 수요 · 용량 · 부족 대수 · 템플릿. 가장 특정한 조합부터"),
+            @ApiResponse(responseCode = "400", description = "id 가 UUID 형식이 아니다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "404", description = "그 웨이브에 계획 대상 후보가 없다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409", description = "`wave-already-planned` — 발행된 계획이 있다(`waveId` · `planId`)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
+    public ResourceViews.FleetFeasibilityView fleetFeasibility(@PathVariable UUID waveId) {
+        return fleet.assess(waveId);
     }
 
     /**

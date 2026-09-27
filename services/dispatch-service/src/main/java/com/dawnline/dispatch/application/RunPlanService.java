@@ -21,7 +21,6 @@ import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DispatchStrategies;
 import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
-import com.dawnline.dispatch.domain.optimizer.Parcel;
 import com.dawnline.dispatch.domain.optimizer.PlanPruner;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlanValidator;
@@ -386,14 +385,7 @@ public class RunPlanService implements RunPlanUseCase {
     }
 
     private PlanningProblem problemOf(RunPlanCommand command, Snapshot snapshot, Instant startedAt) {
-        List<Candidate> optimizerCandidates = new ArrayList<>(snapshot.plannable().size());
-        for (DispatchCandidate candidate : snapshot.plannable()) {
-            optimizerCandidates.add(new Candidate(OrderId.of(candidate.orderId()),
-                    candidate.location(),
-                    new Parcel(candidate.weightG(), candidate.volumeCm3(),
-                            candidate.requiresCold(), candidate.hazmat()),
-                    candidate.promised(), candidate.serviceSeconds(), candidate.priority()));
-        }
+        List<Candidate> optimizerCandidates = OptimizerCandidates.of(snapshot.plannable());
         PlanModeSelector.Decision mode = snapshot.mode();
         return new PlanningProblem(
                 new WaveRef(command.waveId(), command.campId(), "SAME_DAY", startedAt),

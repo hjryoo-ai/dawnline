@@ -474,6 +474,10 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         });
         assertThat(vehicles).isSortedAccordingTo(
                 java.util.Comparator.comparing(ResourceViews.VehicleView::code));
+        assertThat(vehicles).as("시드 차량의 출처는 seed — V11 의 UPDATE 와 R__seed_dispatch 가 함께 적는다")
+                .filteredOn(vehicle -> vehicle.code().startsWith("V-"))
+                .isNotEmpty()
+                .allSatisfy(vehicle -> assertThat(vehicle.source()).isEqualTo("seed"));
     }
 
     @Test
@@ -482,7 +486,7 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
 
         UUID id = tx().execute(status -> resources.createVehicle(new ResourceViews.NewVehicle(
                 CAMP_ID, code, "VAN", 1_000_000, 5_000_000, true, false,
-                40_000, 300, 120, LocalTime.of(2, 0), LocalTime.of(10, 0))));
+                40_000, 300, 120, LocalTime.of(2, 0), LocalTime.of(10, 0), null)));
         created.add(id);
 
         ResourceViews.VehicleView created = tx().execute(status -> resources.listVehicles(CAMP_ID))
@@ -492,6 +496,8 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         assertThat(created.allowsHazmat()).isFalse();
         assertThat(created.shiftStart()).isEqualTo(LocalTime.of(2, 0));
         assertThat(created.active()).as("새 차량은 활성").isTrue();
+        assertThat(created.source()).as("출처를 말하지 않은 등록은 운영자의 것 (V11 기본값, ADR-067 결정 4)")
+                .isEqualTo("operator");
     }
 
     @Test

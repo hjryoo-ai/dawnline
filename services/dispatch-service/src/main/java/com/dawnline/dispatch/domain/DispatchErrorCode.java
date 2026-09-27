@@ -20,7 +20,23 @@ public enum DispatchErrorCode implements ErrorCode {
      * 근거(화물 · 약속창)가 사라진 라우트는 다시 풀 수 없고, 운영자가 할 일은 그 계획을 새로 돌리는 것뿐이다. 무시하면
      * 후보 없는 stop 이 라우트에서 <em>조용히</em> 빠진다 — 이 코드가 그 자리를 소리 나게 한다.
      */
-    CANDIDATES_EXPIRED("candidates-expired", 409, "계획의 후보가 보존 기간이 지나 지워졌습니다");
+    CANDIDATES_EXPIRED("candidates-expired", 409, "계획의 후보가 보존 기간이 지나 지워졌습니다"),
+
+    /**
+     * 비활성화하려는 차량의 라우트에 끝나지 않은 stop 이 있다 (ADR-067 결정 5).
+     *
+     * <p>완화하지 않는다 — 배정됐지만 출발 전인 차량을 빼면 그 주문들은 주인 없이 남는다. 할 일은 그 라우트가 끝나기를
+     * 기다리는 것이다(시뮬레이터는 기사가 끝낸 stop 을 dispatch 가 소비할 때까지 다시 시도한다).
+     */
+    VEHICLE_IN_SERVICE("vehicle-in-service", 409, "끝나지 않은 stop 이 있는 차량은 비활성화할 수 없습니다"),
+
+    /**
+     * 발행된 계획이 있는 웨이브의 함대를 재려 했다 (ADR-067 결정 2).
+     *
+     * <p>계획 대상 후보가 0 이 되어 답이 「부족 0」으로 보인다 — 모름을 0 으로 접지 않는다. 실패한 계획({@code FAILED})은
+     * 여기 들지 않는다: 그 웨이브의 후보는 아직 계획 대상이고, 증차한 뒤 다시 돌리는 것이 운영자가 할 일이다.
+     */
+    WAVE_ALREADY_PLANNED("wave-already-planned", 409, "이미 계획이 발행된 웨이브입니다");
 
     private final String code;
     private final int status;
@@ -45,6 +61,32 @@ public enum DispatchErrorCode implements ErrorCode {
     @Override
     public String title() {
         return title;
+    }
+
+    /**
+     * 차량에 끝나지 않은 stop 이 있다.
+     *
+     * @param vehicleId       차량
+     * @param unfinishedStops 끝나지 않은 stop 수
+     * @return {@link #VEHICLE_IN_SERVICE}
+     */
+    public static DomainException vehicleInService(UUID vehicleId, long unfinishedStops) {
+        return new DomainException(VEHICLE_IN_SERVICE,
+                "차량의 라우트에 끝나지 않은 stop 이 %d 개 있습니다 — 라우트가 끝난 뒤 비활성화합니다".formatted(unfinishedStops),
+                Map.of("vehicleId", vehicleId.toString(), "unfinishedStops", unfinishedStops));
+    }
+
+    /**
+     * 웨이브에 발행된 계획이 있다.
+     *
+     * @param waveId 웨이브
+     * @param planId 그 계획
+     * @return {@link #WAVE_ALREADY_PLANNED}
+     */
+    public static DomainException waveAlreadyPlanned(UUID waveId, UUID planId) {
+        return new DomainException(WAVE_ALREADY_PLANNED,
+                "계획이 이미 발행돼 계획 대상 후보가 없습니다 — 함대 판정은 계획 전의 것입니다",
+                Map.of("waveId", waveId.toString(), "planId", planId.toString()));
     }
 
     /**
