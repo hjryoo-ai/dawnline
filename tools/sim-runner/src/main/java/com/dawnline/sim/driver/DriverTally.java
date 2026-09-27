@@ -21,6 +21,7 @@ public final class DriverTally {
     private final AtomicLong abandonedRoutes = new AtomicLong();
     private final AtomicLong scans = new AtomicLong();
     private final AtomicLong retries = new AtomicLong();
+    private final AtomicLong resent = new AtomicLong();
     private final Map<String, LongAdder> outcomes = new ConcurrentHashMap<>();
     private final Map<String, LongAdder> failures = new ConcurrentHashMap<>();
 
@@ -47,19 +48,24 @@ public final class DriverTally {
         completedRoutes.incrementAndGet();
     }
 
-    /** 라우트를 포기했다 ({@link DriverTrip} 의 404 재시도 상한). */
+    /** 라우트를 포기했다 ({@link DriverTrip} 의 재시도 · 재전송 상한). */
     public void routeAbandoned() {
         abandonedRoutes.incrementAndGet();
     }
 
-    /** 스캔 하나를 보냈다 (재시도는 별도로 센다). */
+    /** 요청 하나를 보냈다 — 재시도 · 재전송도 한 번씩 센다(그 둘은 따로도 센다). */
     public void scanSent() {
         scans.incrementAndGet();
     }
 
-    /** 404 를 받아 다시 보냈다. */
+    /** 404 · 409 {@code shipment-contended} 를 받아 다시 보냈다. */
     public void scanRetried() {
         retries.incrementAndGet();
+    }
+
+    /** 응답을 받지 못해(연결 거부 · 타임아웃) 다시 보냈다 — 리포트가 이 수를 따로 싣는다(재시도와 원인이 다르다). */
+    public void scanResent() {
+        resent.incrementAndGet();
     }
 
     /**
@@ -97,7 +103,7 @@ public final class DriverTally {
     public DriverReport snapshot(String scenario, int expectedRoutes) {
         return new DriverReport(scenario, expectedRoutes, routes.get(), revisions.get(),
                 staleRevisions.get(), completedRoutes.get(), abandonedRoutes.get(),
-                scans.get(), retries.get(), copy(outcomes), copy(failures));
+                scans.get(), retries.get(), resent.get(), copy(outcomes), copy(failures));
     }
 
     private static Map<String, Long> copy(Map<String, LongAdder> counts) {

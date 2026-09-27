@@ -160,7 +160,7 @@ public record SimProperties(
          *                               배속이 크면 라우트당 at-risk 가 한 번만 보인다 —
          *                               "몇 번 났다" 를 보려면 1 로 둔다 (ADR-046, package-info)
          * @param timeoutSeconds         라우트를 기다리는 상한(초)
-         * @param scanRetrySeconds       스캔 404 재시도 상한(초). 넘기면 그 라우트를 포기한다 —
+         * @param scanRetrySeconds       스캔 404 · 409 재시도와 전송 실패(타임아웃) 재전송의 상한(초). 넘기면 그 라우트를 포기한다 —
          *                               조용히 무한 재시도하면 시나리오 결과가 오염된다
          * @param scanBaseUrl            tracking-service 주소
          * @param delayProbability       구간에 지연이 걸릴 확률 (0.0 ~ 1.0)

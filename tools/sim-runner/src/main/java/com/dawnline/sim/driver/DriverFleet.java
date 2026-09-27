@@ -77,7 +77,7 @@ public final class DriverFleet implements AutoCloseable {
      * @param speed           배속. 여정마다 {@link TripPacer} 를 새로 만들 때 읽는다
      * @param sleeper         재시도 대기
      * @param nanoTime        단조 시계
-     * @param retryLimitNanos 404 재시도 상한
+     * @param retryLimitNanos 404 · 409 재시도와 전송 실패 재전송의 상한
      * @param tally           집계
      */
     public DriverFleet(int expectedRoutes, DriverSimulator simulator, ScanClient scans, DoubleSupplier speed,
