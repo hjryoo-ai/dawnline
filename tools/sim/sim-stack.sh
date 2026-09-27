@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# make sim-up · sim-down — 시뮬레이션 스택 (DESIGN.md §5.6 「시뮬레이션 시계」, ADR-066)
+# make sim-up · sim-down · sim-reset — 시뮬레이션 스택 (DESIGN.md §5.6 「시뮬레이션 시계」, ADR-066)
 #
 # 시뮬레이션은 스케줄이 아니라 시계를 옮긴다. 이 스크립트가 하는 일은 셋이다:
 #   1. 자기 compose 프로젝트(dawnline-sim, 볼륨 dawnline-sim_*)에서 돈다 — 오프셋을 켜고 쓴 사실은 벽시계보다 미래라, 같은 볼륨으로
@@ -10,7 +10,10 @@
 #   3. 다섯 서비스에 같은 값을 준다 — compose 앵커의 DAWNLINE_CLOCK_OFFSET 하나 + 프로필 sim(없으면 서비스가 기동을 거부한다).
 #
 #   make sim-up [SIM_AT=22:40]     개발 스택이 떠 있으면 거부한다(컨테이너 이름이 고정 — make down 먼저, 볼륨은 그대로다)
-#   make sim-down                  컨테이너만 내린다(볼륨 유지 — 지우는 명령은 이 스크립트에 없다)
+#   make sim-down                  컨테이너만 내린다(볼륨 유지)
+#   make sim-reset                 이 프로젝트의 컨테이너 · 볼륨 · build/sim-offset 을 지운다 — 측정의 첫 단계(ADR-066 후속).
+#                                  묻지 않는다: 대상이 dawnline-sim 으로 고정이고, 이것이 CLAUDE.md 데이터 삭제 규칙의 유일한 예외다.
+#                                  지우는 명령은 이 스크립트에서 reset 하나뿐이고, 프로젝트 이름을 인자로 받지 않는다.
 #
 # 이 셸에서 다른 make 타깃을 시뮬레이션 스택에 쓰려면 COMPOSE_PROJECT_NAME=dawnline-sim 을 내보낸다(obs-check · chaos · smoke).
 # =============================================================================
@@ -75,8 +78,19 @@ case "${1:-}" in
   down)
     "${COMPOSE[@]}" down --remove-orphans
     ;;
+  reset)
+    # 이름을 두 번 확인한다 — 위에서 고정한 값이 그대로인지(누가 이 스크립트를 고쳐 인자로 받게 만들면 여기서 멈춘다).
+    [[ "$COMPOSE_PROJECT_NAME" == "dawnline-sim" ]] || { echo "reset 은 dawnline-sim 만 지운다: $COMPOSE_PROJECT_NAME" >&2; exit 2; }
+    volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=dawnline-sim")"
+    say "시뮬레이션 프로젝트 dawnline-sim 을 지운다 — 측정의 첫 단계(ADR-066 후속). 볼륨: $(echo $volumes | tr '\n' ' ')"
+    "${COMPOSE[@]}" down -v --remove-orphans
+    rm -f build/sim-offset
+    left="$(docker volume ls -q --filter "label=com.docker.compose.project=dawnline-sim")"
+    [[ -z "$left" ]] || { echo "지우지 못한 볼륨이 있다: $left" >&2; exit 1; }
+    say "지웠다. 다음은 make sim-up."
+    ;;
   *)
-    echo "사용법: $0 up|down" >&2
+    echo "사용법: $0 up|down|reset" >&2
     exit 2
     ;;
 esac

@@ -2,12 +2,35 @@
 
 | 항목 | 내용 |
 |---|---|
-| 상태 | Accepted (2026-09-26) |
+| 상태 | Accepted (2026-09-26) (**후속 있음** — 아래 「[후속 — 2026-09-27] 볼륨 삭제는 측정의 첫 단계다 — `make sim-reset`」) |
 | 결정일 | 2026-09-26 (방향은 같은 날 사용자 결정 — IMPLEMENTATION_PLAN 7-4a ①) |
 | 관련 문서 | `docs/DESIGN.md` §5.6 「시뮬레이션 시계」 · §9.1 · 부록 A · CLAUDE.md 불변규칙 12 |
 | 관련 ADR | [ADR-020](ADR-020-cutoff-ownership-wave-grace-promise-revision.md) (컷오프 소유) · [ADR-046](ADR-046-at-risk-is-an-event.md) (쿨다운 TTL 은 벽시계) · [ADR-054](ADR-054-early-wave-close-is-an-operator-cutoff.md) (조기 마감의 `cause`) |
 
 ---
+
+## [후속 — 2026-09-27] 볼륨 삭제는 측정의 첫 단계다 — `make sim-reset`
+
+결정 6(시뮬레이션은 자기 볼륨에서 돈다)은 그대로다. 그 볼륨을 **언제 지우는가**를 정하지 않았고, 첫 `peak-day` 가 그 빈칸에 걸렸다: 기사가 포기한
+라우트 55개의 차량 42대가 `vehicle-in-service`(ADR-067 결정 5)로 비활성화되지 못했고, 다음 실행의 전제 검사(활성 `peak-sim` 0)가 막았다
+— 의도한 동작이다. 남은 것을 되돌리는 도구(「기사 재개」)는 운영 경로로는 맞지만 측정에는 필요 없다.
+
+**결정.** 측정 실행은 콜드 스택에서 시작한다(7-0 D1). 시뮬레이션 볼륨은 사실을 미래에 쓰는 일회용이다(결정 6). 그러므로 그 볼륨의 삭제는
+정리가 아니라 **측정 프로토콜의 첫 단계**다:
+
+```
+make sim-reset   # dawnline-sim 프로젝트의 컨테이너 · 볼륨 · build/sim-offset 을 지운다 — 묻지 않는다
+make sim-up      # 새 볼륨, 기동 순간의 유효 시각 SIM_AT
+make peak        # 창 시나리오
+```
+
+- **대상은 고정이다.** `tools/sim/sim-stack.sh reset` 은 프로젝트 이름을 인자로 받지 않는다 — `COMPOSE_PROJECT_NAME=dawnline-sim` 을 스크립트가
+  정하고, 지우기 전에 그 프로젝트 라벨의 볼륨 목록을 찍는다. 개발 볼륨(`dawnline_*`)은 이름이 달라 닿지 않는다.
+- **묻지 않는다** — CLAUDE.md 「하지 말 것」의 데이터 삭제 규칙의 **유일한 예외**로 거기에 적었다(사용자 결정). 예외가 문서에 있어야 다음 사람이
+  다른 볼륨에 같은 방식을 쓰지 않는다. 개발 볼륨의 삭제는 여전히 `clean-volumes` 하나이고 확인을 묻는다.
+- **전제 검사는 그대로다.** `sim-reset` 을 건너뛰고 앞 실행의 볼륨을 다시 쓰면 `peak-day` 의 전제(활성 `peak-sim` 0)가 막는다 — 실수로
+  재사용할 때를 위한 문이다.
+- `build/sim-offset` 도 함께 지운다. 볼륨이 없는데 오프셋이 남아 있으면 `make peak` 이 없는 스택의 오프셋을 믿는다.
 
 ## 맥락
 

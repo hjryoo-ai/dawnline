@@ -50,6 +50,7 @@ make up          # 전체 스택 기동 (Compose)
 make demo        # 시드 + smoke 시나리오 + Grafana/Swagger URL 출력
 make peak        # 피크 시나리오
 make sim-up      # 시뮬레이션 스택 — 자기 프로젝트(dawnline-sim), 기동 순간의 유효 시각 SIM_AT(KST) (ADR-066)
+make sim-reset   # 시뮬레이션 볼륨(dawnline-sim_*)만 지운다 — 측정의 첫 단계, 묻지 않는다(아래 「하지 말 것」의 유일한 예외)
 make chaos-kafka # Kafka 중단→복구 검증 스크립트
 make down
 cd apps/ops-web && npm ci && npm test   # ops-web 타입 검사 + 컴포넌트 테스트 (생성은 pre* 스크립트가 한다)
@@ -142,6 +143,10 @@ cd apps/ops-web && npm ci && npm test   # ops-web 타입 검사 + 컴포넌트 �
 
 - 설계서에 없는 서비스·토픽·테이블을 임의로 추가하지 않는다.
 - `docker compose down -v` 같은 데이터 삭제 명령을 사용자 확인 없이 실행하지 않는다.
+  **예외는 하나 — `make sim-reset`** (2026-09-27 사용자 결정, ADR-066 후속). 대상이 시뮬레이션 프로젝트 `dawnline-sim` 의 볼륨으로
+  **고정**돼 있고(인자로 받지 않는다), 그 볼륨의 삭제는 정리가 아니라 **측정 프로토콜의 첫 단계**다 — 오프셋을 켜고 쓴 사실은 미래라
+  한 번 쓰면 버리는 볼륨이다(ADR-066 결정 6). 그래서 묻지 않고 돌린다. 개발 볼륨(`dawnline_*`)과 다른 프로젝트에는 이 방식을 쓰지 않는다 —
+  그쪽의 삭제는 여전히 `clean-volumes` 하나이고 확인을 묻는다.
 - `.env`, 시크릿, 개인정보 샘플을 커밋하지 않는다(`.env.example`만).
 - 테스트를 통과시키기 위해 테스트를 약화(어설션 삭제, `@Disabled`)하지 않는다. 실패 원인을 고친다.
 - 최적화 결과를 "더 좋아졌다"고 말할 때는 반드시 벤치마크 수치를 함께 보고한다.
