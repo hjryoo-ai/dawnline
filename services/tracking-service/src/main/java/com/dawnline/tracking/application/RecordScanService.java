@@ -16,9 +16,11 @@ import com.dawnline.tracking.domain.Shipment;
 import com.dawnline.tracking.domain.ShipmentEvent;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,7 +52,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 새 사실이 없다.
  *
  * <h2>순서가 규칙이다</h2>
- * 상태를 옮기고 → 편차를 전파하고 → 위험을 판정하고 → 사건을 적재하고 →
+ * 라우트 행을 잡고(ADR-070 — 쓰기 계층의 부모) → 상태를 옮기고 → 편차를 라우트에 적고 → 위험을 판정하고 → 사건을 적재하고 →
  * <strong>마지막에</strong> 센다. 카운터는 트랜잭션을 모르므로
  * 먼저 올리면 뒤의 INSERT 가 실패해 롤백됐을 때 숫자만 남는다 — 「취소 뒤 스캔이 늘었다」는
  * 알림이 실제로는 파티션이 없어서 났다는 뜻이 되고, 그 오해는 대시보드에서 풀리지 않는다.
@@ -122,6 +124,10 @@ public class RecordScanService implements RecordScanUseCase {
             throw NotFoundException.of(fromCamp ? "Route" : "Shipment",
                     fromCamp ? command.routeId() : command.orderIds());
         }
+        // 쓰기 계층은 라우트 행 → shipments 다(ADR-070 결정 1). 배송을 고치기 전에 그 배송들이 지금 있는 라우트를 잡는다 — 같은 라우트의
+        // 개정 반영이 여기서 줄을 서고, 그러면 배송을 잡는 순서(여기는 stop 순, 개정은 주문 id 순)가 교착을 만들지 않는다. 읽은 뒤에 잡으므로
+        // 기다리는 사이 개정이 커밋했으면 배송은 옛 사본이다 — flush 의 version 검사가 실패시키고 ContendedScanRetry 가 다시 한다.
+        revisions.lockForWrite(routesOf(targets));
         List<OrderScan> outcomes = new ArrayList<>(targets.size());
         List<ShipmentEvent> appended = new ArrayList<>(targets.size());
         List<Shipment> moved = new ArrayList<>(targets.size());
@@ -214,8 +220,8 @@ public class RecordScanService implements RecordScanUseCase {
             Propagation propagation = eta.propagate(routeId, command.type(), stopSeq,
                     command.occurredAt());
             atRisk.evaluate(routeId, propagation);
-            log.debug("편차를 전파했다. routeId={}, stopSeq={}, etaMoved={}, deviationS={}",
-                    routeId, stopSeq, propagation.moved().size(),
+            log.debug("편차를 적었다. routeId={}, stopSeq={}, remaining={}, deviationS={}",
+                    routeId, stopSeq, propagation.remaining().size(),
                     propagation.deviation().toSeconds());
         });
     }
@@ -241,6 +247,13 @@ public class RecordScanService implements RecordScanUseCase {
                 "배송은 있는데 route_revisions 에 행이 없다: routeId=" + command.routeId()));
         delivery.routeDeparted(command.routeId(), planned.campId(), planned.revision(),
                 planned.plannedDeparture(), command.occurredAt());
+    }
+
+    /** 배송들이 지금 있는 라우트들 — 잡는 순서는 저장소가 정한다. */
+    private static Set<UUID> routesOf(List<Shipment> targets) {
+        Set<UUID> routes = new LinkedHashSet<>();
+        targets.forEach(shipment -> routes.add(shipment.routeId()));
+        return routes;
     }
 
     /** 기사가 찍은 자리와 우리가 아는 자리가 다른가. 판정이 아니라 <em>계량</em>에만 쓴다. */

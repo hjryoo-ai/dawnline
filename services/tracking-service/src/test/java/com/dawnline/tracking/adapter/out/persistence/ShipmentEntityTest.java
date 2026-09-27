@@ -48,7 +48,6 @@ class ShipmentEntityTest {
         assertThat(roundTrip.stopSeq()).isEqualTo(7);
         assertThat(roundTrip.status()).isEqualTo(ShipmentStatus.SCHEDULED);
         assertThat(roundTrip.plannedArrival()).isEqualTo(ARRIVAL);
-        assertThat(roundTrip.etaAt()).isEqualTo(ARRIVAL);
         assertThat(roundTrip.promisedEnd()).isEqualTo(PROMISED_END);
         assertThat(roundTrip.deliveredAt()).isNull();
     }
@@ -107,13 +106,12 @@ class ShipmentEntityTest {
         Shipment base = Shipment.scheduled(ORDER, ROUTE, 1, ARRIVAL, PROMISED_END);
         ShipmentStatus scheduled = ShipmentStatus.SCHEDULED;
         List<Shipment> oneChange = List.of(
-                Shipment.restore(ORDER, UUID.randomUUID(), 1, scheduled, ARRIVAL, ARRIVAL, PROMISED_END, null, 0),
-                Shipment.restore(ORDER, ROUTE, 2, scheduled, ARRIVAL, ARRIVAL, PROMISED_END, null, 0),
-                Shipment.restore(ORDER, ROUTE, 1, ShipmentStatus.OUT_FOR_DELIVERY, ARRIVAL, ARRIVAL, PROMISED_END, null, 0),
-                Shipment.restore(ORDER, ROUTE, 1, scheduled, ARRIVAL.plusSeconds(1), ARRIVAL, PROMISED_END, null, 0),
-                Shipment.restore(ORDER, ROUTE, 1, scheduled, ARRIVAL, ARRIVAL.plusSeconds(1), PROMISED_END, null, 0),
-                Shipment.restore(ORDER, ROUTE, 1, scheduled, ARRIVAL, ARRIVAL, PROMISED_END.plusSeconds(1), null, 0),
-                Shipment.restore(ORDER, ROUTE, 1, scheduled, ARRIVAL, ARRIVAL, PROMISED_END, NOW, 0));
+                Shipment.restore(ORDER, UUID.randomUUID(), 1, scheduled, ARRIVAL, PROMISED_END, null, 0),
+                Shipment.restore(ORDER, ROUTE, 2, scheduled, ARRIVAL, PROMISED_END, null, 0),
+                Shipment.restore(ORDER, ROUTE, 1, ShipmentStatus.OUT_FOR_DELIVERY, ARRIVAL, PROMISED_END, null, 0),
+                Shipment.restore(ORDER, ROUTE, 1, scheduled, ARRIVAL.plusSeconds(1), PROMISED_END, null, 0),
+                Shipment.restore(ORDER, ROUTE, 1, scheduled, ARRIVAL, PROMISED_END.plusSeconds(1), null, 0),
+                Shipment.restore(ORDER, ROUTE, 1, scheduled, ARRIVAL, PROMISED_END, NOW, 0));
 
         for (Shipment changed : oneChange) {
             ShipmentEntity entity = ShipmentEntity.from(base, NOW);

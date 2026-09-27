@@ -33,11 +33,11 @@ class ShipmentTest {
     }
 
     @Test
-    void 새_배송은_SCHEDULED_이고_ETA_가_계획_도착_시각이다() {
+    void 새_배송은_SCHEDULED_이고_편차_0_의_ETA_가_계획_도착_시각이다() {
         Shipment shipment = scheduled();
 
         assertThat(shipment.status()).isEqualTo(ShipmentStatus.SCHEDULED);
-        assertThat(shipment.etaAt()).isEqualTo(PLANNED);
+        assertThat(shipment.etaWith(Duration.ZERO)).contains(PLANNED);
         assertThat(shipment.deliveredAt()).isNull();
         assertThat(shipment.version()).isZero();
     }
@@ -142,12 +142,12 @@ class ShipmentTest {
     }
 
     @Test
-    void 스캔은_ETA_를_건드리지_않는다() {
-        // 편차 전파는 이 stop 하나가 아니라 뒤따르는 stop 들의 문제다 (Phase 5-1b).
+    void 스캔은_계획을_건드리지_않는다() {
+        // 편차는 라우트의 것이다(ADR-070) — 배송은 계획만 들고 있고, 다음 편차도 그 계획에서 잰다.
         Shipment shipment = scheduled();
         shipment.recordScan(ScanType.ARRIVED, CLOCK.instant().plus(Duration.ofHours(3)));
 
-        assertThat(shipment.etaAt()).isEqualTo(PLANNED);
+        assertThat(shipment.plannedArrival()).isEqualTo(PLANNED);
     }
 
     // --- 개정 -------------------------------------------------------------------
@@ -165,9 +165,9 @@ class ShipmentTest {
         assertThat(shipment.stopSeq()).isEqualTo(7);
         assertThat(shipment.plannedArrival()).isEqualTo(newArrival);
         assertThat(shipment.promisedEnd()).isEqualTo(newPromise);
-        assertThat(shipment.etaAt())
-                .as("개정은 새 계획이고, 그 이전의 편차는 이미 반영돼 있다")
-                .isEqualTo(newArrival);
+        assertThat(shipment.etaWith(Duration.ZERO))
+                .as("개정은 새 계획이고 그 이전의 편차는 이미 반영돼 있다 — 라우트의 편차는 claim 이 0 으로 되돌린다(ADR-070)")
+                .contains(newArrival);
     }
 
     @ParameterizedTest
@@ -175,7 +175,7 @@ class ShipmentTest {
             names = {"SCHEDULED", "OUT_FOR_DELIVERY", "ARRIVED"})
     void 개정은_종결_상태를_되돌리지_않는다(ShipmentStatus terminal) {
         Shipment shipment = Shipment.restore(Ids.newId(), Ids.newId(), 3, terminal,
-                PLANNED, PLANNED, PROMISED_END, null, 4L);
+                PLANNED, PROMISED_END, null, 4L);
         UUID before = shipment.routeId();
 
         assertThat(shipment.applyRevision(Ids.newId(), 9, PLANNED.plus(Duration.ofHours(1)),
@@ -193,7 +193,7 @@ class ShipmentTest {
         for (ShipmentStatus inFlight : new ShipmentStatus[] {ShipmentStatus.SCHEDULED,
                 ShipmentStatus.OUT_FOR_DELIVERY, ShipmentStatus.ARRIVED}) {
             Shipment shipment = Shipment.restore(Ids.newId(), Ids.newId(), 3, inFlight,
-                    PLANNED, PLANNED, PROMISED_END, null, 1L);
+                    PLANNED, PROMISED_END, null, 1L);
             assertThat(shipment.applyRevision(Ids.newId(), 9, PLANNED, PROMISED_END))
                     .as("%s", inFlight)
                     .isTrue();
@@ -226,54 +226,44 @@ class ShipmentTest {
     // --- ETA 와 위험 (Phase 5-1b) ----------------------------------------------
 
     @Test
-    void ETA_는_받은_값으로_옮겨진다() {
-        // 얼마나 옮기는지는 애그리거트가 정하지 않는다 — 편차는 라우트의 성질이고, 여기 오는
-        // 것은 결과값 하나다 (EtaPropagator).
+    void ETA_는_계획에_라우트의_편차를_더한_값이다() {
+        // 얼마나 옮기는지는 애그리거트가 정하지 않는다 — 편차는 라우트의 성질이고 라우트 행에 한 번 산다(ADR-070).
         Shipment shipment = scheduled();
-        Instant moved = PLANNED.plus(Duration.ofMinutes(25));
 
-        assertThat(shipment.projectEta(moved)).isTrue();
-        assertThat(shipment.etaAt()).isEqualTo(moved);
+        assertThat(shipment.etaWith(Duration.ofMinutes(25))).contains(PLANNED.plus(Duration.ofMinutes(25)));
+        assertThat(shipment.etaWith(Duration.ofMinutes(-5)))
+                .as("부호를 지우지 않는다 — 일찍 도착하면 당겨진다")
+                .contains(PLANNED.minus(Duration.ofMinutes(5)));
         assertThat(shipment.plannedArrival())
                 .as("계획은 계획대로 남는다 — 다음 편차도 여기서 잰다")
                 .isEqualTo(PLANNED);
     }
 
-    @Test
-    void 같은_ETA_로는_옮기지_않는다() {
-        Shipment shipment = scheduled();
-
-        assertThat(shipment.projectEta(PLANNED))
-                .as("편차 0 에 UPDATE 와 낙관적 락 충돌을 만들지 않는다")
-                .isFalse();
-    }
-
     @ParameterizedTest
     @EnumSource(value = ShipmentStatus.class, names = {"COMPLETED", "FAILED", "CANCELLED"})
-    void 종결된_배송의_ETA_는_움직이지_않는다(ShipmentStatus terminal) {
+    void 종결된_배송에는_ETA_가_없다(ShipmentStatus terminal) {
         Shipment shipment = Shipment.restore(Ids.newId(), Ids.newId(), 1, terminal,
-                PLANNED, PLANNED, PROMISED_END, null, 0L);
+                PLANNED, PROMISED_END, null, 0L);
 
-        assertThat(shipment.projectEta(PLANNED.plus(Duration.ofHours(1)))).isFalse();
-        assertThat(shipment.etaAt()).isEqualTo(PLANNED);
+        assertThat(shipment.etaWith(Duration.ofHours(1))).isEmpty();
     }
 
     @Test
     void 약속_끝에서_여유_안에_들면_위험이다() {
         // §5.4 — eta > promised_end − 15분.
         Shipment shipment = scheduled();
-        shipment.projectEta(PROMISED_END.minus(Duration.ofMinutes(14)));
+        Duration deviation = Duration.between(PLANNED, PROMISED_END.minus(Duration.ofMinutes(14)));
 
-        assertThat(shipment.isAtRisk(Duration.ofMinutes(15))).isTrue();
+        assertThat(shipment.isAtRisk(Duration.ofMinutes(15), deviation)).isTrue();
     }
 
     @Test
     void 여유_경계_위는_위험이_아니다() {
         // 경계는 <em>초과</em>다. 같은 값이 위험이면 정확히 15분 남은 라우트가 매번 알림을 낸다.
         Shipment shipment = scheduled();
-        shipment.projectEta(PROMISED_END.minus(Duration.ofMinutes(15)));
+        Duration deviation = Duration.between(PLANNED, PROMISED_END.minus(Duration.ofMinutes(15)));
 
-        assertThat(shipment.isAtRisk(Duration.ofMinutes(15))).isFalse();
+        assertThat(shipment.isAtRisk(Duration.ofMinutes(15), deviation)).isFalse();
     }
 
     @ParameterizedTest
@@ -281,9 +271,9 @@ class ShipmentTest {
     void 종결된_배송은_위험하지_않다(ShipmentStatus terminal) {
         // 늦게 끝난 것은 사실이지만 「위험」이 아니다 — 재계획으로 되돌릴 것이 없다.
         Shipment shipment = Shipment.restore(Ids.newId(), Ids.newId(), 1, terminal,
-                PLANNED, PROMISED_END.plus(Duration.ofHours(1)), PROMISED_END, null, 0L);
+                PLANNED, PROMISED_END, null, 0L);
 
-        assertThat(shipment.isAtRisk(Duration.ofMinutes(15))).isFalse();
+        assertThat(shipment.isAtRisk(Duration.ofMinutes(15), Duration.ofHours(10))).isFalse();
     }
 
     @Test

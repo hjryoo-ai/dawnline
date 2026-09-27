@@ -74,7 +74,7 @@ V4 의 주석이 그것을 예고했다. 그래서 이 ADR 이 줄이는 것은 
 
 ## 결과
 
-- **장점**: 같은 라우트의 쓰기가 교착하지 않는다. 스캔당 쓰기가 O(1) 이다 — 30-stop 라우트의 그림자 990 → (아래 검증).
+- **장점**: 같은 라우트의 쓰기가 교착하지 않는다. 스캔당 쓰기가 O(1) 이다 — 30-stop 라우트의 그림자 `shipments` 990 → 90(라우트 행 61).
 - **비용**: 같은 라우트의 스캔과 개정 반영이 라우트 행에서 줄을 선다 — 이전에는 서로 다른 배송을 건드리면 동시에 갔다. 한 라우트의 기사는 하나라
   스캔끼리의 줄은 거의 없고, 개정은 라우트당 드물다(근거: 추정 — turbulent 실행의 tracking 풀 대기가 본다). 스캔이 잠그기 전에 읽은 배송이
   낡으면 한 번 더 한다(결정 1).
@@ -84,7 +84,13 @@ V4 의 주석이 그것을 예고했다. 그래서 이 ADR 이 줄이는 것은 
 
 | 표본 | 기대 | 결과 |
 |---|---|---|
-| `ScanRevisionRaceIT` — 스캔이 첫 stop 을 쓴 채 멈춘 동안 같은 라우트의 개정(주문 id 가 방문 순서의 반대) | 교착 0, 스캔 200, 개정 적용 | 정정 전: 교착 1(개정 쪽이 `CannotAcquireLockException`) — (구현 커밋에서 채운다) |
-| `ScanWriteVolumeIT` — 30-stop 라우트를 출발 · 도착 · 완료로 끝까지 | `shipments` 갱신 = 90(배송마다 셋), 라우트 행 갱신 ≤ 스캔 수 61 | 정정 전: `shipments` 990 · 라우트 행 0 — (구현 커밋에서 채운다) |
-| 음성 표본 — 스캔의 라우트 행 잠금을 뺀다 | `ScanRevisionRaceIT` 빨강 | (구현 커밋에서 채운다) |
-| 음성 표본 — 재시도에서 `PessimisticLockingFailureException` 을 뺀다 | 교착 재시도 단위 테스트 빨강 | (구현 커밋에서 채운다) |
+| `ScanRevisionRaceIT` — 스캔이 첫 stop 을 쓴 채 멈춘 동안 같은 라우트의 개정(주문 id 가 방문 순서의 반대) | 교착 0, 개정은 라우트 행(claim)에서 기다린다, 스캔 200, 개정 적용, 스캔의 `ARRIVED` 가 남는다 | 정정 전: **교착 1**(개정 쪽이 `CannotAcquireLockException`) · 정정 뒤: ✅ |
+| `ScanWriteVolumeIT` — 30-stop 라우트를 출발 · 도착 · 완료로 끝까지(스캔 61) | `shipments` 갱신 = 90(배송마다 셋), 라우트 행 갱신 ≤ 61 | 정정 전: `shipments` **990** · 라우트 행 0 → 정정 뒤: `shipments` **90** · 라우트 행 **61** ✅ |
+| `RouteAssignmentIT` — 새 개정 · 지난 개정 | 새 개정은 편차 0, 지난 개정은 그대로(행은 잠긴다) | ✅ |
+| `RecordScanServiceTest` · `ApplyRouteAssignmentServiceTest` — 호출 순서 | 스캔은 잠금이 첫 배송 쓰기보다 앞, 개정은 claim 이 배송 읽기보다 앞 | ✅ |
+| `ContendedScanRetryTest` — 교착의 패자 | 한 번 더 해서 이긴다 | ✅ |
+| 음성 표본 N1 — 스캔의 라우트 행 잠금을 뺀다 | 순서 단위 테스트 · `ScanRevisionRaceIT` 빨강 | ✅ 둘만 빨강 — IT 는 「개정이 라우트 행에서 기다린다」에서 먼저 멈췄다: 개정이 기다리던 문장이 `update shipments …` 였다(배송에서 줄을 섰다 — 정정 전의 모양) |
+| 음성 표본 N2 — 재시도에서 `PessimisticLockingFailureException` 을 뺀다 | 교착 재시도 단위 테스트 빨강 | ✅ 그것만 빨강 |
+| 음성 표본 N3 — claim 의 `deviation_seconds = 0` 을 뺀다 | `RouteAssignmentIT` 의 개정 테스트 빨강 | ✅ 그것만 빨강(300 이 남았다) |
+
+세 음성 표본 모두 복원 뒤 `cmp` 일치. tracking 통합 테스트 전체 72 초록(정정 뒤).
