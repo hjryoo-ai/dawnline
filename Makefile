@@ -42,7 +42,7 @@ SERVICE       ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls obs-check \
-        topics psql redis-cli config demo peak sim-up sim-down sim-reset chaos-kafka chaos-redis chaos-kill chaos-db chaos-verify clean-volumes \
+        topics psql redis-cli config demo peak peak-facts sim-up sim-down sim-reset chaos-kafka chaos-redis chaos-kill chaos-db chaos-verify clean-volumes \
         k6-orders k6-rate-limit smoke token
 
 # -----------------------------------------------------------------------------
@@ -83,7 +83,8 @@ help:
 	@printf '    make sim-up [SIM_AT=22:40]  개발 스택이 내려가 있어야 한다. 기동 순간의 유효 시각이 SIM_AT(KST)\n'
 	@printf '    make sim-down       시뮬레이션 스택의 컨테이너만 내린다(볼륨 유지)\n'
 	@printf '    make sim-reset      시뮬레이션 볼륨(dawnline-sim_*)만 지운다 — 측정의 첫 단계, 묻지 않는다(ADR-066 후속)\n'
-	@printf '    make peak [PEAK=peak-day]   창 시나리오 — 22:58 까지 기다려 한 시간, 증차 · 계획 · 기사 · 정리 (ADR-067)\n\n'
+	@printf '    make peak [PEAK=peak-day]   창 시나리오 — 22:58 까지 기다려 한 시간, 증차 · 계획 · 기사 · 정리 (ADR-067)\n'
+	@printf '    make peak-facts     그 실행의 반영(발행 → 적용) · 스캔 — 두 DB 의 사실로 (ADR-067 후속)\n\n'
 
 # -----------------------------------------------------------------------------
 # .env 준비 — 이미 있으면 절대 덮어쓰지 않는다.
@@ -353,6 +354,10 @@ PEAK ?= peak-day
 
 peak: env
 	@PEAK=$(PEAK) bash tools/sim/peak.sh
+
+# 리포트의 두 줄(반영 · 스캔)을 시뮬레이션 스택의 두 DB 에서 — 새 지표 없이 사실로(ADR-067 후속). 범위는 볼륨 전체라 sim-reset 뒤에 쓴다.
+peak-facts: env
+	@bash tools/sim/peak-facts.sh
 
 # -----------------------------------------------------------------------------
 # 카오스 (DESIGN.md §13 「카오스」, tools/chaos). 끝에 검증 표 V1–V7 을 낸다 — 카오스 종류와 무관하게 같은 표이고 7-4 peak-day 도

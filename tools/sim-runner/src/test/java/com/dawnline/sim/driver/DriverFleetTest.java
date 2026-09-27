@@ -97,6 +97,34 @@ class DriverFleetTest {
     }
 
     @Test
+    void 출발을_붙잡으면_라우트는_받되_놓기_전에는_스캔하지_않는다() throws InterruptedException {
+        // 붙잡는 것은 여정의 첫 스캔이지 수신이 아니다 — 받은 수는 세어져야 DepartureGate 가 「다 받았다」를 안다.
+        UUID wave = UUID.fromString("0199a000-0000-7000-8000-0000000000a1");
+        try (DriverFleet fleet = fleet(1)) {
+            fleet.holdDepartures();
+            fleet.assign(new AssignedRoute(DriverFixtures.ROUTE, 1, DRIVER, new AssignedRoute.Summary(DEPARTURE),
+                    List.of(stop(1, 20, 5, null)), wave));
+
+            assertThat(fleet.receivedIn(java.util.Set.of(wave))).isEqualTo(1);
+            assertThat(fleet.awaitRoutes(Duration.ofMillis(300))).as("붙잡힌 기사는 끝나지 않는다").isFalse();
+            assertThat(scanned).as("놓기 전에 나간 스캔").isEmpty();
+
+            fleet.releaseDepartures();
+            assertThat(fleet.awaitRoutes(Duration.ofSeconds(10))).isTrue();
+            assertThat(scanned).contains(DriverFixtures.ROUTE);
+        }
+    }
+
+    @Test
+    void 붙잡지_않으면_받는_즉시_출발한다() throws InterruptedException {
+        try (DriverFleet fleet = fleet(1)) {
+            fleet.assign(route(1));
+
+            assertThat(fleet.awaitRoutes(Duration.ofSeconds(10))).isTrue();
+        }
+    }
+
+    @Test
     void 라우트가_오지_않으면_기다리다_시간이_다_된다() throws InterruptedException {
         try (DriverFleet fleet = fleet(1)) {
             assertThat(fleet.awaitRoutes(Duration.ofMillis(200))).isFalse();

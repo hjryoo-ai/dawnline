@@ -49,6 +49,7 @@ docs/{DESIGN.md,IMPLEMENTATION_PLAN.md,adr,runbooks,benchmarks,postmortems}
 make up          # 전체 스택 기동 (Compose)
 make demo        # 시드 + smoke 시나리오 + Grafana/Swagger URL 출력
 make peak        # 피크 시나리오
+make peak-facts  # 그 실행의 반영(발행 → 적용) · 스캔을 두 DB 의 사실로 (ADR-067 후속)
 make sim-up      # 시뮬레이션 스택 — 자기 프로젝트(dawnline-sim), 기동 순간의 유효 시각 SIM_AT(KST) (ADR-066)
 make sim-reset   # 시뮬레이션 볼륨(dawnline-sim_*)만 지운다 — 측정의 첫 단계, 묻지 않는다(아래 「하지 말 것」의 유일한 예외)
 make chaos-kafka # Kafka 중단→복구 검증 스크립트

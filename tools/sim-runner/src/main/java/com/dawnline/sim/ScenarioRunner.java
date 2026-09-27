@@ -1,6 +1,7 @@
 package com.dawnline.sim;
 
 import com.dawnline.sim.config.SimProperties;
+import com.dawnline.sim.driver.DepartureGate;
 import com.dawnline.sim.driver.DriverReport;
 import com.dawnline.sim.driver.DriverScenario;
 import com.dawnline.sim.fleet.FleetFailure;
@@ -110,7 +111,11 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
 
         // 수신을 주문보다 먼저 켠다. 뒤면 그 사이에 확정된 라우트를 놓치고,
         // 놓친 것은 "라우트가 안 왔다" 로 보여서 원인이 도구인지 스택인지 구별되지 않는다.
+        // 창 시나리오는 출발을 그 앞에서 붙잡는다 — 받는 것과 떠나는 것을 뗀다(ADR-067 후속, runFleet 에서 놓는다).
         if (withDriver) {
+            if (fleet != null) {
+                driverScenario.holdDepartures();
+            }
             driverScenario.open();
         }
 
@@ -150,7 +155,8 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
      * 함대 단계 (ADR-067): 증차 · 조기 마감 → 계획 · 시간 예산 → 재배정 → 기사 → 비활성화 → 감사 행 대조 → 리포트 머리.
      *
      * <p>더한 차량이 있으면 <strong>비활성화는 실패 뒤에도 돈다</strong> — 측정을 이어 가는 것이 아니라 정리다. 실패는 리포트와
-     * 종료 코드에 그대로 남는다. 기사는 계획이 끝났을 때만 돈다(기다릴 수를 계획이 낸다).
+     * 종료 코드에 그대로 남는다. 기사는 계획이 끝났을 때만 돈다(기다릴 수를 계획이 낸다) — 그리고 tracking 이 창의 라우트를
+     * 반영한 뒤에 출발한다: 반영과 스캔은 운영에서 겹치지 않는다(ADR-067 후속). 그 기다림이 상한을 넘으면 실행의 실패다.
      */
     private void runFleet(PeakFleet.Session fleet, Instant cutoff, boolean withDriver) throws InterruptedException {
         try {
@@ -163,11 +169,12 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
             log.error("함대 단계 실패 — {}", e.getMessage());
         }
         if (withDriver && fleet.planned()) {
+            DepartureGate.Result departure = driverScenario.departAfterApplied(fleet.waveIds(), fleet.routes());
             DriverReport driverReport = driverScenario.awaitAndReport(properties.scenario(), fleet.waveIds(),
                     fleet.routes());
             this.lastDriverReport = driverReport;
-            log.info("기사 시뮬레이션 완료\n{}", driverReport.toMarkdown());
-            if (!driverReport.isSuccess()) {
+            log.info("기사 시뮬레이션 완료\n{}{}", driverReport.toMarkdown(), departure.toMarkdown());
+            if (!driverReport.isSuccess() || !departure.inTime()) {
                 this.exitCode = FAILURE_EXIT_CODE;
             }
         }

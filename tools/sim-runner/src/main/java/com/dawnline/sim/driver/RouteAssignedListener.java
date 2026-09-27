@@ -32,7 +32,7 @@ public class RouteAssignedListener {
     public static final String LISTENER_ID = "sim-driver";
 
     /** {@code Topics.forEvent("route.assigned", 1)} 와 같아야 한다. 테스트가 확인한다. */
-    static final String ROUTE_ASSIGNED_TOPIC = "dawnline.route.assigned.v1";
+    public static final String ROUTE_ASSIGNED_TOPIC = "dawnline.route.assigned.v1";
 
     private static final Logger log = LoggerFactory.getLogger(RouteAssignedListener.class);
 

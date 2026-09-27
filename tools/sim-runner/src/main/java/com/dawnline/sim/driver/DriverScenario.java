@@ -23,6 +23,7 @@ public final class DriverScenario implements AutoCloseable {
     private final DriverTally tally;
     private final int expectedRoutes;
     private final Duration timeout;
+    private final DepartureGate gate;
 
     /**
      * @param feed           {@code route.assigned} 수신
@@ -30,14 +31,33 @@ public final class DriverScenario implements AutoCloseable {
      * @param tally          집계
      * @param expectedRoutes 기다릴 라우트 수
      * @param timeout        라우트를 기다리는 상한
+     * @param gate           창 시나리오의 출발 — tracking 의 반영 뒤에
      */
     public DriverScenario(RouteFeed feed, DriverFleet fleet, DriverTally tally, int expectedRoutes,
-            Duration timeout) {
+            Duration timeout, DepartureGate gate) {
         this.feed = Objects.requireNonNull(feed, "feed");
         this.fleet = Objects.requireNonNull(fleet, "fleet");
         this.tally = Objects.requireNonNull(tally, "tally");
         this.expectedRoutes = expectedRoutes;
         this.timeout = Objects.requireNonNull(timeout, "timeout");
+        this.gate = Objects.requireNonNull(gate, "gate");
+    }
+
+    /** 기사의 출발을 붙잡는다 — 창 시나리오가 {@link #open()} 앞에서 부른다({@link DepartureGate}). */
+    public void holdDepartures() {
+        gate.hold();
+    }
+
+    /**
+     * 창의 라우트를 다 받고 tracking 이 그것을 반영하면 출발시킨다. 상한을 넘겨도 출발시킨다.
+     *
+     * @param waves  창의 웨이브
+     * @param routes 그 웨이브들의 라우트 수 합 — 계획이 낸 수
+     * @return 기다린 결과
+     * @throws InterruptedException 대기 중 인터럽트
+     */
+    public DepartureGate.Result departAfterApplied(Set<UUID> waves, int routes) throws InterruptedException {
+        return gate.openAfterApplied(waves, routes);
     }
 
     /** 수신을 켠다. */

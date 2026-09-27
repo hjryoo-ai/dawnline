@@ -4,12 +4,14 @@ import com.dawnline.messaging.json.EventJson;
 import com.dawnline.sim.ScenarioRunner;
 import com.dawnline.sim.config.SimProperties.Scenario;
 import com.dawnline.sim.config.SimProperties.Scenario.Driver;
+import com.dawnline.sim.driver.DepartureGate;
 import com.dawnline.sim.driver.DriverFleet;
 import com.dawnline.sim.driver.DriverScenario;
 import com.dawnline.sim.driver.DriverSimulator;
 import com.dawnline.sim.driver.DriverTally;
 import com.dawnline.sim.driver.HttpScanClient;
 import com.dawnline.sim.driver.Jitter;
+import com.dawnline.sim.driver.KafkaGroupLag;
 import com.dawnline.sim.driver.KafkaRouteFeed;
 import com.dawnline.sim.driver.RouteAssignedListener;
 import com.dawnline.sim.driver.RouteFeed;
@@ -29,11 +31,13 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.function.LongSupplier;
 import java.util.random.RandomGenerator;
+import org.apache.kafka.clients.admin.Admin;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
+import org.springframework.kafka.core.KafkaAdmin;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -56,6 +60,12 @@ public class SimRunnerConfig {
     private static final Duration ASSIGNMENT_TIMEOUT = Duration.ofSeconds(30);
 
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
+
+    /**
+     * 기사의 출발이 기다리는 컨슈머 그룹 — tracking 의 {@code spring.kafka.consumer.group-id}. 두 곳에 적힌 같은 값이라
+     * {@code TrackingGroupTest} 가 대조한다: 틀리면 없는 그룹의 랙을 재고, 없는 그룹은 커밋이 없어 랙이 줄지 않는다.
+     */
+    public static final String TRACKING_GROUP = "tracking-service";
 
     /**
      * 창의 시작까지 기다림 — 주입 시계로 (부록 A 「창은 하나다」). 시계는 {@code libs/messaging} 의 빈이다 — 시뮬레이션 스택에서는
@@ -223,14 +233,32 @@ public class SimRunnerConfig {
      * @param feed       수신 스위치
      * @param fleet      기사들
      * @param tally      집계
+     * @param lag        tracking 그룹의 랙 — 창 시나리오의 출발
      */
     @Bean
     public DriverScenario driverScenario(SimProperties properties, RouteFeed feed, DriverFleet fleet,
-            DriverTally tally) {
+            DriverTally tally, KafkaGroupLag lag) {
         Driver driver = driverOf(properties);
+        Duration timeout = Duration.ofSeconds(driver == null ? 1 : driver.timeoutSeconds());
         return new DriverScenario(feed, fleet, tally,
-                driver == null || driver.routes() == null ? 0 : driver.routes(),
-                Duration.ofSeconds(driver == null ? 1 : driver.timeoutSeconds()));
+                driver == null || driver.routes() == null ? 0 : driver.routes(), timeout,
+                new DepartureGate(fleet, lag, Sleeper.REAL, System::nanoTime, timeout));
+    }
+
+    /**
+     * tracking 이 {@code route.assigned} 를 어디까지 반영했나. Admin 은 처음 물을 때 만든다 — 창 시나리오가 아니면 묻지 않는다.
+     *
+     * @param admin Kafka 자동설정의 {@link KafkaAdmin} — 연결 설정의 출처
+     */
+    @Bean
+    public KafkaGroupLag trackingRouteLag(ObjectProvider<KafkaAdmin> admin) {
+        return new KafkaGroupLag(() -> {
+            KafkaAdmin found = admin.getIfAvailable();
+            if (found == null) {
+                throw new IllegalStateException("KafkaAdmin 이 없습니다. 창 시나리오의 출발은 tracking 그룹의 랙을 봅니다");
+            }
+            return Admin.create(found.getConfigurationProperties());
+        }, TRACKING_GROUP, RouteAssignedListener.ROUTE_ASSIGNED_TOPIC);
     }
 
     // -------------------------------------------------------------------------
