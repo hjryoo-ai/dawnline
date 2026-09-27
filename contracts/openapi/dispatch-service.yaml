@@ -591,10 +591,12 @@ components:
           format: uuid
         code:
           type: string
-          minLength: 1
+          maxLength: 16
+          minLength: 0
         type:
           type: string
-          minLength: 1
+          maxLength: 16
+          minLength: 0
         maxWeightG:
           type: integer
           format: int32

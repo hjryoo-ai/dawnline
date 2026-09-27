@@ -270,6 +270,18 @@ class DispatchApiTest {
     }
 
     @Test
+    void 코드가_칸보다_길면_DB_에_가기_전에_400_이다() throws Exception {
+        // vehicles.code 는 VARCHAR(16) — 막지 않으면 DB 가 거절하고 그것은 500 이다.
+        mvc.perform(post("/api/v1/vehicles").contentType(MediaType.APPLICATION_JSON).content("""
+                        {"campId":"%s","code":"V-12345678901234567","type":"VAN","maxWeightG":400000,
+                         "maxVolumeCm3":1200000,"cold":false,"allowsHazmat":false,
+                         "fixedCostKrw":45000,"costPerKmKrw":600,"costPerMinKrw":250,
+                         "shiftStart":"23:00:00","shiftEnd":"08:00:00"}
+                        """.formatted(Ids.newId())))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void 차량_등록의_출처는_peak_sim_을_받는다() throws Exception {
         when(resources.createVehicle(any())).thenReturn(Ids.newId());
 

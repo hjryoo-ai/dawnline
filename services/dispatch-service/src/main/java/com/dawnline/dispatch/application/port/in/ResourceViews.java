@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.util.List;
@@ -74,8 +75,8 @@ public final class ResourceViews {
      * 차량 등록 요청.
      *
      * @param campId         캠프
-     * @param code           이름
-     * @param type           차종
+     * @param code           이름 — {@code VARCHAR(16)}. 길이를 여기서 막지 않으면 DB 가 거절하고 그것은 500 이다
+     * @param type           차종 — {@code VARCHAR(16)}
      * @param maxWeightG     최대 중량(g)
      * @param maxVolumeCm3   최대 부피(㎤)
      * @param cold           냉장 차량인가
@@ -88,7 +89,8 @@ public final class ResourceViews {
      * @param source         누가 넣었나. 생략하면 {@code operator}. {@code seed} 는 받지 않는다 — 시드는 마이그레이션만 쓴다
      *                       (ADR-067 결정 4)
      */
-    public record NewVehicle(@NotNull UUID campId, @NotBlank String code, @NotBlank String type,
+    public record NewVehicle(@NotNull UUID campId, @NotBlank @Size(max = 16) String code,
+            @NotBlank @Size(max = 16) String type,
             @Positive int maxWeightG, @Positive int maxVolumeCm3, boolean cold,
             boolean allowsHazmat, @PositiveOrZero int fixedCostKrw,
             @PositiveOrZero int costPerKmKrw, @PositiveOrZero int costPerMinKrw,
