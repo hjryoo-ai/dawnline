@@ -476,7 +476,7 @@ class RunPlanServiceTest {
      * 사실이다. 같은 목록을 좌석 예약이 라운드로빈으로 돈다 — 설명이 1 을 세면 예약도 주간조에 가지 않는다.
      */
     @Test
-    void 근무창이_웨이브와_겹치지_않는_차량은_계획의_집합에_없다() {
+    void 약속창이_끝난_뒤에_근무를_시작하는_차량은_계획의_집합에_없다() {
         UUID waveId = Ids.newId();
         UUID orderId = seedCold(waveId);
         seed(waveId, 1);   // 밴이 실을 일반 주문 — 라우트가 하나는 있어야 계획이 발행되고 설명이 남는다
@@ -495,7 +495,7 @@ class RunPlanServiceTest {
 
     @Test
     void 쓸_수_있는_차량이_0대면_예외가_아니라_실패로_끝난다() {
-        // 캠프에 활성 차량은 있지만 이 웨이브와 겹치는 근무창이 없다. 거르기 전에는 전 차량이 거절해 라우트 없이 실패했다 —
+        // 캠프에 활성 차량은 있지만 모두 이 웨이브의 약속창이 끝난 뒤에 근무를 시작한다. 거르기 전에는 전 차량이 거절해 라우트 없이 실패했다 —
         // 같은 끝이어야 한다. 전략은 차량 0대를 받지 않으므로(예외) 그대로 부르면 wave.closed 가 재전달을 돈다.
         UUID waveId = Ids.newId();
         seedCold(waveId);
@@ -508,6 +508,27 @@ class RunPlanServiceTest {
         assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.FAILED);
         assertThat(events.failed).isEqualTo(1);
         assertThat(events.routesAssigned).isEmpty();
+    }
+
+    @Test
+    void 근무가_약속창보다_먼저_끝나도_룰이_받는_차량은_집합에_있다() {
+        // Compose 스모크의 모양(2026-09-27): 14:03 에 내일 약속창의 웨이브를 조기 마감한다. 오늘 근무조의 근무는 내일 약속창과 겹치지
+        // 않지만 룰은 지각만 막으므로 이르게 배송할 수 있다 — 처음 판(겹침)은 그 차를 빼서 계획이 실패했다. 집합은 룰보다 엄격하지 않다.
+        UUID waveId = Ids.newId();
+        UUID orderId = Ids.newId();
+        candidates.put(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
+                GeoPoint.of(InMemoryDispatchPorts.CAMP.lat() + 0.004d, InMemoryDispatchPorts.CAMP.lng() + 0.003d),
+                1_000, 2_000, false, false, new TimeWindow(NOW.plus(Duration.ofHours(20)), NOW.plus(Duration.ofHours(26))),
+                60, false, 0, NOW));
+        VehicleSpec todayVan = vehicle(false, new TimeWindow(NOW.minus(Duration.ofHours(5)), NOW.plus(Duration.ofHours(8))));
+
+        RunPlanUseCase.Outcome outcome = service(dawnRules(), (campId, planFor) -> List.of(todayVan),
+                Clock.fixed(NOW, ZoneOffset.UTC), "sweep-greedy-nn+ls")
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
+        assertThat(routes.explanations.stream().filter(e -> e.orderId().value().equals(orderId)))
+                .singleElement().extracting(Explanation::outcome).isEqualTo(Explanation.Outcome.ASSIGNED);
     }
 
     /** 새벽 약속창(NOW + 1h ~ + 5h)의 냉장 주문 하나. */

@@ -22,7 +22,7 @@ class WaveFleetTest {
     private static final TimeWindow DAWN = new TimeWindow(START.plus(Duration.ofHours(1)), START.plus(Duration.ofHours(5)));
 
     @Test
-    void 근무창이_약속창의_합과_겹치지_않는_차량은_뺀다() {
+    void 약속창의_합이_끝난_뒤에_근무를_시작하는_차량은_뺀다() {
         VehicleSpec night = vehicle(new TimeWindow(START.minus(Duration.ofHours(1)), START.plus(Duration.ofHours(8))));
         VehicleSpec day = vehicle(new TimeWindow(START.plus(Duration.ofHours(9)), START.plus(Duration.ofHours(22))));
 
@@ -38,11 +38,20 @@ class WaveFleetTest {
     }
 
     @Test
-    void 맞닿은_근무창은_겹치지_않는다() {
-        // 반열린 구간 — 근무 종료가 약속창 시작과 같으면 한 stop 도 실을 시간이 없다.
-        VehicleSpec touching = vehicle(new TimeWindow(DAWN.start().minus(Duration.ofHours(8)), DAWN.start()));
+    void 약속창_끝에_시작하는_근무는_뺀다() {
+        // 반열린 구간 — 약속창이 끝나는 순각에 시작하면 지각 아닌 stop 이 하나도 없다.
+        VehicleSpec atEnd = vehicle(new TimeWindow(DAWN.end(), DAWN.end().plus(Duration.ofHours(8))));
 
-        assertThat(WaveFleet.usable(List.of(touching), List.of(candidate(DAWN)))).isEmpty();
+        assertThat(WaveFleet.usable(List.of(atEnd), List.of(candidate(DAWN)))).isEmpty();
+    }
+
+    @Test
+    void 약속창보다_먼저_끝나는_근무도_남긴다_룰은_이른_도착을_막지_않는다() {
+        // 처음 판(겹침)은 이 차를 뺐다 — 하드 룰보다 엄격했다. 룰은 지각만 막으므로 이 차는 이르게 배송할 수 있고, 그것을 가를 곳은
+        // stop 마다의 룰이다. 내일 약속창의 웨이브를 오늘 조기 마감한 Compose 스모크가 이 모양이었다(2026-09-27).
+        VehicleSpec earlier = vehicle(new TimeWindow(DAWN.start().minus(Duration.ofHours(8)), DAWN.start()));
+
+        assertThat(WaveFleet.usable(List.of(earlier), List.of(candidate(DAWN)))).containsExactly(earlier);
     }
 
     @Test
