@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.LongSupplier;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,6 +60,16 @@ public final class SmokeScenario {
      */
     public ScenarioReport run(String name, Scenario scenario, OrderGenerator generator, String runId)
             throws InterruptedException {
+        return run(name, scenario, generator, runId, null);
+    }
+
+    /**
+     * 취소를 함께 돈다 (7-4 turbulent). 계획 전 취소는 그 주문이 접수된 직후에 보내고, 발행 뒤 취소는 모아 둔다.
+     *
+     * @param cancellations 취소. 없으면 {@code null}
+     */
+    public ScenarioReport run(String name, Scenario scenario, OrderGenerator generator, String runId,
+            @Nullable OrderCancellations cancellations) throws InterruptedException {
 
         long intervalNanos = Math.round(NANOS_PER_SECOND / scenario.ratePerSecond());
         long[] latencies = new long[scenario.orders()];
@@ -78,12 +89,17 @@ public final class SmokeScenario {
             long dueAt = startedAt + i * intervalNanos;
             sleeper.sleepNanos(dueAt - nanoTime.getAsLong());
 
+            GeneratedOrder order = generator.next(i);
+            CancelPlan.When when = cancellations == null ? CancelPlan.When.NONE : cancellations.decide(order);
             long sentAt = nanoTime.getAsLong();
-            OrderClient.Response response = client.place(generator.next(i), runId + "-" + i);
+            OrderClient.Response response = client.place(order, runId + "-" + i);
             latencies[i] = nanoTime.getAsLong() - sentAt;
 
             if (response.isAccepted()) {
                 accepted++;
+                if (cancellations != null) {
+                    cancellations.onAccepted(when, response);
+                }
             } else if (response.status() == 200) {
                 replayed++;
             } else if (response.status() == 0) {
