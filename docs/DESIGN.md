@@ -1814,11 +1814,12 @@ record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, i
   다루는 다른 서비스에서는 그 위험이 없으므로 그쪽은 그대로 둔다.
 
 **`vehicles` 는 그 웨이브가 쓸 수 있는 차량이다** (2026-09-27, [ADR-039 후속](adr/ADR-039-reserve-seats-by-constraint-class.md)).
-근무창이 후보 약속창의 합과 **겹치는** 차량만 들어온다(`WaveFleet.usable` — 함대 판정 §5.3 과 같은 함수). 거르는 자리는 문제를 만드는
+근무가 후보 약속창의 합이 **끝나기 전에 시작하는** 차량만 들어온다(`WaveFleet.usable` — 함대 판정 §5.3 과 같은 함수). 거르는 자리는 문제를 만드는
 곳(`RunPlanService.problemOf`) 하나다. 이 목록을 쓰는 자리가 배정 하나가 아니기 때문이다 — 좌석 예약(§6.5 3단계)이 라운드로빈을 도는
 목록이고 미배정 설명의 `triedVehicles` 가 세는 목록이다. 주간조가 새벽 웨이브의 목록에 있으면 배정은 근무창 룰이 막아 주지만 **예약은
-그 차에 냉장 좌석을 나눈다** — 첫 `peak-day` 의 미배정 10.55%가 그 자리였다(그림자 재실행에서 2.60%). 겹침이지 덮음이 아니다:
-일부만 겹치는 차량이 실을 stop 은 여전히 stop 마다의 룰이 가른다.
+그 차에 냉장 좌석을 나눈다** — 첫 `peak-day` 의 미배정 10.55%가 그 자리였다(그림자 재실행에서 2.60%). **술어는 하드 룰보다 엄격하지 않다** — 집합은 한 stop 도 실을 수 없는 차만 빼고, 어느 stop 을 실을지는
+stop 마다의 룰이 가른다. 룰은 이른 도착을 막지 않으므로 근무 끝은 술어에 들지 않는다(처음 판의 「겹침」은 내일 약속창의 웨이브를 조기
+마감한 데모에서 쓸 차량을 0대로 만들었다 — ADR-039 후속).
 
 `DistanceProvider`는 `(GeoPoint a, GeoPoint b) → (meters, seconds)`를 반환. 기본 구현 `HaversineDistance`(도로계수 1.3, 평균 속도 25 km/h, 캠프 설정값). 선택 구현 `OsrmDistance`(테이블 API, 캐시). 문제 생성 시 거리 행렬은 **stop 통합 후** 계산해 `O(n²)` 규모를 줄인다(§6.7).
 
