@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.Condition;
@@ -26,6 +27,10 @@ import org.slf4j.LoggerFactory;
  * tracking 의 {@code route_revisions} 와 같은 모양이고, 재전달(같은 개정)과 순서 역전(낮은 개정)을
  * 함께 흡수한다. 예외가 성립하는 이유는 「도구라서」가 아니라 <strong>하류가 멱등이라서</strong>다:
  * 이 거름망이 새더라도 tracking 이 {@code STALE} 로 받는다.
+ *
+ * <h2>출발은 붙잡을 수 있다</h2>
+ * 창 시나리오는 기사를 tracking 의 반영 뒤에 출발시킨다({@link DepartureGate}). 붙잡힌 동안에도 라우트는 받고 개정도 쌓인다 —
+ * 붙잡는 것은 여정의 <em>첫 스캔</em>이지 수신이 아니다. 기본은 열려 있다: 다른 시나리오는 받는 즉시 출발한다.
  */
 public final class DriverFleet implements AutoCloseable {
 
@@ -57,6 +62,12 @@ public final class DriverFleet implements AutoCloseable {
 
     /** routeId → 본 개정의 최댓값. */
     private final Map<UUID, Integer> seenRevisions = new HashMap<>();
+
+    /** 받은 라우트 — 웨이브별. {@code this} 가 지킨다. */
+    private final Map<UUID, Integer> receivedByWave = new HashMap<>();
+
+    /** 출발 신호. 기본은 열려 있다(0). {@link #holdDepartures()} 가 새로 닫는다. */
+    private volatile CountDownLatch departures = new CountDownLatch(0);
 
     /**
      * @param expectedRoutes  기다릴 라우트 수 — 설정이 정한 것. 창 시나리오는 계획이 정하므로 0 이고
@@ -105,15 +116,44 @@ public final class DriverFleet implements AutoCloseable {
             tally.routeStarted();
             DriverTrip started = trip;
             UUID wave = route.waveId() == null ? NO_WAVE : route.waveId();
+            receivedByWave.merge(wave, 1, Integer::sum);
+            CountDownLatch gate = departures;
             drivers.execute(() -> {
                 try {
+                    gate.await();
                     started.run();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 } finally {
                     finished(wave);
                 }
             });
         }
         trip.revise(route);
+    }
+
+    /**
+     * 출발을 붙잡는다 — 이 뒤에 받은 라우트의 기사는 {@link #releaseDepartures()} 까지 첫 스캔을 보내지 않는다.
+     * 수신을 켜기 전에 부른다.
+     */
+    public void holdDepartures() {
+        departures = new CountDownLatch(1);
+    }
+
+    /** 붙잡은 출발을 놓는다. 붙잡지 않았으면 아무 일도 없다. */
+    public void releaseDepartures() {
+        departures.countDown();
+    }
+
+    /**
+     * 그 웨이브들에서 받은 라우트 수 — 개정이 아니라 라우트.
+     *
+     * @param waves 셀 웨이브
+     * @return 받은 라우트 수
+     */
+    public synchronized int receivedIn(Set<UUID> waves) {
+        return receivedByWave.entrySet().stream().filter(entry -> waves.contains(entry.getKey()))
+                .mapToInt(Map.Entry::getValue).sum();
     }
 
     /**

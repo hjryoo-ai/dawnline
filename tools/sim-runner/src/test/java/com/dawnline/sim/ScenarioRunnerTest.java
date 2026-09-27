@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.sim.config.SimProperties;
+import com.dawnline.sim.driver.DepartureGate;
 import com.dawnline.sim.driver.DriverFleet;
 import com.dawnline.sim.driver.DriverReport;
 import com.dawnline.sim.driver.DriverScenario;
@@ -97,7 +98,8 @@ class ScenarioRunnerTest {
         DriverTally tally = new DriverTally();
         DriverFleet fleet = new DriverFleet(0, new DriverSimulator(Jitter.NONE), neverCalled,
                 () -> 0.0, nanos -> { }, FROZEN_CLOCK, 0L, tally);
-        return new DriverScenario(feed, fleet, tally, 0, Duration.ofSeconds(1));
+        return new DriverScenario(feed, fleet, tally, 0, Duration.ofSeconds(1),
+                new DepartureGate(fleet, () -> 0L, nanos -> { }, FROZEN_CLOCK, Duration.ofSeconds(1)));
     }
 
     private ScenarioRunner runner(SimProperties properties, OrderClient client) {

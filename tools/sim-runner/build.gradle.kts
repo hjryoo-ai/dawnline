@@ -51,6 +51,10 @@ tasks.named<Test>("test") {
     inputs.file(rootProject.layout.projectDirectory.file("docs/DESIGN.md"))
             .withPropertyName("designDoc")
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // TrackingGroupTest 가 tracking 의 컨슈머 그룹 이름을 읽는다 — 그쪽만 고친 실행에서도 대조가 돈다.
+    inputs.file(rootProject.layout.projectDirectory.file("services/tracking-service/src/main/resources/application.yml"))
+            .withPropertyName("trackingConfig")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // -----------------------------------------------------------------------------
