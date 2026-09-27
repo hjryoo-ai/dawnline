@@ -6,6 +6,7 @@ import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,8 +27,11 @@ import tools.jackson.databind.JsonNode;
  * 없는 것이 재시도되고 사람이 열어도 할 일이 없다 — 그래서 {@code dawnline_replan_total} 의
  * {@code outcome} 라벨이 그 자리를 대신한다(ADR-048 결정 5).
  *
- * <p>카운터는 유스케이스 <strong>밖</strong>에서 올린다. 안에서 올리면 롤백된 재계획의 숫자가
- * 남고, 그 차이는 장애 때 가장 커진다 — 지표가 가장 많이 읽히는 순간에 가장 많이 틀린다.
+ * <p>카운터는 <strong>커밋 뒤에</strong> 올린다 — {@link IdempotentConsumer#runOnce} 가 돌아온 뒤다. 안에서 올리면 롤백된
+ * 재계획의 숫자가 남고, 그 차이는 장애 때 가장 커진다 — 지표가 가장 많이 읽히는 순간에 가장 많이 틀린다.
+ * <strong>2026-09-27 정정</strong>: 이 문단은 전에 「유스케이스 밖」이라고 적었고 카운터는 {@code runOnce} 의 콜백 안에 있었다 —
+ * 유스케이스의 {@code @Transactional} 은 바깥({@code processed_events})의 트랜잭션에 합류하므로 콜백 안은 아직 커밋 전이다.
+ * {@code ReplanIT} 가 CI 에서 카운터를 기다린 뒤 {@code processed_events} 를 1 행으로 읽어 드러났다(근거: 관측 — 재현은 CI 1회).
  */
 public class AtRiskListener {
 
@@ -67,10 +71,13 @@ public class AtRiskListener {
         EventEnvelope<JsonNode> envelope = json.readEnvelope(record.value());
         JsonNode payload = envelope.payload();
 
-        consumer.runOnce(envelope, CONSUMER, () -> {
-            ReplanRouteUseCase.Outcome outcome = replan.replan(AtRiskPayload.toCommand(payload));
-            metrics.replanned(outcome);
-            log.debug("재계획을 마쳤다. eventId={}, outcome={}", envelope.eventId(), outcome.label());
-        });
+        AtomicReference<ReplanRouteUseCase.Outcome> outcome = new AtomicReference<>();
+        boolean ran = consumer.runOnce(envelope, CONSUMER,
+                () -> outcome.set(replan.replan(AtRiskPayload.toCommand(payload))));
+        // 여기는 커밋 뒤다 — 롤백되면 runOnce 가 예외로 끝나 이 줄에 오지 않는다.
+        if (ran && outcome.get() != null) {
+            metrics.replanned(outcome.get());
+            log.debug("재계획을 마쳤다. eventId={}, outcome={}", envelope.eventId(), outcome.get().label());
+        }
     }
 }
