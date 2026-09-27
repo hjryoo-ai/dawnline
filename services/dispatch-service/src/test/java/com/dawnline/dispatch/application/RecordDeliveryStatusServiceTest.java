@@ -80,6 +80,26 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
+        public void relocateStop(UUID stopId, UUID targetRouteId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public java.util.Map<UUID, Integer> revisionsOfPlan(UUID planId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public java.util.Map<UUID, Integer> lockRevisions(java.util.Collection<UUID> routeIds) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean coolingDown(UUID routeId, java.time.Instant now, java.time.Duration cooldown) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public boolean tryStartReplan(UUID routeId, java.time.Instant now,
                 java.time.Duration cooldown) {
             throw new UnsupportedOperationException();

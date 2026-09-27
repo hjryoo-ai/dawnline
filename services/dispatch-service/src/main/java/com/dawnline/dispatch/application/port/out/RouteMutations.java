@@ -5,7 +5,9 @@ import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -101,10 +103,51 @@ public interface RouteMutations {
     void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId);
 
     /**
+     * stop <strong>행</strong>을 다른 라우트로 옮긴다 — id · 좌표 · 약속창 · 상태 · 주문 연결이 그대로 간다 (§6.8, ADR-068 결정 3).
+     *
+     * <p>{@link #moveOrder} 와 다른 점: 저쪽은 주문 하나를 대상의 새 stop 으로 옮기고 비워진 원래 행을 지운다. 그 행의 락을
+     * 기다리던 상태 반영은 커밋 뒤 0 행을 고치고, 합쳐진 stop 은 주문마다 흩어진다 — 재계획은 stop 단위로 옮기므로 행을 옮긴다.
+     * 순번은 뒤따르는 {@link #rewrite} 가 매긴다(맨 뒤에 둔다 — {@code (route_id, seq)} UNIQUE 는 지연 제약이다).
+     *
+     * @param stopId        옮길 stop
+     * @param targetRouteId 도착 라우트
+     */
+    void relocateStop(UUID stopId, UUID targetRouteId);
+
+    /**
+     * 계획의 라우트마다 지금 {@code revision} — 재계획이 읽기 단계에서 적어 두고 쓰기 단계에서 대조한다 (ADR-068 결정 2).
+     *
+     * @param planId 계획 id
+     */
+    Map<UUID, Integer> revisionsOfPlan(UUID planId);
+
+    /**
+     * 라우트 행들을 <strong>잠그고</strong> {@code revision} 을 읽는다 — id 순서로 잡는다(두 재계획이 같은 두 라우트를 반대
+     * 순서로 잡지 않게).
+     *
+     * @param routeIds 라우트 id 들
+     * @return 라우트마다 지금 {@code revision}. 없는 라우트는 빠진다
+     */
+    Map<UUID, Integer> lockRevisions(Collection<UUID> routeIds);
+
+    /**
+     * 쿨다운 안인가 — <strong>비교만 한다</strong> (ADR-068 결정 4). 계산을 아끼는 자리이고, 집는 것은
+     * {@link #tryStartReplan} 의 한 문장이다.
+     *
+     * @param routeId  라우트 id
+     * @param now      지금 (주입된 시계)
+     * @param cooldown 쿨다운 길이
+     */
+    boolean coolingDown(UUID routeId, Instant now, Duration cooldown);
+
+    /**
      * 이동 뒤 라우트를 다시 쓴다 — 순번 재부여, 시간 재전파, 요약 갱신.
      *
      * <p>시각과 비용은 <strong>도메인이 계산해서 넘긴다</strong>. 어댑터가 다시 계산하면 그
      * 계산이 두 곳이 되고, 두 곳은 갈라진다.
+     *
+     * <p>행은 <strong>주문으로</strong> 찾는다 — 좌표가 아니다(ADR-068 결정 3). 한 라우트에 같은 좌표의 stop 이 둘 있을 수
+     * 있고(약속창이 다르다), 좌표를 열쇠로 쓰면 둘 중 하나는 순번도 시각도 받지 못한다.
      *
      * @param routeId 라우트 id
      * @param route   다시 계산된 라우트. 비어 있으면 stop 을 전부 지운다

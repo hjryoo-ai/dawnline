@@ -19,6 +19,7 @@ import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.Explanation;
 import com.dawnline.dispatch.domain.optimizer.OrderId;
+import com.dawnline.dispatch.domain.optimizer.PlannedStop;
 import com.dawnline.dispatch.domain.optimizer.Parcel;
 import com.dawnline.dispatch.domain.optimizer.PlanResult;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
@@ -289,6 +290,11 @@ final class InMemoryDispatchPorts {
             return routeId;
         }
 
+        /** 라우트의 행들 — 지금 순서 그대로. */
+        List<StopRow> rowsOf(UUID routeId) {
+            return List.copyOf(rows.getOrDefault(routeId, List.of()));
+        }
+
         StopRow row(UUID routeId, int seq) {
             return rows.get(routeId).stream().filter(stop -> stop.seq == seq).findFirst()
                     .orElseThrow();
@@ -395,10 +401,8 @@ final class InMemoryDispatchPorts {
             if (route == null) {
                 return;
             }
-            // 순번은 건드리지 않고 시각만 다시 쓴다 — 실물 SQL 과 같다.
-            route.stops().forEach(planned -> rows.get(routeId).stream()
-                    .filter(row -> row.point.equals(planned.stop().point()))
-                    .forEach(row -> row.arrival = planned.arrival()));
+            // 순번은 건드리지 않고 시각만 다시 쓴다 — 실물 SQL 과 같다. 행은 주문으로 찾는다(ADR-068 결정 3).
+            route.stops().forEach(planned -> liveRowOf(routeId, planned).arrival = planned.arrival());
         }
 
         @Override
@@ -484,11 +488,7 @@ final class InMemoryDispatchPorts {
             summaries.put(routeId, route);
             int seq = 1;
             for (var planned : route.stops()) {
-                StopRow row = rows.get(routeId).stream()
-                        .filter(candidate -> !candidate.cancelled()
-                                && candidate.point.equals(planned.stop().point()))
-                        .findFirst().orElseThrow(() -> new IllegalStateException(
-                                "다시 쓸 stop 을 찾지 못했습니다: " + planned.seq()));
+                StopRow row = liveRowOf(routeId, planned);
                 row.seq = seq++;
                 row.arrival = planned.arrival();
             }
@@ -502,6 +502,49 @@ final class InMemoryDispatchPorts {
         @Override
         public void clear(UUID routeId) {
             rows.put(routeId, new ArrayList<>());
+        }
+
+        /** 실물과 같다 — 행을 옮긴다. id · 주문 · 상태가 그대로 가고 순번은 맨 뒤(rewrite 가 매긴다). */
+        @Override
+        public void relocateStop(UUID stopId, UUID targetRouteId) {
+            StopRow row = rows.values().stream().flatMap(List::stream)
+                    .filter(stop -> stop.id.equals(stopId)).findFirst().orElseThrow();
+            rows.get(routeOf(row)).remove(row);
+            List<StopRow> target = rows.computeIfAbsent(targetRouteId, id -> new ArrayList<>());
+            row.seq = target.stream().mapToInt(stop -> stop.seq).max().orElse(0) + 1;
+            target.add(row);
+        }
+
+        @Override
+        public Map<UUID, Integer> revisionsOfPlan(UUID planId) {
+            Map<UUID, Integer> revisionsOf = new LinkedHashMap<>();
+            routesOfPlan(planId).forEach(header -> revisionsOf.put(header.routeId(), revisions.get(header.routeId())));
+            return revisionsOf;
+        }
+
+        @Override
+        public Map<UUID, Integer> lockRevisions(java.util.Collection<UUID> routeIds) {
+            Map<UUID, Integer> revisionsOf = new LinkedHashMap<>();
+            routeIds.stream().filter(revisions::containsKey).forEach(id -> revisionsOf.put(id, revisions.get(id)));
+            return revisionsOf;
+        }
+
+        @Override
+        public boolean coolingDown(UUID routeId, Instant now, java.time.Duration cooldown) {
+            Instant last = lastReplannedAt.get(routeId);
+            return last != null && last.isAfter(now.minus(cooldown));
+        }
+
+        /** 계획된 stop 의 행 — 실물처럼 주문으로 찾는다. 주문들이 한 행에 있어야 한다. */
+        private StopRow liveRowOf(UUID routeId, PlannedStop planned) {
+            List<UUID> orderIds = planned.stop().orderIds().stream().map(OrderId::value).toList();
+            List<StopRow> found = rows.get(routeId).stream()
+                    .filter(row -> !row.cancelled() && orderIds.stream().anyMatch(row.orderIds::contains))
+                    .toList();
+            if (found.size() != 1 || !found.getFirst().orderIds.containsAll(orderIds)) {
+                throw new IllegalStateException("다시 쓸 stop 을 찾지 못했습니다: " + planned.seq());
+            }
+            return found.getFirst();
         }
     }
 

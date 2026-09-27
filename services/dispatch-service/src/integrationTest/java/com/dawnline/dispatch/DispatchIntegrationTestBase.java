@@ -1,6 +1,9 @@
 package com.dawnline.dispatch;
 
 import com.dawnline.web.internal.InternalTokens;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import org.flywaydb.core.Flyway;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -66,6 +69,16 @@ public abstract class DispatchIntegrationTestBase {
     /** 테스트가 직접 SQL 을 돌릴 때 쓰는 접속 정보. */
     protected static String jdbcUrl() {
         return POSTGRES.getJdbcUrl();
+    }
+
+    /**
+     * 커넥션 풀 <strong>밖</strong>의 연결 — 풀을 다 쓰는 순간을 관측하는 테스트가 쓴다. 관측 질의가 풀에서 커넥션을 기다리면 그
+     * 테스트는 자기가 만든 포화에 막혀 아무것도 보지 못한다({@code ReplanRaceIT}, 2026-09-27).
+     *
+     * @throws SQLException 접속 실패
+     */
+    protected static Connection unpooledConnection() throws SQLException {
+        return DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
     }
 
     /** 테스트 브로커 주소. */

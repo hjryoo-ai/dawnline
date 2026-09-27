@@ -340,16 +340,17 @@ public class DispatchApplicationConfig {
      * @param metrics      §9.1 메트릭
      * @param clock        주입된 시계 (불변규칙 12)
      * @param properties   쿨다운·허용 오차
+     * @param transactionManager 읽기 · 쓰기 트랜잭션 — 계산은 둘 사이에서 트랜잭션 없이 돈다(ADR-068)
      */
     @Bean
     public ReplanRouteUseCase replanRouteUseCase(RouteMutations routes, RoutePlanRepository plans,
             PlannedRouteRepository explanations, JdbcReferenceData reference, DispatchEvents events,
             DistanceProvider distance, DispatchMetrics metrics, Clock clock,
-            DispatchProperties properties) {
+            DispatchProperties properties, PlatformTransactionManager transactionManager) {
 
         return new ReplanRouteService(routes, plans, explanations, reference, reference, events,
                 distance, metrics, clock, properties.replan().cooldown(),
-                properties.replan().deviationTolerance());
+                properties.replan().deviationTolerance(), transactionManager);
     }
 
     /**

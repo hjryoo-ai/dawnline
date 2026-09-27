@@ -3,17 +3,20 @@ package com.dawnline.dispatch.application;
 import com.dawnline.common.error.ConflictException;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.in.ReplanRouteUseCase;
+import com.dawnline.dispatch.application.port.in.WriteGate;
 import com.dawnline.dispatch.application.port.out.DispatchEvents;
 import com.dawnline.dispatch.application.port.out.PlannedRouteRepository;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.application.port.out.RouteMutations.PositionedStop;
 import com.dawnline.dispatch.application.port.out.RouteMutations.RouteHeader;
 import com.dawnline.dispatch.application.port.out.RouteMutations.SettledStop;
+import com.dawnline.dispatch.application.port.out.RouteMutations.StopOfOrder;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.RoutePlan;
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
@@ -34,10 +37,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * {@code delivery.at-risk} → 부분 재계획 (DESIGN.md §6.8, ADR-048).
@@ -54,9 +63,16 @@ import org.springframework.transaction.annotation.Transactional;
  * 밀려 <em>다음 편차의 기준선이 사라진다</em> — 두 번째 at-risk 에서 이 서비스는 자기 편차를
  * 0 으로 본다. 반대편에서 말하면 {@code planned_arrival} 은 계획이고 ETA 는 tracking 의 것이다.
  *
- * <h2>쿨다운이 가장 먼저다</h2>
- * 아무것도 읽기 전에 {@link RouteMutations#tryStartReplan} 을 부른다. 멱등 소비자는 이 자리를
- * 대신하지 못한다 — 두 at-risk 는 {@code eventId} 가 달라 둘 다 처음 보는 이벤트다
+ * <h2>읽기 · 계산 · 쓰기 셋이다 (ADR-068)</h2>
+ * 계획(ADR-064)과 같은 구조다 — 읽기 전용 트랜잭션에서 읽고, 트랜잭션 없이 {@link RelocateSearch} 를 돌리고, 게이트가 감싼 쓰기
+ * 트랜잭션 하나에서 쓴다. 쓰기는 <strong>계산의 전제를 다시 본다</strong>: 옮길 stop 을 잠그고 {@code PLANNED} 인지, 원 · 대상
+ * 라우트의 {@code revision} 이 읽기 때와 같은지. 어긋나면 결과를 버리고 {@link Outcome#STALE} 이다. 옮기는 것은 stop
+ * <strong>행</strong>이다 — 정정 전에는 주문을 대상의 새 stop 으로 옮기고 원래 행을 지웠고, 그 순간 도착한 배송이 적힐 자리를
+ * 잃었다(두 번째 peak-day, 근거: 관측(재현됨) — {@code ReplanRaceIT}).
+ *
+ * <h2>쿨다운 — 읽기는 비교만, 쓰기는 한 문장</h2>
+ * 읽기가 먼저 비교해 쿨다운 안이면 계산하지 않는다(계산을 아낀다). 집는 것은 쓰기의 {@link RouteMutations#tryStartReplan}
+ * 한 문장이다 — 멱등 소비자는 이 자리를 대신하지 못한다: 두 at-risk 는 {@code eventId} 가 달라 둘 다 처음 보는 이벤트다
  * ([ADR-046] 결정 3). 「쿨다운은 이미 있으니 됐다」가 이 자리의 함정이다.
  *
  * <h2>실패하지 않는다 — 갈린다</h2>
@@ -81,6 +97,8 @@ public class ReplanRouteService implements ReplanRouteUseCase {
     private final Duration deviationTolerance;
     private final CostModel cost = new CostModel();
     private final RelocateSearch search;
+    private final TransactionTemplate reads;
+    private final TransactionTemplate writes;
 
     /**
      * @param routes             라우트 조작
@@ -94,20 +112,22 @@ public class ReplanRouteService implements ReplanRouteUseCase {
      * @param clock              주입된 시계 (불변규칙 12)
      * @param cooldown           라우트당 쿨다운 (§6.8 5단계)
      * @param deviationTolerance 두 편차가 이만큼까지는 갈려도 세지 않는다
+     * @param transactions       읽기 · 쓰기 트랜잭션 (ADR-068 결정 1 — 계산은 둘 사이에서 트랜잭션 없이 돈다)
      */
     public ReplanRouteService(RouteMutations routes, RoutePlanRepository plans,
             PlannedRouteRepository explanations, VehicleCatalog vehicles, RuleCatalog rules,
             DispatchEvents events, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
-            Duration cooldown, Duration deviationTolerance) {
+            Duration cooldown, Duration deviationTolerance, PlatformTransactionManager transactions) {
         this(routes, plans, explanations, vehicles, rules, events, distance, metrics, clock, cooldown,
-                deviationTolerance, RelocateSearch.MAX_EVALUATIONS);
+                deviationTolerance, transactions, RelocateSearch.MAX_EVALUATIONS);
     }
 
     /** 평가 상한을 준 서비스 — 상한에 걸리는 두 갈래(truncated · searchTruncated)를 작은 픽스처로 보는 테스트가 쓴다. */
     ReplanRouteService(RouteMutations routes, RoutePlanRepository plans,
             PlannedRouteRepository explanations, VehicleCatalog vehicles, RuleCatalog rules,
             DispatchEvents events, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
-            Duration cooldown, Duration deviationTolerance, int maxEvaluations) {
+            Duration cooldown, Duration deviationTolerance, PlatformTransactionManager transactions,
+            int maxEvaluations) {
 
         this.routes = Objects.requireNonNull(routes, "routes");
         this.plans = Objects.requireNonNull(plans, "plans");
@@ -121,16 +141,51 @@ public class ReplanRouteService implements ReplanRouteUseCase {
         this.cooldown = Objects.requireNonNull(cooldown, "cooldown");
         this.deviationTolerance = Objects.requireNonNull(deviationTolerance, "deviationTolerance");
         this.search = new RelocateSearch(distance, cost, maxEvaluations);
+        Objects.requireNonNull(transactions, "transactions");
+        this.reads = new TransactionTemplate(transactions);
+        this.reads.setReadOnly(true);
+        this.writes = new TransactionTemplate(transactions);
     }
 
     @Override
-    @Transactional
-    public Outcome replan(ReplanCommand command) {
+    public Optional<Outcome> replan(ReplanCommand command, WriteGate gate) {
         Objects.requireNonNull(command, "command");
+        Objects.requireNonNull(gate, "gate");
+        Instant now = clock.instant();
 
-        if (!routes.tryStartReplan(command.routeId(), clock.instant(), cooldown)) {
+        Snapshot snapshot = Objects.requireNonNull(reads.execute(status -> read(command, now)));
+
+        // 여기서부터 쓰기 전까지 트랜잭션이 없다 — 커넥션을 쥐지 않는다 (ADR-068 결정 1). 계산이 PLANNED 로 본 stop 이
+        // 이 사이에 끝날 수 있고, 그래서 쓰기가 다시 본다.
+        Search input = snapshot.search();
+        RelocateSearch.@Nullable Outcome found = input == null ? null
+                : search.search(input.ruleSet(), input.source(), input.candidates());
+
+        AtomicReference<Outcome> written = new AtomicReference<>();
+        boolean entered = gate.enter(() -> written.set(writes.execute(status ->
+                write(command, snapshot, found, now))));
+        if (!entered) {
+            log.debug("같은 at-risk 를 이미 처리했다 — 계산한 결과를 버린다. routeId={}", command.routeId());
+            return Optional.empty();
+        }
+        Outcome outcome = Objects.requireNonNull(written.get(), "게이트가 들어갔다고 했는데 쓰기가 돌지 않았다");
+        // 커밋 뒤에 센다 — 게이트가 돌아왔으면 커밋이 끝났다. 쿨다운에 막힌 쪽은 전에도 견주지 않았다.
+        if (snapshot.deviationMismatch() && outcome != Outcome.COOLDOWN) {
+            metrics.atRiskDeviationMismatch();
+        }
+        return Optional.of(outcome);
+    }
+
+    /**
+     * 읽기 — 읽기 전용 트랜잭션 안. 아무것도 쓰지 않는다(쿨다운도 쓰기가 집는다).
+     *
+     * <p>예외는 여기서 나간다 — 계획이 없다, 시작 시각 · 캠프 좌표가 없다, 원 라우트의 차량이 없다. 정말로 처리하지 못한 것이고
+     * 재시도의 몫이다(클래스 주석 「실패하지 않는다 — 갈린다」).
+     */
+    private Snapshot read(ReplanCommand command, Instant now) {
+        if (routes.coolingDown(command.routeId(), now, cooldown)) {
             log.debug("쿨다운 안이라 재계획하지 않는다. routeId={}", command.routeId());
-            return Outcome.COOLDOWN;
+            return Snapshot.early(Outcome.COOLDOWN, false);
         }
 
         RouteHeader header = routes.findHeader(command.routeId())
@@ -157,9 +212,9 @@ public class ReplanRouteService implements ReplanRouteUseCase {
             // 닫힌다 — 모름은 0 이 아니다(ADR-048 결정 1, 기각 (8)). 첫 ARRIVED 가 stop 하나를
             // 닿게 하고 tracking 의 쿨다운이 다시 발화하므로 구멍은 stop 하나 뒤에 닫힌다.
             log.debug("닿은 stop 이 없어 편차를 모른다. routeId={}", command.routeId());
-            return Outcome.NO_ANCHOR;
+            return Snapshot.early(Outcome.NO_ANCHOR, false);
         }
-        compareDeviation(command, anchor.deviation());
+        boolean mismatch = diverged(command, anchor.deviation());
 
         Map<UUID, VehicleSpec> fleet = fleetOf(plan.campId(), startAt);
         RuleSet ruleSet = rules.forCamp(plan.campId());
@@ -167,47 +222,127 @@ public class ReplanRouteService implements ReplanRouteUseCase {
                 anchor.deviation());
         if (source.stops().size() == source.frozen()) {
             log.debug("남은 stop 이 없다. routeId={}", command.routeId());
-            return Outcome.NO_CANDIDATE;
+            return Snapshot.early(Outcome.NO_CANDIDATE, mismatch);
         }
 
         List<RelocateSearch.RouteInput> candidates = candidatesOf(header, fleet, depot, startAt);
         if (candidates.isEmpty()) {
             log.debug("받을 라우트가 없다. routeId={}, planId={}", command.routeId(), plan.id());
-            return Outcome.NO_CANDIDATE;
+            return Snapshot.early(Outcome.NO_CANDIDATE, mismatch);
         }
+        return new Snapshot(null, mismatch, new Search(plan, fleet, depot, startAt, ruleSet, source,
+                candidates, routes.revisionsOfPlan(plan.id()), anchor.deviation()));
+    }
 
-        RelocateSearch.Outcome found = search.search(ruleSet, source, candidates);
+    /**
+     * 쓰기 — 트랜잭션 하나, 게이트 안. 재검증 → 쿨다운 집기 → 옮기기 (ADR-068 결정 2 · 4).
+     *
+     * <p>재검증이 쿨다운보다 먼저다: 전제가 바뀌어 버린 결과({@link Outcome#STALE})는 쿨다운을 집지 않는다.
+     */
+    private Outcome write(ReplanCommand command, Snapshot snapshot,
+            RelocateSearch.@Nullable Outcome found, Instant now) {
+
+        Search input = snapshot.search();
+        if (input == null || found == null) {
+            Outcome early = Objects.requireNonNull(snapshot.early(), "계산하지 않은 스냅샷에는 갈래가 있다");
+            if (early == Outcome.COOLDOWN) {
+                return Outcome.COOLDOWN;
+            }
+            return claim(command, now) ? early : Outcome.COOLDOWN;
+        }
         if (!found.moved()) {
             if (found.truncated()) {
                 // 이득이 없는 것이 아니라 다 못 봤다 — 상한이 걸리는 규모라는 사실이 이 줄과 카운터에 남는다(§6.8).
                 log.info("평가 상한에 걸려 이동을 찾지 못했다(다 못 봤다). routeId={}, 후보 라우트 {}대",
-                        command.routeId(), candidates.size());
-                return Outcome.TRUNCATED;
+                        command.routeId(), input.candidates().size());
+            } else {
+                log.debug("옮겨도 총비용이 줄지 않는다. routeId={}", command.routeId());
             }
-            log.debug("옮겨도 총비용이 줄지 않는다. routeId={}", command.routeId());
-            return Outcome.NO_GAIN;
+            Outcome outcome = found.truncated() ? Outcome.TRUNCATED : Outcome.NO_GAIN;
+            return claim(command, now) ? outcome : Outcome.COOLDOWN;
         }
 
-        apply(plan, found, fleet, depot, startAt, ruleSet);
+        Map<UUID, UUID> relocations = lockMoves(command, input, found);
+        if (relocations == null) {
+            return Outcome.STALE;
+        }
+        if (!claim(command, now)) {
+            return Outcome.COOLDOWN;
+        }
+        apply(input, found, relocations);
         log.info("부분 재계획을 반영했다. routeId={}, 이동 {}건, 절감 {}원, 편차 {}초",
                 command.routeId(), found.moves().size(), found.gainKrw(),
-                anchor.deviation().toSeconds());
+                input.deviation().toSeconds());
         return Outcome.APPLIED;
+    }
+
+    /** 쿨다운을 한 문장으로 집는다 (ADR-046 결정 3). 비교만 한 읽기 뒤에 다른 at-risk 가 먼저 집었으면 거짓이다. */
+    private boolean claim(ReplanCommand command, Instant now) {
+        boolean claimed = routes.tryStartReplan(command.routeId(), now, cooldown);
+        if (!claimed) {
+            log.debug("계산하는 동안 다른 재계획이 쿨다운을 집었다 — 결과를 버린다. routeId={}", command.routeId());
+        }
+        return claimed;
+    }
+
+    /**
+     * 옮길 stop 을 잠그고 계산의 전제를 다시 본다 (ADR-068 결정 2).
+     *
+     * <p>잠그는 순서는 stop → 라우트다 — 상태 반영 · 취소 · 재배정이 stop 을 먼저 잡는 순서와 같다.
+     *
+     * @return stop id → 대상 라우트. 전제가 바뀌었으면 {@code null}
+     */
+    private @Nullable Map<UUID, UUID> lockMoves(ReplanCommand command, Search input,
+            RelocateSearch.Outcome found) {
+
+        Map<UUID, UUID> relocations = new LinkedHashMap<>();
+        for (RelocateSearch.Move move : found.moves()) {
+            UUID stopId = null;
+            for (OrderId orderId : move.orderIds()) {
+                Optional<StopOfOrder> locked = routes.lockStopOf(move.fromRouteId(), orderId.value());
+                if (locked.isEmpty() || locked.get().status() != RouteStopStatus.PLANNED
+                        || (stopId != null && !stopId.equals(locked.get().stopId()))) {
+                    // 기사가 닿았거나 끝냈다 — 옮기면 그 사실이 새 자리의 PLANNED 에 가려진다. ADR-026 결정 2 의 넷째 분기를
+                    // 개정에 넓힌 자리다. 주문이 원 라우트를 떠났거나(재배정) 취소됐어도 계산한 이동은 지금 라우트의 것이 아니다.
+                    log.info("계산하는 동안 옮길 stop 이 바뀌었다 — 결과를 버린다. routeId={}, 상태={}",
+                            command.routeId(), locked.map(StopOfOrder::status).map(Enum::name).orElse("원 라우트에 없음"));
+                    return null;
+                }
+                stopId = locked.get().stopId();
+            }
+            relocations.put(Objects.requireNonNull(stopId, "이동에는 주문이 있다"), move.toRouteId());
+        }
+
+        Set<UUID> touched = new TreeSet<>(found.sequences().keySet());
+        touched.add(command.routeId());
+        Map<UUID, Integer> revisions = routes.lockRevisions(touched);
+        for (UUID routeId : touched) {
+            if (!Objects.equals(revisions.get(routeId), input.revisions().get(routeId))) {
+                // 취소 · 재배정 · 다른 재계획이 순서나 소속을 바꿨다 — 계산한 순서는 지금 라우트의 것이 아니다.
+                log.info("계산하는 동안 라우트가 개정됐다 — 결과를 버린다. routeId={}, 바뀐 라우트={}, 읽기={}, 지금={}",
+                        command.routeId(), routeId, input.revisions().get(routeId), revisions.get(routeId));
+                return null;
+            }
+        }
+        return relocations;
     }
 
     /**
      * 두 편차를 견준다 — <strong>버리지도 않고 입력으로 쓰지도 않는다</strong>.
      *
      * <p>갈린다는 것은 tracking 과 dispatch 가 같은 라우트를 다르게 보고 있다는 뜻이고, 그
-     * 사실이 먼저 필요하다(ADR-048 결정 2).
+     * 사실이 먼저 필요하다(ADR-048 결정 2). 세는 것은 쓰기가 커밋된 뒤다 — 같은 이벤트의 재전달이 두 번 세지 않는다.
+     *
+     * @return 허용 오차를 넘게 갈렸으면 참
      */
-    private void compareDeviation(ReplanCommand command, Duration mine) {
+    private boolean diverged(ReplanCommand command, Duration mine) {
         Duration gap = mine.minus(command.deviation()).abs();
         if (gap.compareTo(deviationTolerance) > 0) {
             log.info("편차가 갈렸다. routeId={}, tracking={}초, dispatch={}초",
                     command.routeId(), command.deviationSeconds(), mine.toSeconds());
-            metrics.atRiskDeviationMismatch();
+            return true;
         }
+        return false;
     }
 
     /**
@@ -260,31 +395,27 @@ public class ReplanRouteService implements ReplanRouteUseCase {
     /**
      * 옮기고, 두 라우트를 다시 쓰고, 둘 다 개정으로 발행한다 (ADR-048 결정 4 (c)).
      *
-     * <p>저장은 <strong>계획 시계</strong>로 한다 — 평가에 쓴 밀린 시계가 아니다.
+     * <p>옮기는 것은 stop <strong>행</strong>이다(ADR-068 결정 3) — 주문을 대상의 새 stop 으로 옮기고 원래 행을 지우면 그 행의
+     * 락을 기다리던 상태 반영이 0 행을 고치고, 합쳐진 stop 이 주문마다 흩어진다. 저장은 <strong>계획 시계</strong>로 한다 — 평가에
+     * 쓴 밀린 시계가 아니다.
      */
-    private void apply(RoutePlan plan, RelocateSearch.Outcome found, Map<UUID, VehicleSpec> fleet,
-            CampDepot depot, Instant startAt, RuleSet ruleSet) {
+    private void apply(Search input, RelocateSearch.Outcome found, Map<UUID, UUID> relocations) {
+        relocations.forEach(routes::relocateStop);
 
         Map<UUID, UUID> vehicleOf = new LinkedHashMap<>();
         List<Explanation> reasons = new ArrayList<>();
         for (RelocateSearch.Move move : found.moves()) {
-            for (OrderId orderId : move.orderIds()) {
-                UUID stopId = routes.findStopOf(move.fromRouteId(), orderId.value())
-                        .orElseThrow(() -> NotFoundException.of("RouteStop",
-                                orderId.value().toString()));
-                routes.moveOrder(stopId, orderId.value(), move.toRouteId());
-            }
             UUID vehicleId = vehicleOf.computeIfAbsent(move.toRouteId(),
                     routeId -> routes.findHeader(routeId).orElseThrow().vehicleId());
             move.orderIds().forEach(orderId -> reasons.add(Explanation.relocated(orderId,
-                    fleet.get(vehicleId).id(), move.fromRouteId(), move.toRouteId(),
+                    input.fleet().get(vehicleId).id(), move.fromRouteId(), move.toRouteId(),
                     move.gainKrw(), found.truncated())));
         }
 
-        found.sequences().forEach((routeId, stops) ->
-                republish(plan, routeId, stops, fleet, depot, startAt, ruleSet));
+        found.sequences().forEach((routeId, stops) -> republish(input.plan(), routeId, stops,
+                input.fleet(), input.depot(), input.startAt(), input.ruleSet()));
         // 설명은 마지막이다 — 라우트가 실제로 옮겨진 뒤에야 「어디서 어디로」가 참이 된다.
-        explanations.saveExplanations(plan.id(), reasons, Map.of());
+        explanations.saveExplanations(input.plan().id(), reasons, Map.of());
     }
 
     /** 순서를 다시 쓰고 개정 번호를 올려 발행한다. */
@@ -342,5 +473,30 @@ public class ReplanRouteService implements ReplanRouteUseCase {
         vehicles.availableAt(campId, startAt)
                 .forEach(vehicle -> fleet.put(vehicle.id().value(), vehicle));
         return fleet;
+    }
+
+    /**
+     * 읽기 단계가 본 것.
+     *
+     * @param early             계산하지 않고 끝난 갈래({@code cooldown} · {@code no-anchor} · {@code no-candidate}). 계산하면 null
+     * @param deviationMismatch 페이로드의 편차와 갈렸다 — 쓰기가 커밋된 뒤에 센다
+     * @param search            계산의 입력이자 쓰기 단계가 대조할 기준. {@code early} 가 있으면 null
+     */
+    private record Snapshot(@Nullable Outcome early, boolean deviationMismatch, @Nullable Search search) {
+
+        static Snapshot early(Outcome outcome, boolean deviationMismatch) {
+            return new Snapshot(outcome, deviationMismatch, null);
+        }
+    }
+
+    /**
+     * 계산의 입력.
+     *
+     * @param revisions 계획의 라우트마다 읽은 {@code revision} — 쓰기가 대조한다 (ADR-068 결정 2)
+     * @param deviation 원 라우트의 편차 — 로그용
+     */
+    private record Search(RoutePlan plan, Map<UUID, VehicleSpec> fleet, CampDepot depot, Instant startAt,
+            RuleSet ruleSet, RelocateSearch.RouteInput source, List<RelocateSearch.RouteInput> candidates,
+            Map<UUID, Integer> revisions, Duration deviation) {
     }
 }

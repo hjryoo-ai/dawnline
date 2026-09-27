@@ -265,6 +265,29 @@ class ReplanIT extends DispatchIntegrationTestBase {
                 .as("적용된 자리는 지금 있는 라우트다").isNotEqualTo(planned.routeId());
     }
 
+    @Test
+    void 합쳐진_stop_은_한_행_그대로_옮겨_간다() {
+        // ADR-068 맥락 2 — 옛 moveOrder 는 대상의 새 stop 을 후보의 좌표로 만들었다. §6.5 1단계가 geohash7 안의 주문을 한
+        // stop 으로 합치므로 합쳐진 stop 의 주문들은 좌표가 서로 다르고, 옮기면 주문 수만큼의 행이 됐다 — 두 번째 peak-day 에서
+        // 주문 8건이 행 8개로 흩어졌고 7개는 자리표시 시각으로 남았다. 행을 옮기면(결정 3) 한 행 그대로 간다.
+        Planned planned = plannedRoute(true);
+        assertThat(planned.stops()).as("전제 — 계획이 짝마다 한 stop 으로 합쳤다")
+                .allSatisfy(stop -> assertThat(stop.orderIds()).hasSize(2));
+        tightenWindows(planned.routeId());
+        arriveLate(planned);
+        double before = replanCount(Outcome.APPLIED);
+        double total = replanTotal();
+
+        sendAtRisk(planned, deviationSeconds(planned));
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(replanTotal()).isEqualTo(total + 1.0d));
+        assertThat(replanCount(Outcome.APPLIED)).as("전제 — 옮겼다. 갈래별: %s", outcomes()).isEqualTo(before + 1.0d);
+        RouteView.StopView moved = movedStop(planned);
+        assertThat(moved.orderIds().stream().map(this::stopOfOrder).distinct().toList())
+                .as("옮겨 간 짝이 한 행에 있다 — 주문마다 흩어지지 않았다").hasSize(1);
+    }
+
     // --- 보내기 --------------------------------------------------------------
 
     private void sendAtRisk(Planned planned, long deviationSeconds) {
@@ -332,6 +355,14 @@ class ReplanIT extends DispatchIntegrationTestBase {
         return total;
     }
 
+    private Map<String, Double> outcomes() {
+        Map<String, Double> counts = new java.util.LinkedHashMap<>();
+        for (Outcome outcome : Outcome.values()) {
+            counts.put(outcome.label(), replanCount(outcome));
+        }
+        return counts;
+    }
+
     private double mismatchCount() {
         return registry.counter(DawnlineMetrics.AT_RISK_DEVIATION_MISMATCH.meterName()).count();
     }
@@ -379,6 +410,12 @@ class ReplanIT extends DispatchIntegrationTestBase {
                 """).setParameter(1, orderId).getSingleResult());
     }
 
+    private UUID stopOfOrder(UUID orderId) {
+        return tx().execute(status -> (UUID) entityManager.createNativeQuery(
+                "SELECT stop_id FROM route_stop_orders WHERE order_id = ?")
+                .setParameter(1, orderId).getSingleResult());
+    }
+
     private UUID routeOfOrder(UUID orderId) {
         return tx().execute(status -> (UUID) entityManager.createNativeQuery("""
                 SELECT s.route_id FROM route_stops s
@@ -407,8 +444,16 @@ class ReplanIT extends DispatchIntegrationTestBase {
     }
 
     private Planned plannedRoute() {
+        return plannedRoute(false);
+    }
+
+    /**
+     * @param paired 참이면 지점마다 주문 둘을 2 m 떨어뜨려 둔다 — 계획이 한 stop 으로 합친다(§6.5 1단계, geohash7). 무게를 반으로
+     *               나눠 stop 하나의 짐은 짝이 없을 때와 같다 — 계획의 모양이 같아야 재계획도 같은 이동을 찾는다
+     */
+    private Planned plannedRoute(boolean paired) {
         UUID waveId = Ids.newId();
-        seedCandidates(waveId, 24);
+        seedCandidates(waveId, paired ? 48 : 24, paired);
         runPlan.run(RunPlanCommand.of(waveId, CAMP_ID, CAMP, null));
         PlanView plan = tx().execute(status -> planQueries.findPlanByWave(waveId)).orElseThrow();
         assertThat(plan.routes()).as("재계획에는 받을 라우트가 있어야 한다").hasSizeGreaterThan(1);
@@ -447,7 +492,7 @@ class ReplanIT extends DispatchIntegrationTestBase {
     }
 
     /** 약속창의 기준을 {@link PlanningClock#PLAN_AT} 에서 잡는다 — 벽시계가 아니다. */
-    private List<UUID> seedCandidates(UUID waveId, int count) {
+    private List<UUID> seedCandidates(UUID waveId, int count, boolean paired) {
         Instant now = PlanningClock.PLAN_AT.truncatedTo(ChronoUnit.MICROS);
         TimeWindow window = new TimeWindow(now.plus(Duration.ofHours(1)),
                 now.plus(Duration.ofHours(5)));
@@ -456,10 +501,13 @@ class ReplanIT extends DispatchIntegrationTestBase {
             for (int i = 0; i < count; i++) {
                 UUID orderId = Ids.newId();
                 orderIds.add(orderId);
+                int point = paired ? i / 2 : i;
+                double nudge = paired ? 0.00002d * (i % 2) : 0.0d;
+                int share = paired ? 2 : 1;
                 candidates.insertIfAbsent(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
-                        GeoPoint.of(CAMP.lat() + 0.006d * (i % 6 + 1),
-                                CAMP.lng() + 0.007d * (i / 6 + 1)),
-                        90_000, 180_000, false, false, window, 60, false, 0, now));
+                        GeoPoint.of(CAMP.lat() + 0.006d * (point % 6 + 1) + nudge,
+                                CAMP.lng() + 0.007d * (point / 6 + 1)),
+                        90_000 / share, 180_000 / share, false, false, window, 60, false, 0, now));
             }
         });
         return orderIds;

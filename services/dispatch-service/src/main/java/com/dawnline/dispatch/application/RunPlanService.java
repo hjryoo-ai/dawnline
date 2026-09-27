@@ -3,6 +3,7 @@ package com.dawnline.dispatch.application;
 import com.dawnline.common.Ids;
 import com.dawnline.dispatch.application.port.in.RunPlanCommand;
 import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
+import com.dawnline.dispatch.application.port.in.WriteGate;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.DispatchEvents;
 import com.dawnline.dispatch.application.port.out.PlannedRouteRepository;
