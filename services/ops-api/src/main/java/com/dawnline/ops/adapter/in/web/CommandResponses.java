@@ -31,9 +31,9 @@ import org.springframework.http.ResponseEntity;
  */
 final class CommandResponses {
 
-    static final String CORE_UNREACHABLE = "core-unreachable";
-    static final String CORE_TIMEOUT = "core-timeout";
-    static final String CORE_ERROR = "core-error";
+    static final String CORE_UNREACHABLE = CoreCallErrorCode.CORE_UNREACHABLE.code();
+    static final String CORE_TIMEOUT = CoreCallErrorCode.CORE_TIMEOUT.code();
+    static final String CORE_ERROR = CoreCallErrorCode.CORE_ERROR.code();
 
     private CommandResponses() {
     }

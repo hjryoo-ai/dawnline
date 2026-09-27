@@ -46,20 +46,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/WaveClosed"
         "400":
-          description: "`reason` 이 비었거나 200자를 넘는다(감사 행 없음), 또는 코어의 거절 그대로"
+          description: "`reason` 이 비었거나 200자를 넘는다(감사 행 없음), 또는 코어의 거절 그대로 — 사유는 `fulfillment-service.yaml`\
+            \ 의 `close`"
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "404":
-          description: 코어의 거절 그대로 — 없는 웨이브
+          description: 코어의 거절 그대로 — 사유는 `fulfillment-service.yaml` 의 `close`
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "409":
-          description: "코어의 거절 그대로 — `wave-not-open`(`closeCause` 가 `MANUAL` 이면 앞의\
-            \ 요청이 적용됐다, RB-07) 또는 `not-next-wave`(같은 캠프 · 티어에 더 이른 열린 웨이브가 있다 — `earlierWaveId`)"
+          description: 코어의 거절 그대로 — 사유는 `fulfillment-service.yaml` 의 `close`
           content:
             '*/*':
               schema:
@@ -172,13 +172,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/VehicleAdded"
         "400":
-          description: "필수 칸이 없다(감사 행 없음), 또는 코어의 거절 그대로(용량 · 비용 · 길이 · `source`)"
+          description: "필수 칸이 없다(감사 행 없음), 또는 코어의 거절 그대로 — 사유는 `dispatch-service.yaml`\
+            \ 의 `createVehicle`"
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "409":
-          description: 코어의 거절 그대로 — `vehicle-code-taken`(같은 코드의 차량이 있다 — `vehicleId`)
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `createVehicle`
           content:
             '*/*':
               schema:
@@ -197,8 +198,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "504":
-          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 같은 본문으로 다시 누르면 409
-            `vehicle-code-taken` 이 있는 차량을 말한다(RB-07)'
+          description: '`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 다시 누르기가 먼저다(RB-07)'
           content:
             '*/*':
               schema:
@@ -242,13 +242,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/Vehicle"
         "404":
-          description: 코어의 거절 그대로 — 없는 차량
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `deactivateVehicle`
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "409":
-          description: 코어의 거절 그대로 — `vehicle-in-service`(끝나지 않은 stop 이 있다 — `unfinishedStops`)
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `deactivateVehicle`
           content:
             '*/*':
               schema:
@@ -324,19 +324,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/StopReassigned"
         "400":
-          description: "`targetRouteId` 가 없다(감사 행 없음), 또는 코어의 거절 그대로"
+          description: "`targetRouteId` 가 없다(감사 행 없음), 또는 코어의 거절 그대로 — 사유는 `dispatch-service.yaml`\
+            \ 의 `reassign`"
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "404":
-          description: 코어의 거절 그대로 — 없는 라우트·주문
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `reassign`
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "409":
-          description: "코어의 거절 그대로 — 옮길 수 없는 상태(출발한 라우트, 끝난 stop 등)"
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `reassign`
           content:
             '*/*':
               schema:
@@ -415,19 +416,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/PlanRun"
         "400":
-          description: 코어의 거절 그대로 — 인자가 틀렸다
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `run`
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "404":
-          description: 코어의 거절 그대로 — 없는 웨이브
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/ProblemDetail"
-        "409":
-          description: 코어의 거절 그대로 — 지금 계획할 수 없는 상태
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `run`
           content:
             '*/*':
               schema:
@@ -495,19 +490,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/OrderCancelled"
         "400":
-          description: "`reason` 이 200자를 넘는다(감사 행 없음), 또는 코어의 거절 그대로"
+          description: '`reason` 이 200자를 넘는다(감사 행 없음)'
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "404":
-          description: 코어의 거절 그대로 — 없는 주문
+          description: 코어의 거절 그대로 — 사유는 `order-service.yaml` 의 `cancel`
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "409":
-          description: 코어의 거절 그대로 — 취소할 수 없는 상태
+          description: 코어의 거절 그대로 — 사유는 `order-service.yaml` 의 `cancel`
           content:
             '*/*':
               schema:
@@ -638,13 +633,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/OutboxRequeued"
         "404":
-          description: "`{service}` 가 넷 중 하나가 아니다(감사 행 없음), 또는 코어에 없는 행"
+          description: "`{service}` 가 넷 중 하나가 아니다(감사 행 없음), 또는 코어의 거절 그대로 — 사유는 `{service}-service.yaml`\
+            \ 의 `requeue`"
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "409":
-          description: 코어의 거절 그대로 — `not-quarantined`. `currentState` 가 지금 위치다(RB-07)
+          description: "코어의 거절 그대로 — 사유는 `{service}-service.yaml` 의 `requeue`"
           content:
             '*/*':
               schema:
@@ -795,13 +791,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/FleetFeasibility"
         "404":
-          description: 그 웨이브에 계획 대상 후보가 없다 — 코어의 본문 그대로
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `fleetFeasibility`
           content:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
         "409":
-          description: '`wave-already-planned` — 발행된 계획이 있다. 코어의 본문 그대로'
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `fleetFeasibility`
           content:
             '*/*':
               schema:
@@ -853,7 +849,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RouteDetail"
         "404":
-          description: dispatch 에 없는 라우트 — 코어의 본문 그대로
+          description: 코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `get`
           content:
             '*/*':
               schema:
@@ -1053,7 +1049,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/QuarantinedOutbox"
         "400":
-          description: 코어의 거절 그대로 — `limit` 이 1–500 밖이다
+          description: "코어의 거절 그대로 — 사유는 `{service}-service.yaml` 의 `listQuarantined`"
           content:
             '*/*':
               schema:

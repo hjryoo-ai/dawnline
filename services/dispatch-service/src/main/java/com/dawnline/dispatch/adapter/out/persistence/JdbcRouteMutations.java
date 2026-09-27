@@ -126,6 +126,26 @@ public class JdbcRouteMutations implements RouteMutations {
 
     @Override
     @SuppressWarnings("unchecked")
+    public Optional<StopOfOrder> lockStopOf(UUID routeId, UUID orderId) {
+        // 후보는 외부 조인이다 — 없으면 moveOrder 가 candidates-expired 로 말한다(ADR-059 결정 3). 그래서 잠금은 stop 만
+        // 건다(외부 조인의 널 쪽은 FOR UPDATE 할 수 없다).
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT s.id, CASE WHEN c.status = 'CANCELLED' THEN 'CANCELLED' ELSE s.status END
+                  FROM route_stops s
+                  JOIN route_stop_orders o ON o.stop_id = s.id
+                  LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+                 WHERE s.route_id = ? AND o.order_id = ?
+                   FOR UPDATE OF s
+                """).setParameter(1, routeId).setParameter(2, orderId).getResultList();
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        Object[] row = rows.getFirst();
+        return Optional.of(new StopOfOrder((UUID) row[0], RouteStopStatus.valueOf((String) row[1])));
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
     public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
         List<Object[]> candidate = entityManager.createNativeQuery("""
                 SELECT lat, lng, service_seconds, promised_start, promised_end

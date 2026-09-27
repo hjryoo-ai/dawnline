@@ -78,6 +78,20 @@ public interface RouteMutations {
     Optional<UUID> findStopOf(UUID routeId, UUID orderId);
 
     /**
+     * 재배정이 옮길 stop 을 <strong>잠그고</strong> 그 주문의 지금 상태를 읽는다 (DESIGN.md §5.3 「재배정은 {@code PLANNED}
+     * 인 것만 옮긴다」).
+     *
+     * <p>상태는 stop 의 것이되, 통합된 stop 에서 <strong>그 주문만</strong> 취소됐으면 {@code CANCELLED} 다 — 후보의 취소는
+     * stop 의 상태로 보이지 않는다(ADR-026 후속 정정). 잠금은 검사와 옮기기 사이에 배송 사건이 그 stop 의 상태를 바꾸지
+     * 못하게 한다.
+     *
+     * @param routeId 라우트 id
+     * @param orderId 주문 id
+     * @return 그 주문의 stop 과 상태. 그 라우트에 없으면 비어 있다
+     */
+    Optional<StopOfOrder> lockStopOf(UUID routeId, UUID orderId);
+
+    /**
      * 주문을 다른 라우트로 옮긴다. 목적지에 같은 지점의 stop 이 없으면 새로 만든다.
      *
      * @param fromStopId    떠나는 stop
@@ -201,6 +215,15 @@ public interface RouteMutations {
      * @return 아직 아무 데도 닿지 않았으면 빈 값 — <strong>편차 0 이 아니라 «모름» 이다</strong>
      */
     Optional<SettledStop> lastSettledStop(UUID routeId);
+
+    /**
+     * 재배정이 옮길 주문의 stop 과 그 주문의 지금 상태 ({@link #lockStopOf}).
+     *
+     * @param stopId stop id
+     * @param status stop 의 상태 — 그 주문의 후보가 취소됐으면 {@code CANCELLED}
+     */
+    record StopOfOrder(UUID stopId, RouteStopStatus status) {
+    }
 
     /**
      * 주문이 실린 stop 과 그 stop 의 상태.

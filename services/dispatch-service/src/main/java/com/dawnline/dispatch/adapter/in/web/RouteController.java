@@ -83,7 +83,9 @@ public class RouteController {
             @ApiResponse(responseCode = "404", description = "없는 라우트·주문",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "409",
-                    description = "옮기면 하드 룰을 어긴다(`conflict`), 또는 계획의 후보가 보존 기간이 지나 지워졌다"
+                    description = "옮기려는 주문의 stop 이 `PLANNED` 가 아니다(`stop-not-planned` — `stopStatus` 가 지금 "
+                            + "상태, 그 주문만 취소됐으면 `CANCELLED`. 기사가 먼저 닿았으면 늦은 것이다), 옮기면 하드 룰을 "
+                            + "어긴다(`conflict`), 또는 계획의 후보가 보존 기간이 지나 지워졌다"
                             + "(`candidates-expired` — 그 계획은 다시 풀 수 없고 새로 돌려야 한다, ADR-059). "
                             + "재시도해도 결과가 같아 `Retry-After` 는 없다",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})

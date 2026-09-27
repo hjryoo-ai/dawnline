@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
+import com.dawnline.common.error.DomainException;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.in.PlanView;
 import com.dawnline.dispatch.application.port.in.ReassignStopUseCase;
@@ -16,7 +17,10 @@ import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
+import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.domain.DispatchCandidate;
+import com.dawnline.dispatch.domain.DispatchErrorCode;
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -32,6 +36,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -75,6 +81,9 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
 
     @Autowired
     private ReassignStopUseCase reassign;
+
+    @Autowired
+    private RouteMutations mutations;
 
     @Autowired
     private ManageResourcesUseCase resources;
@@ -358,6 +367,62 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
                    AND aggregate_id IN (?, ?)
                  ORDER BY aggregate_id
                 """).setParameter(1, fromRouteId).setParameter(2, toRouteId).getResultList());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = RouteStopStatus.class, mode = EnumSource.Mode.EXCLUDE, names = "PLANNED")
+    void PLANNED_가_아닌_stop_의_재배정은_409_이고_행이_그대로다(RouteStopStatus current) {
+        // 2026-09-27 까지 이 경우는 200 이었고 배송된 주문이 대상 라우트의 새 PLANNED stop 으로 되살아났다 — 가드 전 코드에서
+        // 이 클래스가 관측했다(근거: 관측(재현됨), §13 축 17). 제외한 PLANNED 는 옮기는 경우다(재배정이_주문을_옮기고_…).
+        TwoRoutes routes = twoRoutes();
+        UUID stopId = tx().execute(status -> mutations.findStopOf(routes.fromRouteId(), routes.orderId()))
+                .orElseThrow();
+        tx().executeWithoutResult(status -> mutations.markStopStatus(stopId, current, PlanningClock.PLAN_AT));
+
+        assertThatThrownBy(() -> reassign.reassign(routes.fromRouteId(), routes.orderId(), routes.toRouteId()))
+                .isInstanceOfSatisfying(DomainException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(DispatchErrorCode.STOP_NOT_PLANNED);
+                    assertThat(e.details()).containsEntry("stopStatus", current.name());
+                });
+        assertThat(ownerOf(routes.orderId())).as("주문은 제 stop 에, 상태도 그대로")
+                .containsExactly(routes.fromRouteId().toString(), current.name());
+        assertThat(revision(routes.fromRouteId())).isEqualTo(1);
+        assertThat(revision(routes.toRouteId())).isEqualTo(1);
+    }
+
+    @Test
+    void 통합된_stop_에서_그_주문만_취소됐으면_stop_이_PLANNED_여도_409_CANCELLED_다() {
+        // 부분 취소는 stop 의 상태로 보이지 않는다(ADR-026 후속 정정) — 후보만 CANCELLED 다. 취소된 주문을 옮기는 것도
+        // 되살리기다.
+        TwoRoutes routes = twoRoutes();
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery(
+                        "UPDATE dispatch_candidates SET status = 'CANCELLED' WHERE order_id = ?")
+                .setParameter(1, routes.orderId()).executeUpdate());
+        assertThat(ownerOf(routes.orderId())).as("전제 — stop 은 PLANNED 다")
+                .containsExactly(routes.fromRouteId().toString(), "PLANNED");
+
+        assertThatThrownBy(() -> reassign.reassign(routes.fromRouteId(), routes.orderId(), routes.toRouteId()))
+                .isInstanceOfSatisfying(DomainException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(DispatchErrorCode.STOP_NOT_PLANNED);
+                    assertThat(e.details()).containsEntry("stopStatus", "CANCELLED");
+                });
+        assertThat(ownerOf(routes.orderId())).containsExactly(routes.fromRouteId().toString(), "PLANNED");
+    }
+
+    private int revision(UUID routeId) {
+        return ((Number) tx().execute(status -> entityManager.createNativeQuery(
+                        "SELECT revision FROM routes WHERE id = ?")
+                .setParameter(1, routeId).getSingleResult())).intValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> ownerOf(UUID orderId) {
+        Object[] row = tx().execute(status -> (Object[]) entityManager.createNativeQuery("""
+                SELECT s.route_id::text, s.status FROM route_stops s
+                  JOIN route_stop_orders o ON o.stop_id = s.id
+                 WHERE o.order_id = ?
+                """).setParameter(1, orderId).getSingleResult());
+        return List.of((String) row[0], (String) row[1]);
     }
 
     @Test

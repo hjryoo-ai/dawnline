@@ -29,9 +29,9 @@ ops-api 는 감사 행을 `PENDING` 으로 **먼저** 커밋하고 코어를 부
 「아무 일도 없었다」가 아니다 — 커밋 뒤 직렬화에서 난 예외도 500 이다. `PENDING` 이 오래 남은 것은 결과를 쓰기 전에 ops-api 가 죽었거나 결과
 쓰기에 실패한 것이다(로그 「감사 결과를 쓰지 못했다 — 행은 PENDING 으로 남는다(RB-07)」).
 
-## 1. 다시 누르기가 먼저인 둘 — `CLOSE_WAVE` · `REQUEUE_OUTBOX`
+## 1. 다시 누르기가 먼저인 넷 — `CLOSE_WAVE` · `REQUEUE_OUTBOX` · `ADD_VEHICLE` · `DEACTIVATE_VEHICLE`
 
-두 코어 커맨드는 이미 적용된 상태에서 **409 로 지금 위치를 말한다.** 같은 인자로 다시 누르고 응답을 본다 — 다시 누른 요청은 새 감사 행으로 남는다.
+네 코어 커맨드는 이미 적용된 상태에서 **409 로 지금 위치를 말한다.** 같은 인자로 다시 누르고 응답을 본다 — 다시 누른 요청은 새 감사 행으로 남는다.
 
 | 커맨드 | 다시 누른 응답 | 앞의 행 |
 |---|---|---|
@@ -41,6 +41,10 @@ ops-api 는 감사 행을 `PENDING` 으로 **먼저** 커밋하고 코어를 부
 | | 200 | 앞의 요청은 적용되지 않았고 **지금 적용됐다** — 새 행이 `SUCCEEDED`, 앞의 행은 `FAILED` |
 | `REQUEUE_OUTBOX` | 409 `not-quarantined`, `currentState` `PENDING` · `PUBLISHED` | 풀려 있다 — 앞의 요청이 적용됐다. `SUCCEEDED` |
 | | 200 | 앞의 요청은 적용되지 않았고 지금 적용됐다. 앞의 행은 `FAILED` |
+| `ADD_VEHICLE` (같은 본문) | 409 `vehicle-code-taken`, `vehicleId` | 앞의 요청이 적용됐다 — 그 차량이 앞의 요청의 것이다(코드는 전역 UNIQUE). `SUCCEEDED` (2026-09-27, ADR-067) |
+| | 200 | 앞의 요청은 적용되지 않았고 지금 적용됐다. 앞의 행은 `FAILED` |
+| `DEACTIVATE_VEHICLE` | 200 | 비활성화는 멱등이다 — 200 은 「지금 비활성이다」만 말하고 앞의 요청이 적용됐는지는 말하지 않는다. 코어 로그에서 앞의 `auditId` 수신 줄을 찾는다(§2) |
+| | 409 `vehicle-in-service` | 끝나지 않은 stop 이 있다 — 앞의 요청도 같은 판정으로 적용되지 않았다. `FAILED` |
 
 ```bash
 sql ops "SELECT id, actor, result, created_at FROM audit_logs

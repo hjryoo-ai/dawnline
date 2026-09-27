@@ -7,9 +7,11 @@ import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.common.error.ConflictException;
+import com.dawnline.common.error.DomainException;
 import com.dawnline.common.error.NotFoundException;
 import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.application.port.out.RouteSnapshot;
+import com.dawnline.dispatch.domain.DispatchErrorCode;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.RoutePlan;
@@ -35,6 +37,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 /** 운영자 재배정 (§5.3). 검증 없이 옮기면 용량을 어긴 라우트가 조용히 생긴다. */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
@@ -59,6 +63,8 @@ class ReassignStopServiceTest {
         private final Map<UUID, Integer> revisions = new LinkedHashMap<>();
         private final Map<UUID, PlannedRoute> written = new LinkedHashMap<>();
         private final List<UUID> cleared = new ArrayList<>();
+        /** 주문의 지금 상태 — 없으면 {@code PLANNED}. */
+        private final Map<UUID, RouteStopStatus> statuses = new LinkedHashMap<>();
 
         @Override
         public Optional<RouteHeader> findHeader(UUID routeId) {
@@ -80,6 +86,12 @@ class ReassignStopServiceTest {
                             .anyMatch(id -> id.value().equals(orderId)))
                     .map(stop -> UUID.nameUUIDFromBytes(stop.point().toString().getBytes()))
                     .findFirst();
+        }
+
+        @Override
+        public Optional<StopOfOrder> lockStopOf(UUID routeId, UUID orderId) {
+            return findStopOf(routeId, orderId).map(stopId ->
+                    new StopOfOrder(stopId, statuses.getOrDefault(orderId, RouteStopStatus.PLANNED)));
         }
 
         @Override
@@ -211,6 +223,28 @@ class ReassignStopServiceTest {
         assertThat(result.toRevision()).isEqualTo(2);
         // 소비자는 이미 본 revision 이하를 무시한다 — 둘 다 다시 나가야 한다 (§6.8 4단계).
         assertThat(events.routesAssigned).containsExactlyInAnyOrder(from, to);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = RouteStopStatus.class, mode = EnumSource.Mode.EXCLUDE, names = "PLANNED")
+    void PLANNED_가_아닌_주문은_옮기지_않고_지금_상태를_말한다(RouteStopStatus status) {
+        // 제외한 PLANNED 는 옮기는 경우다 — 옮기면_두_라우트_모두_개정된다 가 본다. 끝난 stop 을 옮기면 배송된 주문이
+        // 대상 라우트의 PLANNED stop 으로 되살아났다(§13 축 17). 취소된 주문도 같다.
+        RoutePlan plan = plan();
+        Stop moving = stop(NEAR, 1_000);
+        UUID from = routes.route(plan.id(), Ids.newId(), List.of(moving, stop(FAR, 1_000)));
+        UUID to = routes.route(plan.id(), Ids.newId(), List.of(stop(FAR, 1_000)));
+        UUID orderId = moving.orderIds().getFirst().value();
+        routes.statuses.put(orderId, status);
+
+        assertThatThrownBy(() -> service(RuleSet.empty(), 1_000_000).reassign(from, orderId, to))
+                .isInstanceOfSatisfying(DomainException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(DispatchErrorCode.STOP_NOT_PLANNED);
+                    assertThat(e.details()).containsEntry("stopStatus", status.name());
+                });
+        assertThat(routes.stops.get(from)).as("옮기지 않았다").contains(moving);
+        assertThat(routes.revisions).as("개정하지 않았다").containsEntry(from, 1).containsEntry(to, 1);
+        assertThat(events.routesAssigned).isEmpty();
     }
 
     @Test

@@ -8,7 +8,9 @@ import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
+import com.dawnline.dispatch.domain.DispatchErrorCode;
 import com.dawnline.dispatch.domain.RoutePlan;
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
@@ -84,8 +86,13 @@ public class ReassignStopService implements ReassignStopUseCase {
             throw new ConflictException("다른 계획의 라우트로는 옮길 수 없습니다",
                     Map.of("from", from.planId().toString(), "to", to.planId().toString()));
         }
-        UUID stopId = routes.findStopOf(routeId, orderId)
+        RouteMutations.StopOfOrder stop = routes.lockStopOf(routeId, orderId)
                 .orElseThrow(() -> NotFoundException.of("RouteStop", orderId.toString()));
+        if (stop.status() != RouteStopStatus.PLANNED) {
+            // 규칙은 여기 한 번 있다 — 화면의 단추와 ops-api 의 설명이 말하던 것을 지키는 자리다(§13 축 17).
+            throw DispatchErrorCode.stopNotPlanned(routeId, orderId, stop.status());
+        }
+        UUID stopId = stop.stopId();
 
         RoutePlan plan = plans.findById(from.planId()).orElseThrow(
                 () -> NotFoundException.of("RoutePlan", from.planId().toString()));
