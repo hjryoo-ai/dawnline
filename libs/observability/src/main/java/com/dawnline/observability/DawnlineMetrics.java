@@ -177,8 +177,8 @@ public final class DawnlineMetrics {
 
     /** 부분 재계획이 트리거 하나에 한 일(ADR-048 결정 5) — 합이 트리거 수다. */
     public static final DawnlineMetric REPLAN = counter("dawnline_replan_total",
-            "dawnline.replan", "§6.8 부분 재계획의 결과 — 여섯 갈래의 합이 트리거 수다",
-            closed("outcome", "applied", "cooldown", "no-anchor", "no-candidate", "no-gain", "truncated"));
+            "dawnline.replan", "§6.8 부분 재계획의 결과 — 일곱 갈래의 합이 트리거 수다",
+            closed("outcome", "applied", "cooldown", "no-anchor", "no-candidate", "no-gain", "truncated", "stale"));
 
     /** 두 편차가 60초 넘게 갈린 횟수(ADR-048 결정 2). */
     public static final DawnlineMetric AT_RISK_DEVIATION_MISMATCH = counter(

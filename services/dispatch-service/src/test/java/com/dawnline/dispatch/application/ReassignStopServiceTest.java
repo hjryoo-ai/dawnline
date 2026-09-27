@@ -153,6 +153,26 @@ class ReassignStopServiceTest {
         }
 
         @Override
+        public void relocateStop(UUID stopId, UUID targetRouteId) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다 — ReplanRouteServiceTest 를 보라");
+        }
+
+        @Override
+        public java.util.Map<UUID, Integer> revisionsOfPlan(UUID planId) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다 — ReplanRouteServiceTest 를 보라");
+        }
+
+        @Override
+        public java.util.Map<UUID, Integer> lockRevisions(java.util.Collection<UUID> routeIds) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다 — ReplanRouteServiceTest 를 보라");
+        }
+
+        @Override
+        public boolean coolingDown(UUID routeId, java.time.Instant now, java.time.Duration cooldown) {
+            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다 — ReplanRouteServiceTest 를 보라");
+        }
+
+        @Override
         public boolean tryStartReplan(UUID routeId, java.time.Instant now,
                 java.time.Duration cooldown) {
             throw new UnsupportedOperationException(

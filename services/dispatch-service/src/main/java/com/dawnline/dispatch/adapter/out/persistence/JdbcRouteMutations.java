@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -225,18 +226,64 @@ public class JdbcRouteMutations implements RouteMutations {
     }
 
     @Override
+    public void relocateStop(UUID stopId, UUID targetRouteId) {
+        // 행을 옮긴다 — id 가 그대로라 이 행의 락을 기다리던 상태 반영이 커밋 뒤 옮겨 간 행을 고친다(ADR-068 결정 3). 순번은 맨 뒤,
+        // 다시 쓰기가 매긴다. 주문 연결(route_stop_orders)은 stop_id 로 붙어 있어 손대지 않는다.
+        entityManager.createNativeQuery("""
+                UPDATE route_stops
+                   SET route_id = ?,
+                       seq = (SELECT COALESCE(max(seq), 0) + 1 FROM route_stops WHERE route_id = ?)
+                 WHERE id = ?
+                """).setParameter(1, targetRouteId).setParameter(2, targetRouteId)
+                .setParameter(3, stopId).executeUpdate();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<UUID, Integer> revisionsOfPlan(UUID planId) {
+        List<Object[]> rows = entityManager.createNativeQuery(
+                        "SELECT id, revision FROM routes WHERE plan_id = ?")
+                .setParameter(1, planId).getResultList();
+        return revisions(rows);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<UUID, Integer> lockRevisions(Collection<UUID> routeIds) {
+        // ORDER BY 가 잠그는 순서다 — LockRows 는 Sort 위에서 돈다. 두 재계획이 같은 두 라우트를 반대 순서로 잡지 않는다.
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT id, revision FROM routes WHERE id = ANY(?) ORDER BY id FOR UPDATE
+                """).setParameter(1, routeIds.toArray(UUID[]::new)).getResultList();
+        return revisions(rows);
+    }
+
+    private static Map<UUID, Integer> revisions(List<Object[]> rows) {
+        Map<UUID, Integer> revisions = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            revisions.put((UUID) row[0], ((Number) row[1]).intValue());
+        }
+        return revisions;
+    }
+
+    @Override
+    public boolean coolingDown(UUID routeId, Instant now, Duration cooldown) {
+        // tryStartReplan 의 술어를 뒤집은 것이다 — 비교만 하고 쓰지 않는다(ADR-068 결정 4).
+        return ((Number) entityManager.createNativeQuery("""
+                SELECT count(*) FROM routes WHERE id = ? AND last_replanned_at > ?
+                """).setParameter(1, routeId).setParameter(2, now.minus(cooldown))
+                .getSingleResult()).longValue() > 0;
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public void rewrite(UUID routeId, PlannedRoute route) {
         // 순번을 피신시키지 않는다. (route_id, seq) UNIQUE 는 V3 에서 지연 제약이 되었고
         // (DEFERRABLE INITIALLY DEFERRED), 검사는 커밋 시점에 한 번만 일어난다 — 중간에 두 행이
         // 같은 순번을 갖는 순간은 애초에 지켜야 하는 불변식이 아니다.
-        Map<String, UUID> byPoint = livePointsOf(routeId);
+        Map<UUID, UUID> byOrder = liveStopsByOrder(routeId);
 
         for (PlannedStop planned : route.stops()) {
-            UUID stopId = byPoint.get(key(planned.stop().point()));
-            if (stopId == null) {
-                throw new IllegalStateException("다시 쓸 stop 을 찾지 못했습니다: " + planned.seq());
-            }
+            UUID stopId = stopOf(byOrder, planned, "다시 쓸");
             entityManager.createNativeQuery("""
                     UPDATE route_stops SET seq = ?, planned_arrival = ?, planned_departure = ?,
                                            service_s = ?
@@ -406,12 +453,9 @@ public class JdbcRouteMutations implements RouteMutations {
             return;
         }
 
-        Map<String, UUID> byPoint = livePointsOf(routeId);
+        Map<UUID, UUID> byOrder = liveStopsByOrder(routeId);
         for (PlannedStop planned : route.stops()) {
-            UUID stopId = byPoint.get(key(planned.stop().point()));
-            if (stopId == null) {
-                throw new IllegalStateException("시각을 다시 쓸 stop 을 찾지 못했습니다: " + planned.seq());
-            }
+            UUID stopId = stopOf(byOrder, planned, "시각을 다시 쓸");
             // seq 는 건드리지 않는다 — 기사가 보던 순번이다 (§6.10).
             entityManager.createNativeQuery("""
                     UPDATE route_stops SET planned_arrival = ?, planned_departure = ? WHERE id = ?
@@ -474,18 +518,40 @@ public class JdbcRouteMutations implements RouteMutations {
                 byStop.values().stream().map(SnapshotBuilder::build).toList()));
     }
 
-    /** 라우트의 살아 있는 지점 → stop id. 취소된 stop 은 다시 쓸 대상이 아니다. */
+    /**
+     * 라우트의 살아 있는 stop 의 주문 → stop id. 취소된 stop 은 다시 쓸 대상이 아니다.
+     *
+     * <p>좌표가 아니라 주문으로 찾는다(ADR-068 결정 3) — 라우트 안에서 주문은 한 행에만 있지만 좌표는 둘이 같을 수 있다(약속창이
+     * 다른 두 stop, 재계획이 옮겨 온 행). 좌표를 열쇠로 쓰던 때는 둘 중 하나가 순번도 시각도 받지 못했다.
+     */
     @SuppressWarnings("unchecked")
-    private Map<String, UUID> livePointsOf(UUID routeId) {
+    private Map<UUID, UUID> liveStopsByOrder(UUID routeId) {
         List<Object[]> rows = entityManager.createNativeQuery("""
-                SELECT s.id, s.lat, s.lng FROM route_stops s
+                SELECT o.order_id, s.id FROM route_stops s
+                  JOIN route_stop_orders o ON o.stop_id = s.id
                  WHERE s.route_id = ? AND s.status <> 'CANCELLED'
                 """).setParameter(1, routeId).getResultList();
-        Map<String, UUID> byPoint = new LinkedHashMap<>();
+        Map<UUID, UUID> byOrder = new LinkedHashMap<>();
         for (Object[] row : rows) {
-            byPoint.put(key((BigDecimal) row[1], (BigDecimal) row[2]), (UUID) row[0]);
+            byOrder.put((UUID) row[0], (UUID) row[1]);
         }
-        return byPoint;
+        return byOrder;
+    }
+
+    /** 계획된 stop 의 주문들이 한 행에 있어야 한다 — 아니면 계산과 저장이 갈라진 것이고 조용히 넘기지 않는다. */
+    private static UUID stopOf(Map<UUID, UUID> byOrder, PlannedStop planned, String purpose) {
+        UUID stopId = null;
+        for (OrderId orderId : planned.stop().orderIds()) {
+            UUID found = byOrder.get(orderId.value());
+            if (found == null || (stopId != null && !stopId.equals(found))) {
+                throw new IllegalStateException(purpose + " stop 을 찾지 못했습니다: " + planned.seq());
+            }
+            stopId = found;
+        }
+        if (stopId == null) {
+            throw new IllegalStateException(purpose + " stop 에 주문이 없습니다: " + planned.seq());
+        }
+        return stopId;
     }
 
     /** 스냅샷의 stop 하나를 여러 행에서 모은다. */
@@ -523,16 +589,6 @@ public class JdbcRouteMutations implements RouteMutations {
             return new RouteSnapshot.StopSnapshot(seq, orderIds, cancelledOrderIds, lat, lng,
                     arrival, serviceSeconds, cancelled, promised);
         }
-    }
-
-    private static String key(GeoPoint point) {
-        return key(BigDecimal.valueOf(point.lat()).setScale(6, java.math.RoundingMode.HALF_UP),
-                BigDecimal.valueOf(point.lng()).setScale(6, java.math.RoundingMode.HALF_UP));
-    }
-
-    private static String key(BigDecimal lat, BigDecimal lng) {
-        return lat.setScale(6, java.math.RoundingMode.HALF_UP).toPlainString() + ','
-                + lng.setScale(6, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     /** stop 하나를 여러 행에서 모은다. */

@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -21,10 +22,23 @@ import java.util.UUID;
 public interface ReplanRouteUseCase {
 
     /**
+     * 게이트 없이 — 쓰기가 자기 트랜잭션을 연다.
+     *
      * @param command 무엇이 위험하다고 알려 왔는가
      * @return 무엇을 했는가
      */
-    Outcome replan(ReplanCommand command);
+    default Outcome replan(ReplanCommand command) {
+        return replan(command, WriteGate.OPEN).orElseThrow();
+    }
+
+    /**
+     * 읽기 → 계산 → 쓰기 (ADR-068 결정 1). 계산은 트랜잭션 밖에서 돌고, 게이트는 쓰기만 감싼다.
+     *
+     * @param command 무엇이 위험하다고 알려 왔는가
+     * @param gate    쓰기를 감싸는 게이트 — at-risk 리스너의 멱등 게이트. 계산 뒤에 한 번 불린다
+     * @return 무엇을 했는가. 게이트가 쓰기를 건너뛰었으면(같은 이벤트를 이미 처리했다) 비어 있다 — 셀 것이 없다
+     */
+    Optional<Outcome> replan(ReplanCommand command, WriteGate gate);
 
     /**
      * 재계획 요청.
@@ -85,7 +99,16 @@ public interface ReplanRouteUseCase {
          * 접으면 상한이 걸리는 규모(peak)에서 재계획이 무엇을 못 했는지가 사라진다. 이동을 찾았는데 걸린 것은 {@link #APPLIED}
          * 이고 설명 행이 {@code searchTruncated} 를 싣는다.
          */
-        TRUNCATED;
+        TRUNCATED,
+
+        /**
+         * 계산하는 동안 전제가 바뀌어 <strong>결과를 버렸다</strong> (ADR-068 결정 2) — 옮길 stop 이 {@code PLANNED} 가 아니게
+         * 됐거나(기사가 닿았다 · 끝냈다), 주문이 원 라우트를 떠났거나 취소됐거나, 원 · 대상 라우트의 {@code revision} 이 올랐다.
+         *
+         * <p>쿨다운을 집지 않는다 — 재계획을 한 것이 아니라 계산의 전제가 바뀐 것이고, 다음 at-risk 가 새 사실로 다시 푼다.
+         * {@link #NO_GAIN} 과 따로 있는 이유는 {@link #TRUNCATED} 와 같다: 「옮겨도 이득 없음」과 「옮길 전제가 무너졌다」는 다른 말이다.
+         */
+        STALE;
 
         /** 메트릭 라벨 값 — {@code NO_ANCHOR} → {@code no-anchor}. */
         public String label() {

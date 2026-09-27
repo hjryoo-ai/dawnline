@@ -6,7 +6,7 @@ import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Optional;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +27,7 @@ import tools.jackson.databind.JsonNode;
  * 없는 것이 재시도되고 사람이 열어도 할 일이 없다 — 그래서 {@code dawnline_replan_total} 의
  * {@code outcome} 라벨이 그 자리를 대신한다(ADR-048 결정 5).
  *
- * <p>카운터는 <strong>커밋 뒤에</strong> 올린다 — {@link IdempotentConsumer#runOnce} 가 돌아온 뒤다. 안에서 올리면 롤백된
+ * <p>카운터는 <strong>커밋 뒤에</strong> 올린다 — 유스케이스가 돌아온 뒤, 곧 게이트({@link IdempotentConsumer#runOnce})가 돌아온 뒤다. 안에서 올리면 롤백된
  * 재계획의 숫자가 남고, 그 차이는 장애 때 가장 커진다 — 지표가 가장 많이 읽히는 순간에 가장 많이 틀린다.
  * <strong>2026-09-27 정정</strong>: 이 문단은 전에 「유스케이스 밖」이라고 적었고 카운터는 {@code runOnce} 의 콜백 안에 있었다 —
  * 유스케이스의 {@code @Transactional} 은 바깥({@code processed_events})의 트랜잭션에 합류하므로 콜백 안은 아직 커밋 전이다.
@@ -71,13 +71,14 @@ public class AtRiskListener {
         EventEnvelope<JsonNode> envelope = json.readEnvelope(record.value());
         JsonNode payload = envelope.payload();
 
-        AtomicReference<ReplanRouteUseCase.Outcome> outcome = new AtomicReference<>();
-        boolean ran = consumer.runOnce(envelope, CONSUMER,
-                () -> outcome.set(replan.replan(AtRiskPayload.toCommand(payload))));
-        // 여기는 커밋 뒤다 — 롤백되면 runOnce 가 예외로 끝나 이 줄에 오지 않는다.
-        if (ran && outcome.get() != null) {
-            metrics.replanned(outcome.get());
-            log.debug("재계획을 마쳤다. eventId={}, outcome={}", envelope.eventId(), outcome.get().label());
-        }
+        // 멱등 게이트는 재계획의 <em>쓰기</em>만 감싼다 — 계산은 그 앞에서 트랜잭션 없이 돈다(ADR-068 결정 1). 게이트를 여기서
+        // 통째로 두르면 계산 동안 커넥션 하나가 idle in transaction 이고, 그 창에 끝난 배송을 쓰기가 덮는다.
+        Optional<ReplanRouteUseCase.Outcome> outcome = replan.replan(AtRiskPayload.toCommand(payload),
+                write -> consumer.runOnce(envelope, CONSUMER, write));
+        // 여기는 커밋 뒤다 — 롤백되면 runOnce 가 예외로 끝나 이 줄에 오지 않는다. 비어 있으면 같은 이벤트를 이미 처리했다.
+        outcome.ifPresent(done -> {
+            metrics.replanned(done);
+            log.debug("재계획을 마쳤다. eventId={}, outcome={}", envelope.eventId(), done.label());
+        });
     }
 }

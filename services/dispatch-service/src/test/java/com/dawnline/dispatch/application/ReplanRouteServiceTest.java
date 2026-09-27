@@ -61,11 +61,12 @@ class ReplanRouteServiceTest {
     private final DispatchMetrics metrics = new DispatchMetrics(registry);
     private final VehicleCatalog fleet = InMemoryDispatchPorts.fleet(2, NOW);
     private final Clock clock = Clock.fixed(NOW.plus(LATE), ZoneOffset.UTC);
+    private final InMemoryDispatchPorts.Transactions transactions = new InMemoryDispatchPorts.Transactions();
 
     private final ReplanRouteService service = new ReplanRouteService(routes, plans, saved, fleet,
             InMemoryDispatchPorts.rules(RuleSet.of(
                     List.of(new TimeWindowPenaltyRule("TIME_WINDOW_PENALTY", 1, 2_000L)), 1)),
-            events, new HaversineDistance(1.3d, 25.0d), metrics, clock, COOLDOWN, TOLERANCE);
+            events, new HaversineDistance(1.3d, 25.0d), metrics, clock, COOLDOWN, TOLERANCE, transactions);
 
     // ------------------------------------------------------------ 쿨다운 (결정 7)
 
@@ -218,6 +219,63 @@ class ReplanRouteServiceTest {
                 .isGreaterThanOrEqualTo(LATE);
     }
 
+    // ------------------------------------------------------------ 쓰기는 전제를 다시 본다 (ADR-068)
+
+    @Test
+    void 계산하는_동안_옮길_stop_이_끝나면_결과를_버리고_쿨다운을_집지_않는다() {
+        // 계산이 PLANNED 로 본 stop 을 쓰기가 그대로 옮기면 끝난 배송이 새 자리의 PLANNED 에 가려진다 — 두 번째 peak-day 의
+        // COMPLETED 20건. ADR-026 결정 2 의 「ARRIVED 이후는 거부」를 개정에 넓힌 자리다.
+        Fixture fixture = fixture();
+        ReplanRouteService racing = during(() -> {
+            for (int seq = 2; seq <= 3; seq++) {
+                routes.row(fixture.atRisk(), seq).status = RouteStopStatus.COMPLETED;
+            }
+        });
+
+        assertThat(racing.replan(command(fixture, LATE))).isEqualTo(Outcome.STALE);
+
+        assertThat(events.revised).as("옮기지 않았다 — 개정도 없다").isEmpty();
+        assertThat(routes.rowsOf(fixture.spare())).as("받는 쪽은 그대로다").hasSize(2);
+        assertThat(routes.coolingDown(fixture.atRisk(), NOW.plus(LATE), COOLDOWN))
+                .as("버린 결과는 쿨다운을 집지 않는다 — 다음 at-risk 가 새 사실로 다시 푼다").isFalse();
+    }
+
+    @Test
+    void 계산하는_동안_라우트가_개정되면_결과를_버린다() {
+        // 취소 · 재배정 · 다른 재계획이 순서나 소속을 바꿨다 — 계산한 순서는 지금 라우트의 것이 아니다.
+        Fixture fixture = fixture();
+        ReplanRouteService racing = during(() -> routes.bumpRevision(fixture.spare()));
+
+        assertThat(racing.replan(command(fixture, LATE))).isEqualTo(Outcome.STALE);
+        assertThat(events.revised).isEmpty();
+    }
+
+    @Test
+    void 옮기는_것은_stop_행이다_id_와_상태가_그대로_간다() {
+        // 주문을 새 stop 으로 옮기고 원래 행을 지우면 그 행의 락을 기다리던 상태 반영이 0 행을 고치고, 합쳐진 stop 은 주문마다
+        // 흩어진다(ADR-068 결정 3). 행이 옮겨 가면 둘 다 없다.
+        Fixture fixture = fixture();
+        List<UUID> before = routes.rowsOf(fixture.atRisk()).stream().map(row -> row.id).toList();
+
+        assertThat(service.replan(command(fixture, LATE))).isEqualTo(Outcome.APPLIED);
+
+        List<UUID> arrived = routes.rowsOf(fixture.spare()).stream().map(row -> row.id)
+                .filter(before::contains).toList();
+        assertThat(arrived).as("받는 쪽에 원 라우트의 행이 그대로 있다").isNotEmpty();
+        assertThat(routes.rowsOf(fixture.spare())).as("받는 쪽의 행 수 = 원래 둘 + 옮겨 온 행 — 새로 만든 행이 없다")
+                .hasSize(2 + arrived.size());
+    }
+
+    @Test
+    void 게이트가_쓰기를_건너뛰면_결과가_없고_아무것도_쓰지_않는다() {
+        // 같은 eventId 의 재전달 — 계산은 한 번 더 돌았고 게이트가 버린다(ADR-064 결정 2 와 같다). 셀 것이 없다.
+        Fixture fixture = fixture();
+
+        assertThat(service.replan(command(fixture, LATE), write -> false)).isEmpty();
+        assertThat(events.revised).isEmpty();
+        assertThat(routes.coolingDown(fixture.atRisk(), NOW.plus(LATE), COOLDOWN)).isFalse();
+    }
+
     // ------------------------------------------------------------ 후보가 없는 경우
 
     @Test
@@ -256,7 +314,22 @@ class ReplanRouteServiceTest {
                         List.of(new TimeWindowPenaltyRule("TIME_WINDOW_PENALTY", 1, 2_000L)), 1)),
                 events, new HaversineDistance(1.3d, 25.0d), metrics,
                 Clock.fixed(NOW.plus(LATE).plus(COOLDOWN).plusSeconds(1), ZoneOffset.UTC),
-                COOLDOWN, TOLERANCE);
+                COOLDOWN, TOLERANCE, transactions);
+    }
+
+    /** 계산 안에서 한 번 {@code race} 를 돌리는 같은 서비스 — 거리를 처음 물을 때다. 계산과 쓰기 사이의 경합을 흉내 낸다. */
+    private ReplanRouteService during(Runnable race) {
+        HaversineDistance real = new HaversineDistance(1.3d, 25.0d);
+        java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean(true);
+        return new ReplanRouteService(routes, plans, saved, fleet,
+                InMemoryDispatchPorts.rules(RuleSet.of(
+                        List.of(new TimeWindowPenaltyRule("TIME_WINDOW_PENALTY", 1, 2_000L)), 1)),
+                events, (from, to) -> {
+                    if (armed.compareAndSet(true, false)) {
+                        race.run();
+                    }
+                    return real.between(from, to);
+                }, metrics, clock, COOLDOWN, TOLERANCE, transactions);
     }
 
     /** 평가 상한을 준 같은 서비스. */
@@ -264,7 +337,8 @@ class ReplanRouteServiceTest {
         return new ReplanRouteService(routes, plans, saved, fleet,
                 InMemoryDispatchPorts.rules(RuleSet.of(
                         List.of(new TimeWindowPenaltyRule("TIME_WINDOW_PENALTY", 1, 2_000L)), 1)),
-                events, new HaversineDistance(1.3d, 25.0d), metrics, clock, COOLDOWN, TOLERANCE, maxEvaluations);
+                events, new HaversineDistance(1.3d, 25.0d), metrics, clock, COOLDOWN, TOLERANCE, transactions,
+                maxEvaluations);
     }
 
     private double mismatchCount() {

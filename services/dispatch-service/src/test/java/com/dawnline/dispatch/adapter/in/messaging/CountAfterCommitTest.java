@@ -17,6 +17,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
@@ -47,7 +48,10 @@ class CountAfterCommitTest {
     // --- at-risk → 재계획 ----------------------------------------------------------------------------------
 
     private AtRiskListener atRisk(PlatformTransactionManager transactions) {
-        return new AtRiskListener(consumer(transactions), command -> ReplanRouteUseCase.Outcome.APPLIED,
+        // 유스케이스는 게이트로 쓰기를 감싼다(ADR-068 결정 1) — 게이트가 커밋에서 실패하면 예외가 여기까지 온다.
+        return new AtRiskListener(consumer(transactions),
+                (command, gate) -> gate.enter(() -> { })
+                        ? Optional.of(ReplanRouteUseCase.Outcome.APPLIED) : Optional.empty(),
                 EventJson.standard(), new DispatchMetrics(meters));
     }
 

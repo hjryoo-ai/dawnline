@@ -85,11 +85,11 @@ class AtRiskPayloadTest {
     }
 
     @Test
-    void 결과_라벨은_설계서의_여섯_갈래와_같다() {
+    void 결과_라벨은_설계서의_일곱_갈래와_같다() {
         // §9.1 이 적은 문자열 그대로여야 대시보드의 쿼리가 산다. 열거하지 않고 전체에서
         // 만들어 비교한다 — 값이 늘면 이 검사가 따라온다.
         assertThat(Arrays.stream(Outcome.values()).map(Outcome::label).toList())
-                .containsExactly("applied", "cooldown", "no-anchor", "no-candidate", "no-gain", "truncated");
+                .containsExactly("applied", "cooldown", "no-anchor", "no-candidate", "no-gain", "truncated", "stale");
     }
 
     private static JsonNode payload() {

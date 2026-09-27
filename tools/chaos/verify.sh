@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 검증 표 V1–V7 — 카오스 넷과 7-4 peak-day 가 같은 표를 낸다 (DESIGN.md §13 「카오스」, IMPLEMENTATION_PLAN 7-3)
+# 검증 표 V1–V8 — 카오스 넷과 7-4 peak-day 가 같은 표를 낸다 (DESIGN.md §13 「카오스」, IMPLEMENTATION_PLAN 7-3)
 #
 #   verify.sh baseline <상태파일>                         기준을 남긴다 — 시각 T0 · DLQ 끝 오프셋
 #   verify.sh check <상태파일> [--kind 이름] [--wait 초] [--expect-orders N] [--expect-dlq N]
 #                              [--expect-unserviceable 사유=N[,사유=N…]] [--out 파일]
 #
-# check 는 V1(유실)과 V7(outbox)이 맞을 때까지 --wait 초 동안 다시 잰다 — 장애 뒤 밀린 것이 빠지는 시간을 준다.
+# check 는 V1(유실) · V7(outbox) · V8(서비스 둘의 사실)이 맞을 때까지 --wait 초 동안 다시 잰다 — 장애 뒤 밀린 것이 빠지는 시간을 준다.
 # V1 은 전제를 먼저 말한다 — T0 이후 주문이 없으면 「빠진 주문 0」은 빈 집합끼리의 비교다(§13 축 10). --expect-orders 가 있으면
 # 그 수와 같아야 하고, 없으면 1 이상이어야 한다.
 # 배차 불가는 한 수로 더하지 않고 **사유별로** 기대값과 견준다 — 합 하나는 이유가 바뀐 회귀를 삼킨다(7-3① 의 1차 177 건은
@@ -161,11 +161,29 @@ v7() {
   v7_detail=${v7_detail% · }
 }
 
+# --- V8 서비스 둘의 사실 — dispatch 의 PLANNED stop 에 있는데 tracking 에서 COMPLETED 인 주문 -----------------------------
+# ADR-068 결정 5 — 서비스 둘의 사실을 대조하는 첫 행. 재계획이 옮긴 stop 에 그 순간 도착한 배송이 적힐 자리를 잃으면 tracking 은 끝났고
+# dispatch 는 다시 보내려 한다(두 번째 peak-day 의 20건). 주문마다 지금의 stop 은 가장 나중 stop id 다(findAssignedStop 과 같은 규칙).
+# 서비스 사이 JOIN 없이 id 집합을 뽑아 교집합한다(V1 과 같은 방법). 질의가 실패하면 「모름」이고, tracking 에 T0 이후 COMPLETED 가
+# 하나도 없으면 빈 집합끼리의 비교라 「관찰」이다(§13 축 10).
+v8() {
+  v8_known=1
+  if ! sqlv dispatch "SELECT DISTINCT ON (o.order_id) o.order_id || '|' || s.status FROM route_stop_orders o
+                       JOIN route_stops s ON s.id = o.stop_id ORDER BY o.order_id, s.id DESC" > "$tmp/d_current"; then v8_known=0; fi
+  if ! sqlv tracking "SELECT order_id FROM shipments WHERE status = 'COMPLETED'" > "$tmp/t_completed_all"; then v8_known=0; fi
+  awk -F'|' '$2 == "PLANNED" { print $1 }' "$tmp/d_current" | sort | comm -12 "$tmp/orders" - > "$tmp/d_planned"
+  sort "$tmp/t_completed_all" | comm -12 "$tmp/orders" - > "$tmp/t_completed"
+  comm -12 "$tmp/d_planned" "$tmp/t_completed" > "$tmp/v8_orders"
+  n_v8=$(wc -l < "$tmp/v8_orders" | tr -d ' ')
+  n_t_completed=$(wc -l < "$tmp/t_completed" | tr -d ' ')
+  n_d_planned=$(wc -l < "$tmp/d_planned" | tr -d ' ')
+}
+
 start=$SECONDS
 while :; do
-  v1; v7
-  if { [[ "$n_missing" == 0 && "$v7_bad" == 0 ]]; } || (( SECONDS - start >= wait_s )); then break; fi
-  say "밀린 것이 빠지는 중 — 빠진 주문 $n_missing · outbox(미발행/격리) $v7_detail"
+  v1; v7; v8
+  if { [[ "$n_missing" == 0 && "$v7_bad" == 0 && "$n_v8" == 0 ]]; } || (( SECONDS - start >= wait_s )); then break; fi
+  say "밀린 것이 빠지는 중 — 빠진 주문 $n_missing · outbox(미발행/격리) $v7_detail · 두 서비스가 갈린 주문 $n_v8"
   sleep 10
 done
 waited=$((SECONDS - start))
@@ -217,6 +235,10 @@ r4=$( [[ -n "$v4" ]] && echo obs || echo bad)
 if [[ -z "$v5" ]]; then r5=bad; elif [[ -n "$expect_dlq" ]]; then r5=$(ok_if "$v5" "$expect_dlq"); else r5=obs; fi
 r6=$( [[ -n "$v6" ]] && echo obs || echo bad)
 r7=$( [[ "$v7_bad" == 0 ]] && echo ok || echo bad)
+if [[ "$v8_known" != 1 ]]; then r8=bad; v8_value="모름"
+elif [[ "$n_v8" != 0 ]]; then r8=bad; v8_value="**${n_v8}** (dispatch PLANNED ${n_d_planned} · tracking COMPLETED ${n_t_completed})"
+elif [[ "$n_t_completed" == 0 ]]; then r8=obs; v8_value="0 — tracking COMPLETED 0, 비교할 사실이 없다"
+else r8=ok; v8_value="0 (dispatch PLANNED ${n_d_planned} · tracking COMPLETED ${n_t_completed})"; fi
 reason_table=""; r1_reasons=ok
 while IFS='|' read -r r k n e v; do
   [[ "$v" == ok ]] || r1_reasons=bad
@@ -238,13 +260,17 @@ ${reason_table%$'\n'}
 | V5 | DLQ 증가 (\`*.dlq\` 끝 오프셋 합) | ${v5:-모름} | ${expect_dlq:-관찰} | $(mark "$r5") |
 | V6 | \`rm_orders\` 걸린 행 (보존 90일을 넘긴 비종결) | ${v6:-모름} | 관찰 — 추세 | $(mark "$r6") |
 | V7 | outbox 미발행 / 격리 | ${v7_detail} | 전부 0/0 | $(mark "$r7") |
+| V8 | 서비스 둘의 사실 — dispatch 의 \`PLANNED\` stop 중 tracking 에서 \`COMPLETED\` 인 주문 (T0 이후) | ${v8_value} | 0 | $(mark "$r8") |
 TABLE
 )
 fail=0
-for r in "$r1" "$r1_reasons" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7"; do [[ "$r" == bad ]] && fail=1; done
+for r in "$r1" "$r1_reasons" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7" "$r8"; do [[ "$r" == bad ]] && fail=1; done
 echo "$table"
 [[ -n "$out" ]] && { echo "$table" >> "$out"; echo >> "$out"; }
 if [[ "$n_missing" != 0 && -s "$tmp/missing" ]]; then
   echo; echo "빠진 주문(앞 10):"; head -10 "$tmp/missing"
+fi
+if [[ "$n_v8" != 0 && -s "$tmp/v8_orders" ]]; then
+  echo; echo "두 서비스가 갈린 주문(앞 10) — dispatch PLANNED · tracking COMPLETED:"; head -10 "$tmp/v8_orders"
 fi
 exit $fail
