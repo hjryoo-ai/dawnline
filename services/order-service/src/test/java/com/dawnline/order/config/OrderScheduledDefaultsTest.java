@@ -146,10 +146,12 @@ class OrderScheduledDefaultsTest {
                 .hasMessageContaining("refill-per-second");
         assertThat(catchThrowable(() -> new OrderProperties.RateLimit(true, 60, 1, 0)))
                 .hasMessageContaining("ttl-seconds");
-        assertThat(catchThrowable(() -> new OrderProperties.Redis(0, 10_000)))
+        assertThat(catchThrowable(() -> new OrderProperties.Redis(0, 10_000, 2_000)))
                 .hasMessageContaining("command-timeout-ms");
-        assertThat(catchThrowable(() -> new OrderProperties.Redis(50, 0)))
+        assertThat(catchThrowable(() -> new OrderProperties.Redis(50, 0, 2_000)))
                 .hasMessageContaining("outage-bypass-ms");
+        assertThat(catchThrowable(() -> new OrderProperties.Redis(50, 10_000, 49)))
+                .hasMessageContaining("connect-timeout-ms");
     }
 
     private static Throwable invalid(int retentionDays, int batchSize, int maxBatches) {

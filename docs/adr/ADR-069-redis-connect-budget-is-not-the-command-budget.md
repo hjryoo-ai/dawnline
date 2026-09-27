@@ -84,7 +84,11 @@ overload-day 의 서비스 로그(유효 22:58 = 창 시작):
 
 | 표본 | 기대 | 결과 |
 |---|---|---|
-| `RedisConnectTimeoutIT` — 핸드셰이크 응답을 200 ms 늦추는 프록시 뒤에서 선연결 | 연결된다(걸린 시간 ≥ 200 ms 가 전제) | (구현 커밋에서 채운다) |
-| 같은 IT — 연결된 뒤 응답을 200 ms 늦추면 명령 하나 | 50 ms 부근에서 `QueryTimeoutException` | (구현 커밋에서 채운다) |
-| 같은 IT — 선연결 뒤 명령 | 프록시가 받은 연결 수 1 (명령이 새 연결을 열지 않는다) | (구현 커밋에서 채운다) |
-| 음성 표본 — 커스터마이저를 정정 전(`commandTimeout(50ms)` 하나)으로 | 첫 IT 가 `Connection initialization timed out after 50 millisecond(s)` 로 빨강 | (구현 커밋에서 채운다) |
+| `RedisConnectTimeoutIT`(order · fulfillment) — 새 연결의 첫 응답(HELLO)을 200 ms 늦추는 프록시 뒤에서 선연결 | 연결된다(걸린 시간 ≥ 200 ms 가 전제) | ✅ 둘 다 |
+| 같은 IT — 연결된 뒤 모든 응답을 200 ms 늦추면 명령 하나 | 200 ms 전에 `QueryTimeoutException` | ✅ 둘 다 (0.12 초 — 컨텍스트 포함) |
+| 같은 IT — 선연결 뒤 명령 둘 | 프록시가 받은 연결 수 1 (명령이 새 연결을 열지 않는다) | ✅ 둘 다 |
+| 같은 IT — Redis 가 없다(프록시를 닫는다) | 선연결이 `false` 를 돌려주고 던지지 않는다 | ✅ 둘 다 |
+| 음성 표본 — order 의 두 커스터마이저를 정정 전 모양(`commandTimeout(50ms)` · `TimeoutOptions.enabled()`)으로 | 첫 IT 만 빨강 | ✅ 첫 IT 하나만 빨강, WARN 이 `RedisCommandTimeoutException: Connection initialization timed out after 50 millisecond(s)` — overload-day 로그와 같은 문장. 복원 뒤 `cmp` 일치 |
+
+첫 IT 는 처음에 프록시가 **모든** 응답을 늦춘 채 선연결을 불러 빨강이었다 — 연결은 됐지만 뒤따르는 `PING` 이 명령 예산에 걸렸다. 결함이 아니라
+표본이 틀렸다: 콜드 경로의 모양은 「연결 수립이 느리고 그 뒤 명령은 정상」이다. 그래서 프록시에 「새 연결의 첫 응답만」 손잡이를 두었다.
