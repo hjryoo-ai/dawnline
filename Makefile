@@ -8,8 +8,10 @@
 #   make up            전체 스택 (인프라 + 관측성 + 서비스 5개)
 #   make down          컨테이너만 내린다 (데이터 볼륨은 유지)
 #
-# 주의: 데이터를 지우는 타깃은 `clean-volumes` 하나뿐이고 확인을 묻는다
-#       (CLAUDE.md: 데이터 삭제 명령을 사용자 확인 없이 실행 금지).
+# 주의: 데이터를 지우는 타깃은 둘이다.
+#       clean-volumes — 개발 볼륨. 확인을 묻는다 (CLAUDE.md: 데이터 삭제 명령을 사용자 확인 없이 실행 금지).
+#       sim-reset     — 시뮬레이션 프로젝트(dawnline-sim) 볼륨만, 묻지 않는다. 측정의 첫 단계이고 CLAUDE.md 의 유일한 예외다
+#                       (ADR-066 후속). 대상은 스크립트가 고정한다 — 다른 볼륨에 같은 방식을 쓰지 않는다.
 # =============================================================================
 
 SHELL := /bin/bash
@@ -40,7 +42,7 @@ SERVICE       ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help env images check-images up up-infra up-lean down restart ps logs wait urls obs-check \
-        topics psql redis-cli config demo peak sim-up sim-down chaos-kafka chaos-redis chaos-kill chaos-db chaos-verify clean-volumes \
+        topics psql redis-cli config demo peak sim-up sim-down sim-reset chaos-kafka chaos-redis chaos-kill chaos-db chaos-verify clean-volumes \
         k6-orders k6-rate-limit smoke token
 
 # -----------------------------------------------------------------------------
@@ -80,6 +82,7 @@ help:
 	@printf '  \033[1m시뮬레이션 스택\033[0m (ADR-066 — 시계를 옮긴다, 자기 프로젝트 dawnline-sim)\n'
 	@printf '    make sim-up [SIM_AT=22:40]  개발 스택이 내려가 있어야 한다. 기동 순간의 유효 시각이 SIM_AT(KST)\n'
 	@printf '    make sim-down       시뮬레이션 스택의 컨테이너만 내린다(볼륨 유지)\n'
+	@printf '    make sim-reset      시뮬레이션 볼륨(dawnline-sim_*)만 지운다 — 측정의 첫 단계, 묻지 않는다(ADR-066 후속)\n'
 	@printf '    make peak [PEAK=peak-day]   창 시나리오 — 22:58 까지 기다려 한 시간, 증차 · 계획 · 기사 · 정리 (ADR-067)\n\n'
 
 # -----------------------------------------------------------------------------
@@ -195,24 +198,37 @@ config: env
 # 레디니스 대기 (DESIGN.md §8.6)
 #   Paketo tiny 런 이미지에는 셸도 curl 도 없어서 컨테이너 내부 healthcheck 를
 #   걸 수 없다. 그래서 호스트에서 폴링한다.
+#
+#   판정은 **루프가 본 것**이다 — 서비스마다 처음 READY 를 받은 경과 초를 적고, 받은 서비스는 다시 찌르지 않는다.
+#   전에는 루프가 끝난 뒤 결과 표를 찍으려고 한 번 더 찔렀고 그 **두 번째 표본**이 통과 · 실패를 정했다. 2026-09-27 의 CI
+#   스모크(run 36287241200 시도 1)가 그 모양으로 빨갰다: 루프는 48초에 다섯 모두 READY 로 끝났는데, 직후의 재확인에서 ops-api
+#   요청 하나가 2초 제한에 걸려 TIMEOUT 이 됐다(기동 직후의 콜드 JIT — 첫 요청들이 느리다, 7-0 D1). 대기를 늘려도 그 표본은
+#   그대로 뜬다 — 가끔 실패하는 게이트는 가끔 검사하는 게이트다. 상한은 경과 시간(WAIT_SECONDS)이지 횟수가 아니다.
+WAIT_SECONDS ?= 120
+
 wait: env
 	@set -a; . $(ENV_FILE); set +a; \
 	all="order-service:$$ORDER_SERVICE_PORT fulfillment-service:$$FULFILLMENT_SERVICE_PORT dispatch-service:$$DISPATCH_SERVICE_PORT tracking-service:$$TRACKING_SERVICE_PORT ops-api:$$OPS_API_PORT"; \
-	echo "레디니스 대기 (/actuator/health/readiness, 최대 120초)"; \
-	i=0; \
-	while [ $$i -lt 60 ]; do \
-		notready=0; \
+	echo "레디니스 대기 (/actuator/health/readiness, 최대 $(WAIT_SECONDS)초 — 서비스마다 처음 READY 를 받은 시각)"; \
+	seen=" "; start=$$SECONDS; \
+	while :; do \
+		pending=0; \
 		for pair in $$all; do \
-			curl -sf --max-time 2 -o /dev/null "http://localhost:$${pair##*:}/actuator/health/readiness" || notready=1; \
+			svc=$${pair%%:*}; case "$$seen" in *" $$svc="*) continue;; esac; \
+			if curl -sf --max-time 2 -o /dev/null "http://localhost:$${pair##*:}/actuator/health/readiness"; then \
+				seen="$$seen$$svc=$$((SECONDS - start)) "; \
+			else pending=1; fi; \
 		done; \
-		[ $$notready -eq 0 ] && break; \
-		i=$$((i+1)); sleep 2; \
+		[ $$pending -eq 0 ] && break; \
+		[ $$((SECONDS - start)) -ge $(WAIT_SECONDS) ] && break; \
+		sleep 2; \
 	done; \
 	fail=0; \
 	for pair in $$all; do \
 		svc=$${pair%%:*}; port=$${pair##*:}; \
 		url="http://localhost:$$port/actuator/health/readiness"; \
-		if curl -sf --max-time 2 -o /dev/null "$$url"; then st=READY; else st=TIMEOUT; fail=1; fi; \
+		secs=$$(printf '%s' "$$seen" | tr ' ' '\n' | sed -n "s/^$$svc=//p"); \
+		if [ -n "$$secs" ]; then st="READY ($${secs}초)"; else st="TIMEOUT ($(WAIT_SECONDS)초 안에 한 번도 READY 가 아니었다)"; fail=1; fi; \
 		printf '  %-22s %-58s %s\n' "$$svc" "$$url" "$$st"; \
 	done; \
 	exit $$fail
@@ -326,6 +342,10 @@ sim-up: env check-images
 
 sim-down: env
 	@bash tools/sim/sim-stack.sh down
+
+# 측정 프로토콜의 첫 단계: sim-reset → sim-up → peak (ADR-066 후속). 대상은 dawnline-sim 으로 고정이다.
+sim-reset: env
+	@bash tools/sim/sim-stack.sh reset
 
 # 창 시나리오(부록 A)를 시뮬레이션 스택에 — 로직은 tools/sim/peak.sh. sim-runner 는 호스트에서 서비스와 같은 오프셋으로 돌고,
 # 함대 단계(ADR-067)는 여기서 찍은 운영자 토큰으로 ops-api 를 부른다.

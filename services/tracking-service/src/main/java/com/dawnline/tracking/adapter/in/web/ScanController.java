@@ -107,8 +107,11 @@ public class ScanController {
                             + "못한 창일 수 있으므로 **잠시 후 같은 요청을 다시 보내도 된다**",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "409",
-                    description = "상태 머신이 허용하지 않는 전이다. 역행 스캔은 409 가 아니라 "
-                            + "200 + `STALE` 이므로, 여기까지 오는 것은 상류의 결함이다",
+                    description = "둘 중 하나다 — `code` 로 가른다. **`shipment-contended`**: 같은 배송을 바꾸는 "
+                            + "다른 쓰기(개정 반영 · 같은 라우트의 다른 스캔)와 세 번 겹쳐 **적용되지 않았다**. "
+                            + "`Retry-After` 뒤에 **같은 요청을 그대로** 다시 보내면 된다(스캔은 멱등이다). "
+                            + "**`illegal-state-transition`**: 상태 머신이 허용하지 않는 전이다. 역행 스캔은 409 가 아니라 "
+                            + "200 + `STALE` 이므로, 여기까지 오는 것은 상류의 결함이다 — 다시 보내도 같다",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public ScanResult report(@PathVariable UUID routeId, @PathVariable int stopSeq,
             @Valid @RequestBody ScanRequest request) {

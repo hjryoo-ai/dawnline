@@ -16,6 +16,7 @@ import com.dawnline.tracking.adapter.out.persistence.JdbcTrackingRetention;
 import com.dawnline.tracking.adapter.out.persistence.JpaShipmentRepository;
 import com.dawnline.tracking.adapter.out.redis.RedisAtRiskCooldown;
 import com.dawnline.tracking.application.ApplyRouteAssignmentService;
+import com.dawnline.tracking.application.ContendedScanRetry;
 import com.dawnline.tracking.application.AtRiskDetector;
 import com.dawnline.tracking.application.EtaPropagator;
 import com.dawnline.tracking.application.RecordScanService;
@@ -38,6 +39,7 @@ import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -196,10 +198,24 @@ public class TrackingApplicationConfig {
      * @param revisions 라우트당 계획값 — {@code delivery.route-departed} 의 출처
      */
     @Bean
-    public RecordScanUseCase recordScanUseCase(ShipmentRepository shipments, ShipmentEvents events,
+    public RecordScanService recordScanService(ShipmentRepository shipments, ShipmentEvents events,
             DeliveryEvents delivery, EtaPropagator eta, AtRiskDetector atRisk,
             TrackingMetrics metrics, Ids ids, RouteRevisions revisions) {
         return new RecordScanService(shipments, events, delivery, eta, atRisk, metrics, ids, revisions);
+    }
+
+    /**
+     * 컨트롤러가 받는 스캔 유스케이스 — 겹치면 새 트랜잭션으로 다시 하고, 세 번 뒤에는 409 (DESIGN.md §5.4).
+     *
+     * <p>{@code @Primary} 인 이유: 위 {@link #recordScanService} 도 같은 포트를 구현한다. 그 빈은 트랜잭션 프록시를 받기 위해
+     * 빈이어야 하고, 이 빈은 그것을 감싼다 — 감싸는 쪽이 트랜잭션 밖에 있어야 재시도가 새 트랜잭션이 된다.
+     *
+     * @param recordScanService 트랜잭션을 여는 스캔 유스케이스
+     */
+    @Bean
+    @Primary
+    public RecordScanUseCase recordScanUseCase(RecordScanService recordScanService) {
+        return new ContendedScanRetry(recordScanService);
     }
 
     // --- 보존 정리 (§5.4 「보존」, ADR-058) --------------------------------------

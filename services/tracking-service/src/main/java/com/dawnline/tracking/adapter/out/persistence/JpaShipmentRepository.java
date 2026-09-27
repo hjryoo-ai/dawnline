@@ -8,6 +8,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
+import org.springframework.dao.DataAccessException;
+import org.springframework.orm.jpa.EntityManagerFactoryUtils;
 
 /**
  * {@code shipments} 어댑터 (DESIGN.md §5.4).
@@ -18,6 +21,13 @@ import java.util.UUID;
  *
  * <p>집합 경로(dispatch 의 계획 반영, ADR-029)와 달리 여기서 다루는 행 수는 한 라우트의 stop
  * 수(수십~백)이고 전부 상태 머신을 지난다. 벌크로 내려갈 이유가 없다.
+ *
+ * <h2>낙관적 락 실패는 스프링의 타입으로 내보낸다</h2>
+ * 질의 실행 전의 자동 flush 가 앞선 갱신의 {@code version} 검사를 여기서 터뜨린다 — 스캔의 편차 전파가 {@link #findByRouteFrom}
+ * 을 부르는 순간이 그 자리다(첫 {@code peak-day} 의 500 두 건). 그 예외는 {@code jakarta.persistence} 의 것이고, 커밋에서 터지는 같은
+ * 실패는 {@code JpaTransactionManager} 가 스프링의 {@code OptimisticLockingFailureException} 으로 바꾼다. 둘을 한 타입으로 모아야
+ * 재시도({@code ContendedScanRetry}, DESIGN.md §5.4)가 JPA 를 모른 채 하나만 잡는다. {@code @Repository} 번역은 쓰지 않는다 —
+ * 이 클래스는 {@code @Bean} 으로 등록되고, 그 어노테이션은 컴포넌트 스캔에 걸려 같은 포트의 빈을 하나 더 만든다.
  *
  * <p>{@code updated_at} 을 적는 자리가 여기다(ADR-058 결정 4). 쓰기 경로가 이 어댑터 하나라 시계도 여기
  * 하나면 된다 — 유스케이스 셋(개정 반영 · 스캔 · 편차 전파)에 각자 시계를 넘겨 포트로 흘리면 같은 일을 세
@@ -63,22 +73,22 @@ public class JpaShipmentRepository implements ShipmentRepository {
             // 빈 IN 절은 문법 오류다. 그리고 "아무것도 찾지 않는다" 는 질의를 보낼 이유가 없다.
             return List.of();
         }
-        return entityManager.createQuery(FIND_ALL_JPQL, ShipmentEntity.class)
+        return translated(() -> entityManager.createQuery(FIND_ALL_JPQL, ShipmentEntity.class)
                 .setParameter("orderIds", orderIds)
                 .getResultList().stream()
                 .map(ShipmentEntity::toDomain)
-                .toList();
+                .toList());
     }
 
     @Override
     public List<Shipment> findByRouteFrom(UUID routeId, int fromSeq) {
         Objects.requireNonNull(routeId, "routeId");
-        return entityManager.createQuery(FIND_FROM_SEQ_JPQL, ShipmentEntity.class)
+        return translated(() -> entityManager.createQuery(FIND_FROM_SEQ_JPQL, ShipmentEntity.class)
                 .setParameter("routeId", routeId)
                 .setParameter("fromSeq", (short) fromSeq)
                 .getResultList().stream()
                 .map(ShipmentEntity::toDomain)
-                .toList();
+                .toList());
     }
 
     @Override
@@ -97,5 +107,15 @@ public class JpaShipmentRepository implements ShipmentRepository {
             throw new IllegalStateException("없는 배송을 갱신할 수 없습니다: " + shipment.orderId());
         }
         entity.apply(shipment, clock.instant());
+    }
+
+    /** 질의의 자동 flush 가 터뜨린 JPA 예외를 스프링의 데이터 접근 예외로 바꾼다 — 바꿀 수 없는 것은 그대로. */
+    private static <T> T translated(Supplier<T> query) {
+        try {
+            return query.get();
+        } catch (RuntimeException failure) {
+            DataAccessException converted = EntityManagerFactoryUtils.convertJpaAccessExceptionIfPossible(failure);
+            throw converted != null ? converted : failure;
+        }
     }
 }
