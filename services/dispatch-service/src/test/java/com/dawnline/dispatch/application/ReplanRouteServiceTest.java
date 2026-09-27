@@ -267,6 +267,20 @@ class ReplanRouteServiceTest {
     }
 
     @Test
+    void 계산하는_동안_받을_라우트가_끝나면_결과를_버린다() {
+        // 받을 라우트의 마지막 stop 이 계산 중에 끝났다 — 기사는 복귀했다. 넣으면 그 stop 은 아무도 가지 않고 차량은 비활성화되지
+        // 못한다(ADR-068 후속 A). 끝남은 revision 을 올리지 않으므로 revision 대조로는 보이지 않는다 — 이 테스트가 보는 자리다.
+        Fixture fixture = fixture();
+        ReplanRouteService racing = during(() -> routes.rowsOf(fixture.spare())
+                .forEach(row -> row.status = RouteStopStatus.COMPLETED));
+
+        assertThat(racing.replan(command(fixture, LATE))).isEqualTo(Outcome.STALE);
+
+        assertThat(events.revised).isEmpty();
+        assertThat(routes.rowsOf(fixture.spare())).as("끝난 라우트는 아무것도 받지 않았다").hasSize(2);
+    }
+
+    @Test
     void 게이트가_쓰기를_건너뛰면_결과가_없고_아무것도_쓰지_않는다() {
         // 같은 eventId 의 재전달 — 계산은 한 번 더 돌았고 게이트가 버린다(ADR-064 결정 2 와 같다). 셀 것이 없다.
         Fixture fixture = fixture();
@@ -280,15 +294,29 @@ class ReplanRouteServiceTest {
 
     @Test
     void 받을_라우트가_없으면_아무것도_하지_않는다() {
-        Fixture fixture = fixture();
-        routes.clear(fixture.spare());
-
-        // 빈 라우트도 후보이긴 하다(미출발 차량과 같다) — 그래서 이 테스트는 계획에 라우트가
-        // 하나뿐인 경우로 만든다.
         Fixture alone = single();
 
         assertThat(service.replan(command(alone, LATE))).isEqualTo(Outcome.NO_CANDIDATE);
-        assertThat(fixture.atRisk()).isNotEqualTo(alone.atRisk());
+    }
+
+    @Test
+    void 끝난_라우트는_받을_라우트가_아니다() {
+        // 끝나지 않은 stop 이 하나도 없으면 끝났다 — 보존 · 비활성화 409 와 같은 판정이다(ADR-068 후속 A). 두 번째 peak-day 에서
+        // 앞 stop 을 전부 끝낸 라우트 둘이 stop 을 받았고, 그 stop 은 스캔되지 않았다.
+        Fixture fixture = fixture();
+        routes.rowsOf(fixture.spare()).forEach(row -> row.status = RouteStopStatus.COMPLETED);
+
+        assertThat(service.replan(command(fixture, LATE))).isEqualTo(Outcome.NO_CANDIDATE);
+        assertThat(routes.rowsOf(fixture.spare())).hasSize(2);
+    }
+
+    @Test
+    void 빈_라우트도_받을_라우트가_아니다() {
+        // 재배정 · 재계획이 비운 라우트 — 끝나지 않은 stop 이 없으니 409 도 그 차량의 비활성화를 허락한다. 받으면 기사 없는 stop 이다.
+        Fixture fixture = fixture();
+        routes.clear(fixture.spare());
+
+        assertThat(service.replan(command(fixture, LATE))).isEqualTo(Outcome.NO_CANDIDATE);
     }
 
     @Test

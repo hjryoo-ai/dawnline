@@ -65,8 +65,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <h2>읽기 · 계산 · 쓰기 셋이다 (ADR-068)</h2>
  * 계획(ADR-064)과 같은 구조다 — 읽기 전용 트랜잭션에서 읽고, 트랜잭션 없이 {@link RelocateSearch} 를 돌리고, 게이트가 감싼 쓰기
- * 트랜잭션 하나에서 쓴다. 쓰기는 <strong>계산의 전제를 다시 본다</strong>: 옮길 stop 을 잠그고 {@code PLANNED} 인지, 원 · 대상
- * 라우트의 {@code revision} 이 읽기 때와 같은지. 어긋나면 결과를 버리고 {@link Outcome#STALE} 이다. 옮기는 것은 stop
+ * 트랜잭션 하나에서 쓴다. 쓰기는 <strong>계산의 전제를 다시 본다</strong>: 옮길 stop 을 잠그고 {@code PLANNED} 인지, 받을 라우트가
+ * 아직 끝나지 않았는지(후속 A), 원 · 대상 라우트의 {@code revision} 이 읽기 때와 같은지. 어긋나면 결과를 버리고 {@link Outcome#STALE} 이다. 옮기는 것은 stop
  * <strong>행</strong>이다 — 정정 전에는 주문을 대상의 새 stop 으로 옮기고 원래 행을 지웠고, 그 순간 도착한 배송이 적힐 자리를
  * 잃었다(두 번째 peak-day, 근거: 관측(재현됨) — {@code ReplanRaceIT}).
  *
@@ -288,7 +288,8 @@ public class ReplanRouteService implements ReplanRouteUseCase {
     /**
      * 옮길 stop 을 잠그고 계산의 전제를 다시 본다 (ADR-068 결정 2).
      *
-     * <p>잠그는 순서는 stop → 라우트다 — 상태 반영 · 취소 · 재배정이 stop 을 먼저 잡는 순서와 같다.
+     * <p>잠그는 순서는 stop → 라우트다(옮길 stop → 받을 라우트의 끝나지 않은 stop 하나 → 라우트 행) — 상태 반영 · 취소 · 재배정이
+     * stop 을 먼저 잡는 순서와 같다.
      *
      * @return stop id → 대상 라우트. 전제가 바뀌었으면 {@code null}
      */
@@ -311,6 +312,16 @@ public class ReplanRouteService implements ReplanRouteUseCase {
                 stopId = locked.get().stopId();
             }
             relocations.put(Objects.requireNonNull(stopId, "이동에는 주문이 있다"), move.toRouteId());
+        }
+
+        for (UUID receiving : new TreeSet<>(relocations.values())) {
+            if (!routes.lockUnfinishedStop(receiving)) {
+                // 계산하는 동안 받을 라우트의 마지막 stop 이 끝났다 — 기사는 복귀했다. 넣으면 그 stop 은 아무도 가지 않고 그
+                // 차량은 비활성화되지 못한다(ADR-068 후속 A). 잡은 stop 은 커밋까지 끝나지 않으므로 라우트도 끝나지 않는다.
+                log.info("계산하는 동안 받을 라우트가 끝났다 — 결과를 버린다. routeId={}, 받을 라우트={}",
+                        command.routeId(), receiving);
+                return null;
+            }
         }
 
         Set<UUID> touched = new TreeSet<>(found.sequences().keySet());
@@ -368,7 +379,7 @@ public class ReplanRouteService implements ReplanRouteUseCase {
     }
 
     /**
-     * 같은 계획의 다른 라우트들 (§6.8 2단계).
+     * 같은 계획의 끝나지 않은 다른 라우트들 (§6.8 2단계, ADR-068 후속 A — 끝난 라우트가 받은 stop 은 복귀한 기사의 것이 된다).
      *
      * <p>「진행 중」과 「미출발」을 상태 칼럼으로 가르지 않는다 — 닿은 stop 이 있으면 떠난
      * 것이고, 그 사실이 {@code route_stops.actual_at} 에 있다. 각 후보는 <strong>자기 편차</strong>
@@ -381,7 +392,7 @@ public class ReplanRouteService implements ReplanRouteUseCase {
             Map<UUID, VehicleSpec> fleet, CampDepot depot, Instant startAt) {
 
         List<RelocateSearch.RouteInput> candidates = new ArrayList<>();
-        for (RouteHeader header : routes.routesOfPlan(source.planId())) {
+        for (RouteHeader header : routes.unfinishedRoutesOfPlan(source.planId())) {
             if (header.routeId().equals(source.routeId()) || !fleet.containsKey(header.vehicleId())) {
                 continue;
             }
