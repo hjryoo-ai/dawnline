@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
@@ -28,12 +29,14 @@ import org.springframework.core.io.ClassPathResource;
  * 목록에는 대조 검사를 둔다」). 이 표가 처음 대조됐을 때 네 자리가 갈라져 있었다: {@code tiny} · {@code ops-demo} 가 없었고,
  * {@code late-injection} 의 지연·실패가 15% · 3% 였고(yml 은 100% · 5%), 없는 시나리오 넷이 있는 것처럼 적혀 있었다.
  *
- * <p>이름은 <strong>빼는 방식</strong>으로 본다 — 양쪽을 전부 읽고 차집합이 비었는지. 칸은 넷: 주문 수 · 냉장 비율 ·
- * 지연·실패 확률(기사가 없으면 {@code —}) · 창(시작 {@code start-at} 과 주문 수 ÷ 속도로 계산한 끝).
+ * <p>이름은 <strong>빼는 방식</strong>으로 본다 — 양쪽을 전부 읽고 차집합이 비었는지. 칸은 다섯: 주문 수 · 냉장 비율 ·
+ * 지연·실패 확률(기사가 없으면 {@code —}) · 창(시작 {@code start-at} 과 주문 수 ÷ 속도로 계산한 끝) · 함대({@code fleet} —
+ * {@code feasible} 은 「기준」, {@code as-is} 는 「그대로」, 없으면 {@code —}, 2026-09-27 ADR-067).
  */
 class ScenariosTableTest {
 
-    private static final String HEADER = "| 시나리오 | 주문 | 냉장 비율 | 지연 확률 | 실패 확률 | 창(KST) | 무엇을 보나 |";
+    private static final String HEADER =
+            "| 시나리오 | 주문 | 냉장 비율 | 지연 확률 | 실패 확률 | 창(KST) | 함대 | 무엇을 보나 |";
 
     private static final String NONE = "—";
 
@@ -66,6 +69,7 @@ class ScenariosTableTest {
             expect(mismatched, name, "지연 확률", cells.get(2), driver == null ? NONE : ratio(driver.delayProbability()));
             expect(mismatched, name, "실패 확률", cells.get(3), driver == null ? NONE : ratio(driver.failureProbability()));
             expect(mismatched, name, "창", cells.get(4), window(scenario));
+            expect(mismatched, name, "함대", cells.get(5), fleet(scenario.fleet()));
         });
         assertThat(mismatched).as("부록 A ↔ scenarios.yml — 진실은 yml 이다").isEmpty();
     }
@@ -90,6 +94,17 @@ class ScenariosTableTest {
         return Double.toString(value);
     }
 
+    /** 함대 칸의 말 — 「기준」은 80% 기준이 낸 만큼 증차, 「그대로」는 증차 없음. */
+    private static String fleet(SimProperties.Scenario.@Nullable Fleet fleet) {
+        if (fleet == null) {
+            return NONE;
+        }
+        return switch (fleet) {
+            case FEASIBLE -> "기준";
+            case AS_IS -> "그대로";
+        };
+    }
+
     /** {@code HH:mm–HH:mm} — 시작은 start-at, 끝은 주문 수 ÷ 속도만큼 뒤. */
     private static String window(SimProperties.Scenario scenario) {
         LocalTime start = scenario.windowStart();
@@ -100,7 +115,7 @@ class ScenariosTableTest {
         return start + "–" + start.plusSeconds(seconds).withSecond(0);
     }
 
-    /** 부록 A 의 표 — 이름 → [주문, 냉장, 지연, 실패, 창]. 머리가 없으면 실패한다(대조가 공허해지지 않게). */
+    /** 부록 A 의 표 — 이름 → [주문, 냉장, 지연, 실패, 창, 함대]. 머리가 없으면 실패한다(대조가 공허해지지 않게). */
     private static Map<String, List<String>> table() throws IOException {
         String design = Files.readString(repoRoot().resolve("docs/DESIGN.md"), StandardCharsets.UTF_8);
         int start = design.indexOf("\n" + HEADER + "\n");
@@ -111,7 +126,7 @@ class ScenariosTableTest {
             String[] cells = lines[i].split("\\|", -1);
             String name = cells[1].replace("`", "").strip();
             rows.put(name, List.of(cells[2].strip(), cells[3].strip(), cells[4].strip(), cells[5].strip(),
-                    cells[6].strip()));
+                    cells[6].strip(), cells[7].strip()));
         }
         return rows;
     }

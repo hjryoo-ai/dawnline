@@ -3,6 +3,9 @@ package com.dawnline.sim;
 import com.dawnline.sim.config.SimProperties;
 import com.dawnline.sim.driver.DriverReport;
 import com.dawnline.sim.driver.DriverScenario;
+import com.dawnline.sim.fleet.FleetFailure;
+import com.dawnline.sim.fleet.FleetReport;
+import com.dawnline.sim.fleet.PeakFleet;
 import com.dawnline.sim.order.OrderGenerator;
 import com.dawnline.sim.order.ScenarioReport;
 import com.dawnline.sim.order.SmokeScenario;
@@ -39,10 +42,12 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
     private final RandomGeneratorFactory randomFactory;
     private final RunIds runIds;
     private final WindowStart windowStart;
+    private final PeakFleet peakFleet;
 
     private int exitCode;
     private @Nullable ScenarioReport lastReport;
     private @Nullable DriverReport lastDriverReport;
+    private @Nullable FleetReport lastFleetReport;
 
     /**
      * @param properties     설정
@@ -51,21 +56,43 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
      * @param randomFactory  seed → 난수원. 주입하는 이유는 불변규칙 12 그대로다
      * @param runIds         실행 식별자 생성기. 멱등 키 접두어가 되므로 실행마다 달라야 한다
      * @param windowStart    창의 시작까지 기다림 — 시나리오에 {@code start-at} 이 있을 때만 쓴다
+     * @param peakFleet      함대 단계 — 시나리오에 {@code fleet} 이 있을 때만 쓴다(ADR-067)
      */
     public ScenarioRunner(SimProperties properties, SmokeScenario smoke, DriverScenario driverScenario,
-            RandomGeneratorFactory randomFactory, RunIds runIds, WindowStart windowStart) {
+            RandomGeneratorFactory randomFactory, RunIds runIds, WindowStart windowStart, PeakFleet peakFleet) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.smoke = Objects.requireNonNull(smoke, "smoke");
         this.driverScenario = Objects.requireNonNull(driverScenario, "driverScenario");
         this.randomFactory = Objects.requireNonNull(randomFactory, "randomFactory");
         this.runIds = Objects.requireNonNull(runIds, "runIds");
         this.windowStart = Objects.requireNonNull(windowStart, "windowStart");
+        this.peakFleet = Objects.requireNonNull(peakFleet, "peakFleet");
     }
 
     @Override
     public void run(String... args) throws InterruptedException {
         SimProperties.Scenario scenario = properties.selected();
         boolean withDriver = scenario.driver() != null;
+
+        // 함대 단계의 전제를 창을 기다리기 전에 본다 — 앞 실행이 남긴 peak-sim 차량이 있으면 한 시간을 보내고 나서 알 이유가 없다.
+        PeakFleet.@Nullable Session fleet = null;
+        if (scenario.fleet() != null) {
+            if (properties.ops().token().isBlank()) {
+                log.error("시나리오 '{}' 는 함대 단계가 있다 — ops-api 운영자 토큰(DAWNLINE_SIM_OPS_TOKEN, make token ROLE=OPS_OPERATOR)"
+                        + "이 없어 전제를 볼 수 없다", properties.scenario());
+                this.exitCode = FAILURE_EXIT_CODE;
+                return;
+            }
+            fleet = peakFleet.open(scenario.fleet());
+            try {
+                fleet.requireNoLeftovers();
+            } catch (FleetFailure e) {
+                log.error("시나리오 '{}' 를 시작하지 않았다 — {}", properties.scenario(), e.getMessage());
+                this.lastFleetReport = fleet.report();
+                this.exitCode = FAILURE_EXIT_CODE;
+                return;
+            }
+        }
 
         // 창이 있으면 그 시작까지 유효 시각으로 기다린다(부록 A). 창을 이미 지났으면 보내지 않고 실패한다 —
         // 늦게 시작한 한 시간은 컷오프를 넘고, 넘은 주문은 다음 날 웨이브로 가서 창의 수를 조용히 바꾼다.
@@ -102,6 +129,10 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
                     report.requested(), report.accepted());
         }
 
+        if (fleet != null) {
+            runFleet(fleet, dawnCutoffAfter(Objects.requireNonNull(opened, "fleet 은 창이 있다")), withDriver);
+            return;
+        }
         if (!withDriver) {
             return;
         }
@@ -115,6 +146,49 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
         }
     }
 
+    /**
+     * 함대 단계 (ADR-067): 증차 → 계획 · 시간 예산 → 기사 → 비활성화 → 리포트 머리.
+     *
+     * <p>더한 차량이 있으면 <strong>비활성화는 실패 뒤에도 돈다</strong> — 측정을 이어 가는 것이 아니라 정리다. 실패는 리포트와
+     * 종료 코드에 그대로 남는다. 기사는 계획이 끝났을 때만 돈다(기다릴 수를 계획이 낸다).
+     */
+    private void runFleet(PeakFleet.Session fleet, Instant cutoff, boolean withDriver) throws InterruptedException {
+        try {
+            fleet.provision(cutoff);
+            fleet.awaitPlans();
+        } catch (FleetFailure e) {
+            log.error("함대 단계 실패 — {}", e.getMessage());
+        }
+        if (withDriver && fleet.planned()) {
+            DriverReport driverReport = driverScenario.awaitAndReport(properties.scenario(), fleet.waveIds(),
+                    fleet.routes());
+            this.lastDriverReport = driverReport;
+            log.info("기사 시뮬레이션 완료\n{}", driverReport.toMarkdown());
+            if (!driverReport.isSuccess()) {
+                this.exitCode = FAILURE_EXIT_CODE;
+            }
+        }
+        if (fleet.addedCount() > 0) {
+            try {
+                fleet.release();
+            } catch (FleetFailure e) {
+                log.error("함대 정리 실패 — {}", e.getMessage());
+            }
+        }
+        FleetReport report = fleet.report();
+        this.lastFleetReport = report;
+        log.info("함대 — 계산값과 실측 (ADR-067 결정 8)\n{}", report.toMarkdown());
+        if (!report.isSuccess()) {
+            this.exitCode = FAILURE_EXIT_CODE;
+        }
+    }
+
+    /** 창 시작 뒤의 첫 DAWN 컷오프(00:00 KST) — {@code TierSchedule} 의 상수이고 창은 그 앞의 한 시간이다(부록 A). */
+    static Instant dawnCutoffAfter(Instant windowOpened) {
+        return windowOpened.atZone(WindowStart.ZONE).toLocalDate().plusDays(1).atStartOfDay(WindowStart.ZONE)
+                .toInstant();
+    }
+
     @Override
     public int getExitCode() {
         return exitCode;
@@ -123,6 +197,11 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
     /** 마지막 실행 결과. 테스트가 본다. */
     public @Nullable ScenarioReport lastReport() {
         return lastReport;
+    }
+
+    /** 마지막 함대 리포트. 함대 단계가 없는 시나리오면 {@code null}. */
+    public @Nullable FleetReport lastFleetReport() {
+        return lastFleetReport;
     }
 
     /** 마지막 기사 시뮬레이션 결과. 기사를 쓰지 않는 시나리오면 {@code null}. */

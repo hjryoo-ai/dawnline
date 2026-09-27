@@ -28,8 +28,8 @@ public final class WindowStart {
     /** 기다림의 상한. `make sim-up` 의 기본 유효 시각(22:40)에서 창(22:58)까지는 이 안이다. */
     public static final Duration LIMIT = Duration.ofHours(1);
 
-    /** 컷오프가 사는 시간대(§2.2). */
-    private static final ZoneId CUTOFF_ZONE = ZoneId.of("Asia/Seoul");
+    /** 컷오프가 사는 시간대(§2.2) — {@code TierSchedule} 과 같다. 함대 단계가 창 뒤의 DAWN 컷오프를 이 시간대로 잰다. */
+    public static final ZoneId ZONE = ZoneId.of("Asia/Seoul");
 
     private static final Logger log = LoggerFactory.getLogger(WindowStart.class);
 
@@ -56,7 +56,7 @@ public final class WindowStart {
     public Instant await(LocalTime start) throws InterruptedException {
         Objects.requireNonNull(start, "start");
         Instant now = clock.instant();
-        ZonedDateTime local = now.atZone(CUTOFF_ZONE);
+        ZonedDateTime local = now.atZone(ZONE);
         ZonedDateTime next = local.with(start);
         if (next.isBefore(local)) {
             next = next.plusDays(1);

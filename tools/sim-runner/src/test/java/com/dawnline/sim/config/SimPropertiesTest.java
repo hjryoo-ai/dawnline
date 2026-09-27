@@ -89,11 +89,39 @@ class SimPropertiesTest {
     }
 
     @Test
+    void 창_시나리오는_전부_함대_단계가_있고_기사는_계획이_낸_수를_기다린다() throws IOException {
+        // 이름을 열거하지 않는다 — 창(start-at)이 있는 시나리오 전부. 함대 단계가 없으면 증차도 그 차량의 정리도 없고,
+        // 기사의 routes 를 적으면 계획이 낸 수가 아니라 고른 수를 기다린다(ADR-067 결정 6).
+        Map<String, SimProperties.Scenario> windows = bindScenariosYml().scenarios();
+
+        assertThat(windows.values()).filteredOn(scenario -> scenario.startAt() != null)
+                .as("전제 — 창 시나리오가 있다").hasSizeGreaterThanOrEqualTo(4)
+                .allSatisfy(scenario -> {
+                    assertThat(scenario.fleet()).isNotNull();
+                    assertThat(scenario.driver()).isNotNull();
+                    assertThat(scenario.driver().routes()).isNull();
+                });
+        assertThat(windows.get("peak-day").fleet()).isEqualTo(SimProperties.Scenario.Fleet.FEASIBLE);
+        assertThat(windows.get("overload-day").fleet()).as("같은 물량, 증차 없음")
+                .isEqualTo(SimProperties.Scenario.Fleet.AS_IS);
+    }
+
+    @Test
+    void 함대_단계는_창이_있어야_하고_계획이_낼_수는_함대_단계가_있어야_한다() {
+        assertThatThrownBy(() -> new SimProperties.Scenario(1, 1, 1L, 1, 0.0, Map.of("DAWN", 1), null, null,
+                SimProperties.Scenario.Fleet.AS_IS)).hasMessageContaining("fleet");
+        SimProperties.Scenario.Driver planDecided = new SimProperties.Scenario.Driver(null, 600, 60, 30,
+                "http://localhost:8084", 0.0, 0.0, 0.0, 0);
+        assertThatThrownBy(() -> new SimProperties.Scenario(1, 1, 1L, 1, 0.0, Map.of("DAWN", 1), planDecided, "22:58",
+                null)).hasMessageContaining("driver.routes");
+    }
+
+    @Test
     void 고른_시나리오가_없으면_배선은_null_을_받는다() throws IOException {
         // selected() 와 달리 던지지 않는다 — 배선에서 던지면 "있는 것: [...]" 안내가
         // 컨텍스트 기동 실패의 스택 아래로 묻힌다.
         SimProperties properties = new SimProperties("없는것", "http://localhost:8081", 5000,
-                bindScenariosYml().scenarios());
+                bindScenariosYml().scenarios(), null);
 
         assertThat(properties.selectedOrNull()).isNull();
     }
@@ -119,7 +147,7 @@ class SimPropertiesTest {
     @Test
     void 이름이_틀리면_있는_것을_함께_알려_준다() throws IOException {
         SimProperties properties = new SimProperties("없는것", "http://localhost:8081", 5000,
-                bindScenariosYml().scenarios());
+                bindScenariosYml().scenarios(), null);
 
         assertThatThrownBy(properties::selected)
                 .isInstanceOf(IllegalArgumentException.class)
@@ -129,23 +157,23 @@ class SimPropertiesTest {
 
     @Test
     void 잘못된_시나리오_값은_만들어지는_순간_거부된다() {
-        assertThatThrownBy(() -> new SimProperties.Scenario(0, 20, 1L, 10, 0.25, Map.of("DAWN", 1), null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(0, 20, 1L, 10, 0.25, Map.of("DAWN", 1), null, null, null))
                 .hasMessageContaining("orders");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 0, 1L, 10, 0.25, Map.of("DAWN", 1), null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 0, 1L, 10, 0.25, Map.of("DAWN", 1), null, null, null))
                 .hasMessageContaining("rate-per-second");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 0, 0.25, Map.of("DAWN", 1), null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 0, 0.25, Map.of("DAWN", 1), null, null, null))
                 .hasMessageContaining("customers");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 1.5, Map.of("DAWN", 1), null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 1.5, Map.of("DAWN", 1), null, null, null))
                 .hasMessageContaining("cold-ratio");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of(), null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of(), null, null, null))
                 .hasMessageContaining("tier-weights");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of("DAWN", 0), null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of("DAWN", 0), null, null, null))
                 .hasMessageContaining("합이 0");
     }
 
     @Test
     void 타임아웃은_1ms_미만일_수_없다() {
-        assertThatThrownBy(() -> new SimProperties("smoke", "http://x", 0, Map.of()))
+        assertThatThrownBy(() -> new SimProperties("smoke", "http://x", 0, Map.of(), null))
                 .hasMessageContaining("request-timeout-ms");
     }
 }

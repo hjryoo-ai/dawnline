@@ -103,8 +103,16 @@ dawnline:
       #
       # 고객은 주문의 절반 — 고객당 평균 2건이라 §7.2 레이트 리밋(용량 60)에 닿지 않는다.
       # 티어 비율은 smoke 와 같다. SAME_DAY 는 다음 날 10:00 웨이브로 가서 이 창의 측정 밖이다.
-      # 기사는 아직 없다 — 지금의 기사는 「라우트 N 대」를 기다리는데 창의 라우트 수는 계획이 정한다(7-4).
-      # peak-day 와 overload-day 는 함대만 다르다 — 함대 칸은 ③ 에서(실현 가능성 기준 80%, 부록 A).
+      #
+      # fleet (ADR-067) — 창이 끝나면(23:58) 창의 DAWN 웨이브마다 dispatch 의 함대 판정(80% 기준)을 ops-api 로 읽는다.
+      #   feasible : 부족 대수만큼 템플릿을 증차한다(source=peak-sim, 감사 행 ADD_VEHICLE) — peak-day
+      #   as-is    : 재고 리포트하되 더하지 않는다 — 「증차 없음」. overload-day 와 평일 둘
+      # 증차가 그 웨이브의 closed_at 뒤에 끝났으면 실패한다(시간 예산은 어설션이다). 끝나면 이번 실행이 더한 차량만 비활성화한다.
+      # 운영자 토큰이 필요하다: DAWNLINE_SIM_OPS_TOKEN=$(make token ROLE=OPS_OPERATOR).
+      #
+      # driver — 창의 기사는 계획이 정한 라우트 수(창의 웨이브들의 route_count 합)를 전부 기다린다. routes 를 적지 않는다.
+      # 기사가 없으면 라우트가 끝나지 않고, 끝나지 않은 stop 이 있는 차량은 비활성화되지 않는다(409 — ADR-067 결정 5).
+      # 지연 · 실패 주입은 0 이다 — §8.1 정시율(지연 5%)은 7-4 가 잰다.
       # ----------------------------------------------------------------------------------------------------------
 
       # 평일 — 하루 3만(§8.2)의 30%.
@@ -115,12 +123,20 @@ dawnline:
         customers: 4500
         cold-ratio: 0.25
         start-at: "22:58"
+        fleet: as-is
         tier-weights:
           DAWN: 5
           SAME_DAY: 3
           NEXT_DAY: 2
+        driver:
+          speed: 600
+          # 수천 라우트가 가상 스레드마다 동시에 돈다 — 가장 긴 라우트(07:00 까지)가 배속 600 에서 1분 안쪽이고,
+          # 나머지는 계획 · 소비의 지연이다.
+          timeout-seconds: 1800
+          scan-retry-seconds: 60
+          scan-base-url: ${DAWNLINE_SIM_SCAN_BASE_URL:http://localhost:8084}
 
-      # 피크 — 하루 15만의 30%. 함대는 실현 가능성 기준(80%)이 정한다(③).
+      # 피크 — 하루 15만의 30%. 함대는 실현 가능성 기준(80%)이 정한다 — 운영자처럼 증차한다(ADR-067).
       peak-day:
         orders: 45000
         rate-per-second: 12.5
@@ -128,12 +144,21 @@ dawnline:
         customers: 22500
         cold-ratio: 0.25
         start-at: "22:58"
+        fleet: feasible
         tier-weights:
           DAWN: 5
           SAME_DAY: 3
           NEXT_DAY: 2
+        driver:
+          speed: 600
+          # 수천 라우트가 가상 스레드마다 동시에 돈다 — 가장 긴 라우트(07:00 까지)가 배속 600 에서 1분 안쪽이고,
+          # 나머지는 계획 · 소비의 지연이다.
+          timeout-seconds: 1800
+          scan-retry-seconds: 60
+          scan-base-url: ${DAWNLINE_SIM_SCAN_BASE_URL:http://localhost:8084}
 
-      # 과부하 — 같은 물량(같은 seed), 함대 그대로. 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터다.
+      # 과부하 — 같은 물량(같은 seed), 함대 그대로(「증차 없음」 — 재기는 하므로 리포트의 계산 부족분이 「얼마나 과부하였나」다).
+      # 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터다.
       overload-day:
         orders: 45000
         rate-per-second: 12.5
@@ -141,10 +166,18 @@ dawnline:
         customers: 22500
         cold-ratio: 0.25
         start-at: "22:58"
+        fleet: as-is
         tier-weights:
           DAWN: 5
           SAME_DAY: 3
           NEXT_DAY: 2
+        driver:
+          speed: 600
+          # 수천 라우트가 가상 스레드마다 동시에 돈다 — 가장 긴 라우트(07:00 까지)가 배속 600 에서 1분 안쪽이고,
+          # 나머지는 계획 · 소비의 지연이다.
+          timeout-seconds: 1800
+          scan-retry-seconds: 60
+          scan-base-url: ${DAWNLINE_SIM_SCAN_BASE_URL:http://localhost:8084}
 
       # 평일 물량에 냉장 40% — 좌석 예약(ADR-039)이 수요 쪽에서 눌리는 유일한 시나리오.
       cold-heavy:
@@ -154,7 +187,15 @@ dawnline:
         customers: 4500
         cold-ratio: 0.40
         start-at: "22:58"
+        fleet: as-is
         tier-weights:
           DAWN: 5
           SAME_DAY: 3
           NEXT_DAY: 2
+        driver:
+          speed: 600
+          # 수천 라우트가 가상 스레드마다 동시에 돈다 — 가장 긴 라우트(07:00 까지)가 배속 600 에서 1분 안쪽이고,
+          # 나머지는 계획 · 소비의 지연이다.
+          timeout-seconds: 1800
+          scan-retry-seconds: 60
+          scan-base-url: ${DAWNLINE_SIM_SCAN_BASE_URL:http://localhost:8084}
