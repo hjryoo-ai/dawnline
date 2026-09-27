@@ -474,7 +474,7 @@ final class InMemoryDispatchPorts {
 
             List<StopRow> target = rows.computeIfAbsent(targetRouteId, id -> new ArrayList<>());
             StopRow into = target.stream()
-                    .filter(row -> !row.cancelled() && row.point.equals(candidate.location()))
+                    .filter(row -> row.status == RouteStopStatus.PLANNED && row.point.equals(candidate.location()))
                     .findFirst()
                     .orElseGet(() -> {
                         // 실물과 같다: 없으면 맨 뒤에 새로 만들고, 순번은 rewrite 가 다시 매긴다.
