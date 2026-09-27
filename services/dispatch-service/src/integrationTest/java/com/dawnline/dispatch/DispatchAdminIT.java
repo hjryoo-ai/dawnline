@@ -16,7 +16,9 @@ import com.dawnline.dispatch.application.port.in.RunPlanUseCase;
 import com.dawnline.dispatch.application.port.in.ManageResourcesUseCase;
 import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
+import com.dawnline.dispatch.application.port.out.RouteMutations;
 import com.dawnline.dispatch.domain.DispatchCandidate;
+import com.dawnline.dispatch.domain.RouteStopStatus;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -75,6 +77,9 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
 
     @Autowired
     private ReassignStopUseCase reassign;
+
+    @Autowired
+    private RouteMutations mutations;
 
     @Autowired
     private ManageResourcesUseCase resources;
@@ -358,6 +363,34 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
                    AND aggregate_id IN (?, ?)
                  ORDER BY aggregate_id
                 """).setParameter(1, fromRouteId).setParameter(2, toRouteId).getResultList());
+    }
+
+    @Test
+    void 끝난_stop_의_재배정은_배송된_주문을_대상_라우트의_PLANNED_stop_으로_되살린다() {
+        // 관측 — 2026-09-27, 7-4a ④ 계획 중 코드 읽기로 찾은 결함을 재현한다(근거: 추정 → 관측). ops-api 계약은
+        // 재배정 409 를 「끝난 stop 등」이라고 말하지만 ReassignStopService 에는 stop 상태 검사가 없다.
+        TwoRoutes routes = twoRoutes();
+        UUID stopId = tx().execute(status -> mutations.findStopOf(routes.fromRouteId(), routes.orderId()))
+                .orElseThrow();
+        tx().executeWithoutResult(status -> mutations.markStopStatus(stopId, RouteStopStatus.COMPLETED,
+                PlanningClock.PLAN_AT));
+
+        ReassignStopUseCase.Result result = reassign.reassign(
+                routes.fromRouteId(), routes.orderId(), routes.toRouteId());
+
+        assertThat(result.toRevision()).as("거절 없이 옮겼다").isEqualTo(2);
+        assertThat(ownerOf(routes.orderId())).as("배송된 주문이 대상 라우트의 PLANNED stop 에 있다")
+                .containsExactly(routes.toRouteId().toString(), "PLANNED");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> ownerOf(UUID orderId) {
+        Object[] row = tx().execute(status -> (Object[]) entityManager.createNativeQuery("""
+                SELECT s.route_id::text, s.status FROM route_stops s
+                  JOIN route_stop_orders o ON o.stop_id = s.id
+                 WHERE o.order_id = ?
+                """).setParameter(1, orderId).getSingleResult());
+        return List.of((String) row[0], (String) row[1]);
     }
 
     @Test
