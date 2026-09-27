@@ -112,6 +112,12 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: '`vehicle-code-taken` — 같은 코드의 차량이 있다(`code` · `vehicleId`)'
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "401":
           description: 내부 토큰(`X-Dawnline-Internal`)이 없거나 다르다 — `internal-token-required`.
             운영자는 ops-api 를 거친다 (ADR-055)

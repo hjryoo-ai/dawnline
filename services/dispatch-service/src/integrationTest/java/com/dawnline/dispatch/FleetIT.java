@@ -272,6 +272,18 @@ class FleetIT extends DispatchIntegrationTestBase {
         assertThat(vehicleView(id).source()).isEqualTo("peak-sim");
     }
 
+    @Test
+    void 같은_코드의_차량은_409_vehicle_code_taken_이고_있는_차량을_가리킨다() {
+        String code = "FL-DUP-" + suffix().substring(0, 6);
+        UUID first = vehicle(code, false, false, 45_000, LocalTime.of(6, 0), LocalTime.of(22, 0));
+
+        assertThatThrownBy(() -> vehicle(code, false, false, 45_000, LocalTime.of(6, 0), LocalTime.of(22, 0)))
+                .isInstanceOfSatisfying(DomainException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(DispatchErrorCode.VEHICLE_CODE_TAKEN);
+                    assertThat(e.details()).containsEntry("vehicleId", first.toString());
+                });
+    }
+
     // ---------------------------------------------------------------- 픽스처
 
     private UUID vehicle(String code, boolean cold, boolean hazmat, int fixedCost, LocalTime start, LocalTime end) {

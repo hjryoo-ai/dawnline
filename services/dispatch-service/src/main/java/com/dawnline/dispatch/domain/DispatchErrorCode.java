@@ -36,7 +36,15 @@ public enum DispatchErrorCode implements ErrorCode {
      * <p>계획 대상 후보가 0 이 되어 답이 「부족 0」으로 보인다 — 모름을 0 으로 접지 않는다. 실패한 계획({@code FAILED})은
      * 여기 들지 않는다: 그 웨이브의 후보는 아직 계획 대상이고, 증차한 뒤 다시 돌리는 것이 운영자가 할 일이다.
      */
-    WAVE_ALREADY_PLANNED("wave-already-planned", 409, "이미 계획이 발행된 웨이브입니다");
+    WAVE_ALREADY_PLANNED("wave-already-planned", 409, "이미 계획이 발행된 웨이브입니다"),
+
+    /**
+     * 같은 코드의 차량이 이미 있다 ({@code vehicles.code} UNIQUE).
+     *
+     * <p>제약에 맡기면 500 이고, ops-api 는 코어의 5xx 를 「적용됐는지 모름」({@code UNKNOWN})으로 접는다 — 타임아웃 뒤
+     * 다시 누른 등록이 모름을 하나 더 만든다. 409 가 <strong>있는 차량의 id</strong> 를 말하면 다시 누르기가 곧 해소다(RB-07).
+     */
+    VEHICLE_CODE_TAKEN("vehicle-code-taken", 409, "같은 코드의 차량이 이미 있습니다");
 
     private final String code;
     private final int status;
@@ -87,6 +95,18 @@ public enum DispatchErrorCode implements ErrorCode {
         return new DomainException(WAVE_ALREADY_PLANNED,
                 "계획이 이미 발행돼 계획 대상 후보가 없습니다 — 함대 판정은 계획 전의 것입니다",
                 Map.of("waveId", waveId.toString(), "planId", planId.toString()));
+    }
+
+    /**
+     * 같은 코드의 차량이 있다.
+     *
+     * @param code      코드
+     * @param vehicleId 있는 차량
+     * @return {@link #VEHICLE_CODE_TAKEN}
+     */
+    public static DomainException vehicleCodeTaken(String code, UUID vehicleId) {
+        return new DomainException(VEHICLE_CODE_TAKEN, "코드 %s 의 차량이 이미 있습니다".formatted(code),
+                Map.of("code", code, "vehicleId", vehicleId.toString()));
     }
 
     /**

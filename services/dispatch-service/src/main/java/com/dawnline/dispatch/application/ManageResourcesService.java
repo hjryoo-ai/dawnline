@@ -49,9 +49,16 @@ public class ManageResourcesService implements ManageResourcesUseCase {
         return admin.listVehicles(campId);
     }
 
+    /**
+     * 같은 코드가 있으면 409 {@code vehicle-code-taken} — UNIQUE 제약에 맡기면 500 이다. 동시에 온 둘은 제약이 막는다(드물다 —
+     * 운영자 커맨드다).
+     */
     @Override
     @Transactional
     public UUID createVehicle(ResourceViews.NewVehicle request) {
+        admin.vehicleIdByCode(request.code()).ifPresent(existing -> {
+            throw DispatchErrorCode.vehicleCodeTaken(request.code(), existing);
+        });
         return admin.createVehicle(request);
     }
 

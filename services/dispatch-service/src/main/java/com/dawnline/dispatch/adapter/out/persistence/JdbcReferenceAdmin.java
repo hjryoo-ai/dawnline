@@ -126,6 +126,14 @@ public class JdbcReferenceAdmin implements ReferenceAdmin {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
+    public Optional<UUID> vehicleIdByCode(String code) {
+        List<UUID> found = entityManager.createNativeQuery("SELECT id FROM vehicles WHERE code = ?")
+                .setParameter(1, code).getResultList();
+        return found.isEmpty() ? Optional.empty() : Optional.of(found.getFirst());
+    }
+
+    @Override
     public UUID createVehicle(ResourceViews.NewVehicle request) {
         UUID id = Ids.newId();
         entityManager.createNativeQuery("""

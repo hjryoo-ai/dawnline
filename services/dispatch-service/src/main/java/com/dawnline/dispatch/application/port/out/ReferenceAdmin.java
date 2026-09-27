@@ -40,6 +40,12 @@ public interface ReferenceAdmin {
     List<ResourceViews.VehicleView> listVehicles(UUID campId);
 
     /**
+     * @param code 차량 코드
+     * @return 그 코드의 차량 id
+     */
+    Optional<UUID> vehicleIdByCode(String code);
+
+    /**
      * @param request 등록할 차량 — {@code source} 는 {@link ResourceViews.NewVehicle#effectiveSource()}
      */
     UUID createVehicle(ResourceViews.NewVehicle request);

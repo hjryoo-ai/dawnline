@@ -106,6 +106,8 @@ public class ResourceController {
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "등록됨. `Location` 에 차량 주소가 온다"),
             @ApiResponse(responseCode = "400", description = "필수 값이 없거나 형식이 올바르지 않다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409", description = "`vehicle-code-taken` — 같은 코드의 차량이 있다(`code` · `vehicleId`)",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
     public ResponseEntity<CreatedId> createVehicle(
             @Valid @RequestBody ResourceViews.NewVehicle request) {
