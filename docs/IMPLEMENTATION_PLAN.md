@@ -2312,6 +2312,10 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
      (a)~(c) 를 건드릴 때뿐이다.
    - **008(가상 스레드 + ForkJoin 분리)은 Phase 4-3 의 이월을 안고 쓴다** —
      [ADR-035](adr/ADR-035-parallel-unit-is-not-the-cluster.md) 가 병렬 단위를 이미 정정했다.
+   - **교대가 섞인 벤치마크 데이터셋 (2026-09-27 결정)** — 다섯 데이터셋은 근무창 하나(계획 뒤 12시간)라 차량별 상한이 173 으로
+     `max-stops` 120 보다 커서, 시간 축([ADR-039 후속 2](adr/ADR-039-reserve-seats-by-constraint-class.md))을 벤치마크가 보지 못한다
+     ([측정](benchmarks/phase7-time-axis.md) §0). 없으면 시간 축의 회귀를 잡는 자리가 `peak-day` 하나다 — 도구의 빈 곳이다.
+     `DatasetGenerator` 의 근무창 파라미터 하나로 교대를 섞은 데이터셋을 더한다(그림자의 「모두 같은 수」와 구현의 「차량마다」가 갈리는 입력).
 7. release.yml(GHCR 푸시, SBOM). (선택) `deploy/k8s` 매니페스트 + kind 스모크.
 
 **DoD**
