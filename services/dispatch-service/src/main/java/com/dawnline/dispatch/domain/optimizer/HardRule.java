@@ -52,4 +52,17 @@ public non-sealed interface HardRule extends DispatchRule {
     default OptionalInt routeStopCap() {
         return OptionalInt.empty();
     }
+
+    /**
+     * 이 차량이 {@code startAt} 에 계획될 때 이 룰이 라우트 하나에 허용하는 stop 수의 상한 (§6.3, ADR-039 후속 2).
+     *
+     * <p>{@link #routeStopCap()} 의 차량별 판이다 — 답이 차량과 출발 시각에 달린 룰({@code SHIFT_WINDOW}: 근무창이 허락하는 stop 수)만
+     * 스스로 답한다. 기본값은 차량을 보지 않는 답이라, 이미 답하던 룰({@code MAX_STOPS_PER_ROUTE})은 두 질문에 같은 값을 낸다.
+     *
+     * @param vehicle 차량
+     * @param startAt 계획 시작 — 출발은 이것과 근무 시작 중 늦은 쪽이다({@link RouteState} 와 같은 규칙)
+     */
+    default OptionalInt routeStopCap(VehicleSpec vehicle, java.time.Instant startAt) {
+        return routeStopCap();
+    }
 }

@@ -150,6 +150,25 @@ public final class RuleSet {
     }
 
     /**
+     * 이 차량이 {@code startAt} 에 계획될 때의 <strong>유효 stop 상한</strong> — 차량별 답들의 최솟값 (§6.3, ADR-039 후속 2).
+     *
+     * <p>계획이 자리를 셀 때 쓴다 — 좌석 예약 · 클러스터 수 · 절약법의 슬롯. 함대 판정은 차량을 보지 않는 {@link #routeStopCap()}
+     * 을 그대로 쓴다(ADR-067 — 그 자리에 시간을 넣으면 그림자에서 미배정이 늘었다).
+     *
+     * @param vehicle 차량
+     * @param startAt 계획 시작
+     */
+    public OptionalInt routeStopCap(VehicleSpec vehicle, java.time.Instant startAt) {
+        Objects.requireNonNull(vehicle, "vehicle");
+        Objects.requireNonNull(startAt, "startAt");
+        return hard.stream()
+                .map(rule -> rule.routeStopCap(vehicle, startAt))
+                .filter(OptionalInt::isPresent)
+                .mapToInt(OptionalInt::getAsInt)
+                .min();
+    }
+
+    /**
      * 거절들을 <strong>통과에 가까운 것부터</strong> 세우는 순서 (§6.3 미배정 설명, ADR-039 후속).
      *
      * <p>첫 키는 <strong>평가 순서에서 얼마나 멀리 갔는가</strong>다. {@link #check} 는 첫 위반에서 멈추므로, 뒤쪽 룰에 걸린

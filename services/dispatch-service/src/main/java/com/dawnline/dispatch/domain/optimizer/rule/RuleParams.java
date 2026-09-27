@@ -45,6 +45,11 @@ final class RuleParams {
         return value;
     }
 
+    /** 있는가. 파라미터 여럿이 <strong>함께</strong> 있어야 뜻이 있는 룰이 먼저 묻는다(§6.3 {@code SHIFT_WINDOW} 의 시간 상수). */
+    boolean has(String key) {
+        return params.get(key) != null;
+    }
+
     String requireString(String key) {
         Object value = require(key);
         if (!(value instanceof String text) || text.isBlank()) {

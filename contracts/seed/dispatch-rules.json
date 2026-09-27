@@ -32,7 +32,7 @@
     "type": "SHIFT_WINDOW",
     "severity": "HARD",
     "priority": 25,
-    "params": { "bufferMinutes": 30 }
+    "params": { "bufferMinutes": 30, "serviceSeconds": 158, "legSeconds": 76, "depotLegsSeconds": 827 }
   },
   {
     "name": "late-hard-limit",

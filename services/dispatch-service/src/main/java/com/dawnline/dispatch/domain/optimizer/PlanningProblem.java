@@ -57,6 +57,26 @@ public record PlanningProblem(WaveRef wave, CampDepot depot, List<Candidate> can
         vehicles = List.copyOf(Objects.requireNonNull(vehicles, "vehicles"));
     }
 
+    /**
+     * 이 계획에서 이 차량의 라우트 하나에 들어가는 stop 수의 상한 — 룰셋이 차량과 계획 시작으로 답한다 (§6.3, ADR-039 후속 2).
+     *
+     * @param vehicle 이 계획의 차량
+     */
+    public java.util.OptionalInt stopCapOf(VehicleSpec vehicle) {
+        return rules.routeStopCap(vehicle, startedAt);
+    }
+
+    /**
+     * 차량별 상한 중 <strong>가장 큰 것</strong> — 차량을 모르는 채 「차 한 대 몫」을 자르는 자리가 쓴다(ADR-041 후속). 중량 · 부피를
+     * 가장 큰 차량의 용량으로 나누는 것과 같은 규칙이다. 상한을 말하는 룰이 없으면 비어 있다.
+     */
+    public java.util.OptionalInt largestStopCap() {
+        return vehicles.stream().map(this::stopCapOf)
+                .filter(java.util.OptionalInt::isPresent)
+                .mapToInt(java.util.OptionalInt::getAsInt)
+                .max();
+    }
+
     /** 계획 마감 시각. */
     public Instant deadline() {
         return budget.deadlineFrom(startedAt);
