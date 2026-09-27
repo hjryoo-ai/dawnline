@@ -50,6 +50,33 @@ public interface OpsClient {
     Reply deactivate(UUID vehicleId);
 
     /**
+     * @param waveId 웨이브
+     * @param reason 조기 마감의 이유 — 코어가 필수로 받는다(ADR-054 결정 2)
+     * @return {@code POST /waves/{waveId}/close} — {@code CLOSE_WAVE} 감사 행
+     */
+    Reply closeWave(UUID waveId, String reason);
+
+    /**
+     * @param waveId 웨이브
+     * @return 계획의 라우트 — {@code GET /waves/{waveId}/routes}(읽기 모델)
+     */
+    List<RouteSummary> waveRoutes(UUID waveId);
+
+    /**
+     * @param routeId 라우트
+     * @return stop 순서와 상태 — {@code GET /routes/{routeId}}(dispatch 로 조회 위임)
+     */
+    List<RouteStop> routeStops(UUID routeId);
+
+    /**
+     * @param routeId       옮길 주문이 있는 라우트
+     * @param orderId       주문
+     * @param targetRouteId 받을 라우트
+     * @return {@code POST /routes/{routeId}/stops/{orderId}/reassign} — {@code REASSIGN_STOP} 감사 행
+     */
+    Reply reassign(UUID routeId, UUID orderId, UUID targetRouteId);
+
+    /**
      * 읽기 모델의 웨이브 한 행.
      *
      * @param waveId          웨이브
@@ -64,6 +91,29 @@ public interface OpsClient {
     record Wave(UUID waveId, @Nullable String serviceTier, @Nullable Instant cutoffAt, @Nullable String status,
             @Nullable Integer orderCount, @Nullable Integer unassignedCount, @Nullable Integer routeCount,
             @Nullable Instant closedAt) {
+    }
+
+    /**
+     * 읽기 모델의 라우트 한 줄.
+     *
+     * @param routeId   라우트
+     * @param vehicleId 차량 — 받을 라우트를 능력으로 고른다
+     * @param stopCount stop 수
+     */
+    record RouteSummary(UUID routeId, @Nullable UUID vehicleId, @Nullable Integer stopCount) {
+    }
+
+    /**
+     * 라우트의 stop 하나.
+     *
+     * @param seq      방문 순번
+     * @param status   {@code PLANNED} · {@code ARRIVED} · {@code COMPLETED} · {@code FAILED} · {@code CANCELLED}
+     * @param orderIds 그 stop 의 주문
+     */
+    record RouteStop(int seq, String status, List<UUID> orderIds) {
+        public RouteStop {
+            orderIds = List.copyOf(orderIds);
+        }
     }
 
     /**

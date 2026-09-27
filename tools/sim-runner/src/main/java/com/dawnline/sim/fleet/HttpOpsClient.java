@@ -93,6 +93,35 @@ public final class HttpOpsClient implements OpsClient {
         return command("/vehicles/" + vehicleId + "/deactivate", "");
     }
 
+    @Override
+    public Reply closeWave(UUID waveId, String reason) {
+        return command("/waves/" + waveId + "/close", json.writeValueAsString(java.util.Map.of("reason", reason)));
+    }
+
+    @Override
+    public List<RouteSummary> waveRoutes(UUID waveId) {
+        List<RouteSummary> routes = new ArrayList<>();
+        for (JsonNode route : read("웨이브의 라우트", "/waves/" + waveId + "/routes").path("routes")) {
+            routes.add(json.treeToValue(route, RouteSummary.class));
+        }
+        return List.copyOf(routes);
+    }
+
+    @Override
+    public List<RouteStop> routeStops(UUID routeId) {
+        List<RouteStop> stops = new ArrayList<>();
+        for (JsonNode stop : read("라우트", "/routes/" + routeId).path("stops")) {
+            stops.add(json.treeToValue(stop, RouteStop.class));
+        }
+        return List.copyOf(stops);
+    }
+
+    @Override
+    public Reply reassign(UUID routeId, UUID orderId, UUID targetRouteId) {
+        return command("/routes/" + routeId + "/stops/" + orderId + "/reassign",
+                json.writeValueAsString(java.util.Map.of("targetRouteId", targetRouteId.toString())));
+    }
+
     private JsonNode read(String what, String path) {
         HttpResponse<String> response = send(what, request(path).GET().build());
         if (response.statusCode() != 200) {

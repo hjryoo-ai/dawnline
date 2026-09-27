@@ -36,6 +36,14 @@ OFFSET="$(cat "$OFFSET_FILE")"
 DAWNLINE_SIM_OPS_TOKEN="$(bash tools/ops-token/ops-token.sh OPS_OPERATOR sim-peak)"
 export DAWNLINE_SIM_OPS_TOKEN
 
+# 호스트에서 compose 스택을 부른다 — 주소의 진실은 .env 의 게시 포트다. sim-runner 의 기본값은 각 서비스의 bootRun 포트라서
+# ops-api 는 8085(bootRun)와 8080(compose)이 갈린다 — 첫 make peak 가 그 자리에서 ConnectException 으로 멈췄다(2026-09-27,
+# 전제 검사가 창을 기다리기 전이라 1초 만에). 넷을 다 여기서 정한다: 하나만 고치면 다음 어긋남이 같은 모양으로 온다.
+export DAWNLINE_SIM_BASE_URL="http://localhost:${ORDER_SERVICE_PORT}"
+export DAWNLINE_SIM_OPS_BASE_URL="http://localhost:${OPS_API_PORT}"
+export DAWNLINE_SIM_SCAN_BASE_URL="http://localhost:${TRACKING_SERVICE_PORT}"
+export SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:${KAFKA_EXTERNAL_PORT}"
+
 echo "=== $PEAK — 오프셋 $OFFSET (make sim-up 의 값), 운영자 sim-peak"
 exec ./gradlew --console=plain :tools:sim-runner:bootRun \
   --args="--dawnline.sim.scenario=$PEAK --spring.profiles.active=sim --dawnline.clock.offset=$OFFSET"

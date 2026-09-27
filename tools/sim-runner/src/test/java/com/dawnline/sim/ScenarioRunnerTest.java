@@ -156,16 +156,19 @@ class ScenarioRunnerTest {
         ops.waveAnswers.add(List.of(FakeOpsClient.wave(CUTOFF, "PLANNED", 3, CUTOFF.plusSeconds(90))));
         ops.feasibility = waveId -> FakeOpsClient.assessment(
                 FakeOpsClient.line("일반", "SHORTFALL", 2, FakeOpsClient.van("seed", true)));
+        ops.threeRoutes();
         ScenarioRunner runner = runner(properties("peak", "jwt"), (order, key) -> OrderClient.Response.of(201, null));
 
         runner.run();
 
         assertThat(runner.getExitCode()).isZero();
+        assertThat(ops.commands).containsExactly("ADD_VEHICLE", "ADD_VEHICLE", "CLOSE_WAVE", "REASSIGN_STOP");
         assertThat(ops.addedBodies).hasSize(2);
         assertThat(ops.deactivateCalls).hasSize(2);
         FleetReport report = runner.lastFleetReport();
         assertThat(report).isNotNull();
         assertThat(report.isSuccess()).isTrue();
+        assertThat(report.audit()).allSatisfy(line -> assertThat(line.matches()).as(line.action().name()).isTrue());
         assertThat(report.waves()).singleElement().satisfies(wave -> {
             assertThat(wave.added()).isEqualTo(2);
             assertThat(wave.closedAt()).isEqualTo(CUTOFF.plusSeconds(90));

@@ -147,7 +147,7 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
     }
 
     /**
-     * 함대 단계 (ADR-067): 증차 → 계획 · 시간 예산 → 기사 → 비활성화 → 리포트 머리.
+     * 함대 단계 (ADR-067): 증차 · 조기 마감 → 계획 · 시간 예산 → 재배정 → 기사 → 비활성화 → 감사 행 대조 → 리포트 머리.
      *
      * <p>더한 차량이 있으면 <strong>비활성화는 실패 뒤에도 돈다</strong> — 측정을 이어 가는 것이 아니라 정리다. 실패는 리포트와
      * 종료 코드에 그대로 남는다. 기사는 계획이 끝났을 때만 돈다(기다릴 수를 계획이 낸다).
@@ -156,6 +156,9 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
         try {
             fleet.provision(cutoff);
             fleet.awaitPlans();
+            if (fleet.planned()) {
+                fleet.reassign();
+            }
         } catch (FleetFailure e) {
             log.error("함대 단계 실패 — {}", e.getMessage());
         }
@@ -174,6 +177,11 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
             } catch (FleetFailure e) {
                 log.error("함대 정리 실패 — {}", e.getMessage());
             }
+        }
+        try {
+            fleet.verifyAudit();
+        } catch (FleetFailure e) {
+            log.error("감사 행 대조 실패 — {}", e.getMessage());
         }
         FleetReport report = fleet.report();
         this.lastFleetReport = report;

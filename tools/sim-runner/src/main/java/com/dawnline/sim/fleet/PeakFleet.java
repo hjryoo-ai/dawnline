@@ -5,7 +5,10 @@ import com.dawnline.sim.fleet.OpsClient.Assessment;
 import com.dawnline.sim.fleet.OpsClient.Line;
 import com.dawnline.sim.fleet.OpsClient.NewVehicle;
 import com.dawnline.sim.fleet.OpsClient.OpsException;
+import com.dawnline.sim.fleet.FleetReport.Action;
 import com.dawnline.sim.fleet.OpsClient.Reply;
+import com.dawnline.sim.fleet.OpsClient.RouteStop;
+import com.dawnline.sim.fleet.OpsClient.RouteSummary;
 import com.dawnline.sim.fleet.OpsClient.Vehicle;
 import com.dawnline.sim.fleet.OpsClient.Wave;
 import com.dawnline.sim.order.Sleeper;
@@ -33,11 +36,16 @@ import org.slf4j.LoggerFactory;
  * <ol>
  *   <li>{@link Session#requireNoLeftovers()} — 시작 전 활성 {@code peak-sim} 0 (결정 6 의 전제 어설션).</li>
  *   <li>{@link Session#provision(Instant)} — 창의 DAWN 웨이브마다 dispatch 의 판정을 읽고, {@code feasible} 이면 부족 대수만큼
- *       템플릿을 더한다. 부족한데 템플릿이 없는 조합이 하나라도 있으면 <strong>더하지 않고</strong> 실패한다(결정 3).</li>
+ *       템플릿을 더한다. 부족한데 템플릿이 없는 조합이 하나라도 있으면 <strong>더하지 않고</strong> 실패한다(결정 3).
+ *       {@code feasible} 이면 그 캠프의 증차가 끝난 <strong>직후</strong> 그 웨이브를 조기 마감한다(결정 9 — 시각이 아니라 순서).</li>
  *   <li>{@link Session#awaitPlans()} — 창의 웨이브가 전부 계획되기를 기다리고, 증차가 그 웨이브의 {@code closed_at} 보다 먼저
  *       끝났는지 본다(결정 7 — 시간 예산은 어설션이다).</li>
+ *   <li>{@link Session#reassign()} — 조기 마감한 웨이브마다 한 번 운영자의 재배정(결정 9). 409 는 기사가 먼저 닿은 것이라 세기만
+ *       한다.</li>
  *   <li>{@link Session#release()} — <strong>이번 실행이 더한 차량만</strong> 비활성화한다. 409 {@code vehicle-in-service} 는 기사가
  *       끝낸 stop 을 dispatch 가 소비하기까지의 지연이라 상한 안에서 다시 시도한다(결정 5 · 6).</li>
+ *   <li>{@link Session#verifyAudit()} — 받은 감사 행을 기대와 대조한다: 캠프마다 증차 N + 조기 마감 1 + 재배정 1, 비활성화는 성공
+ *       수 = 더한 대수.</li>
  * </ol>
  *
  * <p>시각은 주입 시계다 — 서비스 다섯과 같은 오프셋이라 증차 완료 시각과 {@code closed_at} 을 한 축에서 비교한다(ADR-066).
@@ -48,6 +56,9 @@ public final class PeakFleet {
 
     /** 증차한 차량의 출처 — V11 의 닫힌 집합(ADR-067 결정 4). */
     static final String SOURCE = "peak-sim";
+
+    /** 조기 마감의 이유 — 코어가 필수로 받는다(ADR-054 결정 2). 실행 표지를 싣는다. */
+    static final String CLOSE_REASON = "성수기 증차 완료 — 컷오프 + grace 를 기다리지 않고 계획을 앞당긴다 (peak-sim %s)";
 
     /** 창의 DAWN 웨이브를 찾는 컷오프 창의 반폭 — 컷오프는 정확히 같아야 하고, 이 폭은 조회의 범위일 뿐이다. */
     private static final Duration CUTOFF_SPAN = Duration.ofHours(1);
@@ -101,6 +112,14 @@ public final class PeakFleet {
         private final List<UUID> added = new ArrayList<>();
         private final Set<String> auditIds = new LinkedHashSet<>();
         private final List<String> failures = new ArrayList<>();
+        /** 캠프 × 커맨드 — 기대한 감사 행 수. 비활성화는 성공 수의 기대다(더한 대수). */
+        private final Map<UUID, Map<Action, Integer>> expected = new LinkedHashMap<>();
+        /** 캠프 × 커맨드 — 받은 감사 id 수. 비활성화는 시도 전부다(409 재시도 포함). */
+        private final Map<UUID, Map<Action, Integer>> received = new LinkedHashMap<>();
+        private final Map<UUID, Integer> deactivatedByCamp = new LinkedHashMap<>();
+        private final Map<UUID, UUID> campOfVehicle = new LinkedHashMap<>();
+        private final List<UUID> closedEarly = new ArrayList<>();
+        private final List<FleetReport.Reassign> reassigns = new ArrayList<>();
         private int deactivated;
         private int sequence;
 
@@ -193,7 +212,7 @@ public final class PeakFleet {
                 for (Line line : assessment.combinations()) {
                     int toAdd = mode == Fleet.FEASIBLE ? line.toAdd() : 0;
                     for (int i = 0; i < toAdd; i++) {
-                        add(Objects.requireNonNull(line.template(), "SHORTFALL 에는 템플릿이 있다"));
+                        add(assessment.campId(), Objects.requireNonNull(line.template(), "SHORTFALL 에는 템플릿이 있다"));
                     }
                     count += toAdd;
                     rows.add(new FleetReport.Row(assessment.campId(), line.label(), line.status(), line.shortfall(),
@@ -201,18 +220,48 @@ public final class PeakFleet {
                 }
                 addedByWave.put(assessment.waveId(), count);
                 provisionedAt.put(assessment.waveId(), clock.instant());
+                if (mode == Fleet.FEASIBLE) {
+                    expect(assessment.campId(), Action.ADD_VEHICLE, count);
+                    expect(assessment.campId(), Action.DEACTIVATE_VEHICLE, count);
+                    closeEarly(assessment);
+                }
             }
-            log.info("증차: 웨이브 {}개, 더한 차량 {}대 ({})", waves.size(), added.size(), mode);
+            log.info("증차: 웨이브 {}개, 더한 차량 {}대, 조기 마감 {} ({})", waves.size(), added.size(), closedEarly.size(),
+                    mode);
         }
 
-        private void add(Vehicle template) {
+        private void add(UUID campId, Vehicle template) {
             String code = "PS%s-%04d".formatted(tag, ++sequence);
             Reply reply = ops.addVehicle(NewVehicle.copyOf(template, code, SOURCE));
-            record(reply);
+            record(campId, Action.ADD_VEHICLE, reply);
             if (!reply.ok() || reply.id() == null) {
                 fail("증차 거절: %s — HTTP %d %s (감사 %s)".formatted(code, reply.status(), reply.code(), reply.auditId()));
             }
-            added.add(Objects.requireNonNull(reply.id()));
+            UUID vehicleId = Objects.requireNonNull(reply.id());
+            added.add(vehicleId);
+            campOfVehicle.put(vehicleId, campId);
+        }
+
+        /**
+         * 증차가 끝난 직후 그 웨이브를 닫는다 — 운영자는 물량을 보고 증차한 <strong>뒤에</strong> 닫는다(결정 9). 그래서
+         * {@code closed_at} 이 증차 완료보다 뒤인 것이 구조다. 409 {@code wave-not-open} 은 그 구조가 깨진 날이다 — 스케줄러가
+         * 먼저 닫았고, 계획이 그 차량을 못 봤을 수 있다.
+         */
+        private void closeEarly(Assessment assessment) {
+            expect(assessment.campId(), Action.CLOSE_WAVE, 1);
+            Reply reply = ops.closeWave(assessment.waveId(), CLOSE_REASON.formatted(tag));
+            record(assessment.campId(), Action.CLOSE_WAVE, reply);
+            if (reply.ok()) {
+                closedEarly.add(assessment.waveId());
+                return;
+            }
+            if (reply.status() == 409 && "wave-not-open".equals(reply.code())) {
+                fail(("시간 예산: 웨이브 %s 를 증차 직후 닫으려 했는데 이미 닫혀 있다 — 스케줄러가 먼저 닫았다(증차가 컷오프 + grace 를 "
+                        + "넘겼다). 계획이 그 차량을 못 봤을 수 있다 (감사 %s)").formatted(short8(assessment.waveId()),
+                        reply.auditId()));
+            }
+            fail("조기 마감 거절: 웨이브 %s — HTTP %d %s (감사 %s)".formatted(short8(assessment.waveId()), reply.status(),
+                    reply.code(), reply.auditId()));
         }
 
         /**
@@ -258,6 +307,131 @@ public final class PeakFleet {
             }
         }
 
+        /**
+         * 조기 마감한 웨이브마다 한 번 재배정한다 — 가장 많이 실은 라우트의 <strong>마지막</strong> {@code PLANNED} stop 을 가장 적게
+         * 실은 라우트로(결정 9). 마지막 stop 은 기사가 가장 늦게 닿는 곳이라 경합이 가장 작고, 가장 적게 실은 쪽은 용량 위반이
+         * 가장 드물다.
+         *
+         * <p>409 는 세기만 한다 — {@code stop-not-planned} 는 기사가 먼저 닿은 것이고(「늦었다」), {@code conflict} 는 옮기면 하드
+         * 룰을 어기는 것이다. 운영자에게도 둘은 도구의 결함이 아니다. 그 밖의 거절은 실패다. 옮길 곳이 없으면(라우트 둘 미만 ·
+         * stop 둘 이상인 라우트 없음) 보내지 않고 그 이유를 리포트에 남긴다 — 기대도 0 이다.
+         *
+         * @throws FleetFailure 409 가 아닌 거절 · 읽기 모델이 라우트를 상한 안에 내지 않았다
+         * @throws InterruptedException 대기 중 인터럽트
+         */
+        public void reassign() throws InterruptedException {
+            for (UUID waveId : closedEarly) {
+                Wave wave = waves.get(waveId);
+                UUID camp = assessments.get(waveId).campId();
+                List<RouteSummary> routes = awaitRoutes(waveId, wave == null || wave.routeCount() == null
+                        ? 0 : wave.routeCount());
+                List<RouteSummary> byLoad = routes.stream().filter(route -> route.stopCount() != null)
+                        .sorted(java.util.Comparator.comparingInt(route -> Objects.requireNonNull(route.stopCount())))
+                        .toList();
+                if (byLoad.size() < 2 || Objects.requireNonNull(byLoad.getLast().stopCount()) < 2) {
+                    skipReassign(camp, waveId, "라우트 %d 개, 가장 많이 실은 것의 stop %s 개 — 옮길 곳이 없다".formatted(byLoad.size(),
+                            byLoad.isEmpty() ? "0" : byLoad.getLast().stopCount()));
+                    continue;
+                }
+                RouteSummary from = byLoad.getLast();
+                // 받을 라우트는 출발 라우트 차량의 능력(냉장 · 위험물)을 모두 갖춘 차량의 것 가운데 가장 적게 실은 것이다 — 능력을
+                // 보지 않고 가장 적게 실은 라우트로 옮기면 첫 peak-day 에서 열 번 모두 냉장 주문을 냉장 없는 밴으로 옮기려다 409
+                // conflict 였다(2026-09-27, 근거: 관측(재현됨)). stop 의 제약은 라우트 조회에 없으므로 차량으로 덮는다.
+                Map<UUID, Vehicle> fleet = new LinkedHashMap<>();
+                guardedRead(() -> ops.vehicles(camp)).forEach(vehicle -> fleet.put(vehicle.id(), vehicle));
+                Vehicle source = from.vehicleId() == null ? null : fleet.get(from.vehicleId());
+                RouteSummary to = byLoad.stream().filter(route -> route != from && covers(fleet.get(route.vehicleId()), source))
+                        .findFirst().orElse(null);
+                if (to == null) {
+                    skipReassign(camp, waveId, "가장 많이 실은 라우트의 차량(%s) 능력을 모두 갖춘 다른 라우트가 없다".formatted(
+                            source == null ? "모름" : source.type()));
+                    continue;
+                }
+                List<RouteStop> stops = new ArrayList<>(guardedRead(() -> ops.routeStops(from.routeId())));
+                java.util.Collections.reverse(stops);
+                RouteStop last = stops.stream().filter(stop -> "PLANNED".equals(stop.status()) && !stop.orderIds().isEmpty())
+                        .findFirst().orElse(null);
+                if (last == null) {
+                    skipReassign(camp, waveId, "가장 많이 실은 라우트에 PLANNED stop 이 없다 — 기사가 이미 다 돌았다");
+                    continue;
+                }
+                expect(camp, Action.REASSIGN_STOP, 1);
+                Reply reply = ops.reassign(from.routeId(), last.orderIds().getFirst(), to.routeId());
+                record(camp, Action.REASSIGN_STOP, reply);
+                if (!reply.ok() && reply.status() != 409) {
+                    fail("재배정 거절: 웨이브 %s — HTTP %d %s (감사 %s). 409 가 아닌 거절은 도구 쪽이다".formatted(
+                            short8(waveId), reply.status(), reply.code(), reply.auditId()));
+                }
+                reassigns.add(new FleetReport.Reassign(camp, waveId, reply.status(), reply.code(), null));
+            }
+        }
+
+        /** 받을 차량이 보낼 차량의 능력을 모두 갖췄다 — 모르는 쪽이 있으면 덮지 않는다(모름을 참으로 접지 않는다). */
+        private static boolean covers(@Nullable Vehicle target, @Nullable Vehicle source) {
+            return target != null && source != null && (target.cold() || !source.cold())
+                    && (target.allowsHazmat() || !source.allowsHazmat());
+        }
+
+        private void skipReassign(UUID camp, UUID waveId, String why) {
+            expect(camp, Action.REASSIGN_STOP, 0);
+            reassigns.add(new FleetReport.Reassign(camp, waveId, null, null, why));
+        }
+
+        /** 읽기 모델의 라우트가 계획의 수만큼 투영되기를 기다린다 — {@code plan.completed} 와 {@code route.assigned} 는 다른 사실이다. */
+        private List<RouteSummary> awaitRoutes(UUID waveId, int expectedRoutes) throws InterruptedException {
+            long deadline = planTimeout.toNanos();
+            while (true) {
+                List<RouteSummary> routes = guardedRead(() -> ops.waveRoutes(waveId));
+                if (routes.size() >= expectedRoutes) {
+                    return routes;
+                }
+                if (deadline <= 0) {
+                    fail("재배정: 웨이브 %s 의 라우트가 %d초 안에 %d 개 중 %d 개만 읽기 모델에 있다".formatted(short8(waveId),
+                            planTimeout.toSeconds(), expectedRoutes, routes.size()));
+                }
+                sleeper.sleepNanos(poll.toNanos());
+                deadline -= poll.toNanos();
+            }
+        }
+
+        /**
+         * 받은 감사 행을 기대와 대조한다 — 캠프마다 증차 N(판정의 부족분 합) + 조기 마감 1 + 재배정 1(옮길 곳이 없으면 0). 비활성화는
+         * 409 재시도 수가 정해져 있지 않아 행 수가 아니라 <strong>성공 수 = 더한 대수</strong>로 본다. 앞 단계가 실패했으면 대조하지
+         * 않는다 — 멈춘 실행의 수는 기대와 다른 것이 당연하고, 실패는 이미 리포트에 있다.
+         *
+         * @throws FleetFailure 기대와 다르다
+         */
+        public void verifyAudit() {
+            if (mode != Fleet.FEASIBLE || !failures.isEmpty()) {
+                return;
+            }
+            List<String> mismatches = new ArrayList<>();
+            expected.forEach((camp, actions) -> actions.forEach((action, want) -> {
+                int got = action == Action.DEACTIVATE_VEHICLE ? deactivatedByCamp.getOrDefault(camp, 0)
+                        : received.getOrDefault(camp, Map.of()).getOrDefault(action, 0);
+                if (got != want) {
+                    mismatches.add("%s %s 기대 %d · %s %d".formatted(short8(camp), action, want,
+                            action == Action.DEACTIVATE_VEHICLE ? "성공" : "받은 감사 id", got));
+                }
+            }));
+            if (!mismatches.isEmpty()) {
+                fail("감사 행이 기대와 다르다: %s".formatted(mismatches));
+            }
+        }
+
+        private void expect(UUID camp, Action action, int count) {
+            expected.computeIfAbsent(camp, key -> new java.util.EnumMap<>(Action.class)).merge(action, count, Integer::sum);
+        }
+
+        private <T> T guardedRead(Supplier<T> read) {
+            try {
+                return read.get();
+            } catch (OpsException e) {
+                fail("ops-api: " + e.getMessage());
+                throw e;
+            }
+        }
+
         private void refreshWaves() {
             Set<UUID> camps = new LinkedHashSet<>();
             assessments.values().forEach(assessment -> camps.add(assessment.campId()));
@@ -295,9 +469,13 @@ public final class PeakFleet {
                 List<UUID> next = new ArrayList<>();
                 for (UUID vehicleId : left) {
                     Reply reply = deactivate(vehicleId);
-                    record(reply);
+                    UUID camp = campOfVehicle.get(vehicleId);
+                    record(camp, Action.DEACTIVATE_VEHICLE, reply);
                     if (reply.ok()) {
                         deactivated++;
+                        if (camp != null) {
+                            deactivatedByCamp.merge(camp, 1, Integer::sum);
+                        }
                     } else if (reply.status() == 409 && "vehicle-in-service".equals(reply.code())) {
                         next.add(vehicleId);
                         last.put(vehicleId, reply.code());
@@ -352,12 +530,25 @@ public final class PeakFleet {
                         wave.routeCount(), addedByWave.getOrDefault(wave.waveId(), 0),
                         provisionedAt.get(wave.waveId()), wave.closedAt()));
             }
-            return new FleetReport(mode, lines, rows, added.size(), deactivated, auditIds.size(), failures);
+            List<FleetReport.AuditLine> audit = new ArrayList<>();
+            for (Map.Entry<UUID, Map<Action, Integer>> camp : expected.entrySet()) {
+                for (Action action : Action.values()) {
+                    Integer want = camp.getValue().get(action);
+                    if (want == null) {
+                        continue;
+                    }
+                    audit.add(new FleetReport.AuditLine(camp.getKey(), action, want,
+                            received.getOrDefault(camp.getKey(), Map.of()).getOrDefault(action, 0),
+                            action == Action.DEACTIVATE_VEHICLE ? deactivatedByCamp.getOrDefault(camp.getKey(), 0) : null));
+                }
+            }
+            return new FleetReport(mode, lines, rows, added.size(), deactivated, auditIds.size(), audit, reassigns,
+                    failures);
         }
 
-        private void record(Reply reply) {
-            if (reply.auditId() != null) {
-                auditIds.add(reply.auditId());
+        private void record(@Nullable UUID camp, Action action, Reply reply) {
+            if (reply.auditId() != null && auditIds.add(reply.auditId()) && camp != null) {
+                received.computeIfAbsent(camp, key -> new java.util.EnumMap<>(Action.class)).merge(action, 1, Integer::sum);
             }
         }
 
@@ -376,7 +567,12 @@ public final class PeakFleet {
         }
     }
 
+    /**
+     * 사람이 읽는 id — <strong>뒤</strong> 8자(난수 부분). UUIDv7 의 앞 8자는 밀리초 시각의 윗부분이라 가까운 때 만든 id 끼리 같다
+     * (DESIGN.md §13 축 11). 첫 peak-day 리포트가 캠프 열 줄을 전부 {@code 01a06edd}, 웨이브 열 줄을 전부 {@code 01a0e328} 로
+     * 적었다(2026-09-27, 근거: 관측(재현됨)).
+     */
     static String short8(@Nullable UUID id) {
-        return id == null ? "—" : id.toString().substring(0, 8);
+        return id == null ? "—" : id.toString().substring(28);
     }
 }
