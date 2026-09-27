@@ -65,6 +65,10 @@ class ReassignStopServiceTest {
         private final List<UUID> cleared = new ArrayList<>();
         /** 주문의 지금 상태 — 없으면 {@code PLANNED}. */
         private final Map<UUID, RouteStopStatus> statuses = new LinkedHashMap<>();
+        /** 끝난 라우트 — 끝나지 않은 stop 이 없다. */
+        private final java.util.Set<UUID> finished = new java.util.HashSet<>();
+        /** 잡은 순서 — 옮길 stop · 받을 라우트의 stop · 붙을 stop(moveOrder) · 라우트 행. */
+        private final List<String> locks = new ArrayList<>();
 
         @Override
         public Optional<RouteHeader> findHeader(UUID routeId) {
@@ -90,12 +94,14 @@ class ReassignStopServiceTest {
 
         @Override
         public Optional<StopOfOrder> lockStopOf(UUID routeId, UUID orderId) {
+            locks.add("stop");
             return findStopOf(routeId, orderId).map(stopId ->
                     new StopOfOrder(stopId, statuses.getOrDefault(orderId, RouteStopStatus.PLANNED)));
         }
 
         @Override
         public void moveOrder(UUID fromStopId, UUID orderId, UUID targetRouteId) {
+            locks.add("target-stop");
             UUID from = headers.keySet().stream()
                     .filter(routeId -> findStopOf(routeId, orderId).isPresent())
                     .findFirst().orElseThrow();
@@ -154,7 +160,8 @@ class ReassignStopServiceTest {
 
         @Override
         public boolean lockUnfinishedStop(UUID routeId) {
-            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다");
+            locks.add("receiving-route");
+            return !finished.contains(routeId) && !stops.getOrDefault(routeId, List.of()).isEmpty();
         }
 
         @Override
@@ -169,7 +176,10 @@ class ReassignStopServiceTest {
 
         @Override
         public java.util.Map<UUID, Integer> lockRevisions(java.util.Collection<UUID> routeIds) {
-            throw new UnsupportedOperationException("이 페이크는 재계획을 모른다 — ReplanRouteServiceTest 를 보라");
+            locks.add("routes");
+            java.util.Map<UUID, Integer> locked = new LinkedHashMap<>();
+            routeIds.forEach(routeId -> locked.put(routeId, revisions.get(routeId)));
+            return locked;
         }
 
         @Override
@@ -270,6 +280,38 @@ class ReassignStopServiceTest {
         assertThat(routes.stops.get(from)).as("옮기지 않았다").contains(moving);
         assertThat(routes.revisions).as("개정하지 않았다").containsEntry(from, 1).containsEntry(to, 1);
         assertThat(events.routesAssigned).isEmpty();
+    }
+
+    @Test
+    void 끝난_라우트로는_옮기지_않는다() {
+        // ADR-068 후속 C — 끝난 라우트의 기사는 이미 돌아왔다. 정정 전에는 200 이었다(ReassignRaceIT, 근거: 관측(재현됨)).
+        RoutePlan plan = plan();
+        Stop moving = stop(NEAR, 1_000);
+        UUID from = routes.route(plan.id(), Ids.newId(), List.of(moving, stop(FAR, 1_000)));
+        UUID to = routes.route(plan.id(), Ids.newId(), List.of(stop(FAR, 1_000)));
+        routes.finished.add(to);
+
+        assertThatThrownBy(() -> service(RuleSet.empty(), 1_000_000).reassign(from, moving.orderIds().getFirst().value(), to))
+                .isInstanceOfSatisfying(DomainException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(DispatchErrorCode.ROUTE_FINISHED);
+                    assertThat(e.details()).containsEntry("routeId", to.toString());
+                });
+        assertThat(routes.stops.get(from)).as("옮기지 않았다").contains(moving);
+        assertThat(routes.revisions).containsEntry(from, 1).containsEntry(to, 1);
+        assertThat(events.routesAssigned).isEmpty();
+    }
+
+    @Test
+    void 잠그는_순서는_stop_에서_라우트다() {
+        // 재계획의 쓰기와 같은 순서(ADR-068 결정 2 · 후속 C) — 거꾸로 잡는 쓰기가 하나라도 있으면 둘이 서로를 기다린다.
+        RoutePlan plan = plan();
+        Stop moving = stop(NEAR, 1_000);
+        UUID from = routes.route(plan.id(), Ids.newId(), List.of(moving, stop(FAR, 1_000)));
+        UUID to = routes.route(plan.id(), Ids.newId(), List.of(stop(FAR, 1_000)));
+
+        service(RuleSet.empty(), 1_000_000).reassign(from, moving.orderIds().getFirst().value(), to);
+
+        assertThat(routes.locks).containsExactly("stop", "receiving-route", "target-stop", "routes");
     }
 
     @Test

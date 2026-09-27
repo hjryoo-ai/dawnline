@@ -53,7 +53,15 @@ public enum DispatchErrorCode implements ErrorCode {
      * 200 이다(§13 축 17). 취소된 주문도 같다. 본문의 {@code stopStatus} 가 지금 상태다 — 기사가 먼저 닿았으면
      * 「늦었다」이고, 할 일은 다른 주문을 고르는 것이다.
      */
-    STOP_NOT_PLANNED("stop-not-planned", 409, "계획 상태가 아닌 stop 은 옮길 수 없습니다");
+    STOP_NOT_PLANNED("stop-not-planned", 409, "계획 상태가 아닌 stop 은 옮길 수 없습니다"),
+
+    /**
+     * 재배정의 받을 라우트가 끝났다 — 끝나지 않은 stop 이 없다 (DESIGN.md §5.3, ADR-068 후속 C).
+     *
+     * <p>「끝났다」는 보존 · 비활성화 409 · 재계획의 대상과 같은 한 조각이다. 끝난 라우트의 기사는 이미 돌아왔다 — 이 코드가 생기기
+     * 전에는 200 이었고 받은 주문은 배송되지 않았다. 모든 stop 이 취소됐거나 stop 이 없는 라우트도 여기 든다.
+     */
+    ROUTE_FINISHED("route-finished", 409, "끝난 라우트로는 옮길 수 없습니다");
 
     private final String code;
     private final int status;
@@ -130,6 +138,18 @@ public enum DispatchErrorCode implements ErrorCode {
         return new DomainException(STOP_NOT_PLANNED,
                 "주문의 stop 이 %s 라 옮길 수 없습니다 — PLANNED 인 것만 옮깁니다".formatted(stopStatus),
                 Map.of("routeId", routeId.toString(), "orderId", orderId.toString(), "stopStatus", stopStatus.name()));
+    }
+
+    /**
+     * 받을 라우트가 끝났다.
+     *
+     * @param routeId 받을 라우트
+     * @return {@link #ROUTE_FINISHED}
+     */
+    public static DomainException routeFinished(UUID routeId) {
+        return new DomainException(ROUTE_FINISHED,
+                "받을 라우트에 끝나지 않은 stop 이 없습니다 — 기사가 이미 돌아왔습니다",
+                Map.of("routeId", routeId.toString()));
     }
 
     /**
