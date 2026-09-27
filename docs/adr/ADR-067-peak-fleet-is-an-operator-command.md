@@ -3,9 +3,9 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | Accepted (2026-09-27) |
-| 결정일 | 2026-09-27 (방향 (A)와 조건 다섯, 비활성화 (i)는 같은 날 사용자 결정 — IMPLEMENTATION_PLAN 7-4a ③) |
+| 결정일 | 2026-09-27 (방향 (A)와 조건 다섯, 비활성화 (i), 결정 9(D3 는 순서)는 같은 날 사용자 결정 — IMPLEMENTATION_PLAN 7-4a ③ · ④) |
 | 관련 문서 | `docs/DESIGN.md` §5.3 「함대 — 실현 가능성과 비활성화」 · §5.5 「커맨드 위임」 · §5.6 「성수기 증차」 · §6.9 · 부록 A |
-| 관련 ADR | [ADR-033](ADR-033-constraint-classes.md) (제약 조합 80%) · [ADR-039](ADR-039-reserve-seats-by-constraint-class.md) (좌석 예약 — 결정 3 이 그 불변식 2 의 거울이다) · [ADR-055](ADR-055-operator-writes-on-cores-carry-an-internal-token.md) (코어의 운영자 쓰기는 내부 토큰) · [ADR-058](ADR-058-shipment-and-read-model-retention.md) (보존) · [ADR-066](ADR-066-simulation-moves-the-clock-not-the-schedule.md) (시뮬레이션 시계) |
+| 관련 ADR | [ADR-026](ADR-026-dispatch-cancellation-window.md) (발행 직전 재검증 — 재검토 지점 6) · [ADR-033](ADR-033-constraint-classes.md) (제약 조합 80%) · [ADR-054](ADR-054-early-wave-close-is-an-operator-cutoff.md) (조기 마감 — 결정 9) · [ADR-039](ADR-039-reserve-seats-by-constraint-class.md) (좌석 예약 — 결정 3 이 그 불변식 2 의 거울이다) · [ADR-055](ADR-055-operator-writes-on-cores-carry-an-internal-token.md) (코어의 운영자 쓰기는 내부 토큰) · [ADR-058](ADR-058-shipment-and-read-model-retention.md) (보존) · [ADR-066](ADR-066-simulation-moves-the-clock-not-the-schedule.md) (시뮬레이션 시계) |
 
 ---
 
@@ -106,6 +106,9 @@ ADR-039 결정 2 는 **좌석을** 특정한 조합부터 나눴다 — 뒤집�
 ops V9 가 `rm_waves.closed_at` 에 그 값을 투영한다(계약은 이미 그 필드를 싣는다 — 이벤트 변경 없음). 증차 완료 시각은 sim-runner 의 주입
 시계(서비스들과 같은 오프셋)로 적는다.
 
+`feasible` 에서는 결정 9 가 조기 마감을 증차 **뒤에** 두므로 이 어설션은 구조로 참이다. 그래도 지우지 않는다 — 그 구조가 깨지는 날(증차가
+컷오프 + grace 를 넘겨 스케줄러가 먼저 닫았다, 조기 마감이 409 `wave-not-open`)을 잡는 자리가 여기다.
+
 ### 8. 계산값과 실측을 나란히 — 판정은 표에, 종료 코드는 도구에
 
 리포트 머리에 캠프 × 조합별 **계산 부족분 · 추가 대수**, 감사 행 수(받은 `X-Dawnline-Audit-Id` 의 수), 계산의 기준 후보 수와 마감 때의 주문
@@ -116,6 +119,20 @@ ops V9 가 `rm_waves.closed_at` 에 그 값을 투영한다(계약은 이미 그
 
 `overload-day` 는 같은 스크립트를 **증차 없음**(`fleet: as-is`)으로 돈다 — 계산은 하고 더하지 않는다. 그 표의 계산 부족분이 곧 「얼마나
 과부하였나」다.
+
+### 9. 운영자의 조기 마감은 시각이 아니라 순서다 — 증차가 끝난 직후 (D3 정정)
+
+7-0 의 D3 는 「peak-day 중 정해진 시각에 조기 마감 · 재배정을 몇 번」이었다. 창 안의 정해진 시각에 닫으면 결정 7 의 전제(웨이브는 컷오프 +
+grace 에 닫힌다)와 충돌한다 — 증차보다 먼저 닫힌 웨이브는 계획이 그 차량을 못 본다. 실제 운영자는 물량을 보고 증차한 **뒤에** 닫는다.
+그래서 `feasible` 의 순서는 **창 종료 → 증차 → 그 캠프의 DAWN 웨이브 조기 마감 → 계획 → 재배정**이다. 조기 마감은 「컷오프 + grace 를
+기다리지 않고 계획을 앞당긴다」는 실제 뜻을 갖고([ADR-054](ADR-054-early-wave-close-is-an-operator-cutoff.md)), 시간 예산은 구조로
+지켜진다(마감이 증차 뒤라 `closed_at` 이 항상 뒤). 재배정은 조기 마감한 웨이브마다 한 번이다(Phase 6 데모와 같은 호출).
+
+**기대값 하나를 미리 적는다 — `promise_revised_total{cause="manual"}` 은 `peak-day` 에서 0 이 정상이다.** 창이 23:58 에 끝나 마감 뒤에
+도착하는 주문이 없다. 0 이 아니면 운영자의 대가가 아니라 fulfillment 의 소비 지연이 증차 시간보다 길었다는 뜻이다 — 23:58 전에 받은
+주문이 마감 뒤에 소비됐다(재검토 지점 4 와 같은 현상). 그 카운터가 살아 있다는 것은 Phase 6 데모와 7-3 카오스가 이미 보였고, 여기서
+만들지 않는다. 이 순서의 대가로 `peak-day` 의 창 웨이브는 `cause="scheduled"` 를 내지 않는다 — lag-aware grace(ADR-020 결정 5)의
+시간축은 같은 물량을 스케줄러가 닫는 `overload-day` 가 낸다.
 
 ## 대안
 
@@ -132,6 +149,8 @@ ops V9 가 `rm_waves.closed_at` 에 그 값을 투영한다(계약은 이미 그
 | 기사 없이, 종료 때 비활성화를 「대기」로 보고 | 남은 차량이 다음 실행에 섞인다 — 전제 어설션만으로는 매번 실패가 된다 |
 | 시간 예산을 grace 설정값으로 | 설정의 사본이다 — 조기 마감 · 설정 변경에서 조용히 틀린다(결정 7) |
 | 미배정 > 0.5% 면 실행 실패 | 기준에 대한 발견을 도구의 결함과 한 종료 코드에 접는다(결정 8) |
+| 조기 마감을 창 안의 정해진 시각에(D3 의 처음 판) | 「웨이브는 컷오프 + grace 에 닫힌다」는 시간 예산의 전제와 충돌한다 — 증차보다 먼저 닫힌 웨이브는 계획이 그 차량을 못 본다(결정 9) |
+| 조기 마감을 창 밖의 웨이브에 | 물량도 증차도 없는 웨이브를 닫는 것은 뜻이 없는 커맨드다 — 감사 행은 남지만 운영의 어떤 결정도 흉내 내지 않는다 |
 
 ## 결과
 
@@ -140,7 +159,7 @@ ops V9 가 `rm_waves.closed_at` 에 그 값을 투영한다(계약은 이미 그
 - ops-api: 위임 둘(`ADD_VEHICLE` · `DEACTIVATE_VEHICLE`) · 조회 위임 둘(`fleet-feasibility` · `vehicles`) · `V9__rm_waves_closed_at.sql` ·
   `OpsCommand.ACTIONS` 와 `dawnline_ops_commands_total` 의 action 값 집합(§9.1).
 - `libs/common`: `FleetFeasibility`. 벤치마크의 기준이 같은 코드를 쓴다.
-- sim-runner: ops-api 클라이언트 · `fleet: feasible | as-is` · 창 시나리오의 기사 · 전제 어설션 · 리포트 머리.
+- sim-runner: ops-api 클라이언트 · `fleet: feasible | as-is` · 창 시나리오의 기사 · 전제 어설션 · 리포트 머리 · 증차 뒤의 조기 마감과 재배정(결정 9).
 - 이벤트 계약 변경 없음(`wave.closed.v1` 의 `closedAt` 은 이미 있다).
 
 ## 재검토 지점
@@ -155,3 +174,7 @@ ops V9 가 `rm_waves.closed_at` 에 그 값을 투영한다(계약은 이미 그
    증차 시점을 늦추거나(여유 3분 안에서) 후보 수가 멈출 때까지 기다린다.
 5. **템플릿이 「가장 싼」 것** — 고정비가 싼 차가 용량 대비로는 비쌀 수 있다(자전거). 시드의 야간조는 밴 · 트럭뿐이라 지금은 차이가 없다.
    야간조에 차종이 늘면 「용량당 고정비」로 다시 본다.
+6. **읽기 시점의 함대로 계획을 쓴다** — 계획은 시작할 때 차량을 읽고 계산은 트랜잭션 밖이다(ADR-064). 그 사이의 비활성화는 결정 5 의
+   409 가 막지 못한다 — 그 차량에는 아직 stop 이 없다(근거: 추정 — 코드 읽기). 답은 409 를 넓히는 것이 아니라 **발행 직전
+   재검증(ADR-026 분기 2, §6.5 6단계)에 차량 활성 여부를 넣는 것**이다: 비활성 차량의 라우트는 발행하지 않고 그 stop 을 미배정으로
+   (사유 `VEHICLE_DEACTIVATED`). 계획 중의 취소가 닫히는 자리와 같은 자리다. 7-4 뒤(7-0 A33).
