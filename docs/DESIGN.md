@@ -2495,7 +2495,8 @@ stop 행이다** — `route_id` 를 대상으로 바꾸고 순번은 다시 쓰�
 있어도 합치지 않는다 — 그래서 다시 쓰기와 취소의 시각 재계산은 행을 **좌표가 아니라 주문으로** 찾는다.
 정정 전에는 셋 다 없었다: 쓰기는 상태를 보지 않고 옮겼고, 주문을 대상의 새 stop(후보 좌표)으로 옮긴 뒤 비워진 원래 행을 지웠다 — 두 번째
 `peak-day` 에서 tracking 의 `COMPLETED` 20건이 dispatch 의 `PLANNED` 에 남았고(근거: 관측(재현됨), `ReplanRaceIT`), 합쳐진 stop 하나가
-주문 8개의 행으로 흩어졌다(근거: 관측). 서비스 둘의 이 대조가 검증 표 V8 이다(§13 「카오스」).
+주문 8개의 행으로 흩어졌고(근거: 관측), 합쳐진 stop 을 둘 이상 옮기면 지연 UNIQUE `(route_id, seq)` 가 커밋에서 터져 재계획이 재전달을
+되풀이했다(근거: 관측(재현됨), `ReplanIT`). 서비스 둘의 이 대조가 검증 표 V8 이다(§13 「카오스」).
 
 ### 6.9 벤치마크 방법
 
@@ -3160,7 +3161,7 @@ id 를 붙여 diff 를 뜻 없이 키운다. 그래서 대조는 파일이 아�
 - `dawnline_*` 가 아닌 이름(플랫폼 지표 — `kafka_*` · `hikaricp_*` · `jvm_*` · `http_server_requests_*`)은 표가 없다. 그
   이름이 **실제로 있다**는 것은 Compose 스모크가 데모 뒤의 Prometheus 에서 확인한다.
 
-**Phase 5 카운터 넷의 패널** (2026-09-23 이월): `dawnline_replan_total{outcome}` 은 여섯 갈래를 **쌓아** 그린다 — 합이 트리거
+**Phase 5 카운터 넷의 패널** (2026-09-23 이월): `dawnline_replan_total{outcome}` 은 일곱 갈래를 **쌓아** 그린다 — 합이 트리거
 수라는 것이 한눈에 보여야 한다. `dawnline_status_after_relocate_total` · `dawnline_scan_after_relocate_total` ·
 `dawnline_at_risk_deviation_mismatch_total` 은 **한 패널에 겹쳐** 놓는다 — 쌍이 *갈리는 것*이 정보다(§9.1). 따로 그리면 사람이
 눈으로 겹쳐야 하고, 장애 중에 그 일은 일어나지 않는다.
