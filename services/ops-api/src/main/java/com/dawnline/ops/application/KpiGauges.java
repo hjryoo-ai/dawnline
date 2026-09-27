@@ -136,7 +136,7 @@ public class KpiGauges {
         this.lastSuccess = clock.instant();
         DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_EXCLUDED, this, KpiGauges::excludedPromiseUnknown,
                 TAG_REASON, PROMISE_UNKNOWN);
-        DawnlineMeters.gauge(registry, DawnlineMetrics.KPI_REFRESH_AGE, this, KpiGauges::refreshAgeSeconds);
+        DawnlineMeters.ageGauge(registry, DawnlineMetrics.KPI_REFRESH_AGE, this, KpiGauges::refreshAgeSeconds);
     }
 
     /**

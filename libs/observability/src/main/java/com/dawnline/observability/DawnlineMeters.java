@@ -27,6 +27,8 @@ import java.util.function.ToDoubleFunction;
  *   <li><strong>닫힌 라벨의 값</strong>이 목록 밖이면 실패한다. 「닫혔다」는 「코드가 값을 전부 안다」는 주장이다.</li>
  *   <li>{@code histogram} 은 {@code publishPercentileHistogram()} — 타입 칸이 곧 버킷이다. 속성 파일의 키가 미터 이름과
  *       맞는지에 기대던 때는 맞지 않아 버킷이 없었다(ADR-060 맥락 1).</li>
+ *   <li><strong>나이 게이지는 {@link #ageGauge}</strong> — 음수는 {@code NaN} + 셈이다(§13 축 16). {@link #gauge} 는 나이 게이지를
+ *       거부하고 {@link #ageGauge} 는 나이가 아닌 것을 거부한다 — 어느 쪽인지는 카탈로그의 {@link DawnlineMetrics#AGES} 가 말한다.</li>
  *   <li><strong>게이지는 {@code strongReference(true)}</strong>. Micrometer 는 상태 객체를 약한 참조로 들고, 대상이 GC 되면
  *       게이지가 조용히 {@code NaN} 을 낸다 — 이 저장소에서 {@code NaN} 은 「모름」의 값이라 그 결함이 「모름」 검사를
  *       대상 없이 통과시켰다(§13 축 10). 등록하는 쪽은 전부 싱글턴이라 강한 참조가 새게 하는 것은 없다.</li>
@@ -86,6 +88,49 @@ public final class DawnlineMeters {
      * @return 게이지
      */
     public static <T> Gauge gauge(MeterRegistry registry, DawnlineMetric metric, T state,
+            ToDoubleFunction<T> value, String... tags) {
+        if (DawnlineMetrics.AGES.contains(metric)) {
+            throw new IllegalArgumentException(metric.name() + " 는 나이 게이지다 — ageGauge 로 등록한다(음수는 값이 아니라 결함, §13 축 16)");
+        }
+        return register(registry, metric, state, value, tags);
+    }
+
+    /**
+     * 나이 게이지를 등록한다 — 「… 뒤로 흐른 초」, 두 시각의 차 ({@link DawnlineMetrics#AGES}, §9.1 「음수 나이는 값이 아니라 결함이다」).
+     *
+     * <p>음수는 <strong>값이 아니라 결함</strong>이다 — 두 시각이 서로 다른 시계에서 왔다. 그대로 내보내면 {@code > 30} 같은 비교 알림은
+     * 조용하다(outbox 의 미발행 나이가 −28,799.95초였다, §13 축 16). 그래서 음수를 읽으면 {@code NaN}(모름)을 내고
+     * {@code dawnline_age_negative_total{gauge}} 를 센다 — {@code NaN} 에도 비교 알림은 조용하므로 알림은 그 카운터에 건다.
+     * 카운터는 여기서 0 으로 함께 등록한다 — 시계열이 게이지와 같이 태어나 첫 음수를 {@code increase()} 가 읽는다.
+     *
+     * <p>읽을 때마다 센다(스크레이프마다) — 음수인 동안 계속 오른다. 원래 {@code NaN}(모름)인 값은 그대로 지나간다.
+     *
+     * @param registry   레지스트리
+     * @param metric     카탈로그 항목 — {@link DawnlineMetrics#AGES} 의 하나
+     * @param state      상태 객체. 레지스트리가 사는 동안 잡힌다
+     * @param ageSeconds 상태에서 나이(초)를 읽는 함수
+     * @param tags       {@code key, value, …}
+     * @param <T>        상태 타입
+     * @return 게이지
+     */
+    public static <T> Gauge ageGauge(MeterRegistry registry, DawnlineMetric metric, T state,
+            ToDoubleFunction<T> ageSeconds, String... tags) {
+        if (!DawnlineMetrics.AGES.contains(metric)) {
+            throw new IllegalArgumentException(metric.name() + " 는 나이 게이지가 아니다 — DawnlineMetrics.AGES 에 없다");
+        }
+        Objects.requireNonNull(ageSeconds, "ageSeconds");
+        Counter negative = counter(registry, DawnlineMetrics.AGE_NEGATIVE, "gauge", metric.name());
+        return register(registry, metric, state, target -> {
+            double age = ageSeconds.applyAsDouble(target);
+            if (age < 0) {
+                negative.increment();
+                return Double.NaN;
+            }
+            return age;
+        }, tags);
+    }
+
+    private static <T> Gauge register(MeterRegistry registry, DawnlineMetric metric, T state,
             ToDoubleFunction<T> value, String... tags) {
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(value, "value");

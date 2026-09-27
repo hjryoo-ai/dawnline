@@ -114,6 +114,54 @@ class DawnlineMetersTest {
                 .hasMessageContaining("열려 있어 미리 등록할 수 없다");
     }
 
+    @Test
+    void 나이_게이지는_음수를_NaN_으로_내고_그_게이지의_이름으로_센다() {
+        AtomicLong age = new AtomicLong(-28_800);
+        DawnlineMeters.ageGauge(registry, DawnlineMetrics.OUTBOX_LAG_SECONDS, age, AtomicLong::doubleValue,
+                "service", "order-service");
+
+        assertThat(negativeCount()).as("등록 때 0 으로 함께 태어난다 — 첫 음수를 increase() 가 읽는다").isZero();
+        assertThat(ageValue()).as("음수는 값이 아니라 결함 — 모름").isNaN();
+        assertThat(ageValue()).isNaN();
+        assertThat(negativeCount()).as("읽을 때마다 센다").isEqualTo(2.0);
+
+        age.set(12);
+        assertThat(ageValue()).isEqualTo(12.0);
+        age.set(0);
+        assertThat(ageValue()).as("0 은 정의역 안이다").isZero();
+        assertThat(negativeCount()).isEqualTo(2.0);
+    }
+
+    @Test
+    void 나이_게이지의_원래_모름은_세지_않고_지나간다() {
+        DawnlineMeters.ageGauge(registry, DawnlineMetrics.KPI_REFRESH_AGE, new Object(), state -> Double.NaN);
+
+        assertThat(registry.get(DawnlineMetrics.KPI_REFRESH_AGE.meterName()).gauge().value()).isNaN();
+        assertThat(registry.get(DawnlineMetrics.AGE_NEGATIVE.meterName())
+                .tag("gauge", DawnlineMetrics.KPI_REFRESH_AGE.name()).counter().count()).isZero();
+    }
+
+    @Test
+    void 나이_게이지와_나머지_게이지는_서로의_형태로_등록할_수_없다() {
+        assertThatThrownBy(() -> DawnlineMeters.gauge(registry, DawnlineMetrics.OUTBOX_LAG_SECONDS, new AtomicLong(),
+                AtomicLong::doubleValue, "service", "s"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("나이 게이지다 — ageGauge 로");
+        assertThatThrownBy(() -> DawnlineMeters.ageGauge(registry, DawnlineMetrics.CLOCK_OFFSET, new AtomicLong(),
+                AtomicLong::doubleValue, "service", "s"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("나이 게이지가 아니다");
+    }
+
+    private double ageValue() {
+        return registry.get(DawnlineMetrics.OUTBOX_LAG_SECONDS.meterName()).tag("service", "order-service").gauge().value();
+    }
+
+    private double negativeCount() {
+        return registry.get(DawnlineMetrics.AGE_NEGATIVE.meterName())
+                .tag("gauge", DawnlineMetrics.OUTBOX_LAG_SECONDS.name()).counter().count();
+    }
+
     private WeakReference<AtomicLong> weaklyRegistered() {
         AtomicLong state = new AtomicLong(3);
         Gauge.builder("probe.weak", state, AtomicLong::doubleValue).register(registry);

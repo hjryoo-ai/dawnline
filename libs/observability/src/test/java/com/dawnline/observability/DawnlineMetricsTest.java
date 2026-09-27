@@ -91,7 +91,13 @@ class DawnlineMetricsTest {
             switch (metric.type()) {
                 case COUNTER -> DawnlineMeters.counter(registry, metric, tags);
                 case HISTOGRAM -> DawnlineMeters.timer(registry, metric, tags);
-                case GAUGE -> DawnlineMeters.gauge(registry, metric, new Object(), state -> 1.0, tags);
+                case GAUGE -> {
+                    if (DawnlineMetrics.AGES.contains(metric)) {
+                        DawnlineMeters.ageGauge(registry, metric, new Object(), state -> 1.0, tags);
+                    } else {
+                        DawnlineMeters.gauge(registry, metric, new Object(), state -> 1.0, tags);
+                    }
+                }
             }
         }
         String scrape = registry.scrape();
@@ -105,6 +111,19 @@ class DawnlineMetricsTest {
             }
         }
         assertThat(missing).as("Micrometer 이름이 표의 Prometheus 이름으로 나오지 않는 항목").isEmpty();
+    }
+
+    @Test
+    void 나이_게이지_목록은_이름_꼴에서_뺀_나머지가_없다() {
+        // 빼는 방식 — AGES 를 열거해 확인하지 않고, 카탈로그의 게이지 전부에서 이름 꼴로 고른 것과 같은지 본다.
+        // 「… 뒤로 흐른 초」를 새로 더하면서 AGES 를 잊으면 그 게이지는 음수를 값으로 낸다(§13 축 16).
+        Set<DawnlineMetric> named = DawnlineMetrics.ALL.stream()
+                .filter(metric -> metric.type() == DawnlineMetric.Type.GAUGE)
+                .filter(metric -> metric.name().endsWith("_age_seconds") || metric.name().endsWith("_lag_seconds"))
+                .collect(Collectors.toSet());
+        assertThat(named).as("전제 — 이름 꼴로 고른 나이 게이지가 있다").isNotEmpty();
+        assertThat(Set.copyOf(DawnlineMetrics.AGES)).as("DawnlineMetrics.AGES ↔ 이름 꼴 _age_seconds · _lag_seconds")
+                .isEqualTo(named);
     }
 
     @Test

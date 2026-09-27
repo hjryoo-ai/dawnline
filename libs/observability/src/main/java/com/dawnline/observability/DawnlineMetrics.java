@@ -271,6 +271,23 @@ public final class DawnlineMetrics {
             "dawnline.clock.offset.seconds", "주입 시계가 벽시계보다 앞선 초 — 0 이 아니면 시뮬레이션 시각이다(ADR-066)",
             open("service"));
 
+    // --- 나이 게이지의 정의역 (전 서비스, libs/observability) -----------------
+
+    /**
+     * 나이 게이지가 음수를 읽어 {@code NaN} 을 낸 횟수 — 읽을 때마다 센다(§9.1 「음수 나이는 값이 아니라 결함이다」, §13 축 16).
+     * 라벨 값은 그 게이지의 Prometheus 이름({@link #AGES})이지만 서비스마다 부분집합이라 닫지 않는다 — 게이지를 등록할 때 0 으로 함께 등록한다.
+     */
+    public static final DawnlineMetric AGE_NEGATIVE = counter("dawnline_age_negative_total",
+            "dawnline.age.negative", "나이 게이지가 음수를 읽어 NaN 을 낸 횟수 — 두 시각이 서로 다른 시계에서 왔다",
+            open("gauge"));
+
+    /**
+     * 나이 게이지 — 「… 뒤로 흐른 초」, 두 시각의 차. 음수는 값이 아니라 결함이라 {@link DawnlineMeters#ageGauge} 로만 등록한다.
+     * {@code DawnlineMetricsTest} 가 이름 꼴({@code _age_seconds} · {@code _lag_seconds})과 대조한다.
+     */
+    public static final List<DawnlineMetric> AGES = List.of(
+            OUTBOX_LAG_SECONDS, EVENT_RETRY_AGE_SECONDS, KPI_REFRESH_AGE, RETENTION_LAST_SUCCESS_AGE);
+
     /**
      * 카탈로그 전부 — §9.1 의 행 수와 같다. 상수만 더하고 이 목록을 잊으면 {@code DawnlineMetricsTest} 가 리플렉션으로 잡는다.
      */
@@ -284,7 +301,7 @@ public final class DawnlineMetrics {
             AT_RISK, AT_RISK_COOLDOWN_BYPASSED, SCAN_AFTER_CANCEL, SCAN_AFTER_RELOCATE, SHIPMENT_PARTITIONS_AHEAD,
             DELIVERY_ON_TIME_RATIO, KPI_EXCLUDED, KPI_DELIVERY, ROUTES, OPS_COMMANDS, KPI_REFRESH_AGE, RM_ORDERS_STUCK,
             INTERNAL_TOKEN_REJECTED,
-            RETENTION_LAST_SUCCESS_AGE, CLOCK_OFFSET);
+            RETENTION_LAST_SUCCESS_AGE, CLOCK_OFFSET, AGE_NEGATIVE);
 
     private static DawnlineMetric counter(String name, String meterName, String help, Label... labels) {
         return new DawnlineMetric(name, Type.COUNTER, meterName, help, List.of(labels));

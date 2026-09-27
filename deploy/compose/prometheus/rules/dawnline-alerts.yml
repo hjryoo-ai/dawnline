@@ -164,3 +164,17 @@ groups:
           severity: ticket
         annotations:
           summary: "{{ $labels.service }} 의 {{ $labels.table }} 정리가 이틀째 어느 인스턴스에서도 성공하지 못했다"
+
+      - alert: DawnlineAgeNegative
+        # 열린 카운터(gauge) — 부재를 다루는 식에 「> 0」 하나를 더한다. 이 카운터는 첫 사건이 아니라 **게이지를 등록할 때 0 으로**
+        # 태어난다 — 규약의 뒤 절(x unless x offset w)만 두면 서비스가 뜰 때마다 0 짜리 새 시계열이 10분 동안 울린다(근거: 관측(재현됨) —
+        # promtool, 0 에 머무는 ops-api 시계열이 2m 에 울렸다). 1 로 태어난 시계열은 > 0 을 지나므로 규약의 뜻은 그대로다.
+        # 이 알림이 우는 동안 그 게이지는 NaN 이고 그 게이지에 걸린 알림은 조용하다(§9.1 「음수 나이는 값이 아니라 결함이다」).
+        expr: |
+          increase(dawnline_age_negative_total[10m]) > 0
+            or
+          (dawnline_age_negative_total unless dawnline_age_negative_total offset 10m) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }} 의 {{ $labels.gauge }} 가 음수 나이를 읽었다 — 두 시각이 서로 다른 시계에서 왔고, 그 게이지의 알림은 그동안 모름이다"

@@ -59,7 +59,7 @@ public class RetentionAges {
 
     private Table register(String name) {
         Table table = new Table(name, clock);
-        DawnlineMeters.gauge(registry, DawnlineMetrics.RETENTION_LAST_SUCCESS_AGE, table, Table::ageSeconds,
+        DawnlineMeters.ageGauge(registry, DawnlineMetrics.RETENTION_LAST_SUCCESS_AGE, table, Table::ageSeconds,
                 MessagingMetrics.TAG_TABLE, name);
         return table;
     }
