@@ -115,6 +115,36 @@ class DriverTripTest {
     }
 
     @Test
+    void 응답을_받지_못한_스캔은_같은_상한_안에서_다시_보낸다() {
+        // 스캔은 서버에서 멱등이다 — 닿았는지 모르면 다시 보낸다. 다시 보내지 않던 동안 두 번째 peak-day 의 타임아웃 972건 중 일부가
+        // 사라졌을 수 있다(라우트 하나의 꼬리 stop 넷, 근거: 추정). 재시도(404 · 409)와 원인이 달라 따로 센다.
+        ScanClient.Response timeout = ScanClient.Response.transportFailure("HttpTimeoutException");
+        int[] calls = {0};
+        DriverTrip trip = trip((routeId, call) -> calls[0]++ < 2 ? timeout : OK, Duration.ofSeconds(30).toNanos());
+        trip.revise(route(1));
+
+        trip.run();
+
+        assertThat(report().completedRoutes()).isEqualTo(1);
+        assertThat(report().resent()).isEqualTo(2);
+        assertThat(report().retries()).as("404 · 409 재시도와 섞지 않는다").isZero();
+        assertThat(report().failures()).as("닿았으면 실패가 아니다").isEmpty();
+    }
+
+    @Test
+    void 끝내_닿지_못하면_같은_상한에서_포기한다() {
+        DriverTrip trip = trip((routeId, call) -> ScanClient.Response.transportFailure("ConnectException"),
+                Duration.ofSeconds(3).toNanos());
+        trip.revise(route(1));
+
+        trip.run();
+
+        assertThat(report().abandonedRoutes()).isEqualTo(1);
+        assertThat(report().resent()).isEqualTo(3);
+        assertThat(report().failures()).containsEntry("transport:ConnectException", 1L);
+    }
+
+    @Test
     void 상한을_넘기면_그_라우트를_포기한다() {
         // 조용히 무한 재시도하는 도구는 시나리오 결과를 오염시킨다 — tracking 이 이벤트를 아예
         // 못 받은 경우와 늦게 받은 경우가 구별되지 않고, 실행은 끝나지 않는다.

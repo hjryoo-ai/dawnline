@@ -110,7 +110,11 @@ final class SavingsMerger {
     /** 룰이 stop 상한을 말하는가. 말하지 않으면 슬롯을 셀 수 없고, 집계 불변식도 없다. */
     private final boolean slotsActive;
 
-    private final int stopCap;
+    /** 조합 c 의 대표 차량의 stop 상한 — 그 조합의 병합 크기를 재는 자. {@link #slotsActive} 가 거짓이면 뜻이 없다. */
+    private final int[] stopCapOf;
+
+    /** 차량별 상한 중 가장 큰 것 — 어느 차에도 더 붙일 자리가 없는 라우트를 병합 후보에서 뺀다. */
+    private final int largestStopCap;
 
     /** 지금의 라우트 수 — 병합 하나가 하나를 줄인다. */
     private int routeCount;
@@ -156,16 +160,22 @@ final class SavingsMerger {
         }
 
         this.representative = representatives(problem.vehicles());
-        OptionalInt cap = problem.rules().routeStopCap();
-        this.slotsActive = cap.isPresent() && cap.getAsInt() > 0;
-        this.stopCap = slotsActive ? cap.getAsInt() : 0;
+        // 상한은 차량마다다(ADR-039 후속 2 · ADR-041 후속) — 슬롯은 그 조합을 실을 차들의 상한의 합, 병합 크기는 대표 차량의 상한.
+        Map<VehicleSpec, OptionalInt> caps = new java.util.IdentityHashMap<>();
+        problem.vehicles().forEach(vehicle -> caps.put(vehicle, problem.stopCapOf(vehicle)));
+        this.slotsActive = !caps.isEmpty() && caps.values().stream().allMatch(OptionalInt::isPresent);
+        this.stopCapOf = new int[CLASSES.size()];
+        this.largestStopCap = slotsActive
+                ? caps.values().stream().mapToInt(OptionalInt::getAsInt).max().orElse(0) : 0;
         this.routeCount = n;
         this.classSlots = new long[CLASSES.size()];
         this.classLoad = new int[CLASSES.size()];
         for (int c = 0; c < CLASSES.size(); c++) {
             ConstraintClass klazz = CLASSES.get(c);
-            classSlots[c] = problem.vehicles().stream().filter(klazz::carriedBy).count()
-                    * stopCap;
+            VehicleSpec lead = representative[c];
+            stopCapOf[c] = slotsActive && lead != null ? caps.get(lead).getAsInt() : 0;
+            classSlots[c] = !slotsActive ? 0L : problem.vehicles().stream().filter(klazz::carriedBy)
+                    .mapToLong(vehicle -> caps.get(vehicle).getAsInt()).sum();
             classLoad[c] = (int) stops.stream().filter(stop -> ConstraintClass.of(stop).covers(klazz))
                     .count();
         }
@@ -247,7 +257,7 @@ final class SavingsMerger {
     private int[] mergeableRoots() {
         return IntStream.range(0, stops.size())
                 .filter(i -> find(i) == i)
-                .filter(i -> !slotsActive || sizes[i] < stopCap)
+                .filter(i -> !slotsActive || sizes[i] < largestStopCap)
                 .toArray();
     }
 
@@ -359,7 +369,7 @@ final class SavingsMerger {
             return;
         }
         int size = sizes[first] + sizes[second];
-        if (slotsActive && size > stopCap) {
+        if (slotsActive && size > stopCapOf[INDEX.get(merged)]) {
             return;
         }
         int[] delta = slotDelta(first, second, merged);

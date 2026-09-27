@@ -105,13 +105,29 @@ public class JdbcRouteMutations implements RouteMutations {
 
     @Override
     @SuppressWarnings("unchecked")
-    public List<RouteHeader> routesOfPlan(UUID planId) {
+    public List<RouteHeader> unfinishedRoutesOfPlan(UUID planId) {
+        // 「끝나지 않았다」는 보존 · 비활성화 409 와 같은 한 조각이다(ADR-068 후속 A) — 셋째 정의를 적지 않는다.
         List<Object[]> rows = entityManager.createNativeQuery("""
-                SELECT id, plan_id, vehicle_id FROM routes WHERE plan_id = ? ORDER BY seq_no
-                """).setParameter(1, planId).getResultList();
+                SELECT r.id, r.plan_id, r.vehicle_id FROM routes r
+                 WHERE r.plan_id = ?
+                   AND EXISTS (SELECT 1 FROM route_stops s WHERE s.route_id = r.id AND""" + " "
+                        + JdbcDispatchRetention.UNFINISHED_STOP + ")\n ORDER BY r.seq_no")
+                .setParameter(1, planId).getResultList();
         return rows.stream()
                 .map(row -> new RouteHeader((UUID) row[0], (UUID) row[1], (UUID) row[2]))
                 .toList();
+    }
+
+    @Override
+    public boolean lockUnfinishedStop(UUID routeId) {
+        // 하나면 된다 — 잠근 stop 은 커밋까지 끝나지 않는다. 락을 기다린 행이 그 사이 끝났으면 READ COMMITTED 의 재검사가 그
+        // 행을 조건 밖으로 본다 — 돌려받은 행은 언제나 잠근 뒤에도 끝나지 않은 행이다(틀려도 거짓 쪽, 곧 stale 로 틀린다).
+        // 맨 뒤 stop 을 고르는 것은 기사가 가장 늦게 닿는 자리라 상태 반영과 덜 겹쳐서다.
+        return !entityManager.createNativeQuery("""
+                SELECT s.id FROM route_stops s
+                 WHERE s.route_id = ? AND""" + " " + JdbcDispatchRetention.UNFINISHED_STOP
+                        + "\n ORDER BY s.seq DESC LIMIT 1 FOR UPDATE")
+                .setParameter(1, routeId).getResultList().isEmpty();
     }
 
     @Override
@@ -156,12 +172,22 @@ public class JdbcRouteMutations implements RouteMutations {
             // 500 이던 자리다 — 원인은 이 서비스의 결함이 아니라 보존 정리다(ADR-059 결정 3).
             throw DispatchErrorCode.candidatesExpired(targetRouteId, orderId);
         }
+        Number orders = (Number) entityManager.createNativeQuery(
+                        "SELECT count(*) FROM route_stop_orders WHERE stop_id = ?")
+                .setParameter(1, fromStopId).getSingleResult();
+        if (orders.intValue() == 1) {
+            // 그 주문뿐이다 — 행을 옮긴다(ADR-068 후속 B). 같은 지점의 stop 이 목적지에 있어도 합치지 않는다: 합치면 비워진
+            // 원래 행을 지워야 하고, 그 행의 락을 기다리던 상태 반영이 0 행을 고친다.
+            relocateStop(fromStopId, targetRouteId);
+            return;
+        }
         BigDecimal lat = (BigDecimal) candidate.getFirst()[0];
         BigDecimal lng = (BigDecimal) candidate.getFirst()[1];
 
-        // 목적지에 같은 지점의 stop 이 있으면 거기 붙인다 — 없는데 새로 만들면 같은 건물을
-        // 두 번 방문하는 라우트가 된다. 취소된 stop 에는 붙이지 않는다 — 기사가 건너뛰는
-        // 지점에 살아 있는 주문을 얹으면 그 주문은 배송되지 않는다 (§6.10).
+        // 합쳐진 stop 에서 하나를 뗀다 — 원래 행에는 주문이 남는다. 목적지에 같은 지점의 stop 이
+        // 있으면 거기 붙인다 — 없는데 새로 만들면 같은 건물을 두 번 방문하는 라우트가 된다.
+        // 취소된 stop 에는 붙이지 않는다 — 기사가 건너뛰는 지점에 살아 있는 주문을 얹으면 그
+        // 주문은 배송되지 않는다 (§6.10).
         List<UUID> existing = entityManager.createNativeQuery("""
                 SELECT id FROM route_stops
                  WHERE route_id = ? AND lat = ? AND lng = ? AND status <> 'CANCELLED'
@@ -178,13 +204,6 @@ public class JdbcRouteMutations implements RouteMutations {
                 "UPDATE route_stop_orders SET stop_id = ? WHERE stop_id = ? AND order_id = ?")
                 .setParameter(1, targetStopId).setParameter(2, fromStopId)
                 .setParameter(3, orderId).executeUpdate();
-
-        // 비워진 stop 은 지운다. 남겨 두면 seq 재부여가 유령 지점을 셈에 넣는다.
-        entityManager.createNativeQuery("""
-                DELETE FROM route_stops s
-                 WHERE s.id = ? AND NOT EXISTS (
-                       SELECT 1 FROM route_stop_orders o WHERE o.stop_id = s.id)
-                """).setParameter(1, fromStopId).executeUpdate();
     }
 
     /**

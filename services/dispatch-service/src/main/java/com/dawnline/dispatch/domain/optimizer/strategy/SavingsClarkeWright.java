@@ -84,8 +84,7 @@ public final class SavingsClarkeWright implements DispatchStrategy {
 
         // 좌석 예약은 스윕과 같은 스냅샷이다 (§6.3, [ADR-039]) — 통합 후 조합을 계획 시작
         // 시점에 한 번 센다. 구성 단계는 이 표의 <em>집계</em>를 쓰고, 배정 단계는 문을 쓴다.
-        SeatReservation seats =
-                SeatReservation.of(stops, problem.vehicles(), problem.rules().routeStopCap());
+        SeatReservation seats = SeatReservation.of(stops, problem.vehicles(), problem::stopCapOf);
 
         List<List<Stop>> constructed = SavingsMerger.merge(problem, stops, deadline);
 

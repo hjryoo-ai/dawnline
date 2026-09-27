@@ -59,7 +59,7 @@ public interface RouteMutations {
     List<PositionedStop> loadPositionedStops(UUID routeId);
 
     /**
-     * 이 계획의 라우트들 — {@code seq_no} 순서 (§6.8 2단계).
+     * 이 계획의 <strong>끝나지 않은</strong> 라우트들 — {@code seq_no} 순서 (§6.8 2단계).
      *
      * <p>재계획의 후보 차량이다. 같은 계획 안이므로 캠프도 같고, 「여유 용량이 있는 진행 중
      * 라우트」와 「미출발 차량」의 구분은 <strong>상태 칼럼이 아니라 사실</strong>로 한다 —
@@ -67,9 +67,21 @@ public interface RouteMutations {
      * 저장 시점의 값이고 출발을 알리는 이벤트가 없다(§5.4 {@code DEPARTED_CAMP} 는 브로커로
      * 나가지 않는다).
      *
+     * <p>끝났다도 사실로 한다 — 끝나지 않은 stop 이 하나도 없으면 끝났다. 보존 · 차량 비활성화의 409 와 <strong>같은 한
+     * 조각</strong>이다(ADR-068 후속 A). 끝난 라우트가 받은 stop 은 이미 복귀한 기사의 것이 된다.
+     *
      * @param planId 계획 id
      */
-    List<RouteHeader> routesOfPlan(UUID planId);
+    List<RouteHeader> unfinishedRoutesOfPlan(UUID planId);
+
+    /**
+     * 이 라우트의 끝나지 않은 stop 하나를 <strong>잠근다</strong> — 재계획의 쓰기가 받을 라우트가 아직 끝나지 않았는지 다시 본다
+     * (ADR-068 후속 A). 잠근 stop 은 커밋까지 끝나지 않으므로 그동안 라우트도 끝나지 않는다.
+     *
+     * @param routeId 라우트 id
+     * @return 잠갔으면 참. 끝나지 않은 stop 이 없으면(끝났다) 거짓
+     */
+    boolean lockUnfinishedStop(UUID routeId);
 
     /**
      * 이 주문이 실린 stop.
@@ -94,7 +106,10 @@ public interface RouteMutations {
     Optional<StopOfOrder> lockStopOf(UUID routeId, UUID orderId);
 
     /**
-     * 주문을 다른 라우트로 옮긴다. 목적지에 같은 지점의 stop 이 없으면 새로 만든다.
+     * 주문을 다른 라우트로 옮긴다 — <strong>행을 지우지 않는다</strong> (§5.3, ADR-068 후속 B).
+     *
+     * <p>그 주문뿐인 stop 이면 행을 옮긴다({@link #relocateStop} 과 같다 — stop id · 상태가 그대로 간다). 합쳐진 stop 에서 떼면
+     * 주문 연결만 목적지의 같은 지점 stop 으로 옮기고, 없으면 새로 만든다. 원래 행에는 주문이 남는다.
      *
      * @param fromStopId    떠나는 stop
      * @param orderId       주문
@@ -105,8 +120,8 @@ public interface RouteMutations {
     /**
      * stop <strong>행</strong>을 다른 라우트로 옮긴다 — id · 좌표 · 약속창 · 상태 · 주문 연결이 그대로 간다 (§6.8, ADR-068 결정 3).
      *
-     * <p>{@link #moveOrder} 와 다른 점: 저쪽은 주문 하나를 대상의 새 stop 으로 옮기고 비워진 원래 행을 지운다. 그 행의 락을
-     * 기다리던 상태 반영은 커밋 뒤 0 행을 고치고, 합쳐진 stop 은 주문마다 흩어진다 — 재계획은 stop 단위로 옮기므로 행을 옮긴다.
+     * <p>재계획은 stop 단위로 옮기므로 언제나 행을 옮긴다. 정정 전의 재계획은 주문을 대상의 새 stop 으로 옮기고 비워진 원래 행을
+     * 지웠다 — 그 행의 락을 기다리던 상태 반영은 커밋 뒤 0 행을 고쳤고, 합쳐진 stop 은 주문마다 흩어졌다.
      * 순번은 뒤따르는 {@link #rewrite} 가 매긴다(맨 뒤에 둔다 — {@code (route_id, seq)} UNIQUE 는 지연 제약이다).
      *
      * @param stopId        옮길 stop
