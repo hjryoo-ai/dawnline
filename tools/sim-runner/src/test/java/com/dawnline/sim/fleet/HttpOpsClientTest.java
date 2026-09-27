@@ -177,7 +177,7 @@ class HttpOpsClientTest {
         OpsClient.Reply reassigned = ops.reassign(route, order, target);
 
         assertThat(closed).isEqualTo(new OpsClient.Reply(200, "audit-3", null, null));
-        assertThat(routes).containsExactly(new OpsClient.RouteSummary(route, 4));
+        assertThat(routes).containsExactly(new OpsClient.RouteSummary(route, null, 4));
         assertThat(stops).containsExactly(new OpsClient.RouteStop(1, "PLANNED", List.of(order)));
         assertThat(reassigned).isEqualTo(new OpsClient.Reply(409, "audit-4", "stop-not-planned", null));
         assertThat(received.getFirst().get("body")).isEqualTo("{\"reason\":\"성수기 증차 완료\"}");

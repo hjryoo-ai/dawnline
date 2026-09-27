@@ -135,14 +135,31 @@ public final class FakeOpsClient implements OpsClient {
     /** 가장 많이 실은 라우트의 마지막 PLANNED stop 의 주문. */
     public static final UUID LAST_PLANNED = UUID.fromString("0199a000-0000-7000-8000-0000000000c3");
 
-    /** 계획의 라우트 셋 — 가장 많이 실은 것(stop 넷)의 앞은 끝났고 뒤 둘은 PLANNED, 마지막 것은 이미 닿았다. */
+    public static final UUID COLD_TRUCK_A = UUID.fromString("0199a000-0000-7000-8000-0000000000e1");
+    public static final UUID COLD_TRUCK_B = UUID.fromString("0199a000-0000-7000-8000-0000000000e2");
+    public static final UUID PLAIN_VAN = UUID.fromString("0199a000-0000-7000-8000-0000000000e3");
+
+    /**
+     * 계획의 라우트 셋 — 첫 peak-day 의 모양(2026-09-27): 가장 많이 실은 것(stop 넷)은 냉장 트럭이고 가장 적게 실은 것은 냉장 없는
+     * 밴이다. 가장 많이 실은 라우트의 앞은 끝났고 뒤 둘은 PLANNED, 마지막 것은 이미 닿았다.
+     */
     public void threeRoutes() {
-        routes = List.of(new RouteSummary(MIDDLE, 2), new RouteSummary(HEAVY, 4), new RouteSummary(LIGHT, 1));
+        routes = List.of(new RouteSummary(MIDDLE, COLD_TRUCK_B, 2), new RouteSummary(HEAVY, COLD_TRUCK_A, 4),
+                new RouteSummary(LIGHT, PLAIN_VAN, 1));
+        vehicles.put(CAMP, List.of(truck(COLD_TRUCK_A), truck(COLD_TRUCK_B),
+                new Vehicle(PLAIN_VAN, CAMP, "PSA1B2C3-0001", "VAN", 400_000, 1_200_000, false, false, 45_000, 600, 250,
+                        LocalTime.of(23, 0), LocalTime.of(8, 0), true, "operator")));
         stops.put(HEAVY, List.of(
                 new RouteStop(1, "COMPLETED", List.of(UUID.fromString("0199a000-0000-7000-8000-0000000000c1"))),
                 new RouteStop(2, "PLANNED", List.of(UUID.fromString("0199a000-0000-7000-8000-0000000000c2"))),
                 new RouteStop(3, "PLANNED", List.of(LAST_PLANNED)),
                 new RouteStop(4, "ARRIVED", List.of(UUID.fromString("0199a000-0000-7000-8000-0000000000c4")))));
+    }
+
+    /** 시드 야간조 모양의 냉장 트럭. */
+    public static Vehicle truck(UUID id) {
+        return new Vehicle(id, CAMP, "T-" + id.toString().substring(34), "TRUCK", 1_000_000, 4_000_000, true, false,
+                80_000, 900, 300, LocalTime.of(23, 0), LocalTime.of(8, 0), true, "seed");
     }
 
     /** 시드 야간조 모양의 밴(일반). */

@@ -97,9 +97,10 @@ public interface OpsClient {
      * 읽기 모델의 라우트 한 줄.
      *
      * @param routeId   라우트
+     * @param vehicleId 차량 — 받을 라우트를 능력으로 고른다
      * @param stopCount stop 수
      */
-    record RouteSummary(UUID routeId, @Nullable Integer stopCount) {
+    record RouteSummary(UUID routeId, @Nullable UUID vehicleId, @Nullable Integer stopCount) {
     }
 
     /**

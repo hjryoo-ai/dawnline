@@ -171,20 +171,26 @@ public record FleetReport(Fleet mode, List<WaveLine> waves, List<Row> rows, int 
                 within ? "✅" : "✗", within ? "" : " (기준에 대한 발견 — 종료 코드에 넣지 않는다, ADR-067 결정 8)");
     }
 
+    /**
+     * 웨이브마다 「그 웨이브의 증차 완료 &lt; 그 웨이브의 마감」 — 결정 7 의 어설션과 같은 단위다. 웨이브를 가로질러 「가장 늦은 증차 ·
+     * 가장 이른 마감」을 견주면 결정 9(캠프마다 증차 직후 마감) 아래에서 멀쩡한 실행이 ✗ 로 보인다 — 첫 peak-day 가 그랬다
+     * (2026-09-27, 23:58:14 증차 · 23:58:03 마감, 둘은 다른 캠프였다).
+     */
     private String budget() {
         List<WaveLine> provisioned = waves.stream().filter(w -> w.added() > 0).toList();
         if (provisioned.isEmpty()) {
             return "— 더한 차량이 없다";
         }
-        Instant latestDone = provisioned.stream().map(WaveLine::provisionedAt).filter(java.util.Objects::nonNull)
-                .max(Instant::compareTo).orElse(null);
-        Instant earliestClose = provisioned.stream().map(WaveLine::closedAt).filter(java.util.Objects::nonNull)
-                .min(Instant::compareTo).orElse(null);
-        if (latestDone == null || earliestClose == null) {
-            return "모름";
+        long known = provisioned.stream().filter(w -> w.provisionedAt() != null && w.closedAt() != null).count();
+        if (known < provisioned.size()) {
+            return "모름 — 증차 완료나 마감 시각이 없는 웨이브 %d 개".formatted(provisioned.size() - known);
         }
-        return "증차 완료 %s KST · 가장 이른 마감 %s KST %s".formatted(KST.format(latestDone), KST.format(earliestClose),
-                latestDone.isBefore(earliestClose) ? "✅" : "✗");
+        long within = provisioned.stream().filter(w -> w.provisionedAt().isBefore(w.closedAt())).count();
+        java.time.Duration tightest = provisioned.stream()
+                .map(w -> java.time.Duration.between(w.provisionedAt(), w.closedAt()))
+                .min(java.time.Duration::compareTo).orElseThrow();
+        return "웨이브 %d/%d 에서 증차 완료 < 마감 · 가장 좁은 여유 %.1f초 %s".formatted(within, provisioned.size(),
+                tightest.toMillis() / 1000.0, within == provisioned.size() ? "✅" : "✗");
     }
 
     private static @Nullable Long sum(List<WaveLine> waves, java.util.function.Function<WaveLine, @Nullable Integer> field) {

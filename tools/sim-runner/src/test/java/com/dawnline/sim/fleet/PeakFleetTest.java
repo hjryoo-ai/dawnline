@@ -78,19 +78,61 @@ class PeakFleetTest {
         assertThat(report.auditRows()).as("등록 셋 + 조기 마감 + 재배정 + 비활성화 셋").isEqualTo(8);
         assertThat(report.audit()).as("캠프 하나 × 커맨드 넷, 모두 기대와 같다").hasSize(4)
                 .allSatisfy(line -> assertThat(line.matches()).as(line.action().name()).isTrue());
-        assertThat(report.toMarkdown()).contains("| 일반 | SHORTFALL | 3 | 3 |", "증차 완료 23:58:00 KST",
-                "가장 이른 마감 00:01:30 KST ✅", "9 / 4500 = 0.20% — §6.7 ≤ 0.5% ✅",
+        assertThat(report.toMarkdown()).contains("| 일반 | SHORTFALL | 3 | 3 |",
+                "웨이브 1/1 에서 증차 완료 < 마감 · 가장 좁은 여유 210.0초 ✅", "9 / 4500 = 0.20% — §6.7 ≤ 0.5% ✅",
                 "| ADD_VEHICLE | 3 | 3 | ✅ |", "| CLOSE_WAVE | 1 | 1 | ✅ |", "| REASSIGN_STOP | 1 | 1 | ✅ |",
                 "| DEACTIVATE_VEHICLE | 3 | 3 (성공 3) | ✅ |", "옮겼다");
     }
 
     @Test
-    void 재배정은_가장_많이_실은_라우트의_마지막_PLANNED_stop_을_가장_적게_실은_라우트로_옮긴다() throws InterruptedException {
-        // 마지막 stop 은 기사가 가장 늦게 닿는 곳이라 경합이 가장 작다 — 이미 닿은(ARRIVED) 넷째는 건너뛴다.
+    void 재배정은_가장_많이_실은_라우트의_마지막_PLANNED_stop_을_그_차량의_능력을_갖춘_가장_적게_실은_라우트로_옮긴다()
+            throws InterruptedException {
+        // 마지막 stop 은 기사가 가장 늦게 닿는 곳이라 경합이 가장 작다 — 이미 닿은(ARRIVED) 넷째는 건너뛴다. 가장 적게 실은 LIGHT 는
+        // 냉장 없는 밴이라 건너뛴다: 첫 peak-day 에서 능력을 보지 않고 고르자 열 번 모두 409 conflict 였다(2026-09-27).
         planned();
 
         assertThat(ops.reassignCalls).singleElement()
-                .isEqualTo(List.of(FakeOpsClient.HEAVY, FakeOpsClient.LAST_PLANNED, FakeOpsClient.LIGHT));
+                .isEqualTo(List.of(FakeOpsClient.HEAVY, FakeOpsClient.LAST_PLANNED, FakeOpsClient.MIDDLE));
+    }
+
+    @Test
+    void 능력을_갖춘_다른_라우트가_없으면_보내지_않고_이유를_남긴다() throws InterruptedException {
+        openWave();
+        ops.waveAnswers.add(List.of(wave(CUTOFF, "PLANNED", 2, CLOSED)));
+        ops.feasibility = waveId -> assessment(line("일반", "SHORTFALL", 1, van("seed", true)));
+        ops.threeRoutes();
+        ops.routes = List.of(ops.routes.get(1), ops.routes.get(2));
+        PeakFleet.Session session = fleet(AT_2358).open(Fleet.FEASIBLE);
+        session.provision(CUTOFF);
+        session.awaitPlans();
+        session.reassign();
+
+        assertThat(ops.reassignCalls).isEmpty();
+        assertThat(session.report().toMarkdown()).contains("보내지 않음 — 가장 많이 실은 라우트의 차량(TRUCK) 능력을 모두 갖춘");
+    }
+
+    @Test
+    void 사람이_읽는_id_는_가까운_때_만든_것끼리도_갈린다() {
+        // 전제 — 둘의 앞 8자(UUIDv7 의 시각)가 같다. 앞 8자를 쓰면 첫 peak-day 리포트처럼 열 캠프가 한 이름이 된다(§13 축 11).
+        java.util.UUID first = java.util.UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
+        java.util.UUID second = java.util.UUID.fromString("01a06edd-6c00-7000-8001-000000000002");
+        assertThat(first.toString().substring(0, 8)).isEqualTo(second.toString().substring(0, 8));
+
+        assertThat(PeakFleet.short8(first)).isNotEqualTo(PeakFleet.short8(second)).hasSize(8);
+    }
+
+    @Test
+    void 시간_예산_줄은_웨이브마다_견준다() {
+        // 결정 9 아래에서는 캠프마다 증차 직후 닫는다 — 한 캠프의 마감(23:58:03)이 다른 캠프의 증차 완료(23:58:14)보다 이르다.
+        // 가로질러 견주면 멀쩡한 실행이 ✗ 였다(첫 peak-day, 2026-09-27).
+        Instant base = Instant.parse("2026-09-27T14:58:00Z");
+        FleetReport report = new FleetReport(Fleet.FEASIBLE, List.of(
+                new FleetReport.WaveLine(FakeOpsClient.CAMP, FakeOpsClient.WAVE, 1, 1, 0, 1, 1, base.plusSeconds(2),
+                        base.plusSeconds(3)),
+                new FleetReport.WaveLine(FakeOpsClient.CAMP, FakeOpsClient.HEAVY, 1, 1, 0, 1, 1, base.plusSeconds(13),
+                        base.plusSeconds(14))), List.of(), 2, 2, 4, List.of(), List.of(), List.of());
+
+        assertThat(report.toMarkdown()).contains("웨이브 2/2 에서 증차 완료 < 마감 · 가장 좁은 여유 1.0초 ✅");
     }
 
     @Test
@@ -144,7 +186,7 @@ class PeakFleetTest {
         openWave();
         ops.waveAnswers.add(List.of(wave(CUTOFF, "PLANNED", 1, CLOSED)));
         ops.feasibility = waveId -> assessment(line("일반", "SHORTFALL", 1, van("seed", true)));
-        ops.routes = List.of(new OpsClient.RouteSummary(FakeOpsClient.LIGHT, 7));
+        ops.routes = List.of(new OpsClient.RouteSummary(FakeOpsClient.LIGHT, null, 7));
         PeakFleet.Session session = fleet(AT_2358).open(Fleet.FEASIBLE);
         session.provision(CUTOFF);
         session.awaitPlans();

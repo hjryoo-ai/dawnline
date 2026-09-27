@@ -334,7 +334,19 @@ public final class PeakFleet {
                     continue;
                 }
                 RouteSummary from = byLoad.getLast();
-                RouteSummary to = byLoad.getFirst();
+                // 받을 라우트는 출발 라우트 차량의 능력(냉장 · 위험물)을 모두 갖춘 차량의 것 가운데 가장 적게 실은 것이다 — 능력을
+                // 보지 않고 가장 적게 실은 라우트로 옮기면 첫 peak-day 에서 열 번 모두 냉장 주문을 냉장 없는 밴으로 옮기려다 409
+                // conflict 였다(2026-09-27, 근거: 관측(재현됨)). stop 의 제약은 라우트 조회에 없으므로 차량으로 덮는다.
+                Map<UUID, Vehicle> fleet = new LinkedHashMap<>();
+                guardedRead(() -> ops.vehicles(camp)).forEach(vehicle -> fleet.put(vehicle.id(), vehicle));
+                Vehicle source = from.vehicleId() == null ? null : fleet.get(from.vehicleId());
+                RouteSummary to = byLoad.stream().filter(route -> route != from && covers(fleet.get(route.vehicleId()), source))
+                        .findFirst().orElse(null);
+                if (to == null) {
+                    skipReassign(camp, waveId, "가장 많이 실은 라우트의 차량(%s) 능력을 모두 갖춘 다른 라우트가 없다".formatted(
+                            source == null ? "모름" : source.type()));
+                    continue;
+                }
                 List<RouteStop> stops = new ArrayList<>(guardedRead(() -> ops.routeStops(from.routeId())));
                 java.util.Collections.reverse(stops);
                 RouteStop last = stops.stream().filter(stop -> "PLANNED".equals(stop.status()) && !stop.orderIds().isEmpty())
@@ -352,6 +364,12 @@ public final class PeakFleet {
                 }
                 reassigns.add(new FleetReport.Reassign(camp, waveId, reply.status(), reply.code(), null));
             }
+        }
+
+        /** 받을 차량이 보낼 차량의 능력을 모두 갖췄다 — 모르는 쪽이 있으면 덮지 않는다(모름을 참으로 접지 않는다). */
+        private static boolean covers(@Nullable Vehicle target, @Nullable Vehicle source) {
+            return target != null && source != null && (target.cold() || !source.cold())
+                    && (target.allowsHazmat() || !source.allowsHazmat());
         }
 
         private void skipReassign(UUID camp, UUID waveId, String why) {
@@ -549,7 +567,12 @@ public final class PeakFleet {
         }
     }
 
+    /**
+     * 사람이 읽는 id — <strong>뒤</strong> 8자(난수 부분). UUIDv7 의 앞 8자는 밀리초 시각의 윗부분이라 가까운 때 만든 id 끼리 같다
+     * (DESIGN.md §13 축 11). 첫 peak-day 리포트가 캠프 열 줄을 전부 {@code 01a06edd}, 웨이브 열 줄을 전부 {@code 01a0e328} 로
+     * 적었다(2026-09-27, 근거: 관측(재현됨)).
+     */
     static String short8(@Nullable UUID id) {
-        return id == null ? "—" : id.toString().substring(0, 8);
+        return id == null ? "—" : id.toString().substring(28);
     }
 }
