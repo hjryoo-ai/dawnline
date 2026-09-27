@@ -4,6 +4,7 @@ import com.dawnline.fulfillment.application.port.in.CancelFulfillmentOrderUseCas
 import com.dawnline.fulfillment.application.port.in.PlanOrderUseCase;
 import com.dawnline.messaging.EventEnvelope;
 import com.dawnline.messaging.MessagingMetrics;
+import com.dawnline.messaging.idempotency.ConsumeOutcome;
 import com.dawnline.messaging.idempotency.EventRejectedException;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
@@ -12,6 +13,7 @@ import com.dawnline.observability.DawnlineMeters;
 import com.dawnline.observability.DawnlineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -106,14 +108,15 @@ public class OrderEventListener {
                 EventRecords.parse(json, record, OrderCancelledPayload.class);
         OrderCancelledPayload payload = envelope.payload();
 
-        consumer.consumeOnce(envelope, CONSUMER, () -> {
-            CancelFulfillmentOrderUseCase.CancelOutcome outcome =
-                    cancelOrder.cancel(payload.orderId(), payload.cancelledAt());
-            if (outcome == CancelFulfillmentOrderUseCase.CancelOutcome.CANCELLED_BEFORE_PLACED) {
-                // 순서 뒤바뀜을 흡수했다는 사실은 세어 둔다 — 늘어나면 어딘가 지연이 커졌다는 뜻이다.
-                countAbsorbed();
-            }
-        });
+        AtomicReference<CancelFulfillmentOrderUseCase.CancelOutcome> outcome = new AtomicReference<>();
+        ConsumeOutcome consumed = consumer.consumeOnce(envelope, CONSUMER,
+                () -> outcome.set(cancelOrder.cancel(payload.orderId(), payload.cancelledAt())));
+        // 여기는 커밋 뒤다(CLAUDE.md 「카운터는 커밋 뒤에 센다」) — 롤백되면 consumeOnce 가 예외로 끝나 이 줄에 오지 않는다.
+        if (consumed == ConsumeOutcome.PROCESSED
+                && outcome.get() == CancelFulfillmentOrderUseCase.CancelOutcome.CANCELLED_BEFORE_PLACED) {
+            // 순서 뒤바뀜을 흡수했다는 사실은 세어 둔다 — 늘어나면 어딘가 지연이 커졌다는 뜻이다.
+            countAbsorbed();
+        }
     }
 
     private void countAbsorbed() {

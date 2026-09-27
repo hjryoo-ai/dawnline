@@ -7,6 +7,7 @@ import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,15 +68,20 @@ public class DeliveryStatusListener {
         EventEnvelope<JsonNode> envelope = json.readEnvelope(record.value());
         JsonNode payload = envelope.payload();
 
-        consumer.runOnce(envelope, CONSUMER, () -> {
+        AtomicBoolean unknown = new AtomicBoolean();
+        boolean ran = consumer.runOnce(envelope, CONSUMER, () -> {
             Optional<RecordDeliveryStatusUseCase.DeliveryStatusCommand> command =
                     DeliveryStatusPayload.toCommand(payload);
             if (command.isEmpty()) {
                 log.warn("모르는 배송 상태값이다. eventId={}", envelope.eventId());
-                metrics.deliveryStatusUnknown();
+                unknown.set(true);
                 return;
             }
             recordStatus.record(command.get());
         });
+        // 커밋 뒤에 센다(CLAUDE.md) — runOnce 가 돌아왔으면 processed_events 가 커밋됐다.
+        if (ran && unknown.get()) {
+            metrics.deliveryStatusUnknown();
+        }
     }
 }
