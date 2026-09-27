@@ -105,6 +105,10 @@ class DeliveryFactPerOrderIT extends DispatchIntegrationTestBase {
 
         assertThat(statusOfStopHolding(merged.orderIds().getLast()))
                 .as("다른 주문의 완료가 이 주문을 끝내지 않는다").isNotEqualTo("COMPLETED");
+        assertThat(statusOfStopHolding(delivered)).as("일부만 끝났다 — 진행 중").isEqualTo("ARRIVED");
+        assertThat(orderStatus(delivered)).isEqualTo("COMPLETED");
+        assertThat(orderStatus(merged.orderIds().getLast())).isEqualTo("PLANNED");
+        assertThat(firstTouchOfStop(merged.stopId())).as("stop 에 처음 닿은 시각은 그 주문의 것").isEqualTo(orderFirstTouch(delivered));
     }
 
     @Test
@@ -123,6 +127,8 @@ class DeliveryFactPerOrderIT extends DispatchIntegrationTestBase {
         assertThat(statusOfStopHolding(moved))
                 .as("배송되지 않은 주문이 배송된 것으로 보이면 계획에서 사라진다 — 재계획도, 보존도, 차량 비활성화도 그 stop 을 끝난 것으로 본다")
                 .isNotEqualTo("COMPLETED");
+        assertThat(orderStatus(moved)).isEqualTo("PLANNED");
+        assertThat(unfinishedStops(plan.to().routeId())).as("받은 라우트는 끝나지 않았다 — 비활성화 409 가 말한다").isPositive();
     }
 
     @Test
@@ -140,6 +146,7 @@ class DeliveryFactPerOrderIT extends DispatchIntegrationTestBase {
 
         assertThat(statusOfStopHolding(kept)).isEqualTo("COMPLETED");
         assertThat(statusOfStopHolding(moved)).as("사실은 주문의 것이다 — 그 주문이 지금 있는 자리에 적힌다").isEqualTo("COMPLETED");
+        assertThat(orderStatus(moved)).isEqualTo("COMPLETED");
     }
 
     // ---------------------------------------------------------------- 도우미
@@ -193,6 +200,29 @@ class DeliveryFactPerOrderIT extends DispatchIntegrationTestBase {
     private UUID stopHolding(UUID orderId) {
         return tx().execute(status -> (UUID) entityManager.createNativeQuery(
                 "SELECT stop_id FROM route_stop_orders WHERE order_id = ?").setParameter(1, orderId).getSingleResult());
+    }
+
+    private String orderStatus(UUID orderId) {
+        return tx().execute(status -> (String) entityManager.createNativeQuery(
+                "SELECT status FROM route_stop_orders WHERE order_id = ?").setParameter(1, orderId).getSingleResult());
+    }
+
+    private Instant orderFirstTouch(UUID orderId) {
+        return tx().execute(status -> (Instant) entityManager.createNativeQuery(
+                "SELECT actual_at FROM route_stop_orders WHERE order_id = ?").setParameter(1, orderId).getSingleResult());
+    }
+
+    private Instant firstTouchOfStop(UUID stopId) {
+        return tx().execute(status -> (Instant) entityManager.createNativeQuery(
+                "SELECT actual_at FROM route_stops WHERE id = ?").setParameter(1, stopId).getSingleResult());
+    }
+
+    /** 끝나지 않은 stop 의 수 — 보존 · 비활성화 · 재계획이 쓰는 같은 조각이다({@code JdbcDispatchRetention.UNFINISHED_STOP}). */
+    private long unfinishedStops(UUID routeId) {
+        return tx().execute(status -> ((Number) entityManager.createNativeQuery(
+                "SELECT count(*) FROM route_stops s WHERE s.route_id = ? AND "
+                        + com.dawnline.dispatch.adapter.out.persistence.JdbcDispatchRetention.UNFINISHED_STOP)
+                .setParameter(1, routeId).getSingleResult()).longValue());
     }
 
     private String statusOfStopHolding(UUID orderId) {

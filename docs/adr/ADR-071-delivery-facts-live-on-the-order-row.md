@@ -88,6 +88,15 @@ ADR-047 은 「계획은 `(route, revision, seq)` 로, 사실은 `orderId` 로 �
 
 | 표본 | 기대 | 결과 |
 |---|---|---|
-| `DeliveryFactPerOrderIT` — 한 stop 의 주문 하나만 끝난다 | stop 은 `ARRIVED`, 그 주문만 `COMPLETED` | 정정 전: stop `COMPLETED` — (구현 커밋에서 채운다) |
-| 같은 IT — 옮겨 온 주문이 있는 stop 에서 원래 주문만 끝난다 | stop `ARRIVED`, 옮겨 온 주문은 `PLANNED` | 정정 전: stop `COMPLETED` — (구현 커밋에서 채운다) |
-| 같은 IT — 가르는 동안 두 주문이 함께 배송된다 | 두 자리 모두 `COMPLETED` | 정정 전: 옮겨 간 자리 `PLANNED` — (구현 커밋에서 채운다) |
+| `DeliveryFactPerOrderIT` — 한 stop 의 주문 하나만 끝난다 | stop 은 `ARRIVED`, 그 주문만 `COMPLETED`, stop 의 처음 닿은 시각 = 그 주문의 것 | 정정 전: stop `COMPLETED` → ✅ |
+| 같은 IT — 옮겨 온 주문이 있는 stop 에서 원래 주문만 끝난다 | stop 은 끝나지 않았다, 옮겨 온 주문 `PLANNED`, 받은 라우트의 끝나지 않은 stop > 0 | 정정 전: stop `COMPLETED` → ✅ |
+| 같은 IT — 가르는 동안 두 주문이 함께 배송된다 | 두 자리 모두 `COMPLETED` | 정정 전: 옮겨 간 자리 `PLANNED` → ✅ |
+| `DeliveryStatusIT` — 옮겨 온 주문 하나의 완료 | 그 주문 `COMPLETED`, 받은 stop `ARRIVED`(다른 주문은 배송되지 않았다) | ✅ — 이 IT 는 처음에 stop 전체의 `COMPLETED` 를 기대했다: 그것이 이 ADR 이 고친 덮음이었다 |
+| `DeliveryStatusIT` — 취소된 stop 에 온 완료 | stop `CANCELLED` 그대로, 취소된 주문의 행 `PLANNED` | ✅ — 픽스처가 stop 칸만 바꾸던 것을 후보 취소로(취소의 출처) |
+| `RouteStopOrdersIndexIT` — 새 조회(`findOrderAtStop`) | `ix_rso_order`, 순차 스캔 없음(통계 있음) | ✅ |
+| 음성 표본 N1 — 다시 세지 않는다 | stop 이 `PLANNED` 에 머문다 | ✅ 단위 11 · IT 7 빨강(전부 이 경로) |
+| 음성 표본 N2 — 「하나라도 끝나면 끝」(정정 전의 덮음) | 덮음 셋이 빨강 | ✅ 정확히 셋(`DeliveryFactPerOrderIT` 둘 · `DeliveryStatusIT` 하나) |
+| 음성 표본 N3 — 주문의 취소를 후보에서 읽지 않는다 | 취소된 주문의 행 검사 빨강 | ✅ 그것 하나 — 처음에는 **초록**이었다: stop 을 다시 세면 여전히 `CANCELLED` 라 가려졌고, 취소된 주문의 행에 `COMPLETED` 가 적히는 것을 아무 테스트도 보지 않았다. 어설션을 더했다 |
+
+세 음성 표본 모두 복원 뒤 `cmp` 일치. dispatch 단위 574 · 통합 140 초록. 검증 표 V8(`verify.sh`)도 주문의 행으로 대조한다 — stop 의 칸으로는
+끝난 주문과 섞인 stop(`ARRIVED`) 안의 `PLANNED` 주문이 보이지 않는다.

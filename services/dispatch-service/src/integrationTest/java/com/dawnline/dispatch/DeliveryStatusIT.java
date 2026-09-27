@@ -195,9 +195,13 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
         // 이미 나간 개정과 저장된 계획이 어긋난다.
         Planned planned = plannedRoute();
         RouteView.StopView last = planned.stops().getLast();
-        tx().executeWithoutResult(status -> entityManager.createNativeQuery(
-                        "UPDATE route_stops SET status = 'CANCELLED' WHERE route_id = ? AND seq = ?")
-                .setParameter(1, planned.routeId()).setParameter(2, last.seq()).executeUpdate());
+        // 취소의 출처는 후보다 — 실물의 취소 경로처럼 후보를 취소하고 stop 을 CANCELLED 로 둔다(ADR-071: 주문의 행에는 취소를 적지 않는다).
+        tx().executeWithoutResult(status -> {
+            entityManager.createNativeQuery("UPDATE dispatch_candidates SET status = 'CANCELLED' WHERE order_id = ANY(?)")
+                    .setParameter(1, last.orderIds().toArray(UUID[]::new)).executeUpdate();
+            entityManager.createNativeQuery("UPDATE route_stops SET status = 'CANCELLED' WHERE route_id = ? AND seq = ?")
+                    .setParameter(1, planned.routeId()).setParameter(2, last.seq()).executeUpdate();
+        });
 
         publish(planned.routeId(), last.seq(), last.orderIds(), "COMPLETED");
         // 앞 stop 에 다른 이벤트를 보내 «리스너가 여기까지 왔다» 를 확인한다 — 「아무 일도
@@ -208,6 +212,9 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(statusOf(planned.routeId(), first.seq())).isEqualTo("COMPLETED"));
         assertThat(statusOf(planned.routeId(), last.seq())).isEqualTo("CANCELLED");
+        assertThat(last.orderIds()).allSatisfy(orderId -> assertThat(orderStatusOf(orderId))
+                .as("취소된 주문의 행에는 배송을 적지 않는다 — 취소의 출처는 후보이고, 판정이 그것을 먼저 묻는다(ADR-047 결정 4 · ADR-071)")
+                .isEqualTo("PLANNED"));
     }
 
     @Test
@@ -236,8 +243,11 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
         publish(a.routeId(), 떠난_stop.seq(), List.of(orderId), "COMPLETED");
 
+        // 받은 stop 에는 원래 주문들이 있다 — 옮겨 온 주문 하나의 완료는 그 주문의 행에 적히고, stop 은 일부만 끝난 진행 중이다(ADR-071).
+        // 이 IT 가 처음에 stop 전체의 COMPLETED 를 기대했던 것이 ADR-071 이 고친 덮음이었다.
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
-                assertThat(statusOf(b.routeId(), 받은_stop.seq())).isEqualTo("COMPLETED"));
+                assertThat(orderStatusOf(orderId)).isEqualTo("COMPLETED"));
+        assertThat(statusOf(b.routeId(), 받은_stop.seq())).as("받은 stop 의 다른 주문은 배송되지 않았다").isEqualTo("ARRIVED");
         assertThat(statusOf(a.routeId(), 떠난_stop.seq()))
                 .as("이벤트가 말한 라우트는 손대지 않는다").isEqualTo("PLANNED");
     }
@@ -287,6 +297,11 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
         return tx().execute(status -> (Instant) entityManager.createNativeQuery(
                         "SELECT actual_at FROM route_stops WHERE route_id = ? AND seq = ?")
                 .setParameter(1, routeId).setParameter(2, seq).getSingleResult());
+    }
+
+    private String orderStatusOf(UUID orderId) {
+        return tx().execute(status -> (String) entityManager.createNativeQuery(
+                "SELECT status FROM route_stop_orders WHERE order_id = ?").setParameter(1, orderId).getSingleResult());
     }
 
     private String statusOf(UUID routeId, int seq) {
