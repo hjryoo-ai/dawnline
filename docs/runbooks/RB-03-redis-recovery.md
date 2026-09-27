@@ -68,7 +68,7 @@ SLO 파괴다(§7.2).
   **기준은 재기 전에 적었다**(2026-09-26 — 이 줄이 첫 실행보다 먼저 커밋됐다): ① 장애가 **끝나기 전에** 검증 표 V1 · V7 이 ✅(주문 전부가 Redis
   없이 후보까지 · outbox 0/0) ② 장애 중 `max(dawnline_outbox_lag_seconds)` 의 최댓값 **≤ 5초**(5초마다 잰다 — 알림 문턱 30초의 1/6, 릴레이는
   100 ms 마다 돈다) ③ `DawnlineRateLimitBypassed` 가 실제 Prometheus 에서 울고 GEO `bypassed` 가 오른다 — 폴백은 조용하면 안 된다 ④ 복구 뒤
-  레이트 리밋이 다시 판정한다(`bypassed` 그대로 · `allowed` 가 오른다) · 검증 표 V1–V7(DLQ 0).
+  레이트 리밋이 다시 판정한다(`bypassed` 그대로 · `allowed` 가 오른다) · 검증 표 V1–V8(DLQ 0).
 - **복구 뒤의 검증 표** — `bash tools/chaos/verify.sh check <baseline 파일> --expect-dlq 0`(만드는 법은 [RB-01](RB-01-kafka-recovery.md) §2.3).
 
 ## 4. 검증 — `make chaos-redis` (2026-09-26 로컬, 근거: 관측(재현됨))
