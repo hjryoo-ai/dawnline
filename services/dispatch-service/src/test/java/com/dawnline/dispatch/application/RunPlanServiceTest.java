@@ -13,9 +13,16 @@ import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.PlanModeReason;
 import com.dawnline.dispatch.domain.PlanModeSelector;
 import com.dawnline.dispatch.domain.PlanStatus;
+import com.dawnline.dispatch.application.port.out.VehicleCatalog;
+import com.dawnline.dispatch.domain.optimizer.Capacity;
+import com.dawnline.dispatch.domain.optimizer.Explanation;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
+import com.dawnline.dispatch.domain.optimizer.VehicleAttrs;
+import com.dawnline.dispatch.domain.optimizer.VehicleCost;
+import com.dawnline.dispatch.domain.optimizer.VehicleId;
+import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import com.dawnline.dispatch.domain.optimizer.rule.DispatchRules;
 import com.dawnline.dispatch.domain.optimizer.rule.RuleDefinition;
 import com.dawnline.dispatch.domain.optimizer.rule.RuleSeverity;
@@ -78,13 +85,17 @@ class RunPlanServiceTest {
     }
 
     private RunPlanService service(RuleSet rules, int vehicleCount, Clock clock) {
+        return service(rules, InMemoryDispatchPorts.fleet(vehicleCount, NOW), clock, "baseline-nn");
+    }
+
+    private RunPlanService service(RuleSet rules, VehicleCatalog fleet, Clock clock, String strategy) {
         return new RunPlanService(plans, candidates, routes, events,
-                InMemoryDispatchPorts.fleet(vehicleCount, NOW),
+                fleet,
                 InMemoryDispatchPorts.rules(rules),
                 new HaversineDistance(1.3d, 25.0d),
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 clock,
-                "baseline-nn", new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
+                strategy, new PlanningBudget(Duration.ofSeconds(30), Duration.ofSeconds(3)),
                 new PlanModeSelector(3L, 0.8d, 0.5d), transactions);
     }
 
@@ -454,6 +465,96 @@ class RunPlanServiceTest {
         // 차 한 대가 stop 하나만 실을 수 있으므로 나머지는 미배정이지만 계획 자체는 성립한다.
         assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
         assertThat(events.ordersDispatched).hasSize(1);
+    }
+
+    /**
+     * 계획의 차량은 이 웨이브가 쓸 수 있는 것만이다 (§6.2, ADR-039 후속).
+     *
+     * <p>첫 {@code peak-day} 의 모양을 줄였다 — 새벽 냉장 주문, 야간 일반 밴, 그리고 코드 순 <em>마지막</em>의 주간 냉장 트럭.
+     * 전 차량을 받던 동안 이 주문의 설명은 「주간 트럭의 지각」(`triedVehicles: 2`)이었다: 그 차는 09:00 에 출발하므로 참이지만,
+     * 새벽 웨이브가 쓸 수 있는 차에 대해서는 아무것도 말하지 않는다. 걸러진 집합에서는 「냉장 차량이 없다」이고 그것이 이 웨이브의
+     * 사실이다. 같은 목록을 좌석 예약이 라운드로빈으로 돈다 — 설명이 1 을 세면 예약도 주간조에 가지 않는다.
+     */
+    @Test
+    void 약속창이_끝난_뒤에_근무를_시작하는_차량은_계획의_집합에_없다() {
+        UUID waveId = Ids.newId();
+        UUID orderId = seedCold(waveId);
+        seed(waveId, 1);   // 밴이 실을 일반 주문 — 라우트가 하나는 있어야 계획이 발행되고 설명이 남는다
+        VehicleSpec nightVan = vehicle(false, new TimeWindow(NOW.minus(Duration.ofHours(1)), NOW.plus(Duration.ofHours(8))));
+        VehicleSpec dayColdTruck = vehicle(true, new TimeWindow(NOW.plus(Duration.ofHours(8)), NOW.plus(Duration.ofHours(21))));
+
+        service(dawnRules(), (campId, planFor) -> List.of(nightVan, dayColdTruck), Clock.fixed(NOW, ZoneOffset.UTC),
+                "sweep-greedy-nn+ls").run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        Explanation unassigned = routes.explanations.stream().filter(e -> e.orderId().value().equals(orderId))
+                .findFirst().orElseThrow();
+        assertThat(unassigned.outcome()).isEqualTo(Explanation.Outcome.UNASSIGNED);
+        assertThat(unassigned.detail()).containsEntry("triedVehicles", 1);
+        assertThat(unassigned.ruleName()).isEqualTo("cold-chain");
+    }
+
+    @Test
+    void 쓸_수_있는_차량이_0대면_예외가_아니라_실패로_끝난다() {
+        // 캠프에 활성 차량은 있지만 모두 이 웨이브의 약속창이 끝난 뒤에 근무를 시작한다. 거르기 전에는 전 차량이 거절해 라우트 없이 실패했다 —
+        // 같은 끝이어야 한다. 전략은 차량 0대를 받지 않으므로(예외) 그대로 부르면 wave.closed 가 재전달을 돈다.
+        UUID waveId = Ids.newId();
+        seedCold(waveId);
+        VehicleSpec dayColdTruck = vehicle(true, new TimeWindow(NOW.plus(Duration.ofHours(8)), NOW.plus(Duration.ofHours(21))));
+
+        RunPlanUseCase.Outcome outcome = service(dawnRules(), (campId, planFor) -> List.of(dayColdTruck),
+                Clock.fixed(NOW, ZoneOffset.UTC), "sweep-greedy-nn+ls")
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.FAILED);
+        assertThat(events.failed).isEqualTo(1);
+        assertThat(events.routesAssigned).isEmpty();
+    }
+
+    @Test
+    void 근무가_약속창보다_먼저_끝나도_룰이_받는_차량은_집합에_있다() {
+        // Compose 스모크의 모양(2026-09-27): 14:03 에 내일 약속창의 웨이브를 조기 마감한다. 오늘 근무조의 근무는 내일 약속창과 겹치지
+        // 않지만 룰은 지각만 막으므로 이르게 배송할 수 있다 — 처음 판(겹침)은 그 차를 빼서 계획이 실패했다. 집합은 룰보다 엄격하지 않다.
+        UUID waveId = Ids.newId();
+        UUID orderId = Ids.newId();
+        candidates.put(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
+                GeoPoint.of(InMemoryDispatchPorts.CAMP.lat() + 0.004d, InMemoryDispatchPorts.CAMP.lng() + 0.003d),
+                1_000, 2_000, false, false, new TimeWindow(NOW.plus(Duration.ofHours(20)), NOW.plus(Duration.ofHours(26))),
+                60, false, 0, NOW));
+        VehicleSpec todayVan = vehicle(false, new TimeWindow(NOW.minus(Duration.ofHours(5)), NOW.plus(Duration.ofHours(8))));
+
+        RunPlanUseCase.Outcome outcome = service(dawnRules(), (campId, planFor) -> List.of(todayVan),
+                Clock.fixed(NOW, ZoneOffset.UTC), "sweep-greedy-nn+ls")
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
+        assertThat(routes.explanations.stream().filter(e -> e.orderId().value().equals(orderId)))
+                .singleElement().extracting(Explanation::outcome).isEqualTo(Explanation.Outcome.ASSIGNED);
+    }
+
+    /** 새벽 약속창(NOW + 1h ~ + 5h)의 냉장 주문 하나. */
+    private UUID seedCold(UUID waveId) {
+        UUID orderId = Ids.newId();
+        candidates.put(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
+                GeoPoint.of(InMemoryDispatchPorts.CAMP.lat() + 0.004d, InMemoryDispatchPorts.CAMP.lng() + 0.003d),
+                1_000, 2_000, true, false, new TimeWindow(NOW.plus(Duration.ofHours(1)), NOW.plus(Duration.ofHours(5))),
+                60, false, 0, NOW));
+        return orderId;
+    }
+
+    /** 시드와 같은 하드 룰 셋 — 냉장 · 근무창 · 지각 상한. */
+    private static RuleSet dawnRules() {
+        return DispatchRules.ruleSet(List.of(
+                new RuleDefinition("cold-chain", RuleType.VEHICLE_ATTRIBUTE_MATCH, RuleSeverity.HARD, 10,
+                        Map.of("orderFlag", "requiresCold", "vehicleFlag", "isCold")),
+                new RuleDefinition("shift-window", RuleType.SHIFT_WINDOW, RuleSeverity.HARD, 25,
+                        Map.of("bufferMinutes", 30)),
+                new RuleDefinition("late-hard-limit", RuleType.TIME_WINDOW_LIMIT, RuleSeverity.HARD, 30,
+                        Map.of("hardLimitMinutes", 60))), 1);
+    }
+
+    private static VehicleSpec vehicle(boolean cold, TimeWindow shift) {
+        return new VehicleSpec(VehicleId.of(Ids.newId()), new Capacity(1_200_000, 4_000_000),
+                new VehicleAttrs(cold ? "TRUCK" : "VAN", cold, false), shift, VehicleCost.krw(45_000, 600, 250));
     }
 
     /** 계획이 끝난 뒤 조회에서 한 주문을 빼는 저장소 — 계획 중 취소를 흉내 낸다. */

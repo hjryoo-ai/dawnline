@@ -31,4 +31,21 @@ class FeasibilityTest {
         assertThatThrownBy(() -> new Feasibility(true, "rule", "이유"))
                 .isInstanceOf(ValidationException.class);
     }
+
+    @Test
+    void 통과에_위반_폭을_붙이면_거부한다() {
+        assertThatThrownBy(() -> new Feasibility(true, null, null, 1L))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void 위반_폭은_음수일_수_없다() {
+        assertThatThrownBy(() -> Feasibility.violated("rule", "이유", -1L))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void 폭을_말하지_않는_거절의_폭은_0_이다() {
+        assertThat(Feasibility.violated("cold-chain", "이유").excess()).isZero();
+    }
 }

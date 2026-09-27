@@ -125,6 +125,16 @@ class HardRuleTest {
             assertThat(rule.check(huge, vehicle, RuleFixtures.emptyRoute(vehicle)).reason())
                     .contains("2000000g");
         }
+
+        @Test
+        void 위반_폭은_한도_대비_초과_퍼밀이다_중량과_부피_중_큰_쪽() {
+            // 폭은 미배정 설명이 「가장 가까웠던 거절」을 고를 때 같은 룰끼리 견주는 값이다(ADR-039 후속).
+            VehicleSpec vehicle = RuleFixtures.vehicle();
+            int maxWeight = vehicle.capacity().maxWeightG();
+            Stop over = RuleFixtures.stop(GANGNAM, new Parcel(maxWeight + maxWeight / 4, 1, false, false), 0, 1);
+
+            assertThat(rule.check(over, vehicle, RuleFixtures.emptyRoute(vehicle)).excess()).isEqualTo(250L);
+        }
     }
 
     @Nested
@@ -186,6 +196,18 @@ class HardRuleTest {
         }
 
         @Test
+        void 위반_폭은_근무_종료_빼기_버퍼를_넘긴_분이다() {
+            VehicleSpec vehicle = RuleFixtures.vehicleWithShiftEnd(START.plus(Duration.ofMinutes(60)));
+            Stop stop = RuleFixtures.stop(GANGNAM);
+            RouteState state = RuleFixtures.emptyRoute(vehicle);
+            long expected = Duration.between(vehicle.shift().end().minus(Duration.ofMinutes(30)),
+                    state.returnTimeIfAppended(stop)).toMinutes();
+
+            assertThat(expected).as("전제 — 넘긴다").isPositive();
+            assertThat(rule.check(stop, vehicle, state).excess()).isEqualTo(expected);
+        }
+
+        @Test
         void 버퍼가_없으면_같은_라우트가_통과한다() {
             // 버퍼는 계획과 현실의 차이를 흡수한다. 0 이면 계획상 딱 맞는 라우트가 만들어진다.
             VehicleSpec vehicle = RuleFixtures.vehicleWithShiftEnd(START.plus(Duration.ofMinutes(60)));
@@ -238,6 +260,18 @@ class HardRuleTest {
 
             assertThat(result.feasible()).isFalse();
             assertThat(result.reason()).contains("상한 60분");
+        }
+
+        @Test
+        void 위반_폭은_지각이_아니라_상한을_넘긴_분이다() {
+            VehicleSpec vehicle = RuleFixtures.vehicle();
+            TimeWindow past = new TimeWindow(START.minus(Duration.ofHours(3)),
+                    START.minus(Duration.ofHours(2)));
+            Stop stop = RuleFixtures.stopPromised(GANGNAM, past);
+            RouteState state = RuleFixtures.emptyRoute(vehicle);
+            long late = Duration.between(past.end(), state.arrivalIfAppended(stop)).toMinutes();
+
+            assertThat(rule.check(stop, vehicle, state).excess()).isEqualTo(late - 60L);
         }
 
         @Test

@@ -33,6 +33,13 @@ public record VehicleCapacityRule(String name, int priority) implements HardRule
         }
         return Feasibility.violated(name, "용량 초과: %dg/%dcm3 → 한도 %dg/%dcm3".formatted(
                 after.weightG(), after.volumeCm3(),
-                vehicle.capacity().maxWeightG(), vehicle.capacity().maxVolumeCm3()));
+                vehicle.capacity().maxWeightG(), vehicle.capacity().maxVolumeCm3()),
+                Math.max(overPermille(after.weightG(), vehicle.capacity().maxWeightG()),
+                        overPermille(after.volumeCm3(), vehicle.capacity().maxVolumeCm3())));
+    }
+
+    /** 한도 대비 초과 ‰ — 중량과 부피는 단위가 달라 비율로만 한 축에 선다. 넘지 않았으면 0. */
+    private static long overPermille(long load, long limit) {
+        return load <= limit ? 0L : (load - limit) * 1_000L / Math.max(1L, limit);
     }
 }

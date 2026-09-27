@@ -41,6 +41,7 @@ public record ShiftWindowRule(String name, int priority, int bufferMinutes) impl
             return Feasibility.ok();
         }
         return Feasibility.violated(name, "복귀 %s 가 근무 종료 %s − 버퍼 %d분을 넘깁니다"
-                .formatted(actualReturn, vehicle.shift().end(), bufferMinutes));
+                .formatted(actualReturn, vehicle.shift().end(), bufferMinutes),
+                Duration.between(latestReturn, actualReturn).toMinutes());
     }
 }
