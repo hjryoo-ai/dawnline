@@ -210,6 +210,9 @@ NEXT_DAY 웨이브 열 개는 스케줄 마감(`close_cause = SCHEDULED`)으로 
 
 ## 8. 이 리포트가 판정하는 7-0 행
 
+> **7-4 의 판정은 [phase7-window-scenarios](phase7-window-scenarios.md) §2 로 옮겼다**(2026-09-28) — 시나리오 넷을 나란히 둔 표다. 아래는
+> `peak-day` 세 실행이 판정한 행이고, 그 문서의 표와 같은 판정이다.
+
 | 행 | 판정 |
 |---|---|
 | A32 (80% 가 ≤ 0.5% 를 내는가) | ✅ **3차 0.27%** (§7). 2차의 ✗(2.66%)는 기준이 아니라 계획의 시간 축이 빠진 것이었다(§4 → #94) |
@@ -220,5 +223,4 @@ NEXT_DAY 웨이브 열 개는 스케줄 마감(`close_cause = SCHEDULED`)으로 
 | B1 (`no-anchor` 빈도) | 관찰 — 2차 `no-anchor` 31 · `applied` 7 · 나머지 갈래 0, `status_after_relocate` 2 · 편차 불일치 7. 3차 `no-anchor` 29 · `applied` 2 · `no-gain` 1, 편차 불일치 3 |
 | B15 (`stale` 빈도) | 관찰 — 3차 `stale` 0 (`applied` 2) |
 
-그 밖의 7-4 행(A1 · A2 · A3 · A8 · A12 · A17 · A18 · A20 · B2 · B5–B12)은 이 세 실행으로 판정하지 않는다. `normal-day` · `overload-day` 를
-아직 돌리지 않았고, 콜드 스타트 · 알림 · 약속 개정의 시간축은 이 리포트의 측정 창 밖이다(3차도 같다).
+그 밖의 7-4 행(A1 · A2 · A3 · A8 · A12 · A17 · A18 · A20 · B2 · B5–B12 · B16)은 시나리오 넷의 리포트가 판정한다 — [phase7-window-scenarios](phase7-window-scenarios.md) §2.
