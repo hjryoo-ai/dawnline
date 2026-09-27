@@ -4,6 +4,7 @@ import com.dawnline.ops.adapter.out.core.AuditIdPropagation;
 import com.dawnline.ops.adapter.out.core.CoreCommandsClient;
 import com.dawnline.ops.adapter.out.core.InternalTokenPropagation;
 import com.dawnline.ops.adapter.out.core.dispatch.api.PlanControllerApi;
+import com.dawnline.ops.adapter.out.core.dispatch.api.ResourceControllerApi;
 import com.dawnline.ops.adapter.out.core.dispatch.api.RouteControllerApi;
 import com.dawnline.ops.adapter.out.core.fulfillment.api.WaveControllerApi;
 import com.dawnline.ops.adapter.out.core.order.api.OrderControllerApi;
@@ -25,6 +26,7 @@ import org.springframework.web.service.registry.ImportHttpServices;
  */
 @Configuration(proxyBeanMethods = false)
 @ImportHttpServices(group = "dispatch", types = {PlanControllerApi.class, RouteControllerApi.class,
+        ResourceControllerApi.class,
         com.dawnline.ops.adapter.out.core.dispatch.api.OutboxAdminControllerApi.class})
 @ImportHttpServices(group = "order", types = {OrderControllerApi.class,
         com.dawnline.ops.adapter.out.core.order.api.OutboxAdminControllerApi.class})
@@ -53,13 +55,13 @@ public class CoreClientsConfig {
      * @return 코어 위임과 조회 — 한 어댑터가 둘을 구현한다
      */
     @Bean
-    public CoreCommandsClient coreCommands(PlanControllerApi plans, RouteControllerApi routes, OrderControllerApi orders,
-            WaveControllerApi waves,
+    public CoreCommandsClient coreCommands(PlanControllerApi plans, RouteControllerApi routes,
+            ResourceControllerApi resources, OrderControllerApi orders, WaveControllerApi waves,
             com.dawnline.ops.adapter.out.core.order.api.OutboxAdminControllerApi orderOutbox,
             com.dawnline.ops.adapter.out.core.fulfillment.api.OutboxAdminControllerApi fulfillmentOutbox,
             com.dawnline.ops.adapter.out.core.dispatch.api.OutboxAdminControllerApi dispatchOutbox,
             com.dawnline.ops.adapter.out.core.tracking.api.OutboxAdminControllerApi trackingOutbox) {
-        return CoreCommandsClient.of(plans, routes, orders, waves, orderOutbox, fulfillmentOutbox, dispatchOutbox,
+        return CoreCommandsClient.of(plans, routes, resources, orders, waves, orderOutbox, fulfillmentOutbox, dispatchOutbox,
                 trackingOutbox);
     }
 }

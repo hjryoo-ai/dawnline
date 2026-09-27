@@ -26,4 +26,20 @@ public interface CoreQueries {
      * @return {@link CoreReply.Applied}({@link CoreReply.RouteDetail}) 또는 거절(없는 라우트는 코어의 404)·연결 실패·모름
      */
     CoreReply route(UUID routeId);
+
+    /**
+     * dispatch 의 함대 판정 — 성수기 증차의 대수를 여기서 읽는다(ADR-067 결정 2).
+     *
+     * @param waveId 웨이브
+     * @return {@link CoreReply.Applied}({@link CoreReply.FleetFeasibility}) 또는 거절(404 · 409)·연결 실패·모름
+     */
+    CoreReply fleetFeasibility(UUID waveId);
+
+    /**
+     * dispatch 의 캠프 차량 — 증차한 차량(`peak-sim`)이 남았는지 보는 목록이다(ADR-067 결정 6).
+     *
+     * @param campId 캠프
+     * @return {@link CoreReply.Applied}({@link CoreReply.VehicleList}) 또는 거절·연결 실패·모름
+     */
+    CoreReply vehicles(UUID campId);
 }

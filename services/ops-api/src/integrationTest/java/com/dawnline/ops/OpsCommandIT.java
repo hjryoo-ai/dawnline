@@ -312,6 +312,62 @@ class OpsCommandIT extends OpsIntegrationTestBase {
     }
 
     @Test
+    void 차량_등록은_dispatch_로_위임되고_감사_행은_캠프를_가리키는_ADD_VEHICLE_이다() throws Exception {
+        // 성수기 증차(ADR-067 결정 1) — 차량 id 는 코어가 만들고 감사 행은 위임 전에 쓴다. 대상은 캠프다.
+        HttpResponse<String> response = post("/api/v1/vehicles", token("OPS_OPERATOR", "kim"), """
+                {"campId":"%s","code":"PS-0001","type":"VAN","maxWeightG":400000,"maxVolumeCm3":1200000,
+                 "cold":false,"allowsHazmat":false,"fixedCostKrw":45000,"costPerKmKrw":600,"costPerMinKrw":250,
+                 "shiftStart":"23:00:00","shiftEnd":"08:00:00","source":"peak-sim"}
+                """.formatted(WAVE));
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).contains("\"id\":\"" + TARGET + "\"");
+        Map<String, Object> row = rowOf(response);
+        assertThat(row).containsEntry("action", "ADD_VEHICLE").containsEntry("target_type", "CAMP")
+                .containsEntry("target_id", WAVE).containsEntry("result", "SUCCEEDED");
+        assertThat((String) row.get("request")).contains("\"source\": \"peak-sim\"", "\"code\": \"PS-0001\"");
+        assertThat(RECEIVED).singleElement().satisfies(request -> {
+            assertThat(request.get("path")).isEqualTo("/api/v1/vehicles");
+            assertThat(request.get("resultAtReceipt")).as("감사 행이 위임 전에 있다").isEqualTo("PENDING");
+            assertThat(request.get("body")).contains("\"source\":\"peak-sim\"");
+        });
+    }
+
+    @Test
+    void 차량_등록의_필수_칸이_없으면_코어에_가기_전에_400_이고_감사_행이_없다() throws Exception {
+        assertThat(post("/api/v1/vehicles", token("OPS_OPERATOR", "kim"), "{\"code\":\"PS-0001\"}").statusCode())
+                .isEqualTo(400);
+        assertThat(ownRows()).isEmpty();
+        assertThat(RECEIVED).isEmpty();
+    }
+
+    @Test
+    void 차량_비활성화는_감사_행이_차량을_가리키는_DEACTIVATE_VEHICLE_이다() throws Exception {
+        HttpResponse<String> response = post("/api/v1/vehicles/" + TARGET + "/deactivate",
+                token("OPS_OPERATOR", "kim"), "");
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).contains("\"active\":false", "\"source\":\"peak-sim\"");
+        assertThat(rowOf(response)).containsEntry("action", "DEACTIVATE_VEHICLE").containsEntry("target_type", "VEHICLE")
+                .containsEntry("target_id", TARGET).containsEntry("result", "SUCCEEDED");
+    }
+
+    @Test
+    void 뷰어는_차량_목록을_읽고_감사_행이_없으며_등록과_비활성화는_403_이다() throws Exception {
+        String viewer = token("OPS_VIEWER", "viewer");
+
+        HttpResponse<String> list = get("/api/v1/vehicles?campId=" + WAVE, viewer);
+        assertThat(list.statusCode()).as(list.body()).isEqualTo(200);
+        assertThat(list.body()).isEqualTo("{\"vehicles\":[]}");
+        assertThat(list.headers().firstValue(MdcKeys.AUDIT_ID_HEADER)).as("조회는 감사하지 않는다").isEmpty();
+
+        assertThat(post("/api/v1/vehicles", viewer, "{}").statusCode()).isEqualTo(403);
+        assertThat(post("/api/v1/vehicles/" + TARGET + "/deactivate", viewer, "").statusCode()).isEqualTo(403);
+        assertThat(ownRows()).isEmpty();
+        assertThat(RECEIVED).as("403 은 코어에 가지 않는다").hasSize(1);
+    }
+
+    @Test
     void 모르는_service_는_404_이고_감사_행도_코어_호출도_없다() throws Exception {
         String operator = token("OPS_OPERATOR", "kim");
 
@@ -418,6 +474,18 @@ class OpsCommandIT extends OpsIntegrationTestBase {
                 } else if (path.equals("/api/v1/routes/" + TARGET)) {
                     status = 404;
                     body = NOT_FOUND;
+                } else if (path.equals("/api/v1/vehicles") && "POST".equals(exchange.getRequestMethod())) {
+                    status = 201;
+                    body = "{\"id\":\"" + TARGET + "\"}";
+                } else if (path.equals("/api/v1/vehicles/" + TARGET + "/deactivate")) {
+                    status = 200;
+                    body = "{\"id\":\"" + TARGET + "\",\"campId\":\"" + WAVE + "\",\"code\":\"PS-0001\",\"type\":\"VAN\","
+                            + "\"maxWeightG\":400000,\"maxVolumeCm3\":1200000,\"cold\":false,\"allowsHazmat\":false,"
+                            + "\"fixedCostKrw\":45000,\"costPerKmKrw\":600,\"costPerMinKrw\":250,"
+                            + "\"shiftStart\":\"23:00:00\",\"shiftEnd\":\"08:00:00\",\"active\":false,\"source\":\"peak-sim\"}";
+                } else if (path.equals("/api/v1/vehicles") && "GET".equals(exchange.getRequestMethod())) {
+                    status = 200;
+                    body = "[]";
                 } else if (path.endsWith("/run")) {
                     status = 200;
                     body = "{\"waveId\":\"" + WAVE + "\",\"outcome\":\"PLANNED\"}";

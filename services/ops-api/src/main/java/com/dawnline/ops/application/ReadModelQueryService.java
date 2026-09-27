@@ -108,6 +108,26 @@ public class ReadModelQueryService implements QueryReadModelUseCase {
         }
     }
 
+    @Override
+    public CoreReply fleetFeasibility(UUID waveId) {
+        return delegated("함대 판정", waveId, () -> core.fleetFeasibility(waveId));
+    }
+
+    @Override
+    public CoreReply vehicles(UUID campId) {
+        return delegated("차량 목록", campId, () -> core.vehicles(campId));
+    }
+
+    /** {@link #route} 와 같은 규칙 — 포트가 예외를 내면 「모름」으로 접는다. */
+    private static CoreReply delegated(String what, UUID id, java.util.function.Supplier<CoreReply> call) {
+        try {
+            return call.get();
+        } catch (RuntimeException e) {
+            log.error("{} 조회 어댑터가 예외를 냈다 id={}", what, id, e);
+            return new CoreReply.Unknown(false, null, e.toString());
+        }
+    }
+
     /** 게이지의 {@code NaN} 은 JSON 에 없다 — 모름은 {@code null} 이다. 0 은 「전부 늦었다」는 주장이다. */
     private static @Nullable Double known(double ratio) {
         return Double.isNaN(ratio) ? null : ratio;

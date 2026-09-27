@@ -13,6 +13,8 @@ public enum WaveColumn {
     DEPOT_LNG(ColumnFamily.KEY),
     /** {@code wave.closed} 의 캠프 코드 — 계약에서 선택이라 그 전의 이벤트는 싣지 않는다(V5). */
     CAMP_CODE(ColumnFamily.KEY),
+    /** {@code wave.closed} 의 마감 시각 — 사실이고 파생하지 않는다(V9, ADR-067 결정 7). */
+    CLOSED_AT(ColumnFamily.KEY),
     STATUS(ColumnFamily.AXIS),
     PLAN_ID(ColumnFamily.PLAN),
     PLAN_DURATION_MS(ColumnFamily.PLAN),

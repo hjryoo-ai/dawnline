@@ -188,14 +188,19 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
         UUID waveId = UUID.randomUUID();
         Instant cutoff = clock.instant();
         transactions.executeWithoutResult(status -> projector.project(
-                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-SEO-N")));
+                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-SEO-N", cutoff.plusSeconds(90))));
         transactions.executeWithoutResult(status -> projector.project(
-                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 35.1, 129.0, "CAMP-SEO-N")));
+                new Fact.WaveClosed(waveId, CAMP, "DAWN", cutoff, 35.1, 129.0, "CAMP-SEO-N", cutoff.plusSeconds(300))));
 
         mockMvc.perform(viewer(get("/api/v1/waves/{waveId}/routes", waveId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.depot.lat").value(37.5))
                 .andExpect(jsonPath("$.depot.lng").value(127.0));
+        // 마감 시각도 같은 계열이다(V9, ADR-067 결정 7) — 시뮬레이터의 시간 예산이 이것과 비교한다
+        mockMvc.perform(viewer(get("/api/v1/camps/{campId}/waves", CAMP)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.waves[?(@.waveId == '" + waveId + "')].closedAt")
+                        .value(cutoff.plusSeconds(90).toString()));
     }
 
     @Test
@@ -205,7 +210,7 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
         UUID waveId = UUID.randomUUID();
         Instant cutoff = clock.instant();
         transactions.executeWithoutResult(status -> projector.project(
-                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, null)));
+                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, null, cutoff)));
 
         mockMvc.perform(viewer(get("/api/v1/camps")))
                 .andExpect(status().isOk())
@@ -213,9 +218,9 @@ class ReadSurfaceIT extends OpsIntegrationTestBase {
                         .as("옛 이벤트만 있으면 코드는 있고 null — 지어내지 않는다").isNull());
 
         transactions.executeWithoutResult(status -> projector.project(
-                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-SEO-N")));
+                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-SEO-N", cutoff)));
         transactions.executeWithoutResult(status -> projector.project(
-                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-XXX")));
+                new Fact.WaveClosed(waveId, OTHER_CAMP, "DAWN", cutoff, 37.5, 127.0, "CAMP-XXX", cutoff)));
 
         mockMvc.perform(viewer(get("/api/v1/camps")))
                 .andExpect(status().isOk())

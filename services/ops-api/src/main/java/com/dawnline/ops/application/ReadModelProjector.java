@@ -170,7 +170,8 @@ public class ReadModelProjector implements ProjectFactUseCase {
         Patch<WaveColumn> patch = Patch.of(WaveColumn.class)
                 // 키 계열 — 웨이브의 불변 속성이라 먼저 온 것이 남는다(V3).
                 .setIfAbsent(WaveColumn.DEPOT_LAT, f.depotLat())
-                .setIfAbsent(WaveColumn.DEPOT_LNG, f.depotLng());
+                .setIfAbsent(WaveColumn.DEPOT_LNG, f.depotLng())
+                .setIfAbsent(WaveColumn.CLOSED_AT, f.closedAt());
         if (f.campCode() != null) {
             // 계약에서 선택(V5) — 싣지 않은 옛 이벤트는 칸을 비워 둔다. 지어내지 않는다.
             patch.setIfAbsent(WaveColumn.CAMP_CODE, f.campCode());

@@ -14,6 +14,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import java.time.LocalTime;
 import java.util.Objects;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -165,6 +166,60 @@ public class OpsCommandController {
         return run(operator, new OpsCommand.CloseWave(waveId, Objects.requireNonNull(body.reason())), request);
     }
 
+    /**
+     * 차량 등록 — dispatch 로 위임 (성수기 증차, ADR-067 결정 1). 감사 대상은 캠프다 — 차량 id 는 코어가 만든다.
+     *
+     * @return 새 차량 id, 또는 {@link CommandResponses} 의 표
+     */
+    @PostMapping("/vehicles")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "새 차량 id",
+                    headers = @Header(name = MdcKeys.AUDIT_ID_HEADER, description = "감사 행 id — 모든 결과에 온다"),
+                    content = @Content(schema = @Schema(implementation = CoreReply.VehicleAdded.class))),
+            @ApiResponse(responseCode = "400", description = "필수 칸이 없다(감사 행 없음), 또는 코어의 거절 그대로(용량 · 비용 · 길이 · `source`)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409", description = "코어의 거절 그대로 — `vehicle-code-taken`(같은 코드의 차량이 있다 — `vehicleId`)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "502", description = "`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의 5xx — 감사 `UNKNOWN`)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "503", description = "감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "504", description = "`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 같은 본문으로 다시 누르면 409 `vehicle-code-taken` 이 있는 차량을 말한다(RB-07)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
+    public ResponseEntity<?> addVehicle(@Valid @RequestBody VehicleBody body,
+            @AuthenticationPrincipal Jwt operator, HttpServletRequest request) {
+        return run(operator, new OpsCommand.AddVehicle(Objects.requireNonNull(body.campId()),
+                Objects.requireNonNull(body.code()), Objects.requireNonNull(body.type()), body.maxWeightG(),
+                body.maxVolumeCm3(), body.cold(), body.allowsHazmat(), body.fixedCostKrw(), body.costPerKmKrw(),
+                body.costPerMinKrw(), Objects.requireNonNull(body.shiftStart()), Objects.requireNonNull(body.shiftEnd()),
+                body.source()), request);
+    }
+
+    /**
+     * 차량 비활성화 — dispatch 로 위임 (ADR-067 결정 5).
+     *
+     * @return 비활성화한 뒤의 차량, 또는 {@link CommandResponses} 의 표
+     */
+    @PostMapping("/vehicles/{vehicleId}/deactivate")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "비활성화한 뒤의 차량 — 이미 비활성이면 그대로",
+                    headers = @Header(name = MdcKeys.AUDIT_ID_HEADER, description = "감사 행 id — 모든 결과에 온다"),
+                    content = @Content(schema = @Schema(implementation = CoreReply.Vehicle.class))),
+            @ApiResponse(responseCode = "404", description = "코어의 거절 그대로 — 없는 차량",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "409", description = "코어의 거절 그대로 — `vehicle-in-service`(끝나지 않은 stop 이 있다 — `unfinishedStops`)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "502", description = "`core-unreachable`(닿지 않았다 — 감사 `FAILED`) 또는 `core-error`(코어의 5xx — 감사 `UNKNOWN`)",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "503", description = "감사 행을 쓰지 못해 위임하지 않았다 — 기록 없는 커맨드는 없다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
+            @ApiResponse(responseCode = "504", description = "`core-timeout` — 적용됐는지 모른다(감사 `UNKNOWN`). 다시 누르기가 먼저다 — 비활성화는 멱등이다",
+                    content = @Content(schema = @Schema(implementation = ProblemDetail.class)))})
+    public ResponseEntity<?> deactivateVehicle(@PathVariable UUID vehicleId,
+            @AuthenticationPrincipal Jwt operator, HttpServletRequest request) {
+        return run(operator, new OpsCommand.DeactivateVehicle(vehicleId), request);
+    }
+
     private ResponseEntity<?> run(Jwt operator, OpsCommand command, HttpServletRequest request) {
         return CommandResponses.of(commands.run(operator.getSubject(), command), request.getRequestURI());
     }
@@ -173,6 +228,30 @@ public class OpsCommandController {
      * @param targetRouteId 받을 라우트
      */
     public record ReassignBody(@NotNull @Nullable UUID targetRouteId) {
+    }
+
+    /**
+     * 차량 등록 본문 — dispatch 의 {@code NewVehicle} 과 같은 칸. 여기서는 커맨드를 만들 수 없는 것(필수 칸의 부재)만 막고
+     * 나머지(용량 · 비용 · 길이 · {@code source})는 코어가 거절한다 — 두 곳의 규칙이 갈라지지 않게.
+     *
+     * @param campId        캠프
+     * @param code          이름
+     * @param type          차종
+     * @param maxWeightG    최대 중량(g)
+     * @param maxVolumeCm3  최대 부피(㎤)
+     * @param cold          냉장
+     * @param allowsHazmat  위험물 허용
+     * @param fixedCostKrw  고정비
+     * @param costPerKmKrw  km 당 비용
+     * @param costPerMinKrw 분당 비용
+     * @param shiftStart    근무 시작
+     * @param shiftEnd      근무 종료
+     * @param source        출처 — {@code operator}(기본) · {@code peak-sim}
+     */
+    public record VehicleBody(@NotNull @Nullable UUID campId, @NotBlank @Nullable String code,
+            @NotBlank @Nullable String type, int maxWeightG, int maxVolumeCm3, boolean cold, boolean allowsHazmat,
+            int fixedCostKrw, int costPerKmKrw, int costPerMinKrw, @NotNull @Nullable LocalTime shiftStart,
+            @NotNull @Nullable LocalTime shiftEnd, @Nullable String source) {
     }
 
     /**

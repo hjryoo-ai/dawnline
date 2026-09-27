@@ -79,11 +79,12 @@ public interface ReadModelViews {
      * @param totalCostKrw    총비용 (불변규칙 9)
      * @param unassignedCount 미배정
      * @param routeCount      라우트 수 — 기대치(ADR-024)
+     * @param closedAt        실제 마감 시각 — {@code wave.closed} 의 {@code closedAt}(V9). 아직 닫히지 않았으면 {@code null}
      */
     record WaveSummary(UUID waveId, @Nullable String serviceTier, @Nullable Instant cutoffAt,
             @Nullable WaveStatus status, @Nullable Integer orderCount, @Nullable UUID planId,
             @Nullable Integer planDurationMs, @Nullable Long totalCostKrw, @Nullable Integer unassignedCount,
-            @Nullable Integer routeCount) {
+            @Nullable Integer routeCount, @Nullable Instant closedAt) {
         public WaveSummary {
             Objects.requireNonNull(waveId, "waveId");
         }

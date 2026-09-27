@@ -84,9 +84,10 @@ public sealed interface Fact {
      * @param depotLat    창고 위도 — 계약 필수, 지도의 원점
      * @param depotLng    창고 경도
      * @param campCode    캠프 코드 — 계약에서 선택(2026-09-24 추가). 그 전의 이벤트에는 없다
+     * @param closedAt    실제 마감 시각 — 계약 필수. 시뮬레이터의 시간 예산이 이것과 비교한다(ADR-067 결정 7)
      */
     record WaveClosed(UUID waveId, UUID campId, String serviceTier, Instant cutoffAt, double depotLat,
-            double depotLng, @Nullable String campCode) implements Fact {
+            double depotLng, @Nullable String campCode, Instant closedAt) implements Fact {
     }
 
     /**

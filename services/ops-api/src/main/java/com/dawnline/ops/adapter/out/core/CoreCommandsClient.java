@@ -1,12 +1,18 @@
 package com.dawnline.ops.adapter.out.core;
 
 import com.dawnline.ops.adapter.out.core.dispatch.api.PlanControllerApi;
+import com.dawnline.ops.adapter.out.core.dispatch.api.ResourceControllerApi;
 import com.dawnline.ops.adapter.out.core.dispatch.api.RouteControllerApi;
+import com.dawnline.ops.adapter.out.core.dispatch.model.CreatedId;
+import com.dawnline.ops.adapter.out.core.dispatch.model.FleetFeasibilityView;
+import com.dawnline.ops.adapter.out.core.dispatch.model.FleetLineView;
+import com.dawnline.ops.adapter.out.core.dispatch.model.NewVehicle;
 import com.dawnline.ops.adapter.out.core.dispatch.model.ReassignRequest;
 import com.dawnline.ops.adapter.out.core.dispatch.model.Result;
 import com.dawnline.ops.adapter.out.core.dispatch.model.RouteView;
 import com.dawnline.ops.adapter.out.core.dispatch.model.RunPlanResponse;
 import com.dawnline.ops.adapter.out.core.dispatch.model.StopView;
+import com.dawnline.ops.adapter.out.core.dispatch.model.VehicleView;
 import com.dawnline.ops.adapter.out.core.fulfillment.api.WaveControllerApi;
 import com.dawnline.ops.adapter.out.core.fulfillment.model.CloseWaveRequest;
 import com.dawnline.ops.adapter.out.core.fulfillment.model.WaveView;
@@ -61,21 +67,24 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
 
     private final PlanControllerApi plans;
     private final RouteControllerApi routes;
+    private final ResourceControllerApi resources;
     private final OrderControllerApi orders;
     private final WaveControllerApi waves;
     private final Map<CoreService, OutboxAdminClients.OutboxAdmin> outbox;
 
     /**
-     * @param plans  dispatch 계획
-     * @param routes dispatch 라우트
-     * @param orders order 주문
-     * @param waves  fulfillment 웨이브
-     * @param outbox 코어 넷의 outbox 관리 — {@link CoreService} 넷이 전부 있어야 한다
+     * @param plans     dispatch 계획
+     * @param routes    dispatch 라우트
+     * @param resources dispatch 자원 — 차량 등록 · 비활성화 · 함대 판정(ADR-067)
+     * @param orders    order 주문
+     * @param waves     fulfillment 웨이브
+     * @param outbox    코어 넷의 outbox 관리 — {@link CoreService} 넷이 전부 있어야 한다
      */
-    CoreCommandsClient(PlanControllerApi plans, RouteControllerApi routes, OrderControllerApi orders,
-            WaveControllerApi waves, Map<CoreService, OutboxAdminClients.OutboxAdmin> outbox) {
+    CoreCommandsClient(PlanControllerApi plans, RouteControllerApi routes, ResourceControllerApi resources,
+            OrderControllerApi orders, WaveControllerApi waves, Map<CoreService, OutboxAdminClients.OutboxAdmin> outbox) {
         this.plans = Objects.requireNonNull(plans, "plans");
         this.routes = Objects.requireNonNull(routes, "routes");
+        this.resources = Objects.requireNonNull(resources, "resources");
         this.orders = Objects.requireNonNull(orders, "orders");
         this.waves = Objects.requireNonNull(waves, "waves");
         this.outbox = new EnumMap<>(outbox);
@@ -89,13 +98,13 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
      *
      * @return 위임과 조회
      */
-    public static CoreCommandsClient of(PlanControllerApi plans, RouteControllerApi routes, OrderControllerApi orders,
-            WaveControllerApi waves,
+    public static CoreCommandsClient of(PlanControllerApi plans, RouteControllerApi routes,
+            ResourceControllerApi resources, OrderControllerApi orders, WaveControllerApi waves,
             com.dawnline.ops.adapter.out.core.order.api.OutboxAdminControllerApi orderOutbox,
             com.dawnline.ops.adapter.out.core.fulfillment.api.OutboxAdminControllerApi fulfillmentOutbox,
             com.dawnline.ops.adapter.out.core.dispatch.api.OutboxAdminControllerApi dispatchOutbox,
             com.dawnline.ops.adapter.out.core.tracking.api.OutboxAdminControllerApi trackingOutbox) {
-        return new CoreCommandsClient(plans, routes, orders, waves, Map.of(
+        return new CoreCommandsClient(plans, routes, resources, orders, waves, Map.of(
                 CoreService.ORDER, OutboxAdminClients.order(orderOutbox),
                 CoreService.FULFILLMENT, OutboxAdminClients.fulfillment(fulfillmentOutbox),
                 CoreService.DISPATCH, OutboxAdminClients.dispatch(dispatchOutbox),
@@ -115,6 +124,9 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
                     waves.close(close.waveId(), new CloseWaveRequest(close.reason()))));
             case OpsCommand.RequeueOutbox requeue -> call(auditId, () -> outbox.get(requeue.service())
                     .requeue(requeue.id()));
+            case OpsCommand.AddVehicle add -> call(auditId, () -> added(resources.createVehicle(newVehicle(add))));
+            case OpsCommand.DeactivateVehicle deactivate -> call(auditId, () -> vehicle(
+                    resources.deactivateVehicle(deactivate.vehicleId()).getBody()));
         };
     }
 
@@ -127,6 +139,17 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
     @Override
     public CoreReply route(UUID routeId) {
         return answer(() -> routeDetail(routes.get(routeId)));
+    }
+
+    @Override
+    public CoreReply fleetFeasibility(UUID waveId) {
+        return answer(() -> fleet(resources.fleetFeasibility(waveId)));
+    }
+
+    @Override
+    public CoreReply vehicles(UUID campId) {
+        return answer(() -> new CoreReply.VehicleList(required(resources.vehicles(campId).getBody()).stream()
+                .map(CoreCommandsClient::vehicle).toList()));
     }
 
     private static CoreReply call(UUID auditId, Supplier<CoreReply.Applied.Body> call) {
@@ -198,6 +221,44 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
         return new CoreReply.RouteStop(required(stop.getSeq()), required(stop.getLat()), required(stop.getLng()),
                 required(stop.getPlannedArrival()).toInstant(), required(stop.getStatus()),
                 required(stop.getOrderIds()));
+    }
+
+    private static NewVehicle newVehicle(OpsCommand.AddVehicle add) {
+        return new NewVehicle(add.campId(), add.code(), add.type(), add.shiftStart(), add.shiftEnd())
+                .maxWeightG(add.maxWeightG()).maxVolumeCm3(add.maxVolumeCm3()).cold(add.cold())
+                .allowsHazmat(add.allowsHazmat()).fixedCostKrw(add.fixedCostKrw()).costPerKmKrw(add.costPerKmKrw())
+                .costPerMinKrw(add.costPerMinKrw()).source(add.source());
+    }
+
+    private static CoreReply.VehicleAdded added(ResponseEntity<CreatedId> response) {
+        return new CoreReply.VehicleAdded(required(required(response.getBody()).getId()));
+    }
+
+    private static CoreReply.Vehicle vehicle(@Nullable VehicleView body) {
+        VehicleView view = required(body);
+        return new CoreReply.Vehicle(required(view.getId()), required(view.getCampId()), required(view.getCode()),
+                required(view.getType()), required(view.getMaxWeightG()), required(view.getMaxVolumeCm3()),
+                required(view.getCold()), required(view.getAllowsHazmat()), required(view.getFixedCostKrw()),
+                required(view.getCostPerKmKrw()), required(view.getCostPerMinKrw()), required(view.getShiftStart()),
+                required(view.getShiftEnd()), required(view.getActive()), required(view.getSource()));
+    }
+
+    private static CoreReply.FleetFeasibility fleet(ResponseEntity<FleetFeasibilityView> response) {
+        FleetFeasibilityView body = required(response.getBody());
+        return new CoreReply.FleetFeasibility(required(body.getWaveId()), required(body.getCampId()),
+                required(body.getAssessedAt()).toInstant(), required(body.getCandidates()), required(body.getStops()),
+                required(body.getFleet()), body.getMaxStopsPerRoute(), required(body.getHeadroomPercent()),
+                required(body.getFeasible()),
+                required(body.getCombinations()).stream().map(CoreCommandsClient::fleetLine).toList());
+    }
+
+    private static CoreReply.FleetLine fleetLine(FleetLineView line) {
+        return new CoreReply.FleetLine(required(line.getCold()), required(line.getHazmat()), required(line.getLarge()),
+                required(line.getLabel()), required(line.getStatus()).getValue(), required(line.getDemandStops()),
+                required(line.getDemandWeightG()), required(line.getDemandVolumeCm3()), required(line.getVehicles()),
+                required(line.getCapacityStops()), required(line.getCapacityWeightG()),
+                required(line.getCapacityVolumeCm3()), line.getShortfall(),
+                line.getTemplate() == null ? null : vehicle(line.getTemplate()));
     }
 
     /** 2xx 인데 칸이 비었다 — 적용은 됐지만 무엇이 됐는지 모른다. 호출자가 {@code UNKNOWN} 으로 접는다. */

@@ -353,6 +353,109 @@ class CoreCommandsClientTest {
         });
     }
 
+    // --- 성수기 증차 (ADR-067): 등록 · 비활성화 · 함대 판정 · 차량 목록 --------------------------------------------
+
+    private static final UUID CAMP = UUID.fromString("0199a000-0000-7000-8000-0000000000d1");
+    private static final UUID VEHICLE = UUID.fromString("0199a000-0000-7000-8000-0000000000d2");
+
+    private static String vehicleJson(boolean active, String source) {
+        return "{\"id\":\"" + VEHICLE + "\",\"campId\":\"" + CAMP + "\",\"code\":\"PS-0001\",\"type\":\"VAN\","
+                + "\"maxWeightG\":400000,\"maxVolumeCm3\":1200000,\"cold\":false,\"allowsHazmat\":false,"
+                + "\"fixedCostKrw\":45000,\"costPerKmKrw\":600,\"costPerMinKrw\":250,\"shiftStart\":\"23:00:00\","
+                + "\"shiftEnd\":\"08:00:00\",\"active\":" + active + ",\"source\":\"" + source + "\"}";
+    }
+
+    private static CoreReply.Vehicle vehicle(boolean active, String source) {
+        return new CoreReply.Vehicle(VEHICLE, CAMP, "PS-0001", "VAN", 400_000, 1_200_000, false, false, 45_000, 600,
+                250, java.time.LocalTime.of(23, 0), java.time.LocalTime.of(8, 0), active, source);
+    }
+
+    private static OpsCommand.AddVehicle addVehicle() {
+        return new OpsCommand.AddVehicle(CAMP, "PS-0001", "VAN", 400_000, 1_200_000, false, false, 45_000, 600, 250,
+                java.time.LocalTime.of(23, 0), java.time.LocalTime.of(8, 0), "peak-sim");
+    }
+
+    @Test
+    void 차량_등록은_계약의_본문으로_나가고_새_id_를_옮긴다() {
+        routes.put("/api/v1/vehicles", e -> new Reply(201, "{\"id\":\"" + VEHICLE + "\"}", 0));
+
+        CoreReply reply = delegate(coreUrl(), addVehicle());
+
+        assertThat(reply).isEqualTo(new CoreReply.Applied(new CoreReply.VehicleAdded(VEHICLE)));
+        assertThat(received).singleElement().satisfies(request -> {
+            assertThat(request.get("method")).isEqualTo("POST");
+            assertThat(request.get("body")).contains("\"source\":\"peak-sim\"", "\"shiftStart\":\"23:00:00\"",
+                    "\"campId\":\"" + CAMP + "\"");
+            assertThat(request.get("auditId")).isEqualTo(AUDIT.toString());
+            assertThat(request.get("internalToken")).isEqualTo(INTERNAL_TOKEN);
+        });
+    }
+
+    @Test
+    void 차량_등록의_거절_모름_닿지_않음() throws IOException {
+        String taken = "{\"code\":\"vehicle-code-taken\",\"status\":409,\"vehicleId\":\"" + VEHICLE + "\"}";
+
+        assertFourBranches(addVehicle(), "/api/v1/vehicles", taken);
+    }
+
+    @Test
+    void 비활성화는_비활성화한_뒤의_차량을_옮긴다() {
+        routes.put("/api/v1/vehicles/" + VEHICLE + "/deactivate", e -> new Reply(200, vehicleJson(false, "peak-sim"), 0));
+
+        CoreReply reply = delegate(coreUrl(), new OpsCommand.DeactivateVehicle(VEHICLE));
+
+        assertThat(reply).isEqualTo(new CoreReply.Applied(vehicle(false, "peak-sim")));
+        assertThat(received.getFirst().get("auditId")).isEqualTo(AUDIT.toString());
+    }
+
+    @Test
+    void 비활성화의_거절_모름_닿지_않음() throws IOException {
+        String inService = "{\"code\":\"vehicle-in-service\",\"status\":409,\"unfinishedStops\":3}";
+
+        assertFourBranches(new OpsCommand.DeactivateVehicle(VEHICLE), "/api/v1/vehicles/" + VEHICLE + "/deactivate",
+                inService);
+    }
+
+    @Test
+    void 함대_판정은_감사_id_없이_옮기고_템플릿이_없는_줄은_null_이다() {
+        routes.put("/dispatch/api/v1/waves/" + WAVE + "/fleet-feasibility", e -> new Reply(200, "{\"waveId\":\""
+                + WAVE + "\",\"campId\":\"" + CAMP + "\",\"assessedAt\":\"2026-09-27T14:58:00Z\",\"candidates\":11,"
+                + "\"stops\":9,\"fleet\":8,\"maxStopsPerRoute\":120,\"headroomPercent\":80,\"feasible\":false,"
+                + "\"combinations\":[{\"cold\":false,\"hazmat\":false,\"large\":false,\"label\":\"일반\","
+                + "\"status\":\"SHORTFALL\",\"demandStops\":9,\"demandWeightG\":1,\"demandVolumeCm3\":2,\"vehicles\":8,"
+                + "\"capacityStops\":960,\"capacityWeightG\":3,\"capacityVolumeCm3\":4,\"shortfall\":2,"
+                + "\"template\":" + vehicleJson(true, "seed") + "},"
+                + "{\"cold\":true,\"hazmat\":true,\"large\":true,\"label\":\"냉장∧위험물∧대형\",\"status\":\"NO_TEMPLATE\","
+                + "\"demandStops\":1,\"demandWeightG\":1,\"demandVolumeCm3\":1,\"vehicles\":0,\"capacityStops\":0,"
+                + "\"capacityWeightG\":0,\"capacityVolumeCm3\":0,\"shortfall\":null,\"template\":null}]}", 0));
+        CoreReply[] reply = new CoreReply[1];
+
+        prefixedRunner(coreUrl()).run(context -> reply[0] = context.getBean(CoreQueries.class).fleetFeasibility(WAVE));
+
+        assertThat(reply[0]).isEqualTo(new CoreReply.Applied(new CoreReply.FleetFeasibility(WAVE, CAMP,
+                java.time.Instant.parse("2026-09-27T14:58:00Z"), 11, 9, 8, 120, 80, false, List.of(
+                        new CoreReply.FleetLine(false, false, false, "일반", "SHORTFALL", 9, 1, 2, 8, 960, 3, 4, 2,
+                                vehicle(true, "seed")),
+                        new CoreReply.FleetLine(true, true, true, "냉장∧위험물∧대형", "NO_TEMPLATE", 1, 1, 1, 0, 0, 0, 0,
+                                null, null)))));
+        assertThat(received).singleElement().satisfies(request -> {
+            assertThat(request.get("method")).isEqualTo("GET");
+            assertThat(request.get("auditId")).as("조회는 감사 행이 없다").isEqualTo("null");
+        });
+    }
+
+    @Test
+    void 차량_목록은_이름_있는_칸에_담는다() {
+        routes.put("/dispatch/api/v1/vehicles", e -> new Reply(200, "[" + vehicleJson(true, "peak-sim") + "]", 0));
+        CoreReply[] reply = new CoreReply[1];
+
+        prefixedRunner(coreUrl()).run(context -> reply[0] = context.getBean(CoreQueries.class).vehicles(CAMP));
+
+        assertThat(reply[0]).isEqualTo(new CoreReply.Applied(new CoreReply.VehicleList(List.of(
+                vehicle(true, "peak-sim")))));
+        assertThat(received.getFirst().get("path")).isEqualTo("/dispatch/api/v1/vehicles?campId=" + CAMP);
+    }
+
     /** 거절(409 본문 그대로) · 5xx(모름) · 응답 전 타임아웃(모름) · 연결 안 됨(닿지 않음). */
     private void assertFourBranches(OpsCommand command, String path, String conflict) throws IOException {
         routes.put(path, e -> new Reply(409, conflict, 0));
