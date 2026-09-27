@@ -111,6 +111,9 @@ public interface RouteMutations {
      * <p>그 주문뿐인 stop 이면 행을 옮긴다({@link #relocateStop} 과 같다 — stop id · 상태가 그대로 간다). 합쳐진 stop 에서 떼면
      * 주문 연결만 목적지의 같은 지점 stop 으로 옮기고, 없으면 새로 만든다. 원래 행에는 주문이 남는다.
      *
+     * <p>붙을 stop 은 <strong>{@code PLANNED} 인 것만, 잠그고</strong> 고른다(ADR-068 후속 C). 기사가 이미 닿았거나 끝낸 지점에
+     * 붙으면 그 주문은 배송된 것으로 보이고 배송되지 않는다. 기다린 뒤 그 stop 이 끝났으면 새 stop 을 만든다.
+     *
      * @param fromStopId    떠나는 stop
      * @param orderId       주문
      * @param targetRouteId 도착 라우트

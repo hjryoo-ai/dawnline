@@ -36,6 +36,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 검증 없이 옮기면 그 라우트는 계획이 아니라 목록이 되고, {@code PlanValidator} 가 발행 직전에
  * 막으려던 것이 운영자 API 로 뒷문을 얻는다. 어기면 409 이고 트랜잭션이 통째로 되돌아간다.
  *
+ * <h2>받는 쪽도 잠근다</h2>
+ * 옮길 stop 만 잡으면 받는 쪽이 비어 있다 — 끝난 라우트가 주문을 받고, 같은 지점의 끝난 stop 에 주문이 붙고, 같은 라우트로의 동시
+ * 재배정이 교착했다(ADR-068 후속 C, {@code ReassignRaceIT}). 순서는 §6.8 쓰기와 같은 「stop → 라우트」다.
+ *
  * <h2>다시 풀지 않는다</h2>
  * §6.8 의 부분 재계획은 <em>알고리즘이</em> 다시 푸는 것이고 이것은 사람이 하나를 옮기는 것이다.
  * 남은 순서는 그대로 두고 시간만 재전파한다 — ADR-026 이 취소에 대해 정한 것과 같은 원칙이다.
@@ -93,6 +97,11 @@ public class ReassignStopService implements ReassignStopUseCase {
             throw DispatchErrorCode.stopNotPlanned(routeId, orderId, stop.status());
         }
         UUID stopId = stop.stopId();
+        // 받는 쪽도 잡고 다시 본다 — 재계획의 쓰기와 같은 문장, 같은 순서(ADR-068 후속 C): 옮길 stop → 받을 라우트의 끝나지 않은
+        // stop → 붙을 stop(moveOrder) → 라우트 행. 잡은 stop 은 커밋까지 끝나지 않고, 같은 라우트로 들어가는 쓰기들이 여기서 줄을 선다.
+        if (!routes.lockUnfinishedStop(targetRouteId)) {
+            throw DispatchErrorCode.routeFinished(targetRouteId);
+        }
 
         RoutePlan plan = plans.findById(from.planId()).orElseThrow(
                 () -> NotFoundException.of("RoutePlan", from.planId().toString()));
@@ -104,6 +113,8 @@ public class ReassignStopService implements ReassignStopUseCase {
                         Map.of("planId", plan.id().toString()))));
 
         routes.moveOrder(stopId, orderId, targetRouteId);
+        // 라우트 행은 id 순으로 — 두 revision 을 차례로 올리면 A→B 와 B→A 가 반대 순서로 잡는다. 아래 읽기는 기다린 뒤의 커밋을 본다.
+        routes.lockRevisions(List.of(routeId, targetRouteId));
 
         List<Stop> fromStops = routes.loadStops(routeId);
         List<Stop> toStops = routes.loadStops(targetRouteId);

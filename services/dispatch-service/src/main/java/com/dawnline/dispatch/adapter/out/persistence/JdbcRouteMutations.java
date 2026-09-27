@@ -186,12 +186,13 @@ public class JdbcRouteMutations implements RouteMutations {
 
         // 합쳐진 stop 에서 하나를 뗀다 — 원래 행에는 주문이 남는다. 목적지에 같은 지점의 stop 이
         // 있으면 거기 붙인다 — 없는데 새로 만들면 같은 건물을 두 번 방문하는 라우트가 된다.
-        // 취소된 stop 에는 붙이지 않는다 — 기사가 건너뛰는 지점에 살아 있는 주문을 얹으면 그
-        // 주문은 배송되지 않는다 (§6.10).
+        // PLANNED 인 stop 에만 붙인다: 취소된 stop 은 기사가 건너뛰고(§6.10), 닿았거나 끝난 stop 에 얹은 주문은 배송된 것으로
+        // 보이고 배송되지 않는다(ADR-068 후속 C). 잠그고 고른다 — 락을 기다린 사이 그 stop 이 끝났으면 READ COMMITTED 의
+        // 재검사가 조건 밖으로 보고 여기서는 새로 만든다.
         List<UUID> existing = entityManager.createNativeQuery("""
                 SELECT id FROM route_stops
-                 WHERE route_id = ? AND lat = ? AND lng = ? AND status <> 'CANCELLED'
-                 LIMIT 1
+                 WHERE route_id = ? AND lat = ? AND lng = ? AND status = 'PLANNED'
+                 LIMIT 1 FOR UPDATE
                 """).setParameter(1, targetRouteId).setParameter(2, lat).setParameter(3, lng)
                 .getResultList();
 
