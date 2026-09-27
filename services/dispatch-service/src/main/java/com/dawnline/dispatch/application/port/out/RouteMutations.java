@@ -63,9 +63,8 @@ public interface RouteMutations {
      *
      * <p>재계획의 후보 차량이다. 같은 계획 안이므로 캠프도 같고, 「여유 용량이 있는 진행 중
      * 라우트」와 「미출발 차량」의 구분은 <strong>상태 칼럼이 아니라 사실</strong>로 한다 —
-     * 닿은 stop 이 있으면 떠난 것이다({@link #lastSettledStop}). {@code routes.status} 는
-     * 저장 시점의 값이고 출발을 알리는 이벤트가 없다(§5.4 {@code DEPARTED_CAMP} 는 브로커로
-     * 나가지 않는다).
+     * 닿은 stop 이 있으면 떠난 것이다({@link #lastSettledStop}). 상태 칼럼({@code routes.status})은
+     * 쓰는 쪽이 없어 지웠다(ADR-073).
      *
      * <p>끝났다도 사실로 한다 — 끝나지 않은 stop 이 하나도 없으면 끝났다. 보존 · 차량 비활성화의 409 와 <strong>같은 한
      * 조각</strong>이다(ADR-068 후속 A). 끝난 라우트가 받은 stop 은 이미 복귀한 기사의 것이 된다.

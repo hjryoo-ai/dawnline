@@ -51,6 +51,7 @@
 
 | 표본 | 기대 | 결과 |
 |---|---|---|
-| `./gradlew build` — 계약 대조(OpenAPI 생성물 ↔ 커밋된 yaml) · ops-api 생성 클라이언트 컴파일 | 초록 | (구현 커밋에서 채운다) |
-| dispatch · ops-api 통합 테스트 | 초록 | (구현 커밋에서 채운다) |
-| ops-web `npm test`(타입 검사 · 컴포넌트) | 초록 — 픽스처에서 칸을 뺀다 | (구현 커밋에서 채운다) |
+| `./gradlew build` — 계약 대조(OpenAPI 생성물 ↔ 커밋된 yaml) · ops-api 생성 클라이언트 컴파일 | 초록 | ✅ — 두 yaml 은 `updateOpenApi` 로 다시 만들었다(dispatch `RouteView` −2줄, ops-api `RouteDetail` −3줄 · `required` 에서도 빠졌다) |
+| `DispatchApiTest` — 라우트 상세 | `$.status` 가 없다 | ✅ |
+| dispatch · ops-api 통합 테스트 | 초록 | ✅ — dispatch 는 픽스처 둘(`DispatchRetentionIT` · `RouteStopOrdersIndexIT`)이 `routes.status` 를 직접 넣고 있었다: 빼고 초록. ops-api 83 |
+| ops-web `npm test`(타입 검사 · 컴포넌트) | 초록 — 픽스처에서 칸을 뺀다 | ✅ 14 — 화면은 그 칸을 읽지 않았다 |
