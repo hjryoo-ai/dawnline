@@ -107,7 +107,7 @@ public class ReadModelController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "stop 순서·좌표·상태 — dispatch 에 조회를 위임한다(감사 없음)",
                     content = @Content(schema = @Schema(implementation = CoreReply.RouteDetail.class))),
-            @ApiResponse(responseCode = "404", description = "dispatch 에 없는 라우트 — 코어의 본문 그대로",
+            @ApiResponse(responseCode = "404", description = "코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `get`",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "502", description = "`core-unreachable` 또는 `core-error`",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
@@ -127,9 +127,9 @@ public class ReadModelController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "조합마다 수요 · 용량 · 부족 대수 · 템플릿 — dispatch 에 조회를 위임한다(감사 없음)",
                     content = @Content(schema = @Schema(implementation = CoreReply.FleetFeasibility.class))),
-            @ApiResponse(responseCode = "404", description = "그 웨이브에 계획 대상 후보가 없다 — 코어의 본문 그대로",
+            @ApiResponse(responseCode = "404", description = "코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `fleetFeasibility`",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
-            @ApiResponse(responseCode = "409", description = "`wave-already-planned` — 발행된 계획이 있다. 코어의 본문 그대로",
+            @ApiResponse(responseCode = "409", description = "코어의 거절 그대로 — 사유는 `dispatch-service.yaml` 의 `fleetFeasibility`",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "502", description = "`core-unreachable` 또는 `core-error`",
                     content = @Content(schema = @Schema(implementation = ProblemDetail.class))),

@@ -124,6 +124,14 @@ tasks.named<Test>("test") {
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
+// OpenApiContractIT 가 contracts/openapi 를 읽는다 — 커밋된 ops-api.yaml 과의 비교, 그리고 위임 응답의 가리킴이 코어
+// 문서에서 풀리는지(ADR-052 후속). 입력으로 선언하지 않으면 코어 문서만 바꾼 빌드에서 이 IT 가 건너뛰어진다.
+tasks.named<Test>("integrationTest") {
+    inputs.dir(rootProject.layout.projectDirectory.dir("contracts/openapi"))
+            .withPropertyName("openApiContracts")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 // -----------------------------------------------------------------------------
 // OpenAPI 문서 재생성 (DESIGN.md §5.5 · §11 — Phase 6 묶음 C).
 //

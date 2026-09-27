@@ -13,6 +13,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
@@ -220,6 +222,184 @@ class OpenApiContractIT extends OpsIntegrationTestBase implements AlertedCounter
         assertThat(typesOf(schemas.path("CloseBody").path("properties").path("reason"))).doesNotContain("null");
         assertThat(typesOf(schemas.path("ReassignBody").path("properties").path("targetRouteId")))
                 .doesNotContain("null");
+    }
+
+    /** 위임 응답의 가리킴 — 설명이 이것으로 <strong>끝난다</strong>(ADR-052 후속, DESIGN.md §5.5). */
+    private static final Pattern POINTER =
+            Pattern.compile("코어의 거절 그대로 — 사유는 `([a-z{}-]+\\.yaml)` 의 `([A-Za-z0-9_]+)`$");
+
+    /** 설명 안의 오류 코드 — 백틱 안의 kebab-case. */
+    private static final Pattern ERROR_CODE = Pattern.compile("`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`");
+
+    /** {@code {service}} 가 가리키는 코어 — 경로 변수의 값 집합(§5.5 「outbox 경로에만 {service} 한 칸」). */
+    private static final List<String> CORES = List.of("order", "fulfillment", "dispatch", "tracking");
+
+    @Test
+    void 위임_응답은_코어의_사유를_재진술하지_않고_코어_문서를_가리킨다() throws Exception {
+        // 재배정 409 의 설명이 「끝난 stop 등」을 약속했고 코어는 그것을 거절하지 않았다 — 재진술은 대조할 짝이 없어 갈라져도
+        // 조용했다(§13 축 17). 위임 오퍼레이션은 열거하지 않고 문서에서 뺀다: 코어에 닿지 못할 수 있는 것(502)이 위임이다.
+        JsonNode paths = JsonMapper.builder().build().readTree(generatedJson()).path("paths");
+        List<String> delegated = new ArrayList<>();
+        List<String> violations = new ArrayList<>();
+        for (Map.Entry<String, JsonNode> path : paths.properties()) {
+            for (Map.Entry<String, JsonNode> operation : path.getValue().properties()) {
+                JsonNode responses = operation.getValue().path("responses");
+                if (!responses.has("502")) {
+                    continue;
+                }
+                String name = operation.getKey().toUpperCase(java.util.Locale.ROOT) + " " + path.getKey();
+                delegated.add(name);
+                Set<String> targets = new java.util.TreeSet<>();
+                Set<String> pointed = new java.util.TreeSet<>();
+                for (Map.Entry<String, JsonNode> response : responses.properties()) {
+                    String status = response.getKey();
+                    if (!status.startsWith("4") || status.equals("401") || status.equals("403")) {
+                        continue;
+                    }
+                    String description = response.getValue().path("description").asString();
+                    Matcher pointer = POINTER.matcher(description);
+                    if (!pointer.find()) {
+                        if (description.contains("코어")) {
+                            violations.add(name + " " + status + " — 코어의 거절을 말하면서 코어 문서를 가리키지 않는다: " + description);
+                        }
+                        continue;
+                    }
+                    targets.add(pointer.group(1) + " " + pointer.group(2));
+                    pointed.add(status);
+                    List<Set<String>> core = coreResponses(pointer.group(1), pointer.group(2));
+                    if (core == null) {
+                        violations.add(name + " " + status + " — 가리킴이 풀리지 않는다: " + pointer.group(1) + " " + pointer.group(2));
+                    } else if (core.stream().anyMatch(codes -> !codes.contains(status))) {
+                        violations.add(name + " " + status + " — 가리킨 코어 오퍼레이션이 " + status + " 를 말하지 않는다");
+                    }
+                }
+                if (targets.size() > 1) {
+                    violations.add(name + " — 한 오퍼레이션이 코어 오퍼레이션 둘 이상을 가리킨다: " + targets);
+                }
+                // 빠진 것 — 코어가 말하는 404 · 409 는 운영자에게도 온다. 400 은 뺀다: ops-api 가 같은 입력을 먼저 검증해 코어의
+                // 400 에 닿지 않는 자리가 있다(경로의 UUID 형식).
+                List<Set<String>> core = targets.isEmpty() ? samePathInCores(name)
+                        : coreResponses(targets.iterator().next().split(" ")[0], targets.iterator().next().split(" ")[1]);
+                for (Set<String> codes : core == null ? List.<Set<String>>of() : core) {
+                    for (String status : List.of("404", "409")) {
+                        if (codes.contains(status) && !pointed.contains(status)) {
+                            violations.add(name + " " + status + " — 코어가 말하는데 가리키는 응답이 없다");
+                        }
+                    }
+                }
+            }
+        }
+
+        assertThat(delegated).as("전제 — 위임 오퍼레이션을 문서에서 읽었다")
+                .contains("POST /api/v1/routes/{routeId}/stops/{orderId}/reassign", "POST /api/v1/waves/{waveId}/close")
+                .hasSizeGreaterThan(5);
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
+    void 응답_설명에_ops_api_가_내지_않는_오류_코드가_없다() throws Exception {
+        // ops-api 가 내는 코드는 ErrorCode 구현에서 읽는다(열거하지 않는다). 그 밖의 코드는 코어의 것이고, 코어의 것은 코어
+        // 문서가 말한다 — 여기 적으면 재진술이다(ADR-052 후속).
+        Set<String> own = ownErrorCodes();
+        assertThat(own).as("전제 — ops-api 의 코드를 코드에서 읽었다")
+                .contains("core-timeout", "unauthenticated", "audit-already-resolved", "validation-failed");
+
+        JsonNode paths = JsonMapper.builder().build().readTree(generatedJson()).path("paths");
+        List<String> foreign = new ArrayList<>();
+        for (Map.Entry<String, JsonNode> path : paths.properties()) {
+            for (Map.Entry<String, JsonNode> operation : path.getValue().properties()) {
+                String name = operation.getKey().toUpperCase(java.util.Locale.ROOT) + " " + path.getKey();
+                for (Map.Entry<String, JsonNode> response : operation.getValue().path("responses").properties()) {
+                    Matcher code = ERROR_CODE.matcher(response.getValue().path("description").asString());
+                    while (code.find()) {
+                        if (!own.contains(code.group(1))) {
+                            foreign.add(name + " " + response.getKey() + " — `" + code.group(1) + "`");
+                        }
+                    }
+                }
+            }
+        }
+        assertThat(foreign).isEmpty();
+    }
+
+    /** ops-api 와 공통 라이브러리의 {@code ErrorCode} 구현(enum)의 코드 전부. */
+    private static Set<String> ownErrorCodes() throws ClassNotFoundException {
+        var scanner = new org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider(false);
+        scanner.addIncludeFilter(new org.springframework.core.type.filter.AssignableTypeFilter(
+                com.dawnline.common.error.ErrorCode.class));
+        Set<String> codes = new java.util.TreeSet<>();
+        for (String base : List.of("com.dawnline.ops", "com.dawnline.common")) {
+            for (var candidate : scanner.findCandidateComponents(base)) {
+                Class<?> type = Class.forName(candidate.getBeanClassName());
+                Object[] constants = type.getEnumConstants();
+                if (constants != null) {
+                    for (Object constant : constants) {
+                        codes.add(((com.dawnline.common.error.ErrorCode) constant).code());
+                    }
+                }
+            }
+        }
+        return codes;
+    }
+
+    /**
+     * 가리킨 코어 오퍼레이션의 응답 코드들 — {@code {service}} 면 코어 넷 각각.
+     *
+     * @return 풀리지 않으면 {@code null}
+     */
+    private static @org.jspecify.annotations.Nullable List<Set<String>> coreResponses(String file, String operationId)
+            throws Exception {
+        List<String> files = file.contains("{service}")
+                ? CORES.stream().map(core -> file.replace("{service}", core)).toList() : List.of(file);
+        List<Set<String>> found = new ArrayList<>();
+        for (String each : files) {
+            Set<String> codes = null;
+            for (Map<String, Object> operation : coreOperations(each).values()) {
+                if (operationId.equals(operation.get("operationId"))) {
+                    codes = responseCodes(operation);
+                }
+            }
+            if (codes == null) {
+                return null;
+            }
+            found.add(codes);
+        }
+        return found;
+    }
+
+    /** 가리킴이 없는 위임 오퍼레이션 — 같은 메서드 · 경로의 코어 오퍼레이션(§5.5 「경로는 코어의 것을 그대로」). */
+    private static @org.jspecify.annotations.Nullable List<Set<String>> samePathInCores(String name) throws Exception {
+        List<Set<String>> found = new ArrayList<>();
+        for (String core : CORES) {
+            Map<String, Object> operation = coreOperations(core + "-service.yaml").get(name);
+            if (operation != null) {
+                found.add(responseCodes(operation));
+            }
+        }
+        return found.isEmpty() ? null : found;
+    }
+
+    /** 코어 문서의 오퍼레이션 — 「메서드 경로」 → 오퍼레이션. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Map<String, Object>> coreOperations(String file) throws Exception {
+        Path contract = CONTRACT.resolveSibling(file);
+        if (!Files.exists(contract)) {
+            return Map.of();
+        }
+        Map<String, Object> document = new org.yaml.snakeyaml.Yaml().load(Files.readString(contract, StandardCharsets.UTF_8));
+        Map<String, Map<String, Object>> operations = new java.util.LinkedHashMap<>();
+        ((Map<String, Map<String, Object>>) document.get("paths")).forEach((path, methods) -> methods.forEach(
+                (method, operation) -> operations.put(method.toUpperCase(java.util.Locale.ROOT) + " " + path,
+                        (Map<String, Object>) operation)));
+        return operations;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<String> responseCodes(Map<String, Object> operation) {
+        // 키는 YAML 에서 따옴표 문자열이지만, 따옴표가 빠지면 정수로 읽힌다 — 문자열로 맞춘다.
+        Set<String> codes = new java.util.TreeSet<>();
+        ((Map<Object, Object>) operation.get("responses")).keySet().forEach(code -> codes.add(String.valueOf(code)));
+        return codes;
     }
 
     /** {@code type} 이 문자열이든 배열이든 그 값들. */
