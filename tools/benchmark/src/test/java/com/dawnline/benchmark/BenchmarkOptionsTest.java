@@ -63,7 +63,14 @@ class BenchmarkOptionsTest {
     void 값이_빠진_옵션은_사용법과_함께_실패한다() {
         assertThatThrownBy(() -> BenchmarkOptions.parse(new String[] {"--dataset"}, REGISTERED))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("--dataset <small|medium|large|peak|overload>");
+                .hasMessageContaining("--dataset <small|medium|large|peak|overload|mixed-windows>");
+    }
+
+    @Test
+    void 이름의_밑줄은_하이픈으로_읽는다() {
+        BenchmarkOptions options = BenchmarkOptions.parse(new String[] {"--dataset", "mixed-windows"}, REGISTERED);
+
+        assertThat(options.dataset()).isEqualTo(Dataset.MIXED_WINDOWS);
     }
 
     @Test

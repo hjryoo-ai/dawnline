@@ -83,10 +83,13 @@ class DatasetFeasibilityTest {
      */
     private static final double STOP_HEADROOM = FleetFeasibility.HEADROOM_PERCENT / 100.0d;
 
+    /** {@code overload} 의 선언 — 무는 축(stop)의 수요가 80% 슬롯의 몇 배인가 (ADR-075 결정 1). */
+    private static final double OVERLOAD_STOP_RATIO = 1.5d;
+
     // 실현 가능성 기준은 OVERLOAD 를 <strong>빼는 방식</strong>으로 적는다(EXCLUDE), 드는
     // 방식이 아니라 — 데이터셋이 새로 생기면 자동으로 검사 대상이 되어야 한다. 드는 방식이던
     // 2026-09-12 까지 `peak` 이 목록에 없었고, 그래서 stop 8,411 개가 슬롯 7,200 개를 넘는다는
-    // 사실을 아무도 보지 못했다. OVERLOAD 의 «일부러 어긴다» 는
+    // 사실을 아무도 보지 못했다(창이 셋이던 때의 수 — ADR-075 뒤로 stop 은 5,811 이다). OVERLOAD 의 «일부러 어긴다» 는
     // overload_는_stop_기준을_일부러_어긴다() 가 따로 말한다.
 
     /** 아무 능력도 요구하지 않는 조합 — 그 stop 축이 전체 stop 수 대 전체 슬롯이다. */
@@ -215,8 +218,10 @@ class DatasetFeasibilityTest {
                 .isGreaterThanOrEqualTo(1.2d);
     }
 
+    // 창 기준은 MIXED_WINDOWS 를 빼는 방식으로 적는다 — 그 데이터셋의 «일부러 어긴다» 는
+    // mixed_windows_는_창_하나_기준을_일부러_어긴다() 가 따로 말한다.
     @ParameterizedTest
-    @EnumSource(Dataset.class)
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "MIXED_WINDOWS")
     void 웨이브의_모든_후보는_컷오프에서_유도한_약속창_하나를_갖는다(Dataset dataset) {
         PlanningProblem problem = problem(dataset);
         TimeWindow expected = TierSchedule.standard().windowFor(problem.wave().serviceTier(), problem.wave().cutoffAt());
@@ -225,6 +230,24 @@ class DatasetFeasibilityTest {
                 .as("%s — 웨이브는 (캠프, 티어, 컷오프)이고 창은 컷오프에서 유도된다(§2.2). 창이 여럿인 웨이브는 "
                         + "어느 티어에도 없는 레짐이다", dataset.cliName())
                 .containsExactly(expected);
+    }
+
+    /**
+     * {@code mixed-windows} 는 <strong>창 기준을 어기는 것이 목적</strong>이다 — 그 사실을 테스트가 스스로 말한다.
+     *
+     * <p>{@link #overload_는_stop_기준을_일부러_어긴다} 와 같은 이유다: 말하지 않으면 다음 사람이 결함으로 보고 «고치거나»(창을
+     * 하나로 — 시각을 보지 않는 줄 세우기의 약점을 보는 자리가 사라진다), 기본 레짐으로 읽어 비교표의 같은 절에 싣는다.
+     */
+    @org.junit.jupiter.api.Test
+    void mixed_windows_는_창_하나_기준을_일부러_어긴다() {
+        PlanningProblem mixed = problem(Dataset.MIXED_WINDOWS);
+
+        assertThat(mixed.candidates().stream().map(Candidate::promised).distinct().count())
+                .as("mixed-windows 의 존재 이유가 «한 웨이브에 창이 여럿» 이다. 이 어설션이 깨졌다면 창을 하나로 만든 것이고, "
+                        + "그건 도구를 없앤 것이다")
+                .isEqualTo(3L);
+        assertThat(mixed.candidates()).as("medium 과 같은 주문 수 — 차이는 창뿐이다")
+                .hasSameSizeAs(problem(Dataset.MEDIUM).candidates());
     }
 
     /**
@@ -249,6 +272,33 @@ class DatasetFeasibilityTest {
                 .isNotEqualTo(FleetFeasibility.Status.FEASIBLE);
         assertThat(problem(Dataset.OVERLOAD).candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
                 .hasSameSizeAs(problem(Dataset.PEAK).candidates());
+    }
+
+    /**
+     * {@code overload} 의 대수는 <strong>선언한 비율</strong>에서 나온다 — 무는 축(stop)의 수요가 80% 슬롯의 1.5배
+     * (ADR-075 결정 1). 정수 대수로는 그 비율을 넘지 않는 최소 대수이고, 한 대 적으면 넘는다. 처음 판의 60대는 비율이 아니라
+     * 결과(옛 통합 위의 146%)였고, 통합이 바뀌자 그 결과가 101% 로 조용히 변했다.
+     *
+     * <p>그리고 중량도 원래 용량을 넘는다 — 「다 못 싣는다」가 한 축에서 겨우가 아니라 두 축에서 참이다.
+     */
+    @org.junit.jupiter.api.Test
+    void overload_의_대수는_무는_축의_수요가_80퍼센트_슬롯의_1_5배가_되는_최소_대수다() {
+        PlanningProblem problem = problem(Dataset.OVERLOAD);
+        int vehicles = problem.vehicles().size();
+        long stops = assess(problem).line(GENERAL).orElseThrow().demand().stops();
+        double slotsPerVehicle = STOP_HEADROOM * MAX_STOPS;
+
+        assertThat(stops / (slotsPerVehicle * vehicles))
+                .as("overload stop %,d / 80%% 슬롯 %,.0f (차량 %d) — 선언은 1.5배다", stops, slotsPerVehicle * vehicles, vehicles)
+                .isLessThanOrEqualTo(OVERLOAD_STOP_RATIO);
+        assertThat(stops / (slotsPerVehicle * (vehicles - 1)))
+                .as("한 대 적으면 1.5배를 넘어야 최소다 — 넘지 않으면 대수가 선언보다 적다")
+                .isGreaterThan(OVERLOAD_STOP_RATIO);
+
+        long weight = sum(problem.candidates(), candidate -> candidate.parcel().weightG());
+        long capacity = sumVehicles(problem.vehicles(), vehicle -> vehicle.capacity().maxWeightG());
+        assertThat(weight).as("overload 중량 %,d / 원래 용량 %,d g — 무는 축이 아닌 중량에서도 다 못 싣는다", weight, capacity)
+                .isGreaterThan(capacity);
     }
 
     private static long sum(List<Candidate> candidates, java.util.function.ToLongFunction<Candidate> field) {

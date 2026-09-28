@@ -2,6 +2,7 @@ package com.dawnline.benchmark;
 
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
+import com.dawnline.common.TierSchedule;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.domain.PlanMode;
 import com.dawnline.dispatch.domain.optimizer.CampDepot;
@@ -46,10 +47,14 @@ import java.util.random.RandomGenerator;
  * 아파트·오피스가 현실의 상당수이고, {@link com.dawnline.dispatch.domain.optimizer.StopMerger} 가
  * 하는 일이 정확히 그것이다. 나머지 중 다수는 8개 군집 주변, 일부는 전역에 흩는다.
  *
- * <h2>약속창은 세 개뿐이다</h2>
- * 주문마다 다른 창을 주면 통합 조건("같은 geohash7 + 같은 약속창")이 사실상 성립하지 않아
- * {@code StopMerger} 가 아무 일도 못 한다 — 첫 측정에서 통합률이 0.08% 였다. §2.2 의 실제 티어는
- * 웨이브 하나에 창이 몇 개뿐이므로, 무작위 창이 오히려 비현실적이었다.
+ * <h2>약속창은 웨이브에 하나다</h2>
+ * 웨이브는 (캠프, 티어, 컷오프)이고 창은 컷오프에서 유도된다(§2.2) — 그래서 창은 {@link TierSchedule#windowFor} 가 이 웨이브의
+ * (티어, 컷오프)에서 내는 하나다. 계획 시작을 컷오프로 본다.
+ *
+ * <p>처음 판은 주문마다 다른 창이었고(통합 조건 「같은 geohash7 + 같은 약속창」이 성립하지 않아 첫 측정의 통합률 0.08%), 다음 판은
+ * 두 시간씩 밀린 창 셋이었다 — 「§2.2 의 실제 티어는 웨이브 하나에 창이 몇 개뿐」이라는 근거였는데 §2.2 가 말하는 것은 티어 <em>하루</em>
+ * 의 창 수다. 창 셋은 어느 실제 웨이브와도 맞지 않았고, 기다림을 넣자 그 레짐에서 비용이 두 배가 됐다(ADR-075 결정 1). 창 셋은
+ * {@link Dataset#MIXED_WINDOWS} 가 스트레스 레짐으로 이어 간다.
  *
  * <h2>규모는 실현 가능해야 한다</h2>
  * 수요가 용량을 넘으면 어떤 알고리즘도 미배정을 없앨 수 없고, 그 표는 라우팅 품질이 아니라 용량
@@ -68,8 +73,11 @@ public final class DatasetGenerator {
     private static final double CLUSTERED_RATIO = 0.85d;
     /** 군집 하나의 퍼짐(m). */
     private static final double CLUSTER_SIGMA_M = 700.0d;
-    /** 웨이브 하나의 약속창 수 (§2.2 — 티어당 창이 몇 개뿐이다). */
-    private static final int PROMISED_WINDOWS = 3;
+    /** 벤치마크 웨이브의 티어 — 근무창(주간조)과 약속창이 이 티어에서 나온다. */
+    private static final String TIER = "SAME_DAY";
+
+    /** {@link Dataset.Windows#STAGGERED_THREE} 의 창 수. */
+    private static final int STAGGERED_WINDOWS = 3;
 
     /** 위험물 허용 차량의 비율 (부록 A — 캠프 20대 중 4대). */
     private static final double HAZMAT_RATIO = 0.20d;
@@ -110,7 +118,7 @@ public final class DatasetGenerator {
         List<TimeWindow> windows = promisedWindows();
 
         return new PlanningProblem(
-                new WaveRef(Ids.newId(), campId, "SAME_DAY", startedAt),
+                new WaveRef(Ids.newId(), campId, TIER, startedAt),
                 depot,
                 candidates(random, clusters, buildings, windows),
                 vehicles(random),
@@ -136,10 +144,18 @@ public final class DatasetGenerator {
         return List.copyOf(centers);
     }
 
-    /** 웨이브 하나의 약속창들. 겹치지 않게 두 시간씩 밀어 시간 룰이 실제로 갈린다. */
+    /**
+     * 웨이브 하나의 약속창들. 기본은 컷오프(= 계획 시작)에서 유도한 하나이고, {@link Dataset#MIXED_WINDOWS} 만 두 시간씩 밀린 셋이다.
+     *
+     * <p>창이 하나여도 후보마다 {@code random.nextInt(windows.size())} 를 부른다 — 난수열이 창 수와 무관하게 같아야
+     * {@code mixed-windows} 가 {@code medium} 과 <strong>창만</strong> 다르다({@code DatasetGeneratorTest}).
+     */
     private List<TimeWindow> promisedWindows() {
-        List<TimeWindow> windows = new ArrayList<>(PROMISED_WINDOWS);
-        for (int i = 0; i < PROMISED_WINDOWS; i++) {
+        if (dataset.windows() == Dataset.Windows.ONE_PER_WAVE) {
+            return List.of(TierSchedule.standard().windowFor(TIER, startedAt));
+        }
+        List<TimeWindow> windows = new ArrayList<>(STAGGERED_WINDOWS);
+        for (int i = 0; i < STAGGERED_WINDOWS; i++) {
             Instant start = startedAt.plus(Duration.ofHours(2L + i * 2L));
             windows.add(new TimeWindow(start, start.plus(Duration.ofHours(4))));
         }
