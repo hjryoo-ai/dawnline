@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 검증 표 V1–V9 — 카오스 넷과 7-4 peak-day 가 같은 표를 낸다 (DESIGN.md §13 「카오스」, IMPLEMENTATION_PLAN 7-3)
+# 검증 표 V1–V10 — 카오스 넷과 7-4 peak-day 가 같은 표를 낸다 (DESIGN.md §13 「카오스」, IMPLEMENTATION_PLAN 7-3)
 #
 #   verify.sh baseline <상태파일>                         기준을 남긴다 — 시각 T0 · DLQ 끝 오프셋
 #   verify.sh check <상태파일> [--kind 이름] [--wait 초] [--expect-orders N] [--expect-dlq N]
@@ -261,6 +261,24 @@ v6=$(sqlv ops "SELECT count(*) FROM rm_orders o WHERE o.updated_at < now() - int
                  AND (o.order_status IS NULL OR o.order_status NOT IN ('CANCELLED', 'UNSERVICEABLE'))
                  AND o.delivery_outcome IS NULL")
 
+# --- V10 한 차량이 두 곳에 있다 — 같은 차량의 라우트 둘이 계획 시각에서 겹친다 (ADR-075) ------------------------------
+# 라우트의 계획 시각은 [planned_departure, planned_departure + duration_s) 다. 같은 캠프의 두 웨이브(DAWN · NEXT_DAY)는 따로 계획되고,
+# 두 번째 계획이 첫 번째가 잡은 차량 시간을 모르면 야간조 한 대가 DAWN 을 도는 동안 NEXT_DAY 를 출발한다 — 7-4 의 다섯 실행에서
+# 13–43쌍이었다(근거: 관측, 리포트 §3.8). stop 이 전부 취소된 라우트는 차를 쓰지 않으므로 뺀다. T0 이후에 시작한 계획의 라우트만 본다.
+# 라우트가 하나도 없으면 빈 집합끼리의 비교라 「관찰」이다(§13 축 10).
+v10_row=$(sqlv dispatch "WITH span AS (
+                           SELECT r.id, r.vehicle_id, r.planned_departure AS s,
+                                  r.planned_departure + make_interval(secs => r.duration_s) AS e
+                             FROM routes r JOIN route_plans p ON p.id = r.plan_id
+                            WHERE p.started_at >= '$t0' AND r.planned_departure IS NOT NULL
+                              AND EXISTS (SELECT 1 FROM route_stops s WHERE s.route_id = r.id AND s.status <> 'CANCELLED'))
+                         SELECT (SELECT count(*) FROM span a JOIN span b ON a.vehicle_id = b.vehicle_id AND a.id < b.id
+                                                                         AND a.s < b.e AND b.s < a.e)
+                                || '|' || (SELECT count(DISTINCT a.vehicle_id) FROM span a JOIN span b ON a.vehicle_id = b.vehicle_id
+                                                  AND a.id < b.id AND a.s < b.e AND b.s < a.e)
+                                || '|' || (SELECT count(*) FROM span)")
+IFS='|' read -r n_v10 n_v10_vehicles n_v10_routes <<< "$v10_row"
+
 # --- 표 -----------------------------------------------------------------------------------------------------
 # 판정은 표를 그리기 전에 모은다 — mark 는 $(…) 안에서 불리므로(서브셸) 거기서 세운 변수는 밖에 남지 않는다. 처음 판이 그래서
 # ✗ 가 있어도 종료 코드 0 이었다(2026-09-25 chaos-db 첫 실행).
@@ -285,6 +303,10 @@ if [[ "$v9_known" != 1 ]]; then r9=bad; v9_value="모름"
 elif [[ "$n_v9_before" != 0 || "$n_v9_unknown" != 0 ]]; then r9=bad; v9_value="$v9_counts"
 elif [[ "$n_o_cancelled" == 0 || "$n_t_completed" == 0 ]]; then r9=obs; v9_value="0 — 취소 ${n_o_cancelled} · tracking COMPLETED ${n_t_completed}, 비교할 사실이 없다"
 else r9=ok; v9_value="$v9_counts"; fi
+if [[ -z "$v10_row" ]]; then r10=bad; v10_value="모름"
+elif [[ "$n_v10" != 0 ]]; then r10=bad; v10_value="**${n_v10}쌍** (차량 ${n_v10_vehicles} · 라우트 ${n_v10_routes})"
+elif [[ "$n_v10_routes" == 0 ]]; then r10=obs; v10_value="0 — 라우트 0, 비교할 사실이 없다"
+else r10=ok; v10_value="0 (라우트 ${n_v10_routes})"; fi
 reason_table=""; r1_reasons=ok
 while IFS='|' read -r r k n e v; do
   [[ "$v" == ok ]] || r1_reasons=bad
@@ -308,10 +330,11 @@ ${reason_table%$'\n'}
 | V7 | outbox 미발행 / 격리 | ${v7_detail} | 전부 0/0 | $(mark "$r7") |
 | V8 | 서비스 둘의 사실 — dispatch 의 \`PLANNED\` stop 중 tracking 에서 \`COMPLETED\` 인 주문 (T0 이후) | ${v8_value} | 0 | $(mark "$r8") |
 | V9 | 서비스 둘의 사실 — order 에서 \`CANCELLED\` 인데 tracking 에서 \`COMPLETED\` 인 주문, 취소 시각 대 그 계획의 시작 (T0 이후) | ${v9_value} | 계획 시작 전 0 · 계획 없음 0 | $(mark "$r9") |
+| V10 | 한 차량이 두 곳에 — 같은 차량의 라우트 둘이 계획 시각에서 겹친다 (T0 이후 계획) | ${v10_value} | 0 | $(mark "$r10") |
 TABLE
 )
 fail=0
-for r in "$r1" "$r1_reasons" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7" "$r8" "$r9"; do [[ "$r" == bad ]] && fail=1; done
+for r in "$r1" "$r1_reasons" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7" "$r8" "$r9" "$r10"; do [[ "$r" == bad ]] && fail=1; done
 echo "$table"
 [[ -n "$out" ]] && { echo "$table" >> "$out"; echo >> "$out"; }
 if [[ "$n_missing" != 0 && -s "$tmp/missing" ]]; then

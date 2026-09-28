@@ -111,9 +111,9 @@ dc exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server loca
 - `sum by (consumergroup, topic) (kafka_consumergroup_lag >= 0)` 이 1,000 아래로 내려온다(브로커 기준 — 클라이언트 지표 `records_lag` 는 재시도에 막힌 레코드를 세지 않는다, §2.1).
 - `dawnline_event_retry_age_seconds` 가 0 이다 — 재시도 중인 파티션이 없다.
 - 처리율의 `dlq` 가 0 이다. 0 이 아니면 그 레코드는 [RB-05](RB-05-dlq-and-outbox-quarantine.md) §2 로 간다.
-- **검증 표** — 복구 뒤에 돌린다. 카오스와 같은 표다(V1–V9 — 유실 · 사유별 배차 불가 · 라우트 stop 주문 중복 · `processed_events` 의 PK ·
+- **검증 표** — 복구 뒤에 돌린다. 카오스와 같은 표다(V1–V10 — 유실 · 사유별 배차 불가 · 라우트 stop 주문 중복 · `processed_events` 의 PK ·
   감사 `UNKNOWN` · DLQ 증가 · outbox 미발행/격리 · dispatch 의 `PLANNED` 인데 tracking 에서 `COMPLETED` 인 주문 ·
-  order 에서 `CANCELLED` 인데 tracking 에서 `COMPLETED` 인 주문):
+  order 에서 `CANCELLED` 인데 tracking 에서 `COMPLETED` 인 주문 · 한 차량의 라우트 둘이 계획 시각에서 겹친다):
 
   ```bash
   bash tools/chaos/verify.sh baseline /tmp/rb01.state        # 장애를 알아챈 때 — 이 시각 뒤의 주문과 DLQ 증가를 본다

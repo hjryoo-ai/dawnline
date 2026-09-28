@@ -5,7 +5,7 @@
 #   make chaos-kill [SCENARIO=ops-demo]
 #
 # 기대: 죽은 뒤 그 웨이브의 route_plans 행이 없다(REQUESTED 도 PLANNING 도) · 재기동하면 커밋되지 않은 오프셋이 wave.closed 를 다시
-# 전달해 PUBLISHED 하나로 끝난다 · 검증 표 V1–V9 (DLQ 0 · 라우트 stop 주문 중복 0).
+# 전달해 PUBLISHED 하나로 끝난다 · 검증 표 V1–V10 (DLQ 0 · 라우트 stop 주문 중복 0).
 #
 # 계획은 대개 수십 ms 에 끝난다(로컬 route_plans 의 중앙값 14 ms) — 「계획 중에」 죽이려면 창을 벌려야 한다. 이 스크립트는 dispatch DB 의
 # routes 에 배타 락을 쥐어 계획을 **결과 쓰기**에서 세운다. 세운 것은 인위지만 죽이는 순간의 상태는 실제다: 계획 트랜잭션이 열려 있고
