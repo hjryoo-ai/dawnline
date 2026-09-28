@@ -156,6 +156,17 @@ class LoadCandidateServiceTest {
     }
 
     @Test
+    void 취소가_먼저_온_주문은_적재하지_않는다() {
+        // ADR-074 결정 2 — 표식이 있으면 ON CONFLICT DO NOTHING 이 넣지 못하고, 그것은 재전달이 아니다.
+        PlannedOrderSnapshot snapshot = snapshot(Ids.newId());
+        repository.insertCancelledFirst(snapshot.orderId(), NOW);
+
+        assertThat(service.load(snapshot)).isEqualTo(LoadCandidateUseCase.Outcome.CANCELLED_FIRST);
+        assertThat(repository.findById(snapshot.orderId())).as("후보가 되지 않는다").isEmpty();
+        assertThat(repository.findPlannableInWave(snapshot.waveId())).isEmpty();
+    }
+
+    @Test
     void 재전달은_스냅샷을_덮어쓰지_않는다() {
         // 첫 번째가 계획의 근거였고, 두 번째가 같은 내용이라는 보장이 없다.
         UUID orderId = Ids.newId();

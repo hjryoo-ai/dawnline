@@ -294,11 +294,12 @@ public class DispatchApplicationConfig {
      * @param consumer    멱등 게이트
      * @param cancelOrder 취소 유스케이스
      * @param json        봉투 역직렬화
+     * @param metrics     §9.1 메트릭 — 취소 선착의 흡수를 커밋 뒤에 센다(ADR-074)
      */
     @Bean
     public OrderCancelledListener orderCancelledListener(IdempotentConsumer consumer,
-            CancelOrderUseCase cancelOrder, EventJson json) {
-        return new OrderCancelledListener(consumer, cancelOrder, json);
+            CancelOrderUseCase cancelOrder, EventJson json, DispatchMetrics metrics) {
+        return new OrderCancelledListener(consumer, cancelOrder, json, metrics);
     }
 
     /**

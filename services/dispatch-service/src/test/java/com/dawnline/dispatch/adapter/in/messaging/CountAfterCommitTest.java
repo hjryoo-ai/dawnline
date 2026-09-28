@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.dawnline.dispatch.application.DispatchMetrics;
+import com.dawnline.dispatch.application.port.in.CancelOrderUseCase;
 import com.dawnline.dispatch.application.port.in.ReplanRouteUseCase;
 import com.dawnline.messaging.MessagingMetrics;
 import com.dawnline.messaging.contract.EventContracts;
@@ -115,5 +116,41 @@ class CountAfterCommitTest {
                 .onDeliveryStatus(unknownStatusRecord())).isInstanceOf(IllegalStateException.class);
 
         assertThat(unknownStatus()).isZero();
+    }
+
+    // --- 후보보다 먼저 온 취소 (ADR-074) --------------------------------------------------------------------
+
+    private OrderCancelledListener cancelled(PlatformTransactionManager transactions) {
+        return new OrderCancelledListener(consumer(transactions),
+                (orderId, cancelledAt) -> CancelOrderUseCase.Outcome.CANCELLED_FIRST,
+                EventJson.standard(), new DispatchMetrics(meters));
+    }
+
+    private ConsumerRecord<String, String> cancelledRecord() {
+        String value = CONTRACTS.readTree(CONTRACTS.contractsDirectory()
+                .resolve("examples/order.cancelled.v1.example.json")).toString();
+        return new ConsumerRecord<>(OrderCancelledListener.ORDER_CANCELLED_TOPIC, 0, 0L, "key", value);
+    }
+
+    private double cancelledFirst() {
+        Counter counter = meters.find(DawnlineMetrics.EVENT_STALE.meterName())
+                .tag(MessagingMetrics.TAG_CONSUMER, DispatchMetrics.CANCEL_CONSUMER)
+                .tag(MessagingMetrics.TAG_EVENT_TYPE, DispatchMetrics.ORDER_CANCELLED_EVENT_TYPE).counter();
+        return counter == null ? 0.0 : counter.count();
+    }
+
+    @Test
+    void 취소_선착은_커밋_뒤에_센다() {
+        cancelled(CommitOutcomeTransactions.committing()).onOrderCancelled(cancelledRecord());
+
+        assertThat(cancelledFirst()).isEqualTo(1.0);
+    }
+
+    @Test
+    void 취소_선착의_커밋이_실패하면_세지_않는다() {
+        assertThatThrownBy(() -> cancelled(CommitOutcomeTransactions.failingOnCommit())
+                .onOrderCancelled(cancelledRecord())).isInstanceOf(IllegalStateException.class);
+
+        assertThat(cancelledFirst()).as("표식이 롤백됐으면 흡수한 것이 없다").isZero();
     }
 }
