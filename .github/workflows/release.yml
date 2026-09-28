@@ -66,8 +66,16 @@ jobs:
       - name: 서비스 이미지 5개 (Buildpacks)
         run: ./gradlew bootBuildImage -PdawnlineVersion=${{ steps.meta.outputs.version }}
 
+      # 기반 이미지 둘의 판은 deploy/compose/.env.example 한 곳에 고정돼 있고 Dockerfile 은 기본값을 두지 않는다(ADR-057 —
+      # 두 곳에 적힌 판은 갈라진다). 그래서 여기서도 그 파일에서 읽는다 — 첫 드라이런이 이 인자 없이 실패했다(2026-09-28).
       - name: ops-web 이미지 (Dockerfile)
-        run: docker build -f apps/ops-web/Dockerfile -t dawnline/ops-web:${{ steps.meta.outputs.version }} .
+        run: |
+          node_image="$(grep '^NODE_IMAGE=' deploy/compose/.env.example | cut -d= -f2-)"
+          nginx_image="$(grep '^NGINX_IMAGE=' deploy/compose/.env.example | cut -d= -f2-)"
+          test -n "$node_image" && test -n "$nginx_image" || { echo "NODE_IMAGE · NGINX_IMAGE 가 .env.example 에 없다"; exit 1; }
+          docker build -f apps/ops-web/Dockerfile \
+            --build-arg NODE_IMAGE="$node_image" --build-arg NGINX_IMAGE="$nginx_image" \
+            -t dawnline/ops-web:${{ steps.meta.outputs.version }} .
 
       - name: 레지스트리 이름 붙이기
         run: |
