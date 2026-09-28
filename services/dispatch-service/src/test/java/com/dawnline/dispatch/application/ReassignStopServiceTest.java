@@ -251,7 +251,7 @@ class ReassignStopServiceTest {
 
     private ReassignStopService service(RuleSet rules, int maxWeightG) {
         return new ReassignStopService(routes, plans,
-                (campId, at) -> capped(maxWeightG),
+                (campId, at, promised, waveId) -> capped(maxWeightG),
                 campId -> rules, events, new HaversineDistance(1.3d, 25.0d));
     }
 

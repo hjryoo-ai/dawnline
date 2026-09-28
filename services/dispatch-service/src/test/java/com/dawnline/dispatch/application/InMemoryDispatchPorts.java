@@ -68,7 +68,7 @@ final class InMemoryDispatchPorts {
                     new TimeWindow(startedAt, startedAt.plus(Duration.ofHours(10))),
                     VehicleCost.krw(45_000, 600, 250)));
         }
-        return (campId, planFor) -> vehicles;
+        return (campId, planFor, promised, waveId) -> vehicles;
     }
 
     static RuleCatalog rules(RuleSet ruleSet) {
@@ -667,6 +667,16 @@ final class InMemoryDispatchPorts {
             java.util.Set<UUID> found = new java.util.LinkedHashSet<>(vehicleIds);
             found.retainAll(inactive);
             return java.util.Set.copyOf(found);
+        }
+
+        /** 차량별 점유 — 다른 계획의 라우트가 잡은 계획 시각(ADR-075 결정 4). */
+        final java.util.Map<UUID, List<TimeWindow>> occupiedSpans = new java.util.HashMap<>();
+
+        @Override
+        public java.util.Map<UUID, List<TimeWindow>> occupied(java.util.Collection<UUID> vehicleIds, UUID waveId) {
+            java.util.Map<UUID, List<TimeWindow>> found = new java.util.HashMap<>(occupiedSpans);
+            found.keySet().retainAll(vehicleIds);
+            return found;
         }
     }
 

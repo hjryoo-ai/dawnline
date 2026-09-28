@@ -414,7 +414,7 @@ class ReplanRouteServiceTest {
      */
     private Fixture fixture() {
         RoutePlan plan = plan();
-        List<UUID> vehicles = fleet.availableAt(CAMP_ID, NOW).stream()
+        List<UUID> vehicles = fleet.availableAt(CAMP_ID, NOW, new TimeWindow(NOW, NOW.plus(java.time.Duration.ofHours(6))), Ids.newId()).stream()
                 .map(vehicle -> vehicle.id().value()).toList();
 
         UUID atRisk = routes.route(plan.id(), vehicles.getFirst(),
@@ -430,7 +430,7 @@ class ReplanRouteServiceTest {
     /** 라우트가 하나뿐인 계획 — 받을 곳이 없다. */
     private Fixture single() {
         RoutePlan plan = plan();
-        UUID vehicleId = fleet.availableAt(CAMP_ID, NOW).getFirst().id().value();
+        UUID vehicleId = fleet.availableAt(CAMP_ID, NOW, new TimeWindow(NOW, NOW.plus(java.time.Duration.ofHours(6))), Ids.newId()).getFirst().id().value();
         UUID atRisk = routes.route(plan.id(), vehicleId, arm(true, 5, 6, 7));
         routes.row(atRisk, 1).status = RouteStopStatus.COMPLETED;
         routes.row(atRisk, 1).actualAt = routes.row(atRisk, 1).arrival.plus(LATE);

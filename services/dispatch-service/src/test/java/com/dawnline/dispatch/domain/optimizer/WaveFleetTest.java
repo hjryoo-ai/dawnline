@@ -46,12 +46,36 @@ class WaveFleetTest {
     }
 
     @Test
-    void 약속창보다_먼저_끝나는_근무도_남긴다_룰은_이른_도착을_막지_않는다() {
-        // 처음 판(겹침)은 이 차를 뺐다 — 하드 룰보다 엄격했다. 룰은 지각만 막으므로 이 차는 이르게 배송할 수 있고, 그것을 가를 곳은
-        // stop 마다의 룰이다. 내일 약속창의 웨이브를 오늘 조기 마감한 Compose 스모크가 이 모양이었다(2026-09-27).
+    void 약속창보다_먼저_끝나는_근무는_뺀다_약속창_시작은_하한이다() {
+        // ADR-075 결정 5 — 처음 판의 이 자리는 「남긴다(룰은 이른 도착을 막지 않는다)」였다. 이제 약속창 시작 전에는 기다리므로(§2.2)
+        // 창이 열리기 전에 끝나는 근무는 한 stop 도 실을 수 없다. 반열린 구간 — 창 시작에 끝나는 근무도 뺀다.
         VehicleSpec earlier = vehicle(new TimeWindow(DAWN.start().minus(Duration.ofHours(8)), DAWN.start()));
 
-        assertThat(WaveFleet.usable(List.of(earlier), List.of(candidate(DAWN)))).containsExactly(earlier);
+        assertThat(WaveFleet.usable(List.of(earlier), List.of(candidate(DAWN)))).isEmpty();
+    }
+
+    @Test
+    void 근무_시작은_앞선_계획의_복귀로_밀린다() {
+        // ADR-075 결정 3 — available_from = max(근무 시작, 끝나지 않은 발행 라우트 중 가장 늦은 계획 복귀).
+        VehicleSpec night = vehicle(new TimeWindow(START.minus(Duration.ofHours(1)), START.plus(Duration.ofHours(8))));
+        java.time.Instant back = START.plus(Duration.ofHours(3));
+
+        assertThat(WaveFleet.availableFrom(night, back)).hasValueSatisfying(spec -> {
+            assertThat(spec.shift().start()).isEqualTo(back);
+            assertThat(spec.shift().end()).isEqualTo(night.shift().end());
+            assertThat(spec.id()).isEqualTo(night.id());
+        });
+        assertThat(WaveFleet.availableFrom(night, null)).contains(night);
+        assertThat(WaveFleet.availableFrom(night, START.minus(Duration.ofHours(2)))).as("근무 전에 돌아왔다 — 그대로").contains(night);
+        assertThat(WaveFleet.availableFrom(night, night.shift().end())).as("근무 끝에야 돌아온다 — 쓸 수 없다").isEmpty();
+    }
+
+    @Test
+    void 앞선_계획이_약속창_끝까지_잡은_차는_뺀다() {
+        VehicleSpec night = vehicle(new TimeWindow(START.minus(Duration.ofHours(1)), START.plus(Duration.ofHours(8))));
+        VehicleSpec busy = WaveFleet.availableFrom(night, DAWN.end()).orElseThrow();
+
+        assertThat(WaveFleet.usable(List.of(busy), List.of(candidate(DAWN)))).isEmpty();
     }
 
     @Test

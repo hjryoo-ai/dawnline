@@ -230,7 +230,9 @@ class DispatchSeedCoverageIT extends DispatchIntegrationTestBase {
 
         for (int hour = 0; hour < 24; hour++) {
             Instant planFor = day.atTime(hour, 0).atZone(ZoneId.of("Asia/Seoul")).toInstant();
-            List<VehicleSpec> fleet = referenceData.availableAt(campId, planFor);
+            List<VehicleSpec> fleet = referenceData.availableAt(campId, planFor,
+                    new com.dawnline.common.TimeWindow(planFor, planFor.plus(java.time.Duration.ofHours(4))),
+                    com.dawnline.common.Ids.newId());
             // §6.3 은 복귀가 근무 종료 − 30분 버퍼 안이기를 요구한다. 출발은 근무 시작 이후로
             // 밀리므로(RouteState.empty), 실제로 쓸 수 있는 시간은 아래와 같다.
             boolean usable = fleet.stream().anyMatch(vehicle -> {

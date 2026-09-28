@@ -227,7 +227,9 @@ class FleetIT extends DispatchIntegrationTestBase {
         ResourceViews.VehicleView deactivated = resources.deactivateVehicle(vehicleId);
 
         assertThat(deactivated.active()).isFalse();
-        List<VehicleSpec> available = tx().execute(status -> vehicles.availableAt(CAMP_ID, PlanningClock.PLAN_AT));
+        List<VehicleSpec> available = tx().execute(status -> vehicles.availableAt(CAMP_ID, PlanningClock.PLAN_AT,
+                new com.dawnline.common.TimeWindow(PlanningClock.PLAN_AT, PlanningClock.PLAN_AT.plus(java.time.Duration.ofHours(6))),
+                Ids.newId()));
         assertThat(available).as("비활성 차량은 계획이 받는 함대에 없다")
                 .noneMatch(spec -> spec.id().value().equals(vehicleId));
         assertThat(routesOf(vehicleId)).as("과거 라우트는 그대로다").isPositive();

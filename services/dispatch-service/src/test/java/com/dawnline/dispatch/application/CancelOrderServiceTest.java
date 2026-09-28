@@ -306,7 +306,7 @@ class CancelOrderServiceTest {
 
     private Published publishedRoute() {
         RoutePlan plan = plan();
-        UUID vehicleId = fleet.availableAt(CAMP_ID, NOW).getFirst().id().value();
+        UUID vehicleId = fleet.availableAt(CAMP_ID, NOW, new TimeWindow(NOW, NOW.plus(java.time.Duration.ofHours(6))), Ids.newId()).getFirst().id().value();
 
         UUID first = candidate(NOW);
         UUID middle = candidate(NOW);

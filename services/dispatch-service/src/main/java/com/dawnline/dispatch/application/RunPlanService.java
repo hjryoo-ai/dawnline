@@ -18,6 +18,7 @@ import com.dawnline.dispatch.domain.PlanStatus;
 import com.dawnline.dispatch.domain.RoutePlan;
 import com.dawnline.dispatch.domain.optimizer.Candidate;
 import com.dawnline.common.GeoPoint;
+import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.domain.optimizer.CampDepot;
 import com.dawnline.dispatch.domain.optimizer.CostModel;
 import com.dawnline.dispatch.domain.optimizer.DispatchStrategies;
@@ -81,8 +82,15 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <h2>발행 직전 재검증</h2>
  * 계획은 시작 시점 스냅샷으로 돈다. 그 사이 도착한 취소는 반영되지 않았으므로, 발행 직전에
  * 후보 상태를 <strong>다시 읽어</strong> 취소된 것을 뺀다(§6.5 6단계, ADR-026 분기 2).
- * 이 창을 revision 없이 닫는 유일한 자리다. 같은 자리에서 라우트의 차량을 {@code FOR SHARE} 로 다시 읽어 계획 중에 비활성화된
- * 차량의 라우트를 뺀다 — 그 주문은 미배정이다(ADR-067 후속, 7-0 A33).
+ * 이 창을 revision 없이 닫는 유일한 자리다. 같은 자리에서 라우트의 차량을 {@code FOR NO KEY UPDATE} 로 다시 읽어 계획 중에
+ * 비활성화된 차량의 라우트를 빼고(ADR-067 후속, 7-0 A33), 잠근 뒤 점유를 다시 읽어 다른 계획의 라우트와 계획 시각이 겹치는
+ * 라우트를 뺀다(ADR-075 결정 4) — 그 주문은 미배정이다.
+ *
+ * <h2>차량의 시간은 먼저 발행한 계획의 것이다 (ADR-075 결정 3)</h2>
+ * 읽기 단계가 받는 차량은 근무가 이 웨이브의 약속창에 닿는 것이고, 근무 시작은 {@code available_from} 이다 — 그 차량의 끝나지 않은
+ * 발행 라우트 중 가장 늦은 계획 복귀와의 최댓값. {@code wave.closed} 의 키가 캠프라(§4.1) 같은 캠프의 계획은 한 스레드에서 차례로
+ * 돌고, 두 번째 계획의 읽기는 첫 번째의 커밋 뒤다 — 필요한 것은 동시성 제어가 아니라 읽기다. <strong>그 문장은 키 = 캠프에 기댄다</strong>
+ * (ADR-075 의존 경고). 운영자 재실행은 파티션을 지나지 않으므로 발행의 잠금과 재검증이 막는다.
  */
 public class RunPlanService implements RunPlanUseCase {
 
@@ -219,10 +227,8 @@ public class RunPlanService implements RunPlanUseCase {
         if (plannable.isEmpty()) {
             return new Snapshot(false, depot, mode, plannable, RuleSet.empty(), List.of());
         }
-        List<VehicleSpec> fleet = vehicles.availableAt(command.campId(), startedAt);
-        if (fleet.isEmpty()) {
-            throw new IllegalStateException("캠프에 가용 차량이 없습니다: " + command.campId());
-        }
+        List<VehicleSpec> fleet = vehicles.availableAt(command.campId(), startedAt,
+                WaveFleet.promisedSpan(OptimizerCandidates.of(plannable)), command.waveId());
         return new Snapshot(false, depot, mode, plannable, rules.forCamp(command.campId()), fleet);
     }
 
@@ -289,9 +295,14 @@ public class RunPlanService implements RunPlanUseCase {
         }
 
         // 계획 중에 비활성화된 차량의 라우트를 뺀다 (ADR-067 후속 — 7-0 A33). 409 가 막지 못한 창이다: 그 차량에는 아직 stop 이
-        // 없었다. FOR SHARE 가 비활성화의 FOR UPDATE 와 직렬화하므로 여기서 활성이면 발행이 커밋될 때까지 비활성화가 기다린다.
+        // 없었다. FOR NO KEY UPDATE 가 비활성화의 FOR UPDATE 와 직렬화하므로 여기서 활성이면 발행이 커밋될 때까지 비활성화가 기다린다.
         Set<VehicleId> inactive = inactiveVehicles(command.waveId(), result);
         result = PlanPruner.withoutVehicles(result, inactive, snapshot.ruleSet());
+        // 잠근 뒤 점유를 다시 읽는다 (ADR-075 결정 4) — 같은 잠금이 발행끼리도 직렬화하므로, 같은 차를 잡은 다른 계획이 먼저
+        // 커밋했으면 그 라우트가 여기 보인다. 겹치는 라우트는 빼고 그 주문은 미배정이다(다른 차로 다시 풀지 않는다 — ADR-064).
+        Set<VehicleId> occupied = occupiedVehicles(command.waveId(), result);
+        result = PlanPruner.withoutVehicles(result, occupied, snapshot.ruleSet(), PlanPruner.VEHICLE_OCCUPIED,
+                PlanPruner.OCCUPIED_REASON);
         if (result.routes().isEmpty()) {
             plan.fail(NO_VEHICLE, clock.instant());
             plans.update(plan);
@@ -392,6 +403,26 @@ public class RunPlanService implements RunPlanUseCase {
             log.info("계획 중 취소된 주문을 발행에서 뺍니다: waveId={} {}건", waveId, cancelled.size());
         }
         return cancelled;
+    }
+
+    /** 발행하려는 라우트 중 다른 계획의 라우트와 계획 시각이 겹치는 것의 차량 — 잠근 뒤에 읽는다({@link VehicleActivity#occupied}). */
+    private Set<VehicleId> occupiedVehicles(UUID waveId, PlanResult result) {
+        Map<UUID, List<TimeWindow>> spans = activity.occupied(
+                result.routes().stream().map(route -> route.vehicle().value()).toList(), waveId);
+        Set<VehicleId> occupied = new LinkedHashSet<>();
+        for (PlannedRoute route : result.routes()) {
+            Instant from = route.departAt();
+            Instant to = from.plusSeconds(route.durationS());
+            for (TimeWindow span : spans.getOrDefault(route.vehicle().value(), List.of())) {
+                if (from.isBefore(span.end()) && span.start().isBefore(to)) {
+                    occupied.add(route.vehicle());
+                }
+            }
+        }
+        if (!occupied.isEmpty()) {
+            log.warn("다른 계획의 라우트와 계획 시각이 겹치는 차량의 라우트를 뺍니다: waveId={} 차량={}", waveId, occupied);
+        }
+        return occupied;
     }
 
     /** 발행하려는 라우트의 차량 중 비활성인 것 — 잠그며 읽는다({@link VehicleActivity#lockInactive}). */

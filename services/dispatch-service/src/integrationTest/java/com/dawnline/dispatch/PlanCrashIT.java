@@ -134,7 +134,8 @@ class PlanCrashIT extends DispatchIntegrationTestBase {
         try (Connection locker = dataSource.getConnection()) {
             locker.setAutoCommit(false);
             try (Statement s = locker.createStatement()) {
-                s.execute("LOCK TABLE routes IN ACCESS EXCLUSIVE MODE");
+                // EXCLUSIVE — SELECT 는 지나고 INSERT 는 멈춘다. 계획이 routes 를 읽는다(점유, ADR-075) — ACCESS EXCLUSIVE 면 그 읽기에서 멈춘다.
+                s.execute("LOCK TABLE routes IN EXCLUSIVE MODE");
             }
 
             producer.send(new ProducerRecord<>(WAVE_CLOSED, CAMP_ID.toString(), waveClosed(eventId, waveId))).get();

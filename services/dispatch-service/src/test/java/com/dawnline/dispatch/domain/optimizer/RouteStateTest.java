@@ -62,6 +62,27 @@ class RouteStateTest {
     }
 
     @Test
+    void 약속창_시작_전에_닿으면_창_시작까지_기다리고_그_시간이_라우트에_들어간다() {
+        // §2.2 — 약속창 시작은 하한이다(ADR-075 결정 2). 처음 판은 도착 즉시 서비스를 시작했다.
+        Instant opens = START.plus(java.time.Duration.ofHours(2));
+        Stop late = new Stop(GANGNAM, java.util.List.of(OrderId.of(com.dawnline.common.Ids.newId())), Parcel.EMPTY,
+                new com.dawnline.common.TimeWindow(opens, opens.plus(java.time.Duration.ofHours(4))), 90, 0);
+        RouteState before = empty();
+        assertThat(START.plusSeconds(distance.between(before.at(), late.point()).seconds()))
+                .as("전제: 이동만으로는 창 시작 전에 닿는다").isBefore(opens);
+
+        RouteState after = before.append(late);
+
+        assertThat(before.arrivalIfAppended(late)).isEqualTo(opens);
+        assertThat(after.stops().getFirst().arrival()).isEqualTo(opens);
+        assertThat(after.time()).isEqualTo(opens.plusSeconds(late.serviceSeconds()));
+        assertThat(before.returnTimeIfAppended(late)).isEqualTo(after.returnTime());
+        assertThat(after.durationWithReturn())
+                .as("기다린 시간이 라우트 시간에 든다 — 시간비와 근무창 판정이 그것을 본다")
+                .isGreaterThan(2 * 3600);
+    }
+
+    @Test
     void 방문_순번은_1_부터_연속으로_붙는다() {
         RouteState state = empty();
         for (var point : java.util.List.of(GANGNAM, YEOUIDO, CITY_HALL)) {

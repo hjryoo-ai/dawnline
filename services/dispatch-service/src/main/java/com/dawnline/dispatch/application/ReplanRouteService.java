@@ -28,6 +28,7 @@ import com.dawnline.dispatch.domain.optimizer.RelocateSearch;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.Stop;
+import com.dawnline.dispatch.domain.optimizer.WaveFleet;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Clock;
 import java.time.Duration;
@@ -219,7 +220,12 @@ public class ReplanRouteService implements ReplanRouteUseCase {
         }
         boolean mismatch = diverged(command, deviation);
 
-        Map<UUID, VehicleSpec> fleet = fleetOf(plan.campId(), startAt);
+        List<Stop> sourceStops = routes.loadStops(command.routeId());
+        if (sourceStops.isEmpty()) {
+            log.debug("남은 stop 이 없다. routeId={}", command.routeId());
+            return Snapshot.early(Outcome.NO_CANDIDATE, mismatch);
+        }
+        Map<UUID, VehicleSpec> fleet = fleetOf(plan, startAt, WaveFleet.promisedSpanOfStops(sourceStops));
         RuleSet ruleSet = rules.forCamp(plan.campId());
         RelocateSearch.RouteInput source = inputOf(header, fleet, depot, startAt,
                 deviation);
@@ -482,9 +488,10 @@ public class ReplanRouteService implements ReplanRouteUseCase {
         return route.toRoute(cost);
     }
 
-    private Map<UUID, VehicleSpec> fleetOf(UUID campId, Instant startAt) {
+    /** 계획 때와 같은 해석 — 약속창에 닿는 근무, 시작은 {@code available_from}(ADR-075 결정 5). */
+    private Map<UUID, VehicleSpec> fleetOf(RoutePlan plan, Instant startAt, com.dawnline.common.TimeWindow promised) {
         Map<UUID, VehicleSpec> fleet = new LinkedHashMap<>();
-        vehicles.availableAt(campId, startAt)
+        vehicles.availableAt(plan.campId(), startAt, promised, plan.waveId())
                 .forEach(vehicle -> fleet.put(vehicle.id().value(), vehicle));
         return fleet;
     }

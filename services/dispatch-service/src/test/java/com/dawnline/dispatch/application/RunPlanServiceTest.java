@@ -384,12 +384,37 @@ class RunPlanServiceTest {
     }
 
     @Test
+    void 다른_계획의_라우트와_계획_시각이_겹치는_라우트는_발행되지_않고_그_주문은_미배정이다() {
+        // ADR-075 결정 4 — 파티션을 지나지 않는 두 계획이 같은 차를 읽었을 때 진 쪽. 실물 잠금 · 경합은 PlanOccupancyIT 가 본다.
+        UUID waveId = Ids.newId();
+        List<UUID> orderIds = seed(waveId, 6);
+        RuleSet twoStops = DispatchRules.ruleSet(List.of(new RuleDefinition("max-stops", RuleType.MAX_STOPS_PER_ROUTE,
+                RuleType.MAX_STOPS_PER_ROUTE.severity(), 10, Map.of("max", 2))), 1);
+        VehicleCatalog three = InMemoryDispatchPorts.fleet(3, NOW);
+        UUID busy = three.availableAt(CAMP_ID, NOW, new TimeWindow(NOW, NOW.plus(Duration.ofHours(6))), waveId)
+                .getFirst().id().value();
+        activity.occupiedSpans.put(busy, List.of(new TimeWindow(NOW.minus(Duration.ofHours(1)), NOW.plus(Duration.ofHours(9)))));
+
+        RunPlanUseCase.Outcome outcome = service(twoStops, three, Clock.fixed(NOW, ZoneOffset.UTC), "baseline-nn")
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
+        assertThat(activity.asked).as("전제 — 점유된 차에도 라우트가 계획됐다(계획은 점유를 몰랐다)").singleElement()
+                .satisfies(asked -> assertThat(asked).contains(busy));
+        List<UUID> unassigned = orderIds.stream()
+                .filter(id -> candidates.findById(id).orElseThrow().status() == CandidateStatus.UNASSIGNED).toList();
+        assertThat(unassigned).as("겹친 라우트의 주문은 미배정이다").isNotEmpty();
+        assertThat(routes.explanations).filteredOn(entry -> unassigned.contains(entry.orderId().value()))
+                .allSatisfy(entry -> assertThat(entry.ruleName()).isEqualTo(PlanPruner.VEHICLE_OCCUPIED));
+    }
+
+    @Test
     void 비활성화로_라우트가_전부_빠지면_NO_VEHICLE_로_실패한다() {
         // 취소로 전부 빠진 NO_CANDIDATES 와 가른다 — 운영자가 볼 원인이 다르다.
         UUID waveId = Ids.newId();
         seed(waveId, 2);
         VehicleCatalog one = InMemoryDispatchPorts.fleet(1, NOW);
-        one.availableAt(CAMP_ID, NOW).forEach(vehicle -> activity.deactivate(vehicle.id().value()));
+        one.availableAt(CAMP_ID, NOW, new TimeWindow(NOW, NOW.plus(java.time.Duration.ofHours(6))), Ids.newId()).forEach(vehicle -> activity.deactivate(vehicle.id().value()));
 
         assertThat(service(RuleSet.empty(), one, Clock.fixed(NOW, ZoneOffset.UTC), "baseline-nn")
                 .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
@@ -528,7 +553,7 @@ class RunPlanServiceTest {
         VehicleSpec nightVan = vehicle(false, new TimeWindow(NOW.minus(Duration.ofHours(1)), NOW.plus(Duration.ofHours(8))));
         VehicleSpec dayColdTruck = vehicle(true, new TimeWindow(NOW.plus(Duration.ofHours(8)), NOW.plus(Duration.ofHours(21))));
 
-        service(dawnRules(), (campId, planFor) -> List.of(nightVan, dayColdTruck), Clock.fixed(NOW, ZoneOffset.UTC),
+        service(dawnRules(), (campId, planFor, promised, wave) -> List.of(nightVan, dayColdTruck), Clock.fixed(NOW, ZoneOffset.UTC),
                 "sweep-greedy-nn+ls").run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
 
         Explanation unassigned = routes.explanations.stream().filter(e -> e.orderId().value().equals(orderId))
@@ -546,7 +571,7 @@ class RunPlanServiceTest {
         seedCold(waveId);
         VehicleSpec dayColdTruck = vehicle(true, new TimeWindow(NOW.plus(Duration.ofHours(8)), NOW.plus(Duration.ofHours(21))));
 
-        RunPlanUseCase.Outcome outcome = service(dawnRules(), (campId, planFor) -> List.of(dayColdTruck),
+        RunPlanUseCase.Outcome outcome = service(dawnRules(), (campId, planFor, promised, wave) -> List.of(dayColdTruck),
                 Clock.fixed(NOW, ZoneOffset.UTC), "sweep-greedy-nn+ls")
                 .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
 
@@ -556,9 +581,10 @@ class RunPlanServiceTest {
     }
 
     @Test
-    void 근무가_약속창보다_먼저_끝나도_룰이_받는_차량은_집합에_있다() {
-        // Compose 스모크의 모양(2026-09-27): 14:03 에 내일 약속창의 웨이브를 조기 마감한다. 오늘 근무조의 근무는 내일 약속창과 겹치지
-        // 않지만 룰은 지각만 막으므로 이르게 배송할 수 있다 — 처음 판(겹침)은 그 차를 빼서 계획이 실패했다. 집합은 룰보다 엄격하지 않다.
+    void 근무가_약속창보다_먼저_끝나는_차량은_집합에_없다() {
+        // ADR-075 결정 5 — 처음 판의 이 자리는 「근무가 약속창보다 먼저 끝나도 룰이 받는 차량은 집합에 있다」였다. 그 전제(룰이 이른
+        // 도착을 막지 않는다)가 사라졌다: 약속창 시작은 하한이다(§2.2). 스모크의 모양(14:03 에 내일 약속창의 웨이브를 조기 마감)은
+        // 이제 근무를 약속창에 붙여 푼다 — 어댑터가 내일의 근무를 준다(JdbcReferenceDataShiftTest). 여기 차량은 오늘 근무라 쓸 수 없다.
         UUID waveId = Ids.newId();
         UUID orderId = Ids.newId();
         candidates.put(DispatchCandidate.load(orderId, waveId, CAMP_ID, null,
@@ -567,13 +593,13 @@ class RunPlanServiceTest {
                 60, false, 0, NOW));
         VehicleSpec todayVan = vehicle(false, new TimeWindow(NOW.minus(Duration.ofHours(5)), NOW.plus(Duration.ofHours(8))));
 
-        RunPlanUseCase.Outcome outcome = service(dawnRules(), (campId, planFor) -> List.of(todayVan),
+        RunPlanUseCase.Outcome outcome = service(dawnRules(), (campId, planFor, promised, wave) -> List.of(todayVan),
                 Clock.fixed(NOW, ZoneOffset.UTC), "sweep-greedy-nn+ls")
                 .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
 
-        assertThat(outcome).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
-        assertThat(routes.explanations.stream().filter(e -> e.orderId().value().equals(orderId)))
-                .singleElement().extracting(Explanation::outcome).isEqualTo(Explanation.Outcome.ASSIGNED);
+        assertThat(outcome).as("오늘 근무의 차는 내일 약속창의 stop 을 기다려서도 실을 수 없다").isEqualTo(RunPlanUseCase.Outcome.FAILED);
+        assertThat(events.routesAssigned).isEmpty();
+        assertThat(events.ordersDispatched).doesNotContain(orderId);
     }
 
     /** 새벽 약속창(NOW + 1h ~ + 5h)의 냉장 주문 하나. */
