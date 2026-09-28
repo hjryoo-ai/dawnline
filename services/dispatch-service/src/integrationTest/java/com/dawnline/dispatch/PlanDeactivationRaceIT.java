@@ -79,16 +79,21 @@ class PlanDeactivationRaceIT extends DispatchIntegrationTestBase {
     private static final String WAVE_CLOSED = "dawnline.wave.closed.v1";
     private static final EventContracts CONTRACTS = EventContracts.load();
 
-    /** 차량 제원과 근무창의 본 — 시드의 첫 캠프(PlanCrashIT 가 계획하는 캠프)의 차량에서 복사한다. */
+    /**
+     * 차량 제원과 근무창의 본 — 시드의 첫 캠프(PlanCrashIT 가 계획하는 캠프)의 <strong>주간 근무</strong> 차량에서 복사한다. 계획 시각은
+     * 09:00 KST 다({@link PlanningClock}) — 코드 순서의 첫 상온 차는 야간조(23–08)다. 적재 한도는 3.5 kg 으로 줄인다: 주문이 1 kg 이라
+     * 한 대에 셋만 실리므로 두 대가 다 필요하고, 냉장 주문 셋은 냉장 차에 간다. 줄이지 않으면 고정비 한 번이 싸서 계획이 여섯 건을
+     * 냉장 차 한 대에 싣는다(냉장 차는 상온 주문도 싣는다).
+     */
     private static final UUID SEED_CAMP_ID = UUID.fromString("01a06edd-6c00-7000-8001-000000000001");
     private static final GeoPoint CAMP = GeoPoint.of(37.640000, 127.030000);
 
-    /** 쓰기 트랜잭션의 첫 INSERT 에서 멈춘 계획의 백엔드. */
-    private static final String BLOCKED_PLAN_SQL = """
+    /** 락을 기다리는 백엔드 — 앞머리 패턴은 파라미터다. */
+    private static final String BLOCKED_SQL = """
             SELECT pid FROM pg_stat_activity
              WHERE datname = current_database() AND pid <> pg_backend_pid()
                AND wait_event_type = 'Lock' AND xact_start IS NOT NULL
-               AND query ILIKE 'insert into route_plans%'
+               AND ltrim(query) ILIKE ?
             """;
 
     private static KafkaProducer<String, String> producer;
@@ -164,6 +169,8 @@ class PlanDeactivationRaceIT extends DispatchIntegrationTestBase {
 
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200))
                 .until(() -> planStatus(waveId), status -> status.isPresent() && !status.get().equals("PLANNING"));
+        assertThat(planStatus(waveId)).as("전제 — 상온 차의 라우트가 남아 계획이 발행됐다(전부 빠지면 NO_VEHICLE 로 실패한다)")
+                .contains("PUBLISHED");
 
         assertThat(count("""
                 SELECT count(*) FROM routes r JOIN route_plans p ON p.id = r.plan_id
@@ -182,9 +189,10 @@ class PlanDeactivationRaceIT extends DispatchIntegrationTestBase {
         try (Connection c = dataSource.getConnection(); PreparedStatement s = c.prepareStatement("""
                 INSERT INTO vehicles (id, camp_id, code, type, max_weight_g, max_volume_cm3, is_cold, allows_hazmat,
                                       fixed_cost_krw, cost_per_km_krw, cost_per_min_krw, shift_start, shift_end, active, source)
-                SELECT ?, ?, ?, type, max_weight_g, max_volume_cm3, is_cold, allows_hazmat,
+                SELECT ?, ?, ?, type, 3500, max_volume_cm3, is_cold, allows_hazmat,
                        fixed_cost_krw, cost_per_km_krw, cost_per_min_krw, shift_start, shift_end, TRUE, 'operator'
-                  FROM vehicles WHERE camp_id = ? AND is_cold = ? AND active ORDER BY code LIMIT 1
+                  FROM vehicles WHERE camp_id = ? AND is_cold = ? AND active AND shift_start < shift_end
+                 ORDER BY code LIMIT 1
                 """)) {
             s.setObject(1, id);
             s.setObject(2, campId);
@@ -215,9 +223,16 @@ class PlanDeactivationRaceIT extends DispatchIntegrationTestBase {
     }
 
     private Optional<Integer> blockedPlan() throws SQLException {
-        try (Connection c = dataSource.getConnection(); Statement s = c.createStatement();
-                ResultSet rs = s.executeQuery(BLOCKED_PLAN_SQL)) {
-            return rs.next() ? Optional.of(rs.getInt(1)) : Optional.empty();
+        return blocked("insert into route_plans%");
+    }
+
+    /** 락을 기다리는 백엔드 — 문장의 앞머리로 고른다(테스트 자신의 연결은 뺀다). */
+    private Optional<Integer> blocked(String queryPattern) throws SQLException {
+        try (Connection c = dataSource.getConnection(); PreparedStatement s = c.prepareStatement(BLOCKED_SQL)) {
+            s.setString(1, queryPattern);
+            try (ResultSet rs = s.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getInt(1)) : Optional.empty();
+            }
         }
     }
 
