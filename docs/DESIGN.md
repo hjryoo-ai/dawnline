@@ -3902,15 +3902,22 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
 
 ## 부록 B. 면접 스토리 매핑
 
-| 면접 주제 | 이 프로젝트의 근거 |
-|---|---|
-| 시스템 설계·트레이드오프 | §3.3 의존성 규칙, ADR-002/006, 열화 모드(§6.7) |
-| 알고리즘·최적화 | §6 파이프라인, 벤치마크 표, 설명 가능성 |
-| 대용량·고가용성 | §8 피크 모델·장애 모드·멱등성 지점, 카오스 검증 |
-| 도메인 모델링·JPA | 애그리거트 경계, 낙관적 락, N+1 카운터 테스트 |
-| 운영·관측성 | traceId 한 줄 추적 데모, 런북, 포스트모템 |
-| 새 기술 검토 | ADR-004(**도입하지 않는 결정** + 되돌릴 조건 셋), ADR-010(OSRM) |
-| 코드 품질·자동화 | ArchUnit, 커버리지 게이트, CI 스모크, 벤치마크 회귀 |
+(2026-09-28 갱신 — 주제마다 **답이 되는 문서의 자리**를 적는다. 질문이 오면 이 표의 칸을 열어 보이면 된다.)
+
+| 질문 | 답이 되는 곳 | 한 줄 |
+|---|---|---|
+| **「테스트를 어떻게 믿나요?」** | §13 「픽스처가 정하지 않은 축」 원장(축 1–18) · CLAUDE.md 의 규칙들(빼는 방식 · 전제를 첫 어설션으로 · 음성 표본 · 카운터는 커밋 뒤) · 대조 검사(`AdrIndexConsistencyTest` · `CarryOverLedgerConsistencyTest` · `DeliveryStatusFanoutTest`) | 초록이 무엇을 검사하지 않았는지를 열여덟 번 기록했고, 그때마다 규칙이 됐다 — 축 7(검사 대상을 열거했다) · 축 9(환경이 결함을 가렸다) · 축 18(주석이 결함을 넘겼다) |
+| **「최적에서 얼마나 먼가요?」** | §6.9 고정비 하한 열 · [ADR-038](adr/ADR-038-fixed-cost-floor-is-not-a-total-cost-floor.md) · [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md) · [마감 리포트](benchmarks/phase4-strategies.md) | 다른 솔버가 아니라 **불가능의 경계**와 잰다 — 1.31–1.47배, 그리고 그 열이 자기 한계(고정비의 하한이지 총비용의 하한이 아니다)를 함께 말한다 |
+| **「성수기엔요?」** | [7-4 리포트](benchmarks/phase7-window-scenarios.md)(창 시나리오 다섯 · 검증 표 V1–V10) · [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md)(증차) · [ADR-034](adr/ADR-034-degrade-mode.md)(열화) · [peak-day](benchmarks/phase7-peak-day.md) | 45,000 주문 한 시간 창, 미배정 0.27–0.35%, 계획 전부 FULL — 그리고 그 실행이 찾은 결함 셋(취소 선착 · 이중 배정 · 계획 중 비활성화)과 그 처방 |
+| 시스템 설계 · 트레이드오프 | §3.3 · [ADR-002](adr/ADR-002-db-per-service-polling-outbox.md) · [ADR-006](adr/ADR-006-at-least-once-idempotent-consumer.md) · [ADR-064](adr/ADR-064-planning-computes-outside-the-transaction.md) · [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md) 의 파티션 논거 | 보장이 기대는 전제를 **의존 경고**로 적는다 — 「키 = 캠프가 바뀌면 이 문장이 거짓이 된다」 |
+| 알고리즘 · 최적화 | §6 파이프라인 · [ADR-028](adr/ADR-028-unassigned-policy.md) · [ADR-033](adr/ADR-033-constraint-classes.md) · [ADR-039](adr/ADR-039-reserve-seats-by-constraint-class.md)–[044](adr/ADR-044-endpoints-are-few-enough-to-see-all.md) · 설명 행(§6.3) | 「왜 이 주문이 이 차에 · 왜 미배정」을 운영자가 조회한다 |
+| 측정이 결정을 바꾼 방법 | §6.9 방법론 절(그림자 계측 원장 · 짝 문장 셋) · ADR-033 의 두 질문 · [네 열](benchmarks/phase7-one-window-per-wave.md) | 구현 전에 상한을 재고, 「데이터로 통과시키기」와 「도구 정정」을 두 질문으로 가른다 |
+| 동시성 · 정합성 | [ADR-025](adr/ADR-025-wave-admission-share-lock.md) · [ADR-068](adr/ADR-068-replan-write-locks-and-moves-rows.md) · [ADR-070](adr/ADR-070-tracking-writes-lock-the-route-first.md) · [ADR-074](adr/ADR-074-cancel-before-candidate-leaves-a-row.md) · [ADR-005](adr/ADR-005-redis-lock-coordinates-the-row-guarantees.md) | 재현 IT 가 먼저다 — 잠금으로 시점을 고정한 IT 가 빨강으로 들어가고 수정이 초록으로 만든다 |
+| 대용량 · 고가용성 | §8 · 카오스 넷(`make chaos-*`, 검증 표) · [ADR-027](adr/ADR-027-outbox-relay-leader-lock.md) · [ADR-069](adr/ADR-069-redis-connect-budget-is-not-the-command-budget.md) | Redis · Kafka · DB · 인스턴스를 멈추고 유실 0 · 중복 0 을 표로 |
+| 도메인 모델링 · JPA | 애그리거트 경계 · `@Version` · 「잠금 질의는 버전을 읽는다」(CLAUDE.md, `WaveLockedReadIT`) · [ADR-029](adr/ADR-029-optimizer-io-is-bulk-not-orm.md) | 영속성 컨텍스트의 낡은 사본이 닫힌 웨이브에 주문을 넣었다 — 잠금 SQL 은 맞아 보였다 |
+| 운영 · 관측성 | [ADR-062](adr/ADR-062-trace-survives-the-outbox.md)(outbox 를 지나는 트레이스) · 알림 16 × 런북(RB-01–07) · [ADR-060](adr/ADR-060-metrics-come-from-the-table.md) | 알림마다 첫 줄이 메트릭 · 로그 · SQL 인 런북 |
+| 새 기술 검토 | [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md)(도입하지 않는 결정 + 되돌릴 조건) · [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md)(채택 기준을 먼저) · [ADR-008](adr/ADR-008-no-virtual-threads-no-intra-plan-parallelism.md) · [ADR-010](adr/ADR-010-haversine-with-road-factor-no-osrm.md) | 켜지 않은 것도 조건과 함께 적는다 |
+| 코드 품질 · 자동화 | ArchUnit · 커버리지 게이트 · CI 스모크 · 벤치마크 회귀 게이트 · 마이그레이션 불변 검사 | 게이트는 비용만 본다 — 환경 탓에 빨개지는 게이트는 꺼지고, 꺼진 게이트는 없는 것만 못하다 |
 
 ## 부록 C. 용어집 보충
 
