@@ -1,0 +1,133 @@
+# 릴리스 — 태그 v* 가 서비스 이미지 5개 + ops-web 을 GHCR 에 올리고, 이미지마다 SBOM 을 릴리스에 붙인다 (DESIGN.md §14, 7-7).
+#
+# 이미지는 CI 와 같은 경로로 만든다 — 서비스는 Buildpacks(bootBuildImage, ADR-013), ops-web 은 nginx Dockerfile(ADR-057).
+# 버전은 태그에서 온다(-PdawnlineVersion) — 이미지 이름 dawnline/<서비스>:<버전> 은 build.gradle.kts 의 그 속성이 정한다.
+#
+# SBOM 은 이미지에서 뽑는다(anchore/sbom-action — syft, CycloneDX JSON). 이미지 목록을 드는 방식으로 적었고 마지막 단계가
+# 그 목록을 다시 센다 — 이미지가 늘면 두 곳을 함께 고친다(SERVICES · SBOM 단계). 빌드 도구의 의존 그래프가 아니라 **배포되는 것**의
+# 목록이어야 한다 — 이미지에는 JRE · OS 패키지 · 빌드팩 레이어가 함께 든다.
+#
+# 수동 실행(workflow_dispatch)은 기본이 드라이런이다 — 이미지와 SBOM 은 만들되 올리지 않고 아티팩트로만 남긴다. 공개 레지스트리에
+# 올리는 것은 태그 푸시 하나뿐이다.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 이미지 버전(드라이런)
+        required: true
+        default: 0.0.0-dryrun
+
+permissions:
+  contents: write      # 릴리스 생성 · SBOM 첨부
+  packages: write      # GHCR 푸시
+
+env:
+  JAVA_VERSION: '25'
+  SERVICES: order-service fulfillment-service dispatch-service tracking-service ops-api
+
+jobs:
+  release:
+    name: 이미지 · SBOM · 릴리스
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v7
+
+      - name: 버전 · 레지스트리 경로
+        id: meta
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            version="${GITHUB_REF_NAME#v}"; publish=true
+          else
+            version="${{ inputs.version }}"; publish=false
+          fi
+          owner="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "registry=ghcr.io/$owner" >> "$GITHUB_OUTPUT"
+
+      - name: JDK ${{ env.JAVA_VERSION }} 설치 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle 설정 · 캐시
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
+      - name: 서비스 이미지 5개 (Buildpacks)
+        run: ./gradlew bootBuildImage -PdawnlineVersion=${{ steps.meta.outputs.version }}
+
+      - name: ops-web 이미지 (Dockerfile)
+        run: docker build -f apps/ops-web/Dockerfile -t dawnline/ops-web:${{ steps.meta.outputs.version }} .
+
+      - name: 레지스트리 이름 붙이기
+        run: |
+          for image in $SERVICES ops-web; do
+            docker tag "dawnline/$image:${{ steps.meta.outputs.version }}" \
+                       "${{ steps.meta.outputs.registry }}/dawnline-$image:${{ steps.meta.outputs.version }}"
+          done
+
+      - name: SBOM 디렉터리
+        run: mkdir -p build/sbom
+
+      # 스크립트를 파이프로 받아 실행하지 않는다 — 공급망의 한 칸이다. 액션은 메이저 태그로 고정한다(이 저장소의 다른 액션과 같은 방식).
+      - { name: SBOM — order-service, uses: anchore/sbom-action@v0,
+          with: { image: 'dawnline/order-service:${{ steps.meta.outputs.version }}', format: cyclonedx-json, upload-artifact: false,
+                  output-file: 'build/sbom/dawnline-order-service-${{ steps.meta.outputs.version }}.cdx.json' } }
+      - { name: SBOM — fulfillment-service, uses: anchore/sbom-action@v0,
+          with: { image: 'dawnline/fulfillment-service:${{ steps.meta.outputs.version }}', format: cyclonedx-json, upload-artifact: false,
+                  output-file: 'build/sbom/dawnline-fulfillment-service-${{ steps.meta.outputs.version }}.cdx.json' } }
+      - { name: SBOM — dispatch-service, uses: anchore/sbom-action@v0,
+          with: { image: 'dawnline/dispatch-service:${{ steps.meta.outputs.version }}', format: cyclonedx-json, upload-artifact: false,
+                  output-file: 'build/sbom/dawnline-dispatch-service-${{ steps.meta.outputs.version }}.cdx.json' } }
+      - { name: SBOM — tracking-service, uses: anchore/sbom-action@v0,
+          with: { image: 'dawnline/tracking-service:${{ steps.meta.outputs.version }}', format: cyclonedx-json, upload-artifact: false,
+                  output-file: 'build/sbom/dawnline-tracking-service-${{ steps.meta.outputs.version }}.cdx.json' } }
+      - { name: SBOM — ops-api, uses: anchore/sbom-action@v0,
+          with: { image: 'dawnline/ops-api:${{ steps.meta.outputs.version }}', format: cyclonedx-json, upload-artifact: false,
+                  output-file: 'build/sbom/dawnline-ops-api-${{ steps.meta.outputs.version }}.cdx.json' } }
+      - { name: SBOM — ops-web, uses: anchore/sbom-action@v0,
+          with: { image: 'dawnline/ops-web:${{ steps.meta.outputs.version }}', format: cyclonedx-json, upload-artifact: false,
+                  output-file: 'build/sbom/dawnline-ops-web-${{ steps.meta.outputs.version }}.cdx.json' } }
+
+      - name: SBOM 이 이미지마다 있다
+        run: |
+          # 전제를 먼저 말한다 — 여섯 파일이 비어 있지 않다. 빠진 이미지가 조용히 릴리스에 없는 모양을 막는다.
+          for image in $SERVICES ops-web; do
+            test -s "build/sbom/dawnline-$image-${{ steps.meta.outputs.version }}.cdx.json" || { echo "SBOM 없음: $image"; exit 1; }
+          done
+
+      - name: SBOM 아티팩트
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ steps.meta.outputs.version }}
+          path: build/sbom/*.cdx.json
+
+      - name: GHCR 로그인
+        if: steps.meta.outputs.publish == 'true'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: GHCR 푸시
+        if: steps.meta.outputs.publish == 'true'
+        run: |
+          for image in $SERVICES ops-web; do
+            docker push "${{ steps.meta.outputs.registry }}/dawnline-$image:${{ steps.meta.outputs.version }}"
+          done
+
+      - name: 릴리스 · SBOM 첨부
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/sbom/*.cdx.json \
+            --title "$GITHUB_REF_NAME" \
+            --notes "이미지: ${{ steps.meta.outputs.registry }}/dawnline-<서비스>:${{ steps.meta.outputs.version }} (서비스 5개 + ops-web). SBOM 은 이미지마다 CycloneDX JSON."
