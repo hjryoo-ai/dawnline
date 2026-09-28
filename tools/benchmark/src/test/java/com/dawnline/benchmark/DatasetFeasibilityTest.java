@@ -2,6 +2,8 @@ package com.dawnline.benchmark;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.common.TierSchedule;
+import com.dawnline.common.TimeWindow;
 import com.dawnline.common.fleet.FleetFeasibility;
 import com.dawnline.common.fleet.FleetFeasibility.Assessment;
 import com.dawnline.common.fleet.FleetFeasibility.Line;
@@ -13,9 +15,12 @@ import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import com.dawnline.dispatch.domain.optimizer.StopMerger;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
+import com.dawnline.dispatch.domain.optimizer.rule.ShiftWindowRule;
+import com.dawnline.dispatch.domain.optimizer.rule.TimeWindowLimitRule;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -49,6 +54,17 @@ import org.junit.jupiter.params.provider.EnumSource;
  *       적재 용량 중 <em>먼저 걸리는 쪽</em>이 그 차의 실제 슬롯이다 — 30 kg 자전거는 상한이 120
  *       이어도 평균 화물로 10 곳밖에 못 간다. 이 기준이 빠져 있어 첫 측정에서 미배정 83건 중 71건이
  *       {@code max-stops} 였다. 알고리즘이 아니라 <em>차가 모자란 것</em>이었다.</li>
+ *   <li><strong>웨이브 하나에 약속창은 하나</strong>이고 그 창은 웨이브의 (티어, 컷오프)에서 {@link TierSchedule#windowFor}
+ *       가 내는 창이다(§2.2 — 웨이브는 (캠프, 티어, 컷오프)이고 창은 컷오프에서 유도된다). 처음 판의 창 셋은 어느 실제 웨이브와도
+ *       맞지 않았고, 기다림을 넣자 그 레짐에서 비용이 두 배가 됐다
+ *       ([ADR-075](../../../../../docs/adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md) 결정 1 —
+ *       이 기준은 수치를 보기 전에 적었다).</li>
+ *   <li><strong>시간 축</strong> — 서비스 시간 합 + stop 당 이동 추정이 차량마다의 시간 슬롯 합의 <strong>80% 이하</strong>.
+ *       차량의 시간 슬롯은 {@code 약속창 끝 + 지각 한도 − 출발 − 캠프 왕복}이고, 이동 추정과 캠프 왕복은 시드 룰
+ *       {@code shift-window} 의 {@code legSeconds} · {@code depotLegsSeconds}, 지각 한도는 {@code late-hard-limit} 의 값이다 —
+ *       알고리즘에 기대지 않는 추정이고, 같은 값이 룰의 stop 상한도 낸다. 창이 셋이던 때는 약속창이 계획 시작 +10시간까지 퍼져
+ *       이 축이 물지 않았고, 그래서 기준에 없었다. 창이 하나(6시간)가 되자 무는 축이 됐다 — 두 번째 열의 미배정이 전부
+ *       {@code late-hard-limit} 였다(ADR-075 결정 1).</li>
  * </ul>
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
@@ -75,11 +91,14 @@ class DatasetFeasibilityTest {
      */
     private static final double STOP_HEADROOM = FleetFeasibility.HEADROOM_PERCENT / 100.0d;
 
+    /** {@code overload} 의 선언 — 무는 축(시간)의 수요가 80% 슬롯의 몇 배인가 (ADR-075 결정 1). */
+    private static final double OVERLOAD_RATIO = 1.5d;
+
     // 실현 가능성 기준은 OVERLOAD 를 <strong>빼는 방식</strong>으로 적는다(EXCLUDE), 드는
     // 방식이 아니라 — 데이터셋이 새로 생기면 자동으로 검사 대상이 되어야 한다. 드는 방식이던
     // 2026-09-12 까지 `peak` 이 목록에 없었고, 그래서 stop 8,411 개가 슬롯 7,200 개를 넘는다는
-    // 사실을 아무도 보지 못했다. OVERLOAD 의 «일부러 어긴다» 는
-    // overload_는_stop_기준을_일부러_어긴다() 가 따로 말한다.
+    // 사실을 아무도 보지 못했다(창이 셋이던 때의 수 — ADR-075 뒤로 stop 은 5,811 이다). OVERLOAD 의 «일부러 어긴다» 는
+    // overload_는_시간_기준을_일부러_어긴다() 가 따로 말한다.
 
     /** 아무 능력도 요구하지 않는 조합 — 그 stop 축이 전체 stop 수 대 전체 슬롯이다. */
     private static final FleetFeasibility.Combination GENERAL = new FleetFeasibility.Combination(false, false, false);
@@ -207,6 +226,86 @@ class DatasetFeasibilityTest {
                 .isGreaterThanOrEqualTo(1.2d);
     }
 
+    @ParameterizedTest
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
+    void 시간_축_수요가_약속창_안의_차량_시간의_80퍼센트를_넘지_않는다(Dataset dataset) {
+        TimeAxis axis = timeAxis(problem(dataset));
+
+        assertThat(axis.ratio())
+                .as("%s 시간 수요 %,d 초 / 80%% 시간 슬롯 %,d 초 — 넘으면 미배정이 알고리즘이 아니라 시간 부족에서 나온다"
+                        + "(late-hard-limit)", dataset.cliName(), axis.demandSeconds(), axis.slotSeconds())
+                .isLessThanOrEqualTo(1.0d);
+    }
+
+    /**
+     * 시간 축의 수요와 80% 슬롯.
+     *
+     * @param demandSeconds 서비스 시간 합 + stop 수 × {@code legSeconds}
+     * @param slotSeconds   차량마다 {@code (약속창 끝 + 지각 한도 − 출발 − depotLegsSeconds)} 의 합 × 0.8
+     */
+    record TimeAxis(long demandSeconds, long slotSeconds) {
+        double ratio() {
+            return (double) demandSeconds / slotSeconds;
+        }
+    }
+
+    /** 시드 룰에서 이동 추정 · 캠프 왕복 · 지각 한도를 읽어 시간 축을 잰다. 출발은 {@code max(계획 시작, 근무 시작)} 이다. */
+    static TimeAxis timeAxis(PlanningProblem problem) {
+        RuleSet seed = RuleSeed.load(RuleSeed.locate(), 1);
+        ShiftWindowRule.StopTime stopTime = seed.hardRules().stream()
+                .filter(ShiftWindowRule.class::isInstance).map(ShiftWindowRule.class::cast)
+                .map(ShiftWindowRule::stopTime).filter(java.util.Objects::nonNull).findFirst()
+                .orElseThrow(() -> new IllegalStateException("시드 룰에 shift-window 의 이동 추정이 없다"));
+        int hardLimitMinutes = seed.hardRules().stream()
+                .filter(TimeWindowLimitRule.class::isInstance).map(TimeWindowLimitRule.class::cast)
+                .mapToInt(TimeWindowLimitRule::hardLimitMinutes).findFirst()
+                .orElseThrow(() -> new IllegalStateException("시드 룰에 late-hard-limit 이 없다"));
+
+        List<Stop> stops = StopMerger.merge(problem.candidates());
+        long demand = stops.stream().mapToLong(Stop::serviceSeconds).sum() + (long) stops.size() * stopTime.legSeconds();
+        Instant end = problem.candidates().stream().map(c -> c.promised().end()).max(java.util.Comparator.naturalOrder())
+                .orElseThrow().plus(Duration.ofMinutes(hardLimitMinutes));
+        long slots = 0;
+        for (VehicleSpec vehicle : problem.vehicles()) {
+            Instant departure = vehicle.shift().start().isAfter(problem.startedAt())
+                    ? vehicle.shift().start() : problem.startedAt();
+            slots += Math.max(0L, Duration.between(departure, end).toSeconds() - stopTime.depotLegsSeconds());
+        }
+        return new TimeAxis(demand, Math.round(slots * STOP_HEADROOM));
+    }
+
+    // 창 기준은 MIXED_WINDOWS 를 빼는 방식으로 적는다 — 그 데이터셋의 «일부러 어긴다» 는
+    // mixed_windows_는_창_하나_기준을_일부러_어긴다() 가 따로 말한다.
+    @ParameterizedTest
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "MIXED_WINDOWS")
+    void 웨이브의_모든_후보는_컷오프에서_유도한_약속창_하나를_갖는다(Dataset dataset) {
+        PlanningProblem problem = problem(dataset);
+        TimeWindow expected = TierSchedule.standard().windowFor(problem.wave().serviceTier(), problem.wave().cutoffAt());
+
+        assertThat(problem.candidates().stream().map(Candidate::promised).collect(Collectors.toSet()))
+                .as("%s — 웨이브는 (캠프, 티어, 컷오프)이고 창은 컷오프에서 유도된다(§2.2). 창이 여럿인 웨이브는 "
+                        + "어느 티어에도 없는 레짐이다", dataset.cliName())
+                .containsExactly(expected);
+    }
+
+    /**
+     * {@code mixed-windows} 는 <strong>창 기준을 어기는 것이 목적</strong>이다 — 그 사실을 테스트가 스스로 말한다.
+     *
+     * <p>{@link #overload_는_시간_기준을_일부러_어긴다} 와 같은 이유다: 말하지 않으면 다음 사람이 결함으로 보고 «고치거나»(창을
+     * 하나로 — 시각을 보지 않는 줄 세우기의 약점을 보는 자리가 사라진다), 기본 레짐으로 읽어 비교표의 같은 절에 싣는다.
+     */
+    @org.junit.jupiter.api.Test
+    void mixed_windows_는_창_하나_기준을_일부러_어긴다() {
+        PlanningProblem mixed = problem(Dataset.MIXED_WINDOWS);
+
+        assertThat(mixed.candidates().stream().map(Candidate::promised).distinct().count())
+                .as("mixed-windows 의 존재 이유가 «한 웨이브에 창이 여럿» 이다. 이 어설션이 깨졌다면 창을 하나로 만든 것이고, "
+                        + "그건 도구를 없앤 것이다")
+                .isEqualTo(3L);
+        assertThat(mixed.candidates()).as("medium 과 같은 주문 수 — 차이는 창뿐이다")
+                .hasSameSizeAs(problem(Dataset.MEDIUM).candidates());
+    }
+
     /**
      * {@code overload} 는 <strong>기준을 어기는 것이 목적</strong>이다 — 그 사실을 테스트가
      * 스스로 말한다.
@@ -215,20 +314,58 @@ class DatasetFeasibilityTest {
      * (차량을 늘린다) — 그러면 과부하 거동을 재는 자리가 사라진다. ② 반대로 누군가 이것을
      * 정상 데이터셋으로 읽고 §6.9 비교표에 같은 절로 싣는다 — 그러면 표가 재는 것이 라우팅
      * 품질이 아니라 용량이 된다.
+     *
+     * <p>어기는 축은 <strong>시간</strong>이다(2026-09-28, ADR-075 결정 1). 창이 셋이던 때는 stop 이었다.
      */
     @org.junit.jupiter.api.Test
-    void overload_는_stop_기준을_일부러_어긴다() {
-        Line general = assess(problem(Dataset.OVERLOAD)).line(GENERAL).orElseThrow();
+    void overload_는_시간_기준을_일부러_어긴다() {
+        PlanningProblem overload = problem(Dataset.OVERLOAD);
+        TimeAxis axis = timeAxis(overload);
 
-        assertThat((double) general.demand().stops() / general.capacity().stops())
-                .as("overload stop %,d / 슬롯 %,d — 이 데이터셋의 존재 이유가 «다 못 싣는다» 다. "
-                                + "이 어설션이 깨졌다면 차량을 늘린 것이고, 그건 도구를 없앤 것이다",
-                        general.demand().stops(), general.capacity().stops())
-                .isGreaterThan(STOP_HEADROOM);
-        assertThat(general.status()).as("같은 판정을 증차의 계산이 «부족» 으로 읽는다")
-                .isNotEqualTo(FleetFeasibility.Status.FEASIBLE);
-        assertThat(problem(Dataset.OVERLOAD).candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
+        assertThat(axis.ratio())
+                .as("overload 시간 수요 %,d / 80%% 슬롯 %,d 초 — 이 데이터셋의 존재 이유가 «다 못 싣는다» 다. "
+                        + "이 어설션이 깨졌다면 차량을 늘린 것이고, 그건 도구를 없앤 것이다", axis.demandSeconds(), axis.slotSeconds())
+                .isGreaterThan(1.0d);
+        assertThat(overload.candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
                 .hasSameSizeAs(problem(Dataset.PEAK).candidates());
+    }
+
+    /**
+     * <strong>운영의 증차 계산은 시간 축을 보지 않는다</strong> — 알려진 공백을 테스트가 고정한다(원장 A40).
+     *
+     * <p>{@link FleetFeasibility}(ADR-067 — 성수기 증차의 대수)는 제약 조합 × (stop · 중량 · 부피)만 본다. 시간으로 못 싣는
+     * {@code overload} 를 그 계산은 «충분» 으로 읽는다. 공백을 구현하지 않기로 했으므로(포트폴리오 범위 밖 — 다시 여는 조건은 원장),
+     * 그 사실이 조용히 바뀌지 않게 여기 적는다: 누군가 시간 축을 넣으면 이 테스트가 빨개지고, 그때 원장 행을 닫는다.
+     */
+    @org.junit.jupiter.api.Test
+    void 운영의_증차_계산은_시간으로_못_싣는_웨이브를_충분으로_읽는다() {
+        PlanningProblem overload = problem(Dataset.OVERLOAD);
+
+        assertThat(timeAxis(overload).ratio()).as("전제: 시간으로는 못 싣는다").isGreaterThan(1.0d);
+        assertThat(assess(overload).line(GENERAL).orElseThrow().status())
+                .as("FleetFeasibility 에는 시간 축이 없다 — 원장 A40")
+                .isEqualTo(FleetFeasibility.Status.FEASIBLE);
+    }
+
+    /**
+     * {@code overload} 의 대수는 <strong>선언한 비율</strong>에서 나온다 — 무는 축의 수요가 80% 슬롯의 1.5배
+     * (ADR-075 결정 1). 무는 축은 시간이다. 정수 대수로는 그 비율을 넘지 않는 최소 대수이고, 한 대 적으면 넘는다.
+     * 처음 판의 60대는 비율이 아니라 결과(옛 통합 위에서 stop 146%)였고, 통합이 바뀌자 그 결과가 조용히 변했다.
+     */
+    @org.junit.jupiter.api.Test
+    void overload_의_대수는_무는_축의_수요가_80퍼센트_슬롯의_1_5배가_되는_최소_대수다() {
+        PlanningProblem problem = problem(Dataset.OVERLOAD);
+        TimeAxis axis = timeAxis(problem);
+        int vehicles = problem.vehicles().size();
+        double perVehicle = (double) axis.slotSeconds() / vehicles;
+
+        assertThat(axis.ratio())
+                .as("overload 시간 수요 %,d / 80%% 슬롯 %,d 초 (차량 %d) — 선언은 1.5배다", axis.demandSeconds(),
+                        axis.slotSeconds(), vehicles)
+                .isLessThanOrEqualTo(OVERLOAD_RATIO);
+        assertThat(axis.demandSeconds() / (perVehicle * (vehicles - 1)))
+                .as("한 대 적으면 1.5배를 넘어야 최소다 — 넘지 않으면 대수가 선언보다 적다")
+                .isGreaterThan(OVERLOAD_RATIO);
     }
 
     private static long sum(List<Candidate> candidates, java.util.function.ToLongFunction<Candidate> field) {

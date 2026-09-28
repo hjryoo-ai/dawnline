@@ -132,22 +132,19 @@ class FixedCostFloorTest {
     /**
      * {@code overload} 가 위 목록에서 빠진 이유를 <strong>테스트가 스스로 말한다</strong>
      * (CLAUDE.md — 제외한 것이 왜 제외인지를 검사한다).
+     *
+     * <p>이유가 바뀌었다(2026-09-28, ADR-075 결정 1). 창이 셋이던 때는 stop 축을 덮지 못해 하한이 «실현 불가» 였다. 창이 하나가
+     * 되자 {@code overload} 가 못 싣는 축은 <strong>시간</strong>이고, 이 하한은 시간 축을 보지 않는다 — 하한은 계산되지만 그
+     * 함대로는 실을 수 없다. 「불가능의 경계」가 한 축을 못 보는 자리이므로 표에 싣지 않는다(원장 A40 과 같은 공백).
      */
     @Test
-    void overload_는_stop_축을_덮지_못한다() {
+    void overload_가_못_싣는_축은_하한이_보지_않는_시간이다() {
         PlanningProblem problem = dataset(Dataset.OVERLOAD);
-        List<Stop> stops = StopMerger.merge(problem.candidates());
-        int slots = problem.vehicles().size() * 120;
 
-        assertThat(stops.size())
-                .as("전제: 이 데이터셋의 존재 이유가 «다 못 싣는다» 다 (stop %,d / 슬롯 %,d)",
-                        stops.size(), slots)
-                .isGreaterThan(slots);
-
-        FixedCostFloor floor = FixedCostFloor.of(problem);
-
-        assertThat(floor.feasible()).isFalse();
-        assertThat(floor.uncoverable()).contains("전체 stop");
+        assertThat(DatasetFeasibilityTest.timeAxis(problem).ratio())
+                .as("전제: 이 데이터셋의 존재 이유가 «다 못 싣는다» 다 — 시간 축에서").isGreaterThan(1.0d);
+        assertThat(FixedCostFloor.of(problem).feasible())
+                .as("하한은 stop · 중량 · 부피만 본다 — 시간으로 못 싣는 함대를 «덮는다» 로 읽는다").isTrue();
     }
 
     // ------------------------------------------------------------------ 픽스처

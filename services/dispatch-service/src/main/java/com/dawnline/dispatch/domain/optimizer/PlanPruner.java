@@ -39,6 +39,16 @@ public final class PlanPruner {
 
     private static final String DEACTIVATED_REASON = "계획 중에 비활성화된 차량이다";
 
+    /**
+     * 같은 차량의 다른 계획 라우트와 계획 시각이 겹쳐 내려진 주문의 설명 행 {@code rule_name} (ADR-075 결정 4). 파티션을 지나지 않는
+     * 계획(운영자 재실행)이 같은 캠프의 다른 계획과 동시에 「차가 비어 있다」를 읽었을 때 진 쪽이다. 다른 차로 다시 풀지 않는다 —
+     * 쓰기 트랜잭션 안의 계산이 되기 때문이고(ADR-064), 그 주문은 재실행이 한 번 더 필요하다.
+     */
+    public static final String VEHICLE_OCCUPIED = "VEHICLE_OCCUPIED";
+
+    /** {@link #VEHICLE_OCCUPIED} 의 설명. */
+    public static final String OCCUPIED_REASON = "같은 차량의 다른 계획 라우트와 계획 시각이 겹친다";
+
     private PlanPruner() {
     }
 
@@ -108,9 +118,25 @@ public final class PlanPruner {
      * @param rules    미배정 페널티를 매길 룰셋 — 계획과 같은 것
      */
     public static PlanResult withoutVehicles(PlanResult result, Set<VehicleId> inactive, RuleSet rules) {
+        return withoutVehicles(result, inactive, rules, VEHICLE_DEACTIVATED, DEACTIVATED_REASON);
+    }
+
+    /**
+     * 이 차량들의 라우트를 뺀다 — 이유를 부르는 쪽이 준다(비활성 · 점유).
+     *
+     * @param result   취소를 뺀 결과
+     * @param inactive 뺄 차량들
+     * @param rules    미배정 페널티를 매길 룰셋 — 계획과 같은 것
+     * @param rule     설명 행의 {@code rule_name}
+     * @param reason   설명 행의 이유
+     */
+    public static PlanResult withoutVehicles(PlanResult result, Set<VehicleId> inactive, RuleSet rules, String rule,
+            String reason) {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(inactive, "inactive");
         Objects.requireNonNull(rules, "rules");
+        Objects.requireNonNull(rule, "rule");
+        Objects.requireNonNull(reason, "reason");
         if (inactive.isEmpty()) {
             return result;
         }
@@ -129,9 +155,9 @@ public final class PlanPruner {
             for (PlannedStop planned : route.stops()) {
                 cost = cost.plus(rules.unassignedPenalty(planned.stop()));
                 for (OrderId orderId : planned.stop().orderIds()) {
-                    unassigned.add(new Unassigned(orderId, VEHICLE_DEACTIVATED, DEACTIVATED_REASON));
-                    moved.add(new Explanation(orderId, Explanation.Outcome.UNASSIGNED, VEHICLE_DEACTIVATED, null,
-                            Map.of("reason", DEACTIVATED_REASON, "vehicleId", route.vehicle().value().toString())));
+                    unassigned.add(new Unassigned(orderId, rule, reason));
+                    moved.add(new Explanation(orderId, Explanation.Outcome.UNASSIGNED, rule, null,
+                            Map.of("reason", reason, "vehicleId", route.vehicle().value().toString())));
                     movedOrders.add(orderId);
                 }
             }

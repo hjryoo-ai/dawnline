@@ -12,7 +12,7 @@
 #      100 ms 마다 돈다 — Redis 가 발행 경로에 있으면 5초는 한 번의 명령 타임아웃으로도 넘는다.
 #   ③ 폴백이 보인다 — `DawnlineRateLimitBypassed` 가 실제 Prometheus 에서 울고(RB-03 의 알림) `dawnline_geo_lookups_total{outcome="bypassed"}`
 #      가 오른다. 폴백은 조용히 일어나면 안 된다(§7.2).
-#   ④ 복구 뒤 — 레이트 리밋의 bypassed 가 더 오르지 않고, 검증 표 V1–V9(DLQ 0)이 ✅.
+#   ④ 복구 뒤 — 레이트 리밋의 bypassed 가 더 오르지 않고, 검증 표 V1–V10(DLQ 0)이 ✅.
 #
 # Redis 는 멈춘다(dc stop redis — 볼륨은 그대로). 복구는 끝에서 반드시 한다(trap).
 # =============================================================================

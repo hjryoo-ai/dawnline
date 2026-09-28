@@ -112,7 +112,7 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
     public static String usage() {
         return """
                 사용법: benchmark [옵션]
-                  --dataset <small|medium|large|peak|overload>  기본 small
+                  --dataset <%s>  기본 small
                   --strategies <a,b,c>                 기본: 등록된 전략 전부
                   --repeats <n>                        기본 5 (§6.9)
                   --seed <n>                           기본 20260905
@@ -121,7 +121,7 @@ public record BenchmarkOptions(Dataset dataset, List<String> strategies, int rep
                   --out <path>                         없으면 표준 출력
                   --gate <strategy>                    이 전략보다 비싼 전략이 있으면 종료 코드 1 (§6.9)
                   --mode <full|fast>                   기본 full. fast 는 개선 단계를 생략한다 (§6.7)
-                  --budget-factor <0~1>                기본 1.0. 개선 예산에 곱한다 (§6.7 사다리)""";
+                  --budget-factor <0~1>                기본 1.0. 개선 예산에 곱한다 (§6.7 사다리)""".formatted(Dataset.cliNames());
     }
 
     private static String value(String[] args, int index, String flag) {

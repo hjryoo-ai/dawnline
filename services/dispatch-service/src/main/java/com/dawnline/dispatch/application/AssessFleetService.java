@@ -85,7 +85,8 @@ public class AssessFleetService implements AssessFleetUseCase {
         Map<UUID, ResourceViews.VehicleView> rows = admin.listVehicles(campId).stream()
                 .collect(Collectors.toMap(ResourceViews.VehicleView::id, Function.identity()));
         List<FleetFeasibility.Vehicle> fleet = new ArrayList<>();
-        for (VehicleSpec spec : WaveFleet.usable(vehicles.availableAt(campId, now), optimizerCandidates)) {
+        List<VehicleSpec> available = vehicles.availableAt(campId, now, WaveFleet.promisedSpan(optimizerCandidates), waveId);
+        for (VehicleSpec spec : WaveFleet.usable(available, optimizerCandidates)) {
             ResourceViews.VehicleView row = rows.get(spec.id().value());
             if (row == null) {
                 continue;

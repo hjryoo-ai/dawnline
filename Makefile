@@ -73,7 +73,7 @@ help:
 	@printf '  \033[1m시나리오\033[0m (tools/sim-runner)\n'
 	@printf '    make smoke          주문 200건 생성 [SCENARIO=smoke|tiny]   [Phase 1]\n\n'
 	@printf '    make demo           주문→편입→컷오프→wave.closed 검증  [Phase 2]\n\n'
-	@printf '  \033[1m카오스\033[0m (tools/chaos — 끝에 검증 표 V1–V9, 보고는 build/chaos/)\n'
+	@printf '  \033[1m카오스\033[0m (tools/chaos — 끝에 검증 표 V1–V10, 보고는 build/chaos/)\n'
 	@printf '    make chaos-db       서비스 하나의 DB 장애 → DLQ 0 · 전부 처리 [SERVICE=fulfillment HOLD=300]  [7-3]\n'
 	@printf '    make chaos-kafka    브로커 정지 → 주문은 받고 outbox 가 쌓였다 비운다 [HOLD=300]         [7-3]\n'
 	@printf '    make chaos-redis    Redis 정지 → 발행이 멈추지 않고 지연이 오르지 않는다 [HOLD=300]      [7-3]\n'
@@ -360,7 +360,7 @@ peak-facts: env
 	@bash tools/sim/peak-facts.sh
 
 # -----------------------------------------------------------------------------
-# 카오스 (DESIGN.md §13 「카오스」, tools/chaos). 끝에 검증 표 V1–V9 을 낸다 — 카오스 종류와 무관하게 같은 표이고 7-4 peak-day 도
+# 카오스 (DESIGN.md §13 「카오스」, tools/chaos). 끝에 검증 표 V1–V10 을 낸다 — 카오스 종류와 무관하게 같은 표이고 7-4 peak-day 도
 # 같은 표를 낸다. 보고는 build/chaos/ 에 남는다.
 #
 #   make chaos-db                       fulfillment 의 DB 를 5분 멈춘다(계정 NOLOGIN — 끝에서 반드시 되돌린다)

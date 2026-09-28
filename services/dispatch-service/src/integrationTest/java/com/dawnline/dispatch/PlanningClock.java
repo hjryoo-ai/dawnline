@@ -11,7 +11,7 @@ import org.springframework.context.annotation.Bean;
  *
  * <h2>왜 옮기는가</h2>
  * 차량 근무창은 벽시계 {@code TIME}(06:00–22:00 KST)이고 어댑터가 <em>계획 날짜</em>에 붙인다
- * ({@code JdbcReferenceData.availableAt}). 실행 시각이 21시면 남은 근무창이 한 시간이라 오전에
+ * ({@code JdbcReferenceData.availableAt} — 근무는 약속창에 닿는 것이다, ADR-075). 실행 시각이 21시면 남은 근무창이 한 시간이라 오전에
  * 돌린 것과 결과가 완전히 다르다 — 배정이 미배정으로 바뀌고, 그러면 "주문당 하나" 같은 어설션이
  * 시각에 따라 붙었다 떨어진다. seed 를 고정하고 주문 id 를 결정적으로 만들어도 이 축은 남는다.
  * 09:00 KST 로 옮기면 근무창 한가운데에서 시작해 축이 사라진다.

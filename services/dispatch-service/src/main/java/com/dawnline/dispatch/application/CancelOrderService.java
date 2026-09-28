@@ -18,6 +18,7 @@ import com.dawnline.dispatch.domain.optimizer.DistanceProvider;
 import com.dawnline.dispatch.domain.optimizer.PlannedRoute;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.Stop;
+import com.dawnline.dispatch.domain.optimizer.WaveFleet;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Instant;
 import java.util.List;
@@ -168,7 +169,7 @@ public class CancelOrderService implements CancelOrderUseCase {
         CampDepot depot = new CampDepot(plan.campId(), plan.depot().orElseThrow(
                 () -> new ConflictException("캠프 좌표가 없는 계획은 다시 쓸 수 없습니다",
                         Map.of("planId", plan.id().toString()))));
-        VehicleSpec vehicle = vehicleOf(plan.campId(), startAt, header.vehicleId(), routeId);
+        VehicleSpec vehicle = vehicleOf(plan, startAt, WaveFleet.promisedSpanOfStops(live), header.vehicleId(), routeId);
 
         RouteAccumulator route =
                 new RouteAccumulator(rules.forCamp(plan.campId()), vehicle, depot, distance, startAt);
@@ -178,8 +179,10 @@ public class CancelOrderService implements CancelOrderUseCase {
         return route.toRoute(cost);
     }
 
-    private VehicleSpec vehicleOf(UUID campId, Instant startAt, UUID vehicleId, UUID routeId) {
-        return vehicles.availableAt(campId, startAt).stream()
+    /** 계획 때와 같은 해석 — 약속창에 닿는 근무, 시작은 {@code available_from}(ADR-075 결정 5). 발행된 라우트가 옛 출발을 지킨다. */
+    private VehicleSpec vehicleOf(RoutePlan plan, Instant startAt, com.dawnline.common.TimeWindow promised, UUID vehicleId,
+            UUID routeId) {
+        return vehicles.availableAt(plan.campId(), startAt, promised, plan.waveId()).stream()
                 .filter(spec -> spec.id().value().equals(vehicleId))
                 .findFirst()
                 .orElseThrow(() -> new ConflictException("라우트의 차량을 찾을 수 없습니다",

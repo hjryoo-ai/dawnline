@@ -33,6 +33,11 @@ import java.util.Set;
  * {@link #stops()} 가 필요할 때 한 번만 펴 준다(라우트를 굳힐 때). 같은 이유로
  * {@code zones} 도 누적해 둔다 — {@code ZONE_AFFINITY} 가 stop 마다 묻는데 그때마다 전체를
  * 훑으면 그것만으로 O(n²) 이다. 권역이 늘 때만 복사하므로 보통은 참조 하나다.
+ *
+ * <h2>약속창 시작 전에는 기다린다</h2>
+ * 도착은 {@code max(이동 도착, 약속창 시작)} 이다(§2.2 — 약속창 시작은 하한, ADR-075 결정 2). 기다린 시간은 따로 값을 매기지
+ * 않는다 — 라우트 시간에 들어가 시간비와 {@code SHIFT_WINDOW} 가 이미 본다. 처음 판은 도착 즉시 서비스를 시작했고, 그래서 23:58 에
+ * 출발한 차가 08:00 창의 stop 을 00:20 에 「배송」하는 계획이 비용 모델 안에서 정상이었다.
  */
 public final class RouteState {
 
@@ -103,7 +108,7 @@ public final class RouteState {
     public RouteState append(Stop stop) {
         Objects.requireNonNull(stop, "stop");
         Travel travel = distance.between(at, stop.point());
-        Instant arrival = time.plusSeconds(travel.seconds());
+        Instant arrival = notBeforeWindow(time.plusSeconds(travel.seconds()), stop);
         Instant departure = arrival.plusSeconds(stop.serviceSeconds());
         PlannedStop planned = new PlannedStop(stopCount + 1, stop, arrival, departure);
         return new RouteState(vehicle, depot, distance, startedAt, planStartedAt, this, planned,
@@ -111,10 +116,16 @@ public final class RouteState {
                 departure, Math.addExact(distanceM, travel.meters()));
     }
 
-    /** 이 stop 을 붙였을 때의 <strong>도착</strong> 시각. 붙이지는 않는다. */
+    /** 이 stop 을 붙였을 때의 <strong>도착</strong> 시각 — 약속창 시작 전이면 창 시작이다. 붙이지는 않는다. */
     public Instant arrivalIfAppended(Stop stop) {
         Objects.requireNonNull(stop, "stop");
-        return time.plusSeconds(distance.between(at, stop.point()).seconds());
+        return notBeforeWindow(time.plusSeconds(distance.between(at, stop.point()).seconds()), stop);
+    }
+
+    /** 약속창 시작 전에 닿으면 창 시작까지 기다린다 (§2.2, ADR-075 결정 2). */
+    private static Instant notBeforeWindow(Instant reached, Stop stop) {
+        Instant opens = stop.promised().start();
+        return reached.isBefore(opens) ? opens : reached;
     }
 
     /** 지금 캠프로 돌아간다면 도착하는 시각. */

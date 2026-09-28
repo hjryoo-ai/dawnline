@@ -122,6 +122,25 @@ class DatasetGeneratorTest {
     }
 
     @Test
+    void mixed_windows_는_medium_과_창만_다르다() {
+        // 창이 하나여도 후보마다 같은 난수를 소비한다 — 그래야 두 데이터셋의 차이가 창 하나로 좁혀진다(ADR-075 결정 1).
+        PlanningProblem medium = generate(Dataset.MEDIUM, 20_260_905L);
+        PlanningProblem mixed = generate(Dataset.MIXED_WINDOWS, 20_260_905L);
+
+        assertThat(mixed.candidates()).extracting(Candidate::point, Candidate::parcel, Candidate::serviceSeconds,
+                        Candidate::priority)
+                .containsExactlyElementsOf(medium.candidates().stream()
+                        .map(c -> org.assertj.core.groups.Tuple.tuple(c.point(), c.parcel(), c.serviceSeconds(), c.priority()))
+                        .toList());
+        assertThat(mixed.vehicles()).extracting(v -> v.capacity(), v -> v.attrs(), v -> v.shift(), v -> v.cost())
+                .containsExactlyElementsOf(medium.vehicles().stream()
+                        .map(v -> org.assertj.core.groups.Tuple.tuple(v.capacity(), v.attrs(), v.shift(), v.cost()))
+                        .toList());
+        assertThat(mixed.candidates().stream().map(Candidate::promised).distinct().count()).isEqualTo(3L);
+        assertThat(medium.candidates().stream().map(Candidate::promised).distinct().count()).isEqualTo(1L);
+    }
+
+    @Test
     void 계획_시작_시각과_seed_가_문제에_들어_있다() {
         // 순수 함수는 시각도 난수도 입력으로 받는다 (불변규칙 12).
         PlanningProblem problem = generate(Dataset.SMALL, 99L);

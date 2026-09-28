@@ -18,6 +18,7 @@ import com.dawnline.dispatch.domain.optimizer.Feasibility;
 import com.dawnline.dispatch.domain.optimizer.RouteAccumulator;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.Stop;
+import com.dawnline.dispatch.domain.optimizer.WaveFleet;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Instant;
 import java.util.List;
@@ -119,7 +120,9 @@ public class ReassignStopService implements ReassignStopUseCase {
         List<Stop> fromStops = routes.loadStops(routeId);
         List<Stop> toStops = routes.loadStops(targetRouteId);
         RuleSet ruleSet = rules.forCamp(plan.campId());
-        Map<UUID, VehicleSpec> fleet = fleetOf(plan.campId(), startAt);
+        List<Stop> both = new java.util.ArrayList<>(fromStops);
+        both.addAll(toStops);
+        Map<UUID, VehicleSpec> fleet = fleetOf(plan, startAt, WaveFleet.promisedSpanOfStops(both));
 
         // 두 라우트 모두 다시 검사한다 — 떠난 쪽은 규칙을 어길 수 없지만, 시간이 당겨져
         // 지각 판정이 바뀔 수 있고 그 사실이 발행에 실려야 한다.
@@ -149,9 +152,10 @@ public class ReassignStopService implements ReassignStopUseCase {
                 .orElseThrow(() -> NotFoundException.of("Route", routeId.toString()));
     }
 
-    private Map<UUID, VehicleSpec> fleetOf(UUID campId, Instant startAt) {
+    /** 계획 때와 같은 해석 — 약속창에 닿는 근무, 시작은 {@code available_from}(ADR-075 결정 5). */
+    private Map<UUID, VehicleSpec> fleetOf(RoutePlan plan, Instant startAt, com.dawnline.common.TimeWindow promised) {
         Map<UUID, VehicleSpec> fleet = new java.util.LinkedHashMap<>();
-        vehicles.availableAt(campId, startAt)
+        vehicles.availableAt(plan.campId(), startAt, promised, plan.waveId())
                 .forEach(vehicle -> fleet.put(vehicle.id().value(), vehicle));
         return fleet;
     }
