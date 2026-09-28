@@ -9,6 +9,7 @@ import com.dawnline.dispatch.application.port.out.DispatchEvents;
 import com.dawnline.dispatch.application.port.out.PlannedRouteRepository;
 import com.dawnline.dispatch.application.port.out.RoutePlanRepository;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
+import com.dawnline.dispatch.application.port.out.VehicleActivity;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
@@ -80,7 +81,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <h2>발행 직전 재검증</h2>
  * 계획은 시작 시점 스냅샷으로 돈다. 그 사이 도착한 취소는 반영되지 않았으므로, 발행 직전에
  * 후보 상태를 <strong>다시 읽어</strong> 취소된 것을 뺀다(§6.5 6단계, ADR-026 분기 2).
- * 이 창을 revision 없이 닫는 유일한 자리다.
+ * 이 창을 revision 없이 닫는 유일한 자리다. 같은 자리에서 라우트의 차량을 {@code FOR SHARE} 로 다시 읽어 계획 중에 비활성화된
+ * 차량의 라우트를 뺀다 — 그 주문은 미배정이다(ADR-067 후속, 7-0 A33).
  */
 public class RunPlanService implements RunPlanUseCase {
 
@@ -101,11 +103,18 @@ public class RunPlanService implements RunPlanUseCase {
      */
     static final String RULE_VIOLATION = "RULE_VIOLATION";
 
+    /**
+     * 계획 중에 비활성화된 차량을 빼고 나니 라우트가 하나도 남지 않았다 (ADR-067 후속). {@code plan.failed} 계약에 이미 있는 값이다.
+     * 취소로 전부 빠진 {@link #NO_CANDIDATES} 와 가른다 — 운영자가 볼 원인이 다르다.
+     */
+    static final String NO_VEHICLE = "NO_VEHICLE";
+
     private final RoutePlanRepository plans;
     private final DispatchCandidateRepository candidates;
     private final PlannedRouteRepository routes;
     private final DispatchEvents events;
     private final VehicleCatalog vehicles;
+    private final VehicleActivity activity;
     private final RuleCatalog rules;
     private final DistanceProvider distance;
     private final PlanValidator validator = new PlanValidator();
@@ -124,6 +133,7 @@ public class RunPlanService implements RunPlanUseCase {
      * @param routes          라우트·설명 저장소
      * @param events          발행 (Outbox)
      * @param vehicles        차량 카탈로그
+     * @param activity        발행 직전 재검증의 차량 활성 (ADR-067 후속)
      * @param rules           룰 카탈로그
      * @param distance        거리 제공자
      * @param metrics         §9.1 계획 메트릭
@@ -135,7 +145,7 @@ public class RunPlanService implements RunPlanUseCase {
      */
     public RunPlanService(RoutePlanRepository plans, DispatchCandidateRepository candidates,
             PlannedRouteRepository routes, DispatchEvents events, VehicleCatalog vehicles,
-            RuleCatalog rules, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
+            VehicleActivity activity, RuleCatalog rules, DistanceProvider distance, DispatchMetrics metrics, Clock clock,
             String defaultStrategy, PlanningBudget budget, PlanModeSelector modeSelector,
             PlatformTransactionManager transactions) {
 
@@ -144,6 +154,7 @@ public class RunPlanService implements RunPlanUseCase {
         this.routes = Objects.requireNonNull(routes, "routes");
         this.events = Objects.requireNonNull(events, "events");
         this.vehicles = Objects.requireNonNull(vehicles, "vehicles");
+        this.activity = Objects.requireNonNull(activity, "activity");
         this.rules = Objects.requireNonNull(rules, "rules");
         this.distance = Objects.requireNonNull(distance, "distance");
         this.metrics = Objects.requireNonNull(metrics, "metrics");
@@ -227,8 +238,8 @@ public class RunPlanService implements RunPlanUseCase {
     }
 
     /**
-     * 쓰기 — 게이트 안의 트랜잭션 하나. 계산하는 동안 바뀐 것을 여기서 다시 읽는다: 계획 행(다른 경로가 같은 웨이브를 발행했나)과
-     * 취소(ADR-026 분기 2).
+     * 쓰기 — 게이트 안의 트랜잭션 하나. 계산하는 동안 바뀐 것을 여기서 다시 읽는다: 계획 행(다른 경로가 같은 웨이브를 발행했나),
+     * 취소(ADR-026 분기 2), 차량의 활성(ADR-067 후속).
      */
     private Written write(RunPlanCommand command, Snapshot snapshot, @Nullable Computed computed,
             Instant startedAt) {
@@ -272,6 +283,17 @@ public class RunPlanService implements RunPlanUseCase {
 
         if (result.routes().isEmpty()) {
             plan.fail(NO_CANDIDATES, clock.instant());
+            plans.update(plan);
+            events.planFailed(plan);
+            return Written.of(Outcome.FAILED);
+        }
+
+        // 계획 중에 비활성화된 차량의 라우트를 뺀다 (ADR-067 후속 — 7-0 A33). 409 가 막지 못한 창이다: 그 차량에는 아직 stop 이
+        // 없었다. FOR SHARE 가 비활성화의 FOR UPDATE 와 직렬화하므로 여기서 활성이면 발행이 커밋될 때까지 비활성화가 기다린다.
+        Set<VehicleId> inactive = inactiveVehicles(command.waveId(), result);
+        result = PlanPruner.withoutVehicles(result, inactive, snapshot.ruleSet());
+        if (result.routes().isEmpty()) {
+            plan.fail(NO_VEHICLE, clock.instant());
             plans.update(plan);
             events.planFailed(plan);
             return Written.of(Outcome.FAILED);
@@ -370,6 +392,19 @@ public class RunPlanService implements RunPlanUseCase {
             log.info("계획 중 취소된 주문을 발행에서 뺍니다: waveId={} {}건", waveId, cancelled.size());
         }
         return cancelled;
+    }
+
+    /** 발행하려는 라우트의 차량 중 비활성인 것 — 잠그며 읽는다({@link VehicleActivity#lockInactive}). */
+    private Set<VehicleId> inactiveVehicles(UUID waveId, PlanResult result) {
+        Set<UUID> used = new LinkedHashSet<>();
+        result.routes().forEach(route -> used.add(route.vehicle().value()));
+        Set<VehicleId> inactive = new LinkedHashSet<>();
+        activity.lockInactive(used).forEach(id -> inactive.add(VehicleId.of(id)));
+        if (!inactive.isEmpty()) {
+            log.warn("계획 중에 비활성화된 차량의 라우트를 발행에서 뺍니다 — 그 주문은 미배정입니다: waveId={} 차량={}",
+                    waveId, inactive);
+        }
+        return inactive;
     }
 
     /** 있으면 그것, 없으면 새로 만든다. {@code wave_id} UNIQUE 가 경합을 흡수한다. 쓰기 트랜잭션 안에서만 부른다. */

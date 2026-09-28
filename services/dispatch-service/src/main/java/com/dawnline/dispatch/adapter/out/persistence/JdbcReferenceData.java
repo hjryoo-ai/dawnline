@@ -3,6 +3,7 @@ package com.dawnline.dispatch.adapter.out.persistence;
 import com.dawnline.common.TimeWindow;
 import com.dawnline.dispatch.application.port.out.DriverLookup;
 import com.dawnline.dispatch.application.port.out.RuleCatalog;
+import com.dawnline.dispatch.application.port.out.VehicleActivity;
 import com.dawnline.dispatch.application.port.out.VehicleCatalog;
 import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
@@ -22,11 +23,14 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -41,7 +45,7 @@ import tools.jackson.databind.ObjectMapper;
  * {@code route_plans} 에 저장된다(불변규칙 4, V2 마이그레이션) — dispatch 는 캠프의
  * <strong>참조 데이터를 갖지 않는다</strong>.
  */
-public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLookup {
+public class JdbcReferenceData implements VehicleCatalog, VehicleActivity, RuleCatalog, DriverLookup {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -55,6 +59,31 @@ public class JdbcReferenceData implements VehicleCatalog, RuleCatalog, DriverLoo
      */
     public JdbcReferenceData(EntityManager entityManager) {
         this.entityManager = Objects.requireNonNull(entityManager, "entityManager");
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>{@code ORDER BY id} 로 잠그는 순서를 고정한다 — 공유 잠금끼리는 서로 막지 않지만, 같은 차량들을 다른 순서로 잠그는
+     * 배타 잠금이 나중에 생겨도 교착의 모양이 생기지 않는다.
+     */
+    @Override
+    public Set<UUID> lockInactive(Collection<UUID> vehicleIds) {
+        Objects.requireNonNull(vehicleIds, "vehicleIds");
+        if (vehicleIds.isEmpty()) {
+            return Set.of();
+        }
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT id, active FROM vehicles WHERE id IN (:ids) ORDER BY id FOR SHARE
+                """).setParameter("ids", List.copyOf(new LinkedHashSet<>(vehicleIds))).getResultList();
+        Set<UUID> inactive = new LinkedHashSet<>(vehicleIds);
+        for (Object[] row : rows) {
+            if (Boolean.TRUE.equals(row[1])) {
+                inactive.remove((UUID) row[0]);
+            }
+        }
+        return Set.copyOf(inactive);
     }
 
     @Override

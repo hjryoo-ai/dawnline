@@ -191,7 +191,7 @@ public class DispatchApplicationConfig {
             DispatchMetrics metrics, Clock clock, DispatchProperties properties,
             PlatformTransactionManager transactionManager) {
 
-        return new RunPlanService(plans, candidates, routes, events, reference, reference,
+        return new RunPlanService(plans, candidates, routes, events, reference, reference, reference,
                 distance, metrics, clock, properties.plan().defaultStrategy(),
                 new PlanningBudget(properties.plan().budget(), properties.plan().perRouteBudget()),
                 new PlanModeSelector(properties.degrade().maxBacklogWaves(),

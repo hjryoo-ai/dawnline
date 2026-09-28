@@ -639,6 +639,37 @@ final class InMemoryDispatchPorts {
         }
     }
 
+    /**
+     * 발행 직전 재검증의 차량 활성 (ADR-067 후속). 기본은 전부 활성이다 — 비활성은 테스트가 {@link #deactivate} 로 정한다.
+     * 물어본 차량을 모두 적는다: 「재검증이 돌았다」를 테스트가 볼 수 있어야 기본값의 「전부 활성」이 검사를 조용히 통과시키지 않는다.
+     */
+    static final class Activity implements com.dawnline.dispatch.application.port.out.VehicleActivity {
+
+        final List<java.util.Collection<UUID>> asked = new ArrayList<>();
+        private final java.util.Set<UUID> inactive = new java.util.HashSet<>();
+        private boolean firstAsked;
+
+        void deactivate(UUID vehicleId) {
+            inactive.add(vehicleId);
+        }
+
+        /** 처음 물어본 차량 하나를 비활성으로 — 계획이 어느 차를 쓸지 테스트가 모를 때. */
+        void deactivateFirstAsked() {
+            firstAsked = true;
+        }
+
+        @Override
+        public java.util.Set<UUID> lockInactive(java.util.Collection<UUID> vehicleIds) {
+            asked.add(List.copyOf(vehicleIds));
+            if (firstAsked && !vehicleIds.isEmpty()) {
+                inactive.add(vehicleIds.iterator().next());
+            }
+            java.util.Set<UUID> found = new java.util.LinkedHashSet<>(vehicleIds);
+            found.retainAll(inactive);
+            return java.util.Set.copyOf(found);
+        }
+    }
+
     /** 발행 기록. */
     static final class Events implements DispatchEvents {
 

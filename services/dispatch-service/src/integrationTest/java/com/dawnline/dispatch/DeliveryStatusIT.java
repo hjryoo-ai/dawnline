@@ -14,6 +14,7 @@ import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.application.port.out.PlanQueries;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.messaging.contract.EventContracts;
+import com.dawnline.observability.DawnlineMetrics;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
@@ -80,6 +81,9 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private io.micrometer.core.instrument.MeterRegistry meters;
 
     @Autowired
     private PlatformTransactionManager transactionManager;
@@ -203,6 +207,7 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
                     .setParameter(1, planned.routeId()).setParameter(2, last.seq()).executeUpdate();
         });
 
+        double before = scanAfterCancel();
         publish(planned.routeId(), last.seq(), last.orderIds(), "COMPLETED");
         // 앞 stop 에 다른 이벤트를 보내 «리스너가 여기까지 왔다» 를 확인한다 — 「아무 일도
         // 일어나지 않았다」를 기다림 없이 어설션하면 그저 느린 것과 구별되지 않는다.
@@ -212,6 +217,9 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(statusOf(planned.routeId(), first.seq())).isEqualTo("COMPLETED"));
         assertThat(statusOf(planned.routeId(), last.seq())).isEqualTo("CANCELLED");
+        // 7-0 B5 — 이 자리는 tracking 이 적용하고 내보낸 스캔만 본다(tracking 이 센 스캔은 delivery.status 에 실리지 않는다 —
+        // ScanApiIT.센_스캔은_delivery_status_에_실리지_않는다_두_자리는_한_스캔을_나눠_센다). 개정이 tracking 에 닿기 전의 창이다.
+        assertThat(scanAfterCancel() - before).as("dispatch 의 자리가 셌다").isEqualTo(1.0);
         assertThat(last.orderIds()).allSatisfy(orderId -> assertThat(orderStatusOf(orderId))
                 .as("취소된 주문의 행에는 배송을 적지 않는다 — 취소의 출처는 후보이고, 판정이 그것을 먼저 묻는다(ADR-047 결정 4 · ADR-071)")
                 .isEqualTo("PLANNED"));
@@ -253,6 +261,11 @@ class DeliveryStatusIT extends DispatchIntegrationTestBase {
     }
 
     // --- 발행 ----------------------------------------------------------------
+
+    private double scanAfterCancel() {
+        io.micrometer.core.instrument.Counter counter = meters.find(DawnlineMetrics.SCAN_AFTER_CANCEL.meterName()).counter();
+        return counter == null ? 0.0 : counter.count();
+    }
 
     private void publish(UUID routeId, int seq, List<UUID> orderIds, String status) {
         send(routeId, envelope(routeId, seq, orderIds, status));

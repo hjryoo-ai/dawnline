@@ -18,6 +18,7 @@ import com.dawnline.dispatch.domain.optimizer.Capacity;
 import com.dawnline.dispatch.domain.optimizer.Explanation;
 import com.dawnline.dispatch.domain.optimizer.HaversineDistance;
 import com.dawnline.dispatch.domain.optimizer.PlanningBudget;
+import com.dawnline.dispatch.domain.optimizer.PlanPruner;
 import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.VehicleAttrs;
 import com.dawnline.dispatch.domain.optimizer.VehicleCost;
@@ -51,6 +52,7 @@ class RunPlanServiceTest {
     private final InMemoryDispatchPorts.Candidates candidates = new InMemoryDispatchPorts.Candidates();
     private final InMemoryDispatchPorts.Routes routes = new InMemoryDispatchPorts.Routes();
     private final InMemoryDispatchPorts.Events events = new InMemoryDispatchPorts.Events();
+    private final InMemoryDispatchPorts.Activity activity = new InMemoryDispatchPorts.Activity();
     private final InMemoryDispatchPorts.Transactions transactions = new InMemoryDispatchPorts.Transactions();
 
     private RunPlanService service(RuleSet rules, int vehicleCount) {
@@ -91,7 +93,7 @@ class RunPlanServiceTest {
     private RunPlanService service(RuleSet rules, VehicleCatalog fleet, Clock clock, String strategy) {
         return new RunPlanService(plans, candidates, routes, events,
                 fleet,
-                InMemoryDispatchPorts.rules(rules),
+                activity, InMemoryDispatchPorts.rules(rules),
                 new HaversineDistance(1.3d, 25.0d),
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 clock,
@@ -166,7 +168,7 @@ class RunPlanServiceTest {
     private RunPlanService service(io.micrometer.core.instrument.MeterRegistry registry, Duration budget) {
         return new RunPlanService(plans, candidates, routes, events,
                 InMemoryDispatchPorts.fleet(2, NOW),
-                InMemoryDispatchPorts.rules(RuleSet.empty()),
+                activity, InMemoryDispatchPorts.rules(RuleSet.empty()),
                 new HaversineDistance(1.3d, 25.0d),
                 new DispatchMetrics(registry),
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -185,7 +187,7 @@ class RunPlanServiceTest {
         HaversineDistance real = new HaversineDistance(1.3d, 25.0d);
         return new RunPlanService(plans, candidates, routes, events,
                 InMemoryDispatchPorts.fleet(2, NOW),
-                InMemoryDispatchPorts.rules(RuleSet.empty()),
+                activity, InMemoryDispatchPorts.rules(RuleSet.empty()),
                 (from, to) -> {
                     depthsDuringCompute.add(transactions.depth);
                     return real.between(from, to);
@@ -340,7 +342,7 @@ class RunPlanServiceTest {
 
         RunPlanService service = new RunPlanService(plans, new CancellingCandidates(cancelled),
                 routes, events, InMemoryDispatchPorts.fleet(2, NOW),
-                InMemoryDispatchPorts.rules(RuleSet.empty()),
+                activity, InMemoryDispatchPorts.rules(RuleSet.empty()),
                 new HaversineDistance(1.3d, 25.0d),
                 new DispatchMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 Clock.fixed(NOW, ZoneOffset.UTC),
@@ -352,6 +354,49 @@ class RunPlanServiceTest {
         assertThat(events.ordersDispatched)
                 .as("취소된 주문은 order.dispatched 를 받지 않는다").doesNotContain(cancelled);
         assertThat(events.ordersDispatched).hasSize(3);
+    }
+
+    @Test
+    void 계획_중에_비활성화된_차량의_라우트는_발행되지_않고_그_주문은_미배정이다() {
+        // ADR-067 후속 — 7-0 A33. 실물 잠금 · 경합은 PlanDeactivationRaceIT 가 본다. 여기서는 재검증이 도는 자리와 그 결과를 본다.
+        UUID waveId = Ids.newId();
+        List<UUID> orderIds = seed(waveId, 6);
+        // 라우트당 stop 둘 — 라우트가 여럿이어야 하나를 빼도 발행이 남는다(룰은 데이터다, §6.3).
+        RuleSet twoStops = DispatchRules.ruleSet(List.of(new RuleDefinition("max-stops", RuleType.MAX_STOPS_PER_ROUTE,
+                RuleType.MAX_STOPS_PER_ROUTE.severity(), 10, Map.of("max", 2))), 1);
+        activity.deactivateFirstAsked();
+
+        RunPlanUseCase.Outcome outcome = service(twoStops, 3, Clock.fixed(NOW, ZoneOffset.UTC))
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null));
+
+        assertThat(outcome).as("실패 사유 %s · 물은 차량 %s", plans.findByWaveId(waveId).flatMap(p -> p.failureReason()),
+                activity.asked).isEqualTo(RunPlanUseCase.Outcome.PUBLISHED);
+
+        assertThat(activity.asked).as("전제 — 발행 직전에 라우트의 차량을 물었다").singleElement()
+                .satisfies(asked -> assertThat(asked).as("라우트가 둘 이상이어야 하나를 빼도 발행이 남는다").hasSizeGreaterThan(1));
+        List<UUID> unassigned = orderIds.stream()
+                .filter(id -> candidates.findById(id).orElseThrow().status() == CandidateStatus.UNASSIGNED).toList();
+        assertThat(unassigned).as("빠진 차에 실렸던 주문은 미배정이다").isNotEmpty();
+        assertThat(events.ordersDispatched).as("미배정 주문은 order.dispatched 를 받지 않는다").doesNotContainAnyElementsOf(unassigned)
+                .hasSize(orderIds.size() - unassigned.size());
+        assertThat(routes.explanations).filteredOn(entry -> unassigned.contains(entry.orderId().value()))
+                .allSatisfy(entry -> assertThat(entry.ruleName()).isEqualTo(PlanPruner.VEHICLE_DEACTIVATED));
+    }
+
+    @Test
+    void 비활성화로_라우트가_전부_빠지면_NO_VEHICLE_로_실패한다() {
+        // 취소로 전부 빠진 NO_CANDIDATES 와 가른다 — 운영자가 볼 원인이 다르다.
+        UUID waveId = Ids.newId();
+        seed(waveId, 2);
+        VehicleCatalog one = InMemoryDispatchPorts.fleet(1, NOW);
+        one.availableAt(CAMP_ID, NOW).forEach(vehicle -> activity.deactivate(vehicle.id().value()));
+
+        assertThat(service(RuleSet.empty(), one, Clock.fixed(NOW, ZoneOffset.UTC), "baseline-nn")
+                .run(RunPlanCommand.of(waveId, CAMP_ID, InMemoryDispatchPorts.CAMP, null)))
+                .isEqualTo(RunPlanUseCase.Outcome.FAILED);
+        assertThat(plans.findByWaveId(waveId)).hasValueSatisfying(plan ->
+                assertThat(plan.failureReason()).contains(RunPlanService.NO_VEHICLE));
+        assertThat(events.routesAssigned).isEmpty();
     }
 
     @Test
