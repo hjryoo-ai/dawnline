@@ -2,6 +2,8 @@ package com.dawnline.benchmark;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.dawnline.common.TierSchedule;
+import com.dawnline.common.TimeWindow;
 import com.dawnline.common.fleet.FleetFeasibility;
 import com.dawnline.common.fleet.FleetFeasibility.Assessment;
 import com.dawnline.common.fleet.FleetFeasibility.Line;
@@ -16,6 +18,7 @@ import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -49,6 +52,11 @@ import org.junit.jupiter.params.provider.EnumSource;
  *       적재 용량 중 <em>먼저 걸리는 쪽</em>이 그 차의 실제 슬롯이다 — 30 kg 자전거는 상한이 120
  *       이어도 평균 화물로 10 곳밖에 못 간다. 이 기준이 빠져 있어 첫 측정에서 미배정 83건 중 71건이
  *       {@code max-stops} 였다. 알고리즘이 아니라 <em>차가 모자란 것</em>이었다.</li>
+ *   <li><strong>웨이브 하나에 약속창은 하나</strong>이고 그 창은 웨이브의 (티어, 컷오프)에서 {@link TierSchedule#windowFor}
+ *       가 내는 창이다(§2.2 — 웨이브는 (캠프, 티어, 컷오프)이고 창은 컷오프에서 유도된다). 처음 판의 창 셋은 어느 실제 웨이브와도
+ *       맞지 않았고, 기다림을 넣자 그 레짐에서 비용이 두 배가 됐다
+ *       ([ADR-075](../../../../../docs/adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md) 결정 1 —
+ *       이 기준은 수치를 보기 전에 적었다).</li>
  * </ul>
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
@@ -205,6 +213,18 @@ class DatasetFeasibilityTest {
                                 + "아니라 차량 부족에서 나온다",
                         dataset.cliName(), effective, stops.size(), averageWeight)
                 .isGreaterThanOrEqualTo(1.2d);
+    }
+
+    @ParameterizedTest
+    @EnumSource(Dataset.class)
+    void 웨이브의_모든_후보는_컷오프에서_유도한_약속창_하나를_갖는다(Dataset dataset) {
+        PlanningProblem problem = problem(dataset);
+        TimeWindow expected = TierSchedule.standard().windowFor(problem.wave().serviceTier(), problem.wave().cutoffAt());
+
+        assertThat(problem.candidates().stream().map(Candidate::promised).collect(Collectors.toSet()))
+                .as("%s — 웨이브는 (캠프, 티어, 컷오프)이고 창은 컷오프에서 유도된다(§2.2). 창이 여럿인 웨이브는 "
+                        + "어느 티어에도 없는 레짐이다", dataset.cliName())
+                .containsExactly(expected);
     }
 
     /**
