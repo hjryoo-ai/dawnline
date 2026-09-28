@@ -112,30 +112,35 @@ class AtRiskDetectorTest {
     void 종결된_배송은_남은_것이_아니다() {
         // Propagation.remaining 이 이미 걸러 주지만, 그 경계를 여기서도 못 박는다 —
         // 배송이 끝난 뒤에 늦었다는 사실은 위험이 아니라 결과다.
-        assertThat(detector.evaluate(ROUTE, new Propagation(Duration.ofMinutes(30), List.of(),
-                List.of()))).isFalse();
+        assertThat(detector.evaluate(ROUTE, new Propagation(Duration.ofMinutes(30), List.of()))).isFalse();
         assertThat(delivery.atRisk).isEmpty();
     }
 
     // --- 픽스처 --------------------------------------------------------------
 
-    private static Propagation propagation(Duration deviation, Shipment... remaining) {
-        return new Propagation(deviation, List.of(), List.of(remaining));
+    /**
+     * 남은 배송들의 <em>ETA</em> 를 정해 두고 편차를 준다 — 계획 도착은 ETA − 편차로 거꾸로 만든다. ETA 는 planned + 라우트의
+     * 편차로 계산되므로(ADR-070) 그래야 「이 편차에서 이 ETA」가 된다.
+     */
+    private static Propagation propagation(Duration deviation, Eta... remaining) {
+        List<Shipment> shipments = java.util.Arrays.stream(remaining)
+                .map(eta -> Shipment.restore(UUID.randomUUID(), ROUTE, eta.seq(), ShipmentStatus.OUT_FOR_DELIVERY,
+                        eta.at().minus(deviation), PROMISED_END, null, 0L))
+                .toList();
+        return new Propagation(deviation, shipments);
     }
 
     /** ETA 가 약속 끝 14분 전 — 여유(15분) 안이다. */
-    private static Shipment risky(int seq) {
-        return shipment(seq, PROMISED_END.minus(Duration.ofMinutes(14)));
+    private static Eta risky(int seq) {
+        return new Eta(seq, PROMISED_END.minus(Duration.ofMinutes(14)));
     }
 
     /** ETA 가 약속 끝 40분 전. */
-    private static Shipment safe(int seq) {
-        return shipment(seq, PROMISED_END.minus(Duration.ofMinutes(40)));
+    private static Eta safe(int seq) {
+        return new Eta(seq, PROMISED_END.minus(Duration.ofMinutes(40)));
     }
 
-    private static Shipment shipment(int seq, Instant eta) {
-        return Shipment.restore(UUID.randomUUID(), ROUTE, seq, ShipmentStatus.OUT_FOR_DELIVERY,
-                eta, eta, PROMISED_END, null, 0L);
+    private record Eta(int seq, Instant at) {
     }
 
     private static final class FixedRevisions implements RouteRevisions {
@@ -144,6 +149,16 @@ class AtRiskDetectorTest {
         public boolean claim(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
                 Instant appliedAt) {
             throw new UnsupportedOperationException("판정은 선점하지 않습니다");
+        }
+
+        @Override
+        public void lockForWrite(java.util.Collection<UUID> routeIds) {
+            throw new UnsupportedOperationException("판정은 잡지 않습니다");
+        }
+
+        @Override
+        public void recordDeviation(UUID routeId, Duration deviation) {
+            throw new UnsupportedOperationException("판정은 편차를 적지 않습니다");
         }
 
         @Override

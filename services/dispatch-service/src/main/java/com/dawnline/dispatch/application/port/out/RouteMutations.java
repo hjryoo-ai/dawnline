@@ -229,23 +229,45 @@ public interface RouteMutations {
     Optional<RouteSnapshot> snapshot(UUID routeId);
 
     /**
-     * 이 stop 의 상태를 옮긴다 (ADR-047).
+     * 이 주문이 <strong>지금</strong> 있는 자리와 그 주문의 사실 ({@code delivery.status} 소비, ADR-047 결정 2 · ADR-071).
      *
-     * <p>판정은 {@link com.dawnline.dispatch.domain.RouteStopTransition} 이 이미 내렸다 —
-     * 여기서는 한 행을 쓸 뿐이다. 조건부 갱신(«현재 상태가 X 일 때만»)을 걸지 않는 이유는
-     * 그 조건이 <em>규칙</em>이고 규칙은 한 곳에만 있어야 하기 때문이다. 같은 트랜잭션 안에서
-     * 읽고 쓰므로 그 사이에 끼어들 수 있는 것은 다른 트랜잭션이고, 그건 행 잠금이 막는다.
+     * <p>{@link #findAssignedStop} 과 달리 stop 이 아니라 <strong>주문</strong>의 상태를 돌려준다 — 한 stop 의 주문들은 서로 다른 사실을
+     * 가질 수 있다(ADR-071). 후보가 취소됐으면 {@code CANCELLED} 다(취소의 출처는 후보 하나다).
      *
-     * <p>{@code actualAt} 은 <strong>이 행이 아직 비어 있을 때만</strong> 쓴다 — 그 stop 에
-     * <em>처음</em> 닿은 시각이기 때문이다(ADR-048 결정 1). 덮어쓰면 이 값은 도착이 아니라
-     * 완료가 되고, §6.8 의 편차가 「얼마나 늦게 도착했나」에서 「거기서 머문 시간까지 더한 값」
-     * 으로 조용히 바뀐다. 그 변화는 <strong>값을 보아서는 알 수 없다.</strong>
-     *
-     * @param stopId   stop id
-     * @param status   새 상태
-     * @param actualAt 그 stop 에 닿은 시각 ({@code delivery.status} 의 {@code occurredAt})
+     * @param orderId 주문 id
+     * @return 그 주문의 자리와 상태. 어느 라우트에도 없으면 빈 값
      */
-    void markStopStatus(UUID stopId, RouteStopStatus status, Instant actualAt);
+    Optional<OrderAtStop> findOrderAtStop(UUID orderId);
+
+    /**
+     * 이 주문의 사실을 그 행에 적는다 (ADR-071 결정 1).
+     *
+     * <p>판정은 {@link com.dawnline.dispatch.domain.RouteStopTransition} 이 이미 내렸다 — 여기서는 한 행을 쓸 뿐이다. 조건부 갱신을 걸지
+     * 않는 이유는 그 조건이 <em>규칙</em>이고 규칙은 한 곳에만 있어야 하기 때문이다.
+     *
+     * <p>{@code actualAt} 은 <strong>이 행이 아직 비어 있을 때만</strong> 쓴다 — 그 주문에 <em>처음</em> 닿은 시각이다(ADR-048 결정 1).
+     * 덮어쓰면 이 값은 도착이 아니라 완료가 되고, §6.8 의 편차가 「거기서 머문 시간까지 더한 값」으로 조용히 바뀐다.
+     *
+     * <p>stop 의 상태는 여기서 바꾸지 않는다 — 부르는 쪽이 {@link #recountStop} 으로 다시 센다.
+     *
+     * @param stopId   그 주문이 지금 있는 stop ({@link #findOrderAtStop})
+     * @param orderId  주문 id
+     * @param status   새 상태
+     * @param actualAt 그 주문에 닿은 시각 ({@code delivery.status} 의 {@code occurredAt})
+     */
+    void markOrderStatus(UUID stopId, UUID orderId, RouteStopStatus status, Instant actualAt);
+
+    /**
+     * stop 의 상태와 처음 닿은 시각을 그 주문들에서 다시 센다 (ADR-071 결정 2 — 쓰기 때 다시 센다, ADR-061 의 모양).
+     *
+     * <p>살아 있는 주문(후보가 취소되지 않은 주문)만 센다: 없으면 {@code CANCELLED}, 전부 {@code PLANNED} 면 {@code PLANNED}(아무도 닿지
+     * 않았다), 전부 끝났으면 실패가 있으면 {@code FAILED} 아니면 {@code COMPLETED}, 그 밖은 {@code ARRIVED}(일부만 닿았거나 끝났다).
+     * 처음 닿은 시각은 그 주문들의 것 중 가장 이른 값이다.
+     *
+     * @param stopId stop id
+     * @return 다시 센 stop 의 상태
+     */
+    RouteStopStatus recountStop(UUID stopId);
 
     /**
      * 재계획 쿨다운을 <strong>한 문장으로</strong> 집는다 (§6.8 5단계, ADR-046 결정 3).
@@ -277,12 +299,48 @@ public interface RouteMutations {
     Optional<SettledStop> lastSettledStop(UUID routeId);
 
     /**
+     * 라우트가 캠프를 떠났다 — 처음 온 값만 남긴다 ({@code routes.departed_at}, ADR-072).
+     *
+     * @param routeId    라우트 id
+     * @param departedAt 떠난 시각 ({@code delivery.route-departed} 의 {@code departedAt})
+     * @return 라우트가 있었으면 참. 없으면(보존이 지웠다) 거짓 — 부르는 쪽이 철 지난 사건으로 센다
+     */
+    boolean markDeparted(UUID routeId, Instant departedAt);
+
+    /**
+     * 출발의 편차 — {@code departed_at − planned_departure} (ADR-072). 닿은 stop 이 없을 때의 재계획 앵커다.
+     *
+     * @param routeId 라우트 id
+     * @return 편차. 아직 떠나지 않았거나 계획 출발이 없으면(V7 이전 행) 빈 값 — <strong>«모름»</strong>이다
+     */
+    Optional<Duration> departureDeviation(UUID routeId);
+
+    /**
      * 재배정이 옮길 주문의 stop 과 그 주문의 지금 상태 ({@link #lockStopOf}).
      *
      * @param stopId stop id
      * @param status stop 의 상태 — 그 주문의 후보가 취소됐으면 {@code CANCELLED}
      */
     record StopOfOrder(UUID stopId, RouteStopStatus status) {
+    }
+
+    /**
+     * 주문 하나가 지금 있는 자리와 그 주문의 사실 ({@link #findOrderAtStop}, ADR-071).
+     *
+     * @param orderId 주문 id
+     * @param routeId 라우트 id — 사건이 말한 라우트와 다르면 재배치 뒤에 도착한 사실이다(ADR-047 결정 2)
+     * @param stopId  stop id
+     * @param seq     방문 순번 — 조회 키가 아니다(ADR-047 기각 (1))
+     * @param status  <strong>주문의</strong> 상태. 후보가 취소됐으면 {@code CANCELLED}
+     */
+    record OrderAtStop(UUID orderId, UUID routeId, UUID stopId, int seq, RouteStopStatus status) {
+
+        public OrderAtStop {
+            Objects.requireNonNull(orderId, "orderId");
+            Objects.requireNonNull(routeId, "routeId");
+            Objects.requireNonNull(stopId, "stopId");
+            Objects.requireNonNull(status, "status");
+        }
     }
 
     /**

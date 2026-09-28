@@ -65,6 +65,18 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
              LIMIT 1
             """;
 
+    /** {@code JdbcRouteMutations.findOrderAtStop} 의 질의 그대로 — {@code delivery.status} 가 주문마다 부른다(ADR-071). */
+    private static final String LOOKUP_FACT = """
+            SELECT s.route_id, s.id, s.seq,
+                   CASE WHEN c.status = 'CANCELLED' THEN 'CANCELLED' ELSE o.status END
+              FROM route_stop_orders o
+              JOIN route_stops s ON s.id = o.stop_id
+              LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+             WHERE o.order_id = '%s'
+             ORDER BY s.id DESC
+             LIMIT 1
+            """;
+
     @Autowired
     private EntityManager entityManager;
 
@@ -119,6 +131,19 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
         assertThat(plan).contains("ix_rso_order");
         assertThat(plan).as("순차 스캔이면 stop 방문마다 테이블 전체를 읽는다")
                 .doesNotContain("Seq Scan on route_stop_orders");
+    }
+
+    @Test
+    void 주문의_사실을_찾는_질의도_ix_rso_order_를_탄다() {
+        // ADR-071 — 사건의 주문마다 한 번이다. 새 인덱스 없이 같은 인덱스를 탄다(불변규칙 11).
+        seed();
+        analyze();
+        assertThat(reltuples("route_stop_orders")).as("통계가 있다").isGreaterThan(0.0d);
+
+        String plan = explain(LOOKUP_FACT, probeOrderId());
+
+        assertThat(plan).contains("ix_rso_order");
+        assertThat(plan).doesNotContain("Seq Scan on route_stop_orders");
     }
 
     @Test
@@ -214,8 +239,13 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
 
     @SuppressWarnings("unchecked")
     private String explain(UUID orderId) {
+        return explain(LOOKUP, orderId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String explain(String query, UUID orderId) {
         List<String> lines = tx().execute(status -> entityManager
-                .createNativeQuery("EXPLAIN " + LOOKUP.formatted(orderId)).getResultList());
+                .createNativeQuery("EXPLAIN " + query.formatted(orderId)).getResultList());
         return String.join("\n", lines);
     }
 

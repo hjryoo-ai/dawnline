@@ -59,7 +59,8 @@ public record DeliveryAtRiskPayload(UUID routeId, UUID campId, String detectedAt
      *
      * <p>{@code shipments} 는 주문 하나씩이지만 §6.5 1단계가 같은 지점의 주문을 한 stop 으로
      * 묶었고, 재계획도 stop 단위로 푼다. 되접지 않으면 소비자가 그것을 다시 해야 한다.
-     * 한 stop 의 ETA·약속창은 그 stop 의 배송들이 공유한다(개정이 함께 준 값이다).
+     * 한 stop 의 ETA·약속창은 그 stop 의 배송들이 공유한다(개정이 함께 준 값이다). ETA 는 저장된 값이 아니라 계획 + 라우트의
+     * 편차다([ADR-070](docs/adr/ADR-070-tracking-writes-lock-the-route-first.md) 결정 2) — 계약의 {@code etaAt} 은 그대로다.
      *
      * @param routeId   라우트 id
      * @param campId    캠프 id
@@ -81,10 +82,16 @@ public record DeliveryAtRiskPayload(UUID routeId, UUID campId, String detectedAt
             Shipment first = entry.getValue().getFirst();
             stops.add(new RemainingStop(entry.getKey(),
                     entry.getValue().stream().map(s -> s.orderId().toString()).toList(),
-                    first.etaAt().toString(), first.promisedEnd().toString(),
-                    entry.getValue().stream().anyMatch(s -> s.isAtRisk(margin))));
+                    etaOf(first, deviation).toString(), first.promisedEnd().toString(),
+                    entry.getValue().stream().anyMatch(s -> s.isAtRisk(margin, deviation))));
         }
         return new DeliveryAtRiskPayload(routeId, campId, detectedAt.toString(),
                 deviation.toSeconds(), stops);
+    }
+
+    /** 남은 배송은 종결이 아니라 ETA 가 있다 — 없으면 부르는 쪽이 종결을 「남은」에 넣은 것이다. */
+    private static Instant etaOf(Shipment shipment, Duration deviation) {
+        return shipment.etaWith(deviation).orElseThrow(() -> new IllegalStateException(
+                "종결된 배송이 남은 stop 에 있다: orderId=" + shipment.orderId()));
     }
 }

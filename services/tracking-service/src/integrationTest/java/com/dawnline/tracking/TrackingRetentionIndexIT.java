@@ -59,11 +59,11 @@ class TrackingRetentionIndexIT extends TrackingIntegrationTestBase {
     @BeforeEach
     void fill() {
         jdbc.update("""
-                INSERT INTO shipments (order_id, route_id, stop_seq, status, planned_arrival, eta_at, promised_end,
+                INSERT INTO shipments (order_id, route_id, stop_seq, status, planned_arrival, promised_end,
                                        updated_at)
                 SELECT gen_random_uuid(), ?::uuid, (g % 30000) + 1,
                        CASE WHEN g % 100 < 5 THEN 'FAILED' ELSE 'COMPLETED' END,
-                       t, t, t + interval '2 hours', t
+                       t, t + interval '2 hours', t
                   FROM (SELECT g, now() - (g % 31) * interval '1 day' - interval '1 hour' AS t
                           FROM generate_series(0, ?) g) s
                 """, MARKER_ROUTE, ROWS - 1);

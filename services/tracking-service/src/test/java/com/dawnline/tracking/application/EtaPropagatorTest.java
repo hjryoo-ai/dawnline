@@ -29,9 +29,8 @@ import org.junit.jupiter.api.Test;
 /**
  * 편차 전파 (DESIGN.md §5.4 ETA 재계산).
  *
- * <p>여기서 고정하는 것은 <strong>경계</strong>다: 얼마나 옮기는지는 이 클래스가 정하고,
- * 옮길지 말지는 애그리거트가 정한다. 둘을 한쪽으로 모으면 「어디서 움직이는가」의 답이
- * 둘이 된다.
+ * <p>여기서 고정하는 것은 <strong>경계</strong>다: 편차는 이 클래스가 재서 라우트 행에 한 번 적고(ADR-070), ETA 는 배송이
+ * 계획 + 편차로 계산한다. 배송은 쓰지 않는다.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 @DisplayName("EtaPropagator — 편차는 라우트의 것이다")
@@ -46,16 +45,19 @@ class EtaPropagatorTest {
     private static final Duration LATE = Duration.ofMinutes(18);
 
     private InMemoryShipments shipments;
+    private FixedRevisions revisions;
     private EtaPropagator propagator;
 
     @BeforeEach
     void setUp() {
         shipments = new InMemoryShipments();
-        propagator = new EtaPropagator(shipments, new FixedRevisions());
+        revisions = new FixedRevisions();
+        propagator = new EtaPropagator(shipments, revisions);
     }
 
     @Test
-    void 뒤따르는_stop_만_밀린다() {
+    void 편차는_라우트_행에_한_번_적고_배송은_쓰지_않는다() {
+        // 뒤 stop 마다 eta_at 을 옮겨 적던 것이 라우트당 O(n²) 였다(ADR-070 결정 2 — 30-stop 라우트에 990).
         put(1, ShipmentStatus.ARRIVED);
         put(2, ShipmentStatus.SCHEDULED);
         put(3, ShipmentStatus.SCHEDULED);
@@ -64,17 +66,16 @@ class EtaPropagatorTest {
                 arrivalOf(1).plus(LATE));
 
         assertThat(result.deviation()).isEqualTo(LATE);
-        assertThat(result.moved()).extracting(Shipment::stopSeq).containsExactly(2, 3);
-        assertThat(shipments.stored.get(key(1)).etaAt())
-                .as("스캔이 난 stop 의 ETA 는 건드리지 않는다 — 실제 시각이 이미 사실이다")
-                .isEqualTo(arrivalOf(1));
-        assertThat(shipments.stored.get(key(3)).etaAt()).isEqualTo(arrivalOf(3).plus(LATE));
+        assertThat(revisions.recorded).containsExactly(Map.entry(ROUTE, LATE));
+        assertThat(shipments.updated).as("배송은 계획만 들고 있다 — ETA 는 읽는 자리가 계산한다").isEmpty();
+        assertThat(result.remaining()).extracting(Shipment::stopSeq).containsExactly(1, 2, 3);
+        assertThat(result.remaining().get(2).etaWith(result.deviation())).contains(arrivalOf(3).plus(LATE));
     }
 
     @Test
-    void 캠프_출발은_라우트_전체를_민다() {
-        // 늦은 출발은 첫 도착 스캔 전에 이미 아는 위험이다. 기준은 route_revisions 의
-        // planned_departure 이고, 전파 대상은 1번 stop 부터다.
+    void 캠프_출발의_기준은_계획_출발이다() {
+        // 늦은 출발은 첫 도착 스캔 전에 이미 아는 위험이다. 기준은 route_revisions 의 planned_departure 이고,
+        // 남은 배송은 1번 stop 부터다.
         put(1, ShipmentStatus.OUT_FOR_DELIVERY);
         put(2, ShipmentStatus.OUT_FOR_DELIVERY);
 
@@ -82,12 +83,12 @@ class EtaPropagatorTest {
                 DEPARTURE.plus(LATE));
 
         assertThat(result.deviation()).isEqualTo(LATE);
-        assertThat(result.moved()).extracting(Shipment::stopSeq).containsExactly(1, 2);
-        assertThat(shipments.stored.get(key(1)).etaAt()).isEqualTo(arrivalOf(1).plus(LATE));
+        assertThat(revisions.recorded).containsExactly(Map.entry(ROUTE, LATE));
+        assertThat(result.remaining()).extracting(Shipment::stopSeq).containsExactly(1, 2);
     }
 
     @Test
-    void 종결된_배송은_밀리지_않는다() {
+    void 종결된_배송은_남은_목록에_없다() {
         put(1, ShipmentStatus.COMPLETED);
         put(2, ShipmentStatus.CANCELLED);
         put(3, ShipmentStatus.SCHEDULED);
@@ -95,16 +96,13 @@ class EtaPropagatorTest {
         Propagation result = propagator.propagate(ROUTE, ScanType.DEPARTED_CAMP, 1,
                 DEPARTURE.plus(LATE));
 
-        assertThat(result.moved()).extracting(Shipment::stopSeq)
-                .as("COMPLETED·CANCELLED 의 도착 예정 시각을 미루는 일은 아무 물음에도 답하지 않는다")
-                .containsExactly(3);
         assertThat(result.remaining()).extracting(Shipment::stopSeq)
                 .as("at-risk 판정의 대상은 아직 끝나지 않은 배송이다")
                 .containsExactly(3);
     }
 
     @Test
-    void 일찍_도착하면_음수로_당겨진다() {
+    void 일찍_도착하면_음수로_적는다() {
         // 「늦은 것만 민다」로 적으면 앞서 가는 라우트의 ETA 가 낡은 채로 남고 ops 가 그 값을 읽는다.
         put(1, ShipmentStatus.ARRIVED);
         put(2, ShipmentStatus.SCHEDULED);
@@ -113,30 +111,16 @@ class EtaPropagatorTest {
                 arrivalOf(1).minus(Duration.ofMinutes(7)));
 
         assertThat(result.deviation()).isNegative();
-        assertThat(shipments.stored.get(key(2)).etaAt())
-                .isEqualTo(arrivalOf(2).minus(Duration.ofMinutes(7)));
+        assertThat(revisions.recorded).containsExactly(Map.entry(ROUTE, Duration.ofMinutes(-7)));
     }
 
     @Test
-    void 편차가_0_이면_아무것도_쓰지_않는다() {
-        put(1, ShipmentStatus.ARRIVED);
-        put(2, ShipmentStatus.SCHEDULED);
-
-        Propagation result = propagator.propagate(ROUTE, ScanType.ARRIVED, 1, arrivalOf(1));
-
-        assertThat(result.moved()).isEmpty();
-        assertThat(shipments.updated)
-                .as("값이 같으면 UPDATE 도 낙관적 락 충돌도 만들지 않는다")
-                .isEmpty();
-    }
-
-    @Test
-    void 배송이_없는_라우트는_전파할_것이_없다() {
+    void 배송이_없는_라우트는_적을_것이_없다() {
         Propagation result = propagator.propagate(ROUTE, ScanType.ARRIVED, 1, BASE);
 
         assertThat(result.deviation()).isZero();
-        assertThat(result.moved()).isEmpty();
         assertThat(result.remaining()).isEmpty();
+        assertThat(revisions.recorded).isEmpty();
     }
 
     @Test
@@ -163,13 +147,15 @@ class EtaPropagatorTest {
 
     private void put(int seq, ShipmentStatus status) {
         Instant arrival = arrivalOf(seq);
-        shipments.put(Shipment.restore(key(seq), ROUTE, seq, status, arrival, arrival,
+        shipments.put(Shipment.restore(key(seq), ROUTE, seq, status, arrival,
                 arrival.plus(Duration.ofHours(1)),
                 status == ShipmentStatus.COMPLETED ? arrival : null, 0L));
     }
 
-    /** 계획 출발 시각만 말한다. */
+    /** 계획 출발 시각을 말하고, 적은 편차를 기억한다. */
     private static final class FixedRevisions implements RouteRevisions {
+
+        private final List<Map.Entry<UUID, Duration>> recorded = new ArrayList<>();
 
         @Override
         public boolean claim(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
@@ -180,6 +166,16 @@ class EtaPropagatorTest {
         @Override
         public Optional<RoutePlanned> find(UUID routeId) {
             return Optional.of(new RoutePlanned(CAMP, 1, DEPARTURE));
+        }
+
+        @Override
+        public void lockForWrite(Collection<UUID> routeIds) {
+            throw new UnsupportedOperationException("잡는 것은 부르는 쪽이다 — 전파는 잡힌 행에 적는다");
+        }
+
+        @Override
+        public void recordDeviation(UUID routeId, Duration deviation) {
+            recorded.add(Map.entry(routeId, deviation));
         }
     }
 

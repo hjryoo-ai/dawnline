@@ -132,10 +132,32 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
         assertThat(row.stopSeq()).isEqualTo(1);
         assertThat(row.status()).isEqualTo("SCHEDULED");
         assertThat(row.plannedArrival()).isEqualTo(arrival);
-        assertThat(row.etaAt()).as("§5.4 — eta_at 의 초기값은 planned_arrival 이다").isEqualTo(arrival);
+        assertThat(deviationOf(route)).as("§5.4 — 편차 0: ETA 의 초기값은 planned_arrival 이다(ADR-070)").isZero();
         assertThat(row.promisedEnd()).isEqualTo(promisedEnd);
         assertThat(row.deliveredAt()).isNull();
         assertThat(shipment(second).stopSeq()).isEqualTo(2);
+    }
+
+    @Test
+    void 새_개정은_라우트의_편차를_0_으로_되돌리고_지난_개정은_건드리지_않는다() {
+        // 지금까지 applyRevision 이 eta_at 을 planned_arrival 로 되돌리던 것과 같은 뜻이다 — 새 계획이 그때까지의 사정을 담는다(ADR-070 결정 2).
+        UUID route = newRoute();
+        UUID order = newOrder();
+        apply(new RouteAssignment(route, 2, CAMP, departure, List.of(stop(1, List.of(order), Set.of()))));
+        jdbc.update("UPDATE route_revisions SET deviation_seconds = 300 WHERE route_id = ?", route);
+
+        apply(new RouteAssignment(route, 1, CAMP, departure, List.of(stop(1, List.of(order), Set.of()))));
+        assertThat(deviationOf(route)).as("지난 개정 — 행은 잠기지만 값은 그대로").isEqualTo(300);
+
+        apply(new RouteAssignment(route, 3, CAMP, departure, List.of(stop(1, List.of(order), Set.of()))));
+        assertThat(deviationOf(route)).isZero();
+    }
+
+    private int deviationOf(UUID route) {
+        Integer seconds = jdbc.queryForObject("SELECT deviation_seconds FROM route_revisions WHERE route_id = ?",
+                Integer.class, route);
+        assertThat(seconds).isNotNull();
+        return seconds;
     }
 
     @Test
@@ -401,7 +423,7 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
 
     private ShipmentRow shipment(UUID orderId) {
         List<ShipmentRow> rows = new ArrayList<>(jdbc.query("""
-                SELECT route_id, stop_seq, status, planned_arrival, eta_at, promised_end,
+                SELECT route_id, stop_seq, status, planned_arrival, promised_end,
                        delivered_at, version
                   FROM shipments
                  WHERE order_id = ?
@@ -412,8 +434,7 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
                         instant(rs.getObject(4, OffsetDateTime.class)),
                         instant(rs.getObject(5, OffsetDateTime.class)),
                         instant(rs.getObject(6, OffsetDateTime.class)),
-                        instant(rs.getObject(7, OffsetDateTime.class)),
-                        rs.getLong(8)),
+                        rs.getLong(7)),
                 orderId));
         assertThat(rows).as("배송 행이 있어야 한다: orderId=%s", orderId).hasSize(1);
         return rows.getFirst();
@@ -425,6 +446,6 @@ class RouteAssignmentIT extends TrackingIntegrationTestBase {
 
     /** {@code shipments} 한 행. */
     private record ShipmentRow(UUID routeId, int stopSeq, String status, Instant plannedArrival,
-            Instant etaAt, Instant promisedEnd, @Nullable Instant deliveredAt, long version) {
+            Instant promisedEnd, @Nullable Instant deliveredAt, long version) {
     }
 }

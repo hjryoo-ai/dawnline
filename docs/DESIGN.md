@@ -200,7 +200,7 @@ com.dawnline.<service>
 | dawnline.plan.failed.v1 | waveId | dispatch | **fulfillment**, ops | 계획 실행 실패 (§5.3 Plan `FAILED` — 예외·시간초과) |
 | dawnline.delivery.status.v1 | routeId | tracking | order, **dispatch**, ops | ARRIVED/COMPLETED/FAILED |
 | dawnline.delivery.at-risk.v1 | routeId | tracking | dispatch, ops | 지연 위험 감지 |
-| dawnline.delivery.route-departed.v1 | routeId | tracking | ops | 라우트가 캠프를 떠났다 (§5.4 `DEPARTED_CAMP`). 계약은 소비자가 먼저 정의했고 tracking 이 낸다(2026-09-24, 묶음 B) — 출발 스캔이 배송을 실제로 옮겼을 때 라우트에 하나 |
+| dawnline.delivery.route-departed.v1 | routeId | tracking | ops, **dispatch** | 라우트가 캠프를 떠났다 (§5.4 `DEPARTED_CAMP`). 계약은 소비자가 먼저 정의했고 tracking 이 낸다(2026-09-24, 묶음 B) — 출발 스캔이 배송을 실제로 옮겼을 때 라우트에 하나. dispatch 는 재계획의 앵커로 쓴다(2026-09-28, [ADR-072](adr/ADR-072-departure-is-an-anchor.md)) |
 | `<topic>.dlq` | 원본 키 | 각 소비자 | 운영자 | 재처리 실패 메시지 |
 
 **dispatch 가 `delivery.status` 를 소비한다** (2026-09-05 결정). 처음에는 소비자가 order 와 ops 뿐이었고, 그
@@ -230,6 +230,10 @@ Phase 5 이고(§5.4), 그때 dispatch 리스너 + `route_stops.status` 전이 +
 동안 옛 라우트에서 끝난 배송이 도착하면 그 사실을 *지금 그 주문이 있는* stop 에 적용하고
 `dawnline_status_after_relocate_total` 로 센다. 어느 라우트에도 없을 때만 철 지난 것이다.
 같은 열쇠를 §5.4 의 기사 스캔 API 도 쓴다(기사는 송장을 찍지 stop 번호를 찍지 않는다).
+**찾은 뒤에도 주문의 행에 적는다**(2026-09-28, [ADR-071](adr/ADR-071-delivery-facts-live-on-the-order-row.md)) — 처음에는 찾은 stop
+하나의 칸(`route_stops.status`)에 적어서, 한 stop 의 어느 주문의 사건이 와도 stop 전체가 그 상태가 됐다(합쳐진 stop 의 주문 하나만 끝나도,
+재배정이 붙인 주문이 배송되지 않았어도 — 근거: 관측(재현됨), `DeliveryFactPerOrderIT`). 지금은 주문마다 `route_stop_orders` 의 행에 상태와
+처음 닿은 시각을 적고, stop 의 상태는 그 주문들에서 쓰기 때 다시 센다. 한 사건의 주문들이 서로 다른 stop 에 있으면 각자의 자리에 적힌다.
 소비 처리량은 [측정](benchmarks/phase5-delivery-status-throughput.md)에 있다(조건은 코드보다
 **먼저** 적었다).
 
@@ -968,7 +972,8 @@ CREATE TABLE routes (id UUID PK, plan_id UUID REFERENCES route_plans, vehicle_id
 CREATE TABLE route_stops (id UUID PK, route_id UUID REFERENCES routes, seq SMALLINT NOT NULL, lat NUMERIC(9,6), lng NUMERIC(9,6),
   planned_arrival TIMESTAMPTZ, planned_departure TIMESTAMPTZ, service_s INTEGER,
   -- PLANNED | CANCELLED | ARRIVED | COMPLETED | FAILED. 뒤의 셋은 delivery.status 소비가 옮긴다
-  -- (V8 주석 정정, Phase 5-5, ADR-047). CHECK 제약은 두지 않는다 — §4.7 이 같은 major 안에서
+  -- (V8 주석 정정, Phase 5-5, ADR-047). 2026-09-28 부터 그 주문들(route_stop_orders)에서 쓰기 때 다시 센 값이다(ADR-071) —
+  -- PLANNED 는 「살아 있는 주문 누구도 닿지 않았다」, ARRIVED 는 「일부만 닿았거나 끝났다」. CHECK 제약은 두지 않는다 — §4.7 이 같은 major 안에서
   -- enum 값 추가를 허용하므로, 제약을 걸면 값이 하나 늘 때마다 마이그레이션이 필요해진다.
   status VARCHAR(16),
   promised_start TIMESTAMPTZ, promised_end TIMESTAMPTZ,  -- 이 stop 의 약속창 (V6, Phase 5-1a)
@@ -976,9 +981,13 @@ CREATE TABLE route_stops (id UUID PK, route_id UUID REFERENCES routes, seq SMALL
   -- 5-5 의 전이가 함께 적는다. ARRIVED|COMPLETED|FAILED 중 먼저 온 것이 쓰고 덮어쓰지 않는다 —
   -- 덮으면 이 값은 도착이 아니라 완료가 되고, §6.8 의 편차가 체류 시간까지 더한 값으로 바뀐다.
   -- NULL 이면 아직 닿지 않았다(= §6.8 이 다시 푸는 대상). 편차를 모르는 것과 0 은 다르다.
+  -- ADR-071 뒤로는 그 주문들의 처음 닿은 시각 중 가장 이른 값을 다시 센다 — 뜻은 같다.
   actual_at TIMESTAMPTZ,
   UNIQUE (route_id, seq));
-CREATE TABLE route_stop_orders (stop_id UUID REFERENCES route_stops, order_id UUID, PRIMARY KEY (stop_id, order_id));
+CREATE TABLE route_stop_orders (stop_id UUID REFERENCES route_stops, order_id UUID, PRIMARY KEY (stop_id, order_id),
+  -- 배송의 사실은 주문의 행에 (V12, ADR-071). PLANNED | ARRIVED | COMPLETED | FAILED — 취소는 여기 적지 않는다(출처는
+  -- dispatch_candidates.status 하나). actual_at 은 그 주문에 처음 닿은 시각. 행을 옮기면(moveOrder) 사실이 함께 간다.
+  status VARCHAR(16) NOT NULL DEFAULT 'PLANNED', actual_at TIMESTAMPTZ);
 -- 사실은 orderId 로 식별한다 (V9, Phase 5-5, ADR-047 결정 2). PK 의 선두 컬럼이 stop_id 라
 -- order_id 단독 조회가 그 인덱스를 못 쓴다. delivery.status 는 stop 방문마다 이 조회를 한다.
 CREATE INDEX ix_rso_order ON route_stop_orders (order_id);
@@ -1065,21 +1074,28 @@ ops-api 의 계약은 이 409 를 이미 약속하고 있었고 ops-web 은 화�
 
 **책임**: 라우트별 배송 진행, ETA, 지연 위험 감지, 상태 통지.
 
-- `route.assigned` 수신 → stop마다 `shipments` 생성(status `SCHEDULED`, `eta_at = planned_arrival`, `promised_end = promisedWindow.end`).
+- `route.assigned` 수신 → stop마다 `shipments` 생성(status `SCHEDULED`, `promised_end = promisedWindow.end`)하고 라우트의 편차를 0 으로(`route_revisions.deviation_seconds`, [ADR-070](adr/ADR-070-tracking-writes-lock-the-route-first.md)).
 - 기사 스캔 API `POST /api/v1/routes/{id}/stops/{seq}/events` (DEPARTED_CAMP, ARRIVED, COMPLETED, FAILED, 위치 포함). 시뮬레이터가 호출. **본문의 `orderIds` 가 열쇠이고 경로의 `{id}`·`{seq}` 는 확인용이다**(바로 아래).
 - **스캔은 주문으로 푼다 — 번호는 확인용이다** (2026-09-23, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 결정 1). 본문의 `orderIds` 가 **required** 이고 tracking 은 그것을 `shipments.order_id`(PK)로 푼다. 경로의 `{id}`·`{seq}` 는 조회 조건이 아니라 **확인용 컨텍스트**다 — 기사는 개정 r 의 번호로 찍는데 tracking 은 이미 r+1 을 적용했을 수 있고, 그때 `(route, seq)` 는 다른 주문을 가리키거나 아무것도 가리키지 않는다. 번호로 찾으면 앞의 경우는 **엉뚱한 주문을 배송 완료로 적고** 뒤의 경우는 404 다 — 둘 다 기사가 고칠 수 없다. **현실의 배송 스캔이 stop 번호가 아니라 송장(주문)을 찍는 것**이 이 열쇠의 근거이고, 모호성이 없는 쪽을 찍는 것이다.
   찍은 자리와 tracking 이 아는 자리가 다르면 **그대로 적용하고** `dawnline_scan_after_relocate_total` 로 센다(§9.1) — 그 값이 개정과 기사가 어긋난 창의 크기이고, dispatch 의 `dawnline_status_after_relocate_total` 과 한 쌍이다. 편차 전파와 `delivery.status` 발행도 **배송이 지금 있는 (라우트, 순번)** 에서 한다: 요청이 말한 좌표로 전파하면 개정이 옮긴 stop 의 ETA 를 엉뚱하게 밀고, 옛 좌표를 그대로 실어 보내면 dispatch 의 확인용 컨텍스트가 틀린 값을 받아 저쪽 카운터가 우리 탓으로 오른다. 그래서 **한 스캔이 `delivery.status` 두 건이 될 수 있다** — 그 주문들이 지금 서로 다른 stop 에 있으면 그것은 두 지점의 사실이다.
   `DEPARTED_CAMP` 만 예외다: **라우트의 사건**이라 `orderIds` 를 싣지 않고(실으면 400) 그 라우트 전체에 적용한다. 사유를 `FAILED` 에만 붙이는 것과 같은 모양이다 — 종류가 필드의 뜻을 정하고, 어긋나면 조용히 버리지 않고 거절한다.
-- ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17). 부호를 지우지 않는다 — 일찍 도착하면 음수로 당겨진다. 「늦은 것만 민다」로 적으면 앞서 가는 라우트의 ETA 가 낡은 채로 남고 ops 화면이 그 값을 읽는다.
+- ETA 재계산: 현재 stop 실제 시각 − 계획 시각 = 편차 `d`. 이후 stop들의 `eta = planned + d` (단순 이동 모델; 개선 여지는 §17). **`d` 는 라우트 행에 한 번 적고(`route_revisions.deviation_seconds`) ETA 는 읽는 자리에서 계산한다** — 배송마다 적으면 스캔 하나가 뒤 stop 전부를 다시 써서 라우트당 O(n²) 였다(2026-09-28, [ADR-070](adr/ADR-070-tracking-writes-lock-the-route-first.md) 결정 2 — 30-stop 라우트 하나에 `shipments` 갱신 990, 근거: 관측(재현됨)). 지나온 비종결 stop 도 같은 `d` 를 받는다. 부호를 지우지 않는다 — 일찍 도착하면 음수로 당겨진다. 「늦은 것만 민다」로 적으면 앞서 가는 라우트의 ETA 가 낡은 채로 남고 ops 화면이 그 값을 읽는다.
 - **`DEPARTED_CAMP` 는 라우트의 사건이다** (Phase 5-1b). 경로의 `{seq}` 를 무시하고 그 라우트의 배송 <em>전부</em>를 `OUT_FOR_DELIVERY` 로 옮긴다 — 기사는 캠프를 한 번 떠나고, 그 순간 모든 배송이 길 위에 있다. stop 하나만 옮기면 나머지는 `SCHEDULED` 로 남아 「아직 출발하지 않은 배송」처럼 보인다. 그리고 이 갈래가 **첫 편차의 출처**다: 기준값은 `route_revisions.planned_departure`(= `route.assigned.v1` 의 `summary.plannedDeparture`, required)이고, 늦은 출발은 가장 흔한 지연 원인이면서 **첫 `ARRIVED` 스캔 전에 이미 알 수 있다.** 브로커로는 나가지 않는다 — 한 사실을 stop 수만큼 반복해 말하는 것이고 order-service 의 상태 머신은 `DISPATCHED` 로 그 구간을 이미 덮는다(`ScanType.isPublished()`). 운영자가 출발 사실을 화면에서 원하면 라우트 단위 이벤트 하나(`delivery.route-departed`, 키 `routeId`)를 **첫 소비자가 나타나는 Phase 6 에서 소비자 주도로** 정한다. **정했다** ([ADR-050](adr/ADR-050-route-departure-is-an-event.md), 2026-09-23, Phase 6-0b — §4.1 표와 그 아래 문단). 근거는 화면이 아니라 이 갈래가 *첫 편차의 출처*라는 것이다: 그 편차를 아는 것이 tracking 뿐이면 ops 는 첫 `ARRIVED` 까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, 그 구간이 운영자가 개입할 수 있는 마지막 창이다. **발행이 이 자리에 붙었다**(2026-09-24) — 배송을 실제로 옮긴 출발 스캔에만, 라우트에 한 건.
-- **편차 전파는 애그리거트 밖이다** (`EtaPropagator`). 편차는 <em>라우트</em>의 성질이다 — 어느 stop 에서 얼마가 벌어졌고 그것이 누구에게 옮겨 가는지는 방문 순서를 아는 쪽만 안다. `Shipment` 는 주문 하나만 알고, 받는 것은 결과값 하나(`projectEta`)다. 종결 상태를 옮기지 않는 판단만 애그리거트의 것이다 — 「어디서 움직이는가」의 답이 하나여야 한다.
+- **편차 전파는 애그리거트 밖이다** (`EtaPropagator`). 편차는 <em>라우트</em>의 성질이다 — 어느 stop 에서 얼마가 벌어졌고 그것이 누구에게 옮겨 가는지는 방문 순서를 아는 쪽만 안다. `Shipment` 는 주문 하나만 알고, 받는 것은 편차 하나다(`etaWith(d)` · `isAtRisk(margin, d)`). 종결 상태에 ETA 가 없다는 판단만 애그리거트의 것이다 — 「어디서 움직이는가」의 답이 하나여야 한다.
 - **스캔이 다른 쓰기와 겹치면 다시 한다 — 세 번 뒤에는 409 `shipment-contended`** (2026-09-27, 7-4 첫 `peak-day` 의 발견 3). 스캔은 찍은 배송과
   편차 전파가 옮기는 뒤따르는 배송들을 갱신하고, 그 행들은 개정 반영(`route.assigned`)과 같은 라우트의 다른 스캔도 건드린다. `shipments.version`
   (낙관적 락)이 늦은 쪽을 실패시키는데, 그 실패가 **500** 으로 나갔다(근거: 관측 — 첫 실행에서 2건, ETA 전파 중). 500 은 「적용됐는지 모름」이라
   단말이 할 일을 말하지 않는다. 그런데 스캔은 멱등이다(상태 머신 — 아래 §8.5 문단) — 그래서 유스케이스 밖에서 **새 트랜잭션으로 최대 3회**
   다시 하고(`ContendedScanRetry`), 그래도 지면 409 `shipment-contended` + `Retry-After: 1` 이다: 적용되지 않았고, 같은 요청을 그대로 다시
   보내면 된다. JPA 의 낙관적 락 예외는 어댑터(`@Repository` 번역)와 커밋(`JpaTransactionManager`)에서 스프링의
-  `OptimisticLockingFailureException` 하나로 모인다 — 재시도가 `jakarta.persistence` 를 알지 않는다.
+  `OptimisticLockingFailureException` 하나로 모인다 — 재시도가 `jakarta.persistence` 를 알지 않는다. **교착과 잠금 실패도 다시 한다**
+  (`PessimisticLockingFailureException` — 40P01 은 `CannotAcquireLockException` 으로 온다, 2026-09-28, [ADR-070](adr/ADR-070-tracking-writes-lock-the-route-first.md)
+  결정 3). 그것은 안전망이다 — 교착을 없애는 것은 아래 쓰기 계층이다.
+- **tracking 의 쓰기 계층은 라우트 행 → `shipments` 이고, 모든 쓰기 경로(스캔 · 개정 반영 — 재계획의 결과도 개정으로 온다)가 이 순서를 지킨다**
+  (2026-09-28, [ADR-070](adr/ADR-070-tracking-writes-lock-the-route-first.md) 결정 1). 스캔은 대상 배송을 읽은 뒤 그 배송들이 지금 있는 라우트의
+  `route_revisions` 행을 id 순으로 `FOR UPDATE` 하고 나서 배송을 고친다. 개정 반영은 claim(그 행의 `INSERT … ON CONFLICT DO UPDATE`)이 첫 문장이다.
+  보존 정리는 한 트랜잭션에 한 층만 지운다. 이것이 없을 때 스캔은 stop 순으로, 개정은 주문 id 순으로 배송을 잡아 교착했다(`normal-day` 의 500,
+  `ScanRevisionRaceIT` — 근거: 관측(재현됨)). **다음 쓰기 경로도 이 순서를 지킨다** — 없으면 교착이 돌아온다.
 - **at-risk 규칙**: 어떤 stop의 `eta > promised_end − 15분`이면 `delivery.at-risk` 1회 발행(라우트당 5분 쿨다운, Redis `SET NX`). 페이로드에 남은 stop 목록·편차 포함.
   **이것은 사건이지 상태가 아니다**([ADR-046](adr/ADR-046-at-risk-is-an-event.md)). 위험이 계속되면 다시 알리고(쿨다운이 그 주기다) **사라지는 경우는 알리지 않는다** — dispatch 가 이미 시작한 재계획을 취소할 방법이 없고, 해소된 ETA 는 ops 의 읽기 모델(§5.5)이 그대로 보여 준다. 소비자는 「위험 해제」를 기다리지 않는다.
   페이로드의 `remainingStops` 에는 **위험한 stop 만이 아니라 남은 전부**가 들어간다 — §6.8 이 다시 푸는 대상은 남은 구간이다. stop 마다 `atRisk` 를 함께 싣는 이유는 여유(15분)가 tracking 의 정책이기 때문이다: 소비자가 다시 계산하면 두 곳이 갈라진다. `campId` 도 싣는다 — dispatch 는 자기 `routes` 로 알 수 있지만 ops 는 이 이벤트만 본다(불변규칙 4).
@@ -1095,13 +1111,15 @@ ops-api 의 계약은 이 409 를 이미 약속하고 있었고 ops-web 은 화�
 
 ```sql
 CREATE TABLE shipments (order_id UUID PK, route_id UUID NOT NULL, stop_seq SMALLINT NOT NULL, status VARCHAR(20) NOT NULL,
-  planned_arrival TIMESTAMPTZ NOT NULL, eta_at TIMESTAMPTZ NOT NULL, promised_end TIMESTAMPTZ NOT NULL,
+  planned_arrival TIMESTAMPTZ NOT NULL, promised_end TIMESTAMPTZ NOT NULL,
   delivered_at TIMESTAMPTZ, version BIGINT NOT NULL DEFAULT 0,
   updated_at TIMESTAMPTZ NOT NULL);   -- 보존의 나이 (V3, 2026-09-25, ADR-058) — 어댑터가 주입된 시계로, 값이 바뀐 쓰기만
+                                      -- eta_at 은 V5 가 지웠다 — ETA = planned_arrival + 라우트의 편차 (ADR-070)
 CREATE INDEX ix_ship_route ON shipments (route_id, stop_seq);
 CREATE INDEX ix_ship_updated ON shipments (updated_at);   -- 보존 정리 (V4) — 없으면 하루치 정리가 26초, 있으면 0.18초
 -- 개정 비교의 자리 (§8.5 의 「routeId + revision」). 라우트당 한 행.
-CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), camp_id UUID NOT NULL, planned_departure TIMESTAMPTZ NOT NULL, applied_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE route_revisions (route_id UUID PK, revision INTEGER NOT NULL CHECK (revision >= 1), camp_id UUID NOT NULL, planned_departure TIMESTAMPTZ NOT NULL, applied_at TIMESTAMPTZ NOT NULL,
+  deviation_seconds INTEGER NOT NULL DEFAULT 0);   -- 라우트의 편차 (V5, ADR-070) — 스캔이 적고 개정이 0 으로. 쓰기 계층의 부모 행이기도 하다
 CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHAR(20), occurred_at TIMESTAMPTZ NOT NULL,
   lat NUMERIC(9,6), lng NUMERIC(9,6), payload JSONB, PRIMARY KEY (occurred_at, id)) PARTITION BY RANGE (occurred_at);
 -- 일 단위 파티션, 보존 30일 (pg_partman 없이 Flyway + 스케줄러로 생성/삭제)
@@ -1118,7 +1136,7 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
 26.4초, 인덱스로 0.18초다. `route_revisions (applied_at)` 는 **넣지 않았다** — 11만 행에서 배치가 3.6–8.8 ms 이고
 하루 두 배치다(재검토: 100만 행).
 
-**세 칸이 `NOT NULL` 인 것은 계약이 정했다.** `planned_arrival`·`eta_at`·`promised_end` 의 출처는
+**두 칸이 `NOT NULL` 인 것은 계약이 정했다**(처음에는 `eta_at` 을 더해 셋이었다 — V5 가 지웠다). `planned_arrival`·`promised_end` 의 출처는
 `route.assigned.v1` 의 `plannedArrival` 과 `promisedWindow` 둘뿐이고 둘 다 **required** 다(Phase 5-1a
 계약). NULL 이 들어올 경로가 없는 칸을 NULL 허용으로 두면 at-risk 판정에 「창을 모르는 stop」
 분기가 생기고, 그 분기는 한 번도 실행되지 않으면서 리뷰마다 읽힌다. `promisedWindow` 를 `required` 로 넣은 근거는
@@ -1152,7 +1170,7 @@ CREATE TABLE shipment_events (id UUID, order_id UUID, route_id UUID, type VARCHA
 
 **개정은 종결 상태를 되돌리지 않는다 — 되돌릴 것이 있어서가 아니라 갱신할 것이 없어서다.**
 새 개정이 오면 `COMPLETED`·`FAILED`·`CANCELLED` 인 shipment 는 그대로 두고, 나머지만
-`route_id`·`stop_seq`·`planned_arrival`·`eta_at`·`promised_end` 를 갱신한다. 앞의 둘은 §6.8 의
+`route_id`·`stop_seq`·`planned_arrival`·`promised_end` 를 갱신한다(라우트의 편차는 claim 이 0 으로 — ADR-070). 앞의 둘은 §6.8 의
 부분 재계획이 완료 stop 을 고정하는 것과 같은 규칙이지만, tracking 은 그것을 **페이로드가 아니라
 자기 규칙으로** 지킨다 — Phase 5-5 전에는 dispatch 가 진행 상황을 모르므로 이 규칙이 tracking
 쪽의 **유일한 방어선**이다. `CANCELLED` 가 함께 들어가는 이유는 다르다: 취소된 배송의 계획 도착
@@ -1726,6 +1744,17 @@ peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 212.2 → 6.
   성분, `@Scheduled` 간격 · 타임아웃(기간이지 시각이 아니다). 그래서 **그래프의 23:00 버스트는 실제 시각에 찍힌다** — 유효 시각 = 실제 +
   `dawnline_clock_offset_seconds`. 이 목록의 하나가 사실의 판정에 들어오면 그 자리를 주입 시계로 옮긴다(ADR-066 재검토 지점 1).
 
+  **취소와 흔들림 — `peak-day-turbulent`** (2026-09-28, 7-4). 창 시나리오 넷은 주문을 취소하지 않고 기사가 계획 시각에 떠나서, 취소 ·
+  출발 지연에 걸린 7-0 의 행이 판정되지 않았다(리포트 §2). 이 시나리오는 `peak-day` 에 셋을 더한다:
+  - **취소**(`cancel`) — 실제 고객처럼 order-service 의 `POST /api/v1/orders/{orderId}/cancel`. 대상은 **DAWN 주문의 2%**(창 시나리오가 재는
+    범위다), 절반은 **계획 전**(접수 직후 — 창 안이라 웨이브가 닫히기 전), 절반은 **발행 뒤**(계획이 끝난 직후부터 초당 20건 — 재배정 · 출발과
+    나란히). 어느 주문을 언제는 seed 가 정하고(`CancelPlan`, 주문 생성기와 다른 난수원 — 취소를 켜는 것이 주문 내용을 바꾸지 않는다), 주문마다
+    뽑는 수가 고정이다. order-service 는 `DISPATCHED` 뒤의 취소를 409 로 막으므로 발행 뒤 취소의 대부분이 거기서 끝난다 — **409 는 실패가 아니라
+    측정이다**: 200 의 몫이 `order.dispatched` 가 반영되기 전의 창이다(A18). 리포트는 때와 응답별로 센다(`CancelReport`).
+  - **지연** — 구간의 15% 가 최대 30% 더 걸리고, **출발도 같은 확률로** 최대 15분 늦는다. 처음에는 출발 지연이 모든 라우트에 0 ~ 상한에서 균등하게
+    걸렸다(`SeededJitter` — 2026-09-28 정정: 뽑는 순서 · 개수가 그대로라 확률 1.0 인 `late-injection` 과 상한 0 인 창 시나리오의 값은 같다).
+  - **실패** — 전달의 3%.
+
   **성수기 증차 — 운영자가 하는 일을 그대로** (2026-09-27, 7-4a ③, [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md)).
   창 시나리오는 `fleet` 칸을 갖는다 — `feasible`(기준이 낸 만큼 더한다, `peak-day`) · `as-is`(재기만 하고 더하지 않는다 — 나머지 셋,
   `overload-day` 의 「증차 없음」). sim-runner 는 dispatch 에 직접 닿지 않는다 — **ops-api 를 운영자의 토큰으로** 부른다
@@ -1752,7 +1781,7 @@ peak 30일(450만 행)에서 캠프 하나의 24 버킷: 배송 축 212.2 → 6.
      `peak-day` 의 운영자 흔적이다. `promise_revised_total{cause="manual"}` 은 **기대 0** 이다 — 창이 23:58 에 끝나 마감 뒤에 도착하는
      주문이 없다. 0 이 아니면 fulfillment 의 소비 지연이 증차 시간보다 길었다는 뜻이다(ADR-067 재검토 지점 4 와 같은 현상).
   6. **기사** — 기다릴 라우트 수는 설정이 아니라 **계획이 낸다**: 창의 웨이브들의 `route_count` 합. 배속 600, 지연 · 실패 주입 0
-     (§8.1 의 정시율 측정은 7-4 다). 기사가 없으면 라우트가 끝나지 않고, 끝나지 않은 라우트의 차량은 비활성화되지 않는다(§5.3 409).
+     (§8.1 의 정시율 측정은 7-4 다 — `peak-day-turbulent` 만 주입한다, 아래 「취소와 흔들림」). 기사가 없으면 라우트가 끝나지 않고, 끝나지 않은 라우트의 차량은 비활성화되지 않는다(§5.3 409).
      **출발은 tracking 의 반영 뒤다**(2026-09-27, [ADR-067 후속](adr/ADR-067-peak-fleet-is-an-operator-command.md)) — 도구가 창의 라우트를
      그 수만큼 받고, **그 뒤에 잰** tracking 그룹의 `route.assigned` 랙이 0 이면 첫 스캔을 보낸다(`DepartureGate`). 운영에서 반영과
      스캔은 겹치지 않는다 — 첫 실행은 배속 600 의 스캔이 반영 버스트를 덮어 반영 한 건이 약 1초가 됐다(경로만은 29.5 ms). 상한을 넘기면
@@ -2439,9 +2468,11 @@ public interface DispatchStrategy {
   것이 쓰고 **덮어쓰지 않는다** — 덮으면 이 값은 도착이 아니라 완료가 되고, 아래 편차가
   「얼마나 늦게 도착했나」에서 「거기서 머문 시간까지 더한 값」으로 조용히 바뀐다.
 - **편차 = 마지막으로 닿은 stop 의 `actual_at − planned_arrival`.**
-- **닿은 stop 이 없으면 편차는 «모름» 이고, 모름은 0 이 아니다** — 재계획하지 않고
-  `dawnline_replan_total{outcome=no-anchor}` 로 센다. 출발 지연만으로 난 at-risk 가 그 자리이고,
-  첫 `ARRIVED` 뒤 tracking 의 5분 쿨다운이 다시 발화하므로 구멍은 **stop 하나 뒤에 닫힌다**.
+- **닿은 stop 이 없으면 출발이 앵커다** (2026-09-28, [ADR-072](adr/ADR-072-departure-is-an-anchor.md)) — 편차 = `routes.departed_at −
+  routes.planned_departure`. dispatch 가 `delivery.route-departed` 를 소비해 출발 사실을 자기 DB 에 둔다(V13, 처음 온 값). 처음에는 닿은 stop 이
+  없으면 «모름»(`no-anchor`)이었고, at-risk 가 설계상 출발 지연에서 첫 stop 전에 발화하므로 7-4 에서 29/32 · 24/28 이 그 자리였다(7-0 B1).
+- **둘 다 없으면 편차는 «모름» 이고, 모름은 0 이 아니다** — 재계획하지 않고 `dawnline_replan_total{outcome=no-anchor}` 로 센다. 남는 것은 at-risk 가
+  출발보다 먼저 소비되는 창이다(다른 토픽) — 그 수가 두 토픽 사이 순서 창의 크기다.
 
 `delivery.at-risk` 의 `deviationSeconds` 는 **입력이 아니라 대조값**이다. 자기 값과 60초 넘게
 갈리면 `dawnline_at_risk_deviation_mismatch_total` 을 올린다 — tracking 과 dispatch 가 같은
@@ -2470,7 +2501,7 @@ stop 마다 살아 있는 상태를 이미 돌려주므로 위임 조회도 그 
 편차를 저장까지 반영하면 **다음 편차의 기준선이 사라진다** — `actual_at − planned_arrival` 에서
 빼는 쪽이 방금 `actual_at` 으로 밀렸기 때문이고, 그러면 두 번째 at-risk 에서 dispatch 는 자기
 편차를 0 으로 본다. 반대편에서 말하면 **`planned_arrival` 은 계획이고 ETA 는 tracking 의 것이다**
-(`shipments.eta_at`, §5.4). 두 테이블이 ETA 를 적으면 둘은 갈라진다. 저장 시계가 계획 시계
+(`route_revisions.deviation_seconds` 에서 계산한다, §5.4 — ADR-070 이전에는 `shipments.eta_at`). 두 서비스가 ETA 를 적으면 둘은 갈라진다. 저장 시계가 계획 시계
 그대로이므로 닿은 stop 들의 `planned_arrival` 은 재계획을 지나도 움직이지 않는다 — 기준선의
 안정성이 위의 편차 계산을 성립시킨다.
 
@@ -2851,6 +2882,13 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
 허용이 아니다. 여기에 더해 실패가 감지되면 `dawnline.order.redis.outage-bypass-ms`(기본 10초)
 동안 Redis 호출 자체를 건너뛴다.
 
+**연결 예산은 명령 예산이 아니다**(2026-09-28, [ADR-069](adr/ADR-069-redis-connect-budget-is-not-the-command-budget.md)). 위 50 ms 는
+명령 하나의 예산이고, 연결(TCP + HELLO 핸드셰이크)은 따로 `connect-timeout`(기본 2초)을 쓴다 — order `dawnline.order.redis.connect-timeout-ms`,
+fulfillment `dawnline.fulfillment.redis.connect-timeout`. Spring 은 `commandTimeout` 을 Lettuce 의 `RedisURI.timeout` 에 넣고 Lettuce 는
+그 값으로 핸드셰이크를 기다리므로, 하나로 두면 50 ms 가 연결의 예산이 된다 — 7-4 의 창 시나리오 네 실행이 창 시작마다 30–40초씩 레이트
+리밋을 우회한 원인이다(근거: 관측(재현됨)). 그래서 `commandTimeout` 자리에는 연결 예산을, 명령 예산은 `TimeoutOptions` 로 명령마다 건다
+(`RedisTimeoutConfig` 한 곳). 연결은 **기동 때 best-effort 로 미리 연다** — 레디니스 조건이 아니다(§8.6).
+
 ### 7.3 Kafka 토픽 설정 (로컬)
 
 파티션 12, replication 1(로컬), `retention.ms` 7일, DLQ 30일. **DLQ 30일은 §7.1 보존 표의 하한이다** — 표의 모든 기간이 그 이상이라 재처리가 지운 행을 되살리지 못한다([ADR-023](adr/ADR-023-fulfillment-retention.md) · [ADR-058](adr/ADR-058-shipment-and-read-model-retention.md)). DLQ 보존을 늘리는 변경은 그 표를 함께 본다. 프로덕션 확장 시 파티션 = 캠프 수 × 2 이상, replication 3, `min.insync.replicas=2`, 프로듀서 `acks=all`, `enable.idempotence=true`.
@@ -2943,6 +2981,7 @@ Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다 — �
   것이다 — 끝난 뒤 한 번 더 찌른 **두 번째 표본**으로 판정하던 것이 2026-09-27 에 CI 를 한 번 빨갛게 했다(루프는 48초에 다섯 모두 READY, 직후 재확인의
   ops-api 요청 하나가 콜드 JIT 로 2초 제한에 걸렸다). 상한은 경과 시간(`WAIT_SECONDS`, 기본 120)이다.
 - **Redis GEO 적재도 넣지 않는다**(2026-09-05 정정, ADR-016 후속 정정). 이전 판은 "(fulfillment) GEO 적재 완료"를 조건으로 적었는데, 그것은 §7.2 가 `geo:fc`·`geo:camp` 에 폴백(DB 전체 조회 + 메모리 하버사인)을 둔 것과 모순이다. **폴백이 있는 의존성을 레디니스에 넣으면 Redis 장애가 곧 서비스 차단이 되어 폴백을 만든 이유가 사라진다.** 적재는 best-effort 로 하고 주기적으로 재시도하며, 상태는 `dawnline_geo_index_loaded{index}` 게이지(0/1)와 폴백 사용 카운터로 관측한다(§9.1) — 레이트 리밋의 `bypassed` 와 같은 방식이다.
+- **Redis 연결도 넣지 않는다 — 대신 기동 때 미리 연다**(2026-09-28, [ADR-069](adr/ADR-069-redis-connect-budget-is-not-the-command-budget.md)). order · fulfillment 가 `ApplicationReadyEvent` 에서 별도 스레드로 공유 연결을 열고 `PING` 한다. 실패하면 WARN 한 줄이고 기동은 그대로이며, 첫 명령이 다시 연다(연결 예산 2초, §7.2). 레디니스에 넣지 않는 이유는 GEO 적재와 같다. 선연결이 없으면 첫 연결은 창의 첫 주문이 핫패스에서 연다.
 - 그레이스풀 셧다운: HTTP 드레인 30초, Kafka 소비자 커밋 후 종료, 진행 중 계획은 트랜잭션과 함께 롤백되고 `wave.closed` 가 재기동 뒤 다시 전달된다(§5.3 — `PLANNING` 은 남지 않는다).
 
 ---
@@ -3402,7 +3441,7 @@ dawnline/
 | 3 | 서비스 간 DB 접근 금지 | 규칙 3 — 소스 레벨 패키지 참조만 | DB 권한(`deploy/compose/initdb`): 서비스 DB·부트스트랩 DB 모두 `REVOKE CONNECT … FROM PUBLIC` | 규칙 3 ✅(양방향) / DB 권한 ✅(컨테이너에서 거부 확인) |
 | 4 | 코어 서비스 간 동기 호출 금지 | 규칙 3이 부분 커버 — 모노레포 안의 패키지 참조만 잡는다. HTTP 클라이언트로 부르는 것은 못 잡는다 | PR 체크리스트, Compose 네트워크 구성. **코어의 운영자 쓰기는 ops-api 만 부른다**(§10 셋째 층, [ADR-055](adr/ADR-055-operator-writes-on-cores-carry-an-internal-token.md)) — 내부 토큰, 강제 수단은 코어 넷의 `OpenApiContractIT` 가 **생성된 문서에서 뽑은** 쓰기를 전부 토큰 없이 부르는 검사. 음성 표본(인터셉터 등록을 뺐다)에서 네 코어가 열린 쓰기 **열 개**를 나열했고 **그 목록은 ADR-055 의 표와 같았다** — 검사가 문서에서 뽑히는 이유가 그것이다. 목록을 테스트에 적었다면 그것은 ADR 의 표와 대조할 둘째 목록이 되고, 새 쓰기 엔드포인트는 두 목록 모두에서 빠진 채 열린다. 토큰은 코어도 알므로 코어→코어 호출은 여전히 이 행의 리뷰가 막는다. **(2026-09-25, 7-3) HTTP 경로에 ArchUnit 규칙 12** — 코어 넷의 main 은 HTTP 클라이언트(Spring 의 셋 · JDK 의 둘)에 의존하지 않는다. ops-api 는 `HTTP_CLIENT_OWNERS` 에 이유와 함께 빠진다(빼는 방식). 음성 표본: dispatch 의 어댑터에 `RestClient` 필드 하나를 넣자 `ArchitectureTest` 가 그 필드와 `RestClient.create` 호출을 나열했다. 이 규칙이 [ADR-015 후속 정정](adr/ADR-015-outbox-publish-side-quarantine.md) 경계표의 「HTTP — 해당 없음」을 지킨다. 남는 틈은 **HTTP 클라이언트를 쓰지 않는 호출**(소켓 · 다른 라이브러리)뿐이다 | 규칙 3 ✅ / HTTP 경로 **✅ 규칙 12**(음성 표본) · 운영자 쓰기 ✅(ADR-055 음성 표본) |
 | 5 | domain 프레임워크 비의존 | 규칙 1 — 유일하게 온전히 강제된다. **규칙 10** 이 같은 근거를 `libs/common` 의 main 으로 넓힌다([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) 결정 2) — 그 모듈의 build 파일이 「순수 Java 다」라고 적고 있었지만 그것은 문장이지 강제가 아니었다 | — | ✅ (규칙 1 · 규칙 10 둘 다) |
-| 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트**. **애그리거트가 없는 자리 하나**: dispatch 의 `route_stops.status`(2026-09-22, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 기각 (5)). 라우트는 120 stop 까지 가고 `RouteMutations` 는 「애그리거트를 되살리지 않는다」를 명시한 포트라, 전이 규칙은 도메인의 **순수 함수**(`RouteStopTransition`)에 두고 어댑터가 판정만 받아 한 행을 쓴다. 규칙이 한 곳에 있다는 목적은 지켜지지만 **세터를 막는 장치가 없다** — 지키는 것은 `RouteStopTransitionTest` 와 리뷰다. **둘째가 묶음 B 에 온다**: ops-api 의 상태 칸 넷(`rm_orders.order_status`·`delivery_outcome`·`rm_waves.status`·`rm_routes.status`, §5.5)은 애그리거트가 아니라 **프로젝션**이라 역시 세터를 막을 자리가 없고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓰므로** 「이 전이를 받는가」 앞에 「그 행이 아직 있기는 한가」가 하나 더 있다([ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) — 축 규칙의 다섯 번째 자리). 지키는 것은 「순서를 뒤섞는 IT」다 — **들어왔다**(2026-09-24): 판정은 `ops.domain.Progress` 의 순수 함수(최댓값)이고 `ProgressTest` 가 네 축의 모든 쌍에서 교환법칙을 본다. `ProjectionShuffleIT`(실제 PostgreSQL, 씨 25회)·`ProjectionShuffleTest`(메모리, 씨 300회)가 같은 시나리오를 뒤섞고, 토픽·표·칸을 전부 **빼는 방식**으로 정한다. 「부재는 값이 아니다」는 타입이 지킨다 — `Patch` 가 `null` 을 받지 않는다 | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다. `RouteStopTransitionTest` 가 위 예외의 표 전체(도착 상태 × 현재 상태)를 **빼는 방식**으로 돈다 |
+| 6 | 상태 전이는 상태 머신 메서드로만 | — | 애그리거트에 세터를 두지 않는다, 코드 리뷰, **왕복 매핑 단위 테스트**. **애그리거트가 없는 자리 하나**: dispatch 의 `route_stops.status`(2026-09-22, [ADR-047](adr/ADR-047-delivery-status-is-a-fact-not-a-revision.md) 기각 (5)) — 2026-09-28 부터는 주문의 행(`route_stop_orders.status`)이 전이를 받고 stop 은 그 주문들에서 다시 센다([ADR-071](adr/ADR-071-delivery-facts-live-on-the-order-row.md)). 라우트는 120 stop 까지 가고 `RouteMutations` 는 「애그리거트를 되살리지 않는다」를 명시한 포트라, 전이 규칙은 도메인의 **순수 함수**(`RouteStopTransition`)에 두고 어댑터가 판정만 받아 한 행을 쓴다. 규칙이 한 곳에 있다는 목적은 지켜지지만 **세터를 막는 장치가 없다** — 지키는 것은 `RouteStopTransitionTest` 와 리뷰다. **둘째가 묶음 B 에 온다**: ops-api 의 상태 칸 넷(`rm_orders.order_status`·`delivery_outcome`·`rm_waves.status`·`rm_routes.status`, §5.5)은 애그리거트가 아니라 **프로젝션**이라 역시 세터를 막을 자리가 없고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓰므로** 「이 전이를 받는가」 앞에 「그 행이 아직 있기는 한가」가 하나 더 있다([ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) — 축 규칙의 다섯 번째 자리). 지키는 것은 「순서를 뒤섞는 IT」다 — **들어왔다**(2026-09-24): 판정은 `ops.domain.Progress` 의 순수 함수(최댓값)이고 `ProgressTest` 가 네 축의 모든 쌍에서 교환법칙을 본다. `ProjectionShuffleIT`(실제 PostgreSQL, 씨 25회)·`ProjectionShuffleTest`(메모리, 씨 300회)가 같은 시나리오를 뒤섞고, 토픽·표·칸을 전부 **빼는 방식**으로 정한다. 「부재는 값이 아니다」는 타입이 지킨다 — `Patch` 가 `null` 을 받지 않는다 | 부분 — `FulfillmentOrderEntityTest`·`WaveEntityTest` 가 도메인→행→도메인 왕복에서 필드가 사라지지 않는지 본다. `RouteStopTransitionTest` 가 위 예외의 표 전체(도착 상태 × 현재 상태)를 **빼는 방식**으로 돈다 |
 | 7 | Redis는 진실 저장소가 아님 | — | §7.2 폴백 표(**예외 없음** — 2026-09-05 에 하루 있었고 [ADR-027 후속 정정](adr/ADR-027-outbox-relay-leader-lock.md)이 그 행을 없앴다), 카오스 시나리오(`make chaos-redis` — ADR-027 후속 정정의 기준을 재기 전에 적었다, RB-03 §3), 어댑터가 `DataAccessException` 을 밖으로 내지 않는다 | ✅(멱등·GEO·권역) — `PlaceOrderIT`(order)와 `GeoFallbackIT`(fulfillment)가 죽은 Redis 주소로 컨텍스트를 띄워 각각 멱등과 FC 선택이 DB만으로 성립함을 보인다. **`GeoEquivalenceIT` 는 한 걸음 더 간다** — 폴백이 *동작하는가*가 아니라 시드 전체(캠프 10 × FC 3 × 티어 3 × 냉장 2)에서 Redis 와 **같은 답**을 내는가를 본다 |
 | 8 | 이벤트 계약 우선 | — | 계약 테스트(`EventContractsTest` — 스키마·예시 양방향), `contracts/events/README` §3 | ✅ |
 | 9 | 돈은 정수 KRW·좌표 `NUMERIC(9,6)`·시간 `TIMESTAMPTZ` | — | 컴파일러 — `Money` 는 `long` 을 감싸는 값 객체라 부동소수 금액이 타입에서 막힌다 | ✅(타입) |
@@ -3691,6 +3730,10 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 066 | **시뮬레이션은 스케줄이 아니라 시계를 옮긴다** — `dawnline.clock.offset` 이 주입 시계에 더해지고 컷오프 상수 · 도메인 · 파이프라인은 그대로 · 값은 compose 앵커 하나(`DAWNLINE_CLOCK_OFFSET`) · 기동 로그에 유효 시각 한 줄 · 게이지 `dawnline_clock_offset_seconds` 를 `make obs-check` 가 다섯 서비스에서 대조 · 0 이 아닌 오프셋은 프로필 `sim` 에서만(아니면 기동 거부) · 시계는 하나 — 운영 SQL 의 `now()` 셋을 걷어냄(outbox 미발행 나이가 −28,799.95초였다, 관측) · 벽시계로 남는 것의 목록 · 시뮬레이션은 자기 compose 프로젝트에서(시간은 뒤로 가지 않는다) · **후속(2026-09-27)**: 볼륨 삭제는 측정의 첫 단계 — `make sim-reset`(대상 `dawnline-sim` 고정 · 묻지 않는다, CLAUDE.md 의 유일한 예외) → `sim-up` → `peak` | 실제 23:00 KST 에만(하루 한 번), 컷오프 스케줄을 설정으로(시뮬레이션용 스위치가 도메인에), 조기 마감으로 흉내(`cause=manual` 오염), 배속 시계(p99 가 무엇의 p99 인지 말할 수 없다), DB 시계도 옮기기, 개발 볼륨에서 그대로(오프셋 0 으로 돌아오면 시간이 뒤로 간다) | [ADR-066](adr/ADR-066-simulation-moves-the-clock-not-the-schedule.md) |
 | 067 | **성수기 증차는 운영자 커맨드다 — 기준은 dispatch 가 자기 후보로 낸다** — ops-api 위임 `ADD_VEHICLE` · `DEACTIVATE_VEHICLE`(감사 행) · dispatch 의 읽기 `fleet-feasibility`(통합 후 stop · 계획이 쓸 수 있는 차량 · 조합 × stop·중량·부피 80%, 계산은 `libs/common` — 벤치마크와 같은 코드) · 부족분은 가장 특정한 조합부터(ADR-039 불변식 2 의 거울) · 템플릿이 없으면 `NO_TEMPLATE` 으로 명시하고 실패 · `vehicles.source`(V11, 닫힌 집합) · 비활성화는 끝나지 않은 stop 이 있으면 409(보존과 한 SQL) · 창 시나리오의 기사가 계획의 라우트 수를 전부 기다린다 · 시작 전 활성 `peak-sim` 0 · 시간 예산은 `rm_waves.closed_at`(V9) 대비 어설션 · 미배정 판정은 표에, 종료 코드는 도구에 · 운영자의 조기 마감은 시각이 아니라 **증차 뒤의 순서**(D3 — `cause="manual"` 기대 0) · **후속(2026-09-27)**: 기사는 tracking 의 반영 뒤에 출발한다 — 반영과 스캔을 시간으로 떼고, 리포트는 두 DB 의 사실로(`make peak-facts`) | 내부 토큰으로 직접(감사 없는 둘째 운영자 — ADR-055), 시드 대수를 늘린다(`overload-day` 가 사라진다), 대수를 yml 에, sim-runner 가 계산(기준의 둘째 사본), 특정하지 않은 조합부터, 템플릿 대체, 코드 접두어로 출처, 출발 전이면 비활성화 허용(배정된 주문이 주인 없이 남는다), grace 설정으로 예산, 미배정 > 0.5% 면 실패, 조기 마감을 창 안의 정해진 시각에 · 창 밖의 웨이브에 | [ADR-067](adr/ADR-067-peak-fleet-is-an-operator-command.md) |
 | 068 | **재계획의 쓰기는 옮길 stop 을 잠그고 다시 본다 · 행은 지우지 않고 옮긴다** — 재계획도 읽기 · 계산 · 쓰기 셋(ADR-064 와 같은 구조, 7-0 B13 을 닫는다) · 쓰기는 옮길 stop 을 `FOR UPDATE` 로 잡고 `PLANNED` 를 다시 보고(ADR-026 결정 2 를 개정에) 원 · 대상 라우트의 `revision` 을 대조한다 — 어긋나면 결과를 버리고 `stale`(쿨다운을 집지 않는다) · 옮기는 것은 stop 행(`route_id`)이라 id · 합쳐진 주문 · 그 행을 기다리던 상태 반영이 함께 간다 · 다시 쓰기는 좌표가 아니라 주문으로 행을 찾는다 · 정정 전에는 tracking 의 `COMPLETED` 20건이 dispatch 의 `PLANNED` 에 남았다(근거: 관측(재현됨), `ReplanRaceIT`) · 검증 표 V8 · **후속**: 재계획의 대상은 끝나지 않은 라우트(보존 · 409 와 같은 한 조각 — 쓰기가 받을 라우트의 끝나지 않은 stop 을 잠가 다시 본다) · 재배정도 행을 지우지 않는다(혼자 실린 stop 은 행을 옮긴다) · **후속 C**: 재배정의 받는 쪽도 잠그고 다시 본다 — 받을 라우트의 끝나지 않은 stop(없으면 409 `route-finished`) → 붙을 `PLANNED` stop → 라우트 행 id 순 · 합쳐진 stop 을 가르는 동안의 배송은 잠금이 아니라 ADR-047 의 선택(직렬 순서도 같은 답) | 잠그고 다시 보기만(락을 기다린 반영이 지워진 행을 고친다), 상태 반영이 0 행이면 새 자리에 다시 쓰기만(커밋된 뒤 지워진 사실은 되살릴 수 없다), 계산 전에 남은 stop 을 잠근다(계산 내내 상태 반영이 선다), `SERIALIZABLE`(재시도가 계산까지 덮는다), `stale` 을 `no-gain` 에 접는다 | [ADR-068](adr/ADR-068-replan-write-locks-and-moves-rows.md) |
+| 069 | **Redis 의 연결 예산은 명령 예산이 아니다 · 연결은 기동 때 미리 연다** — Spring 이 `commandTimeout` 을 `RedisURI.timeout` 에 넣고 Lettuce 가 그 값으로 핸드셰이크를 기다려, 50 ms 가 연결의 예산이었다(근거: 관측(재현됨) — 7-4 네 실행의 창 시작 우회 30–40초) · 연결 2초(`connect-timeout`) · 명령 50 ms 는 `TimeoutOptions` 로 명령마다 · 선연결은 `ApplicationReadyEvent` 의 best-effort(레디니스 아님, ADR-016) · 알림의 `for` 는 건드리지 않는다 — 우회는 보상 통제가 없던 시간이다 · order · fulfillment | 명령 타임아웃을 연결에 맞춰 늘린다(멈춘 Redis 를 요청마다 기다린다), `spring.data.redis.connect-timeout` 만(TCP 연결만 바꾼다 — 핸드셰이크는 그대로 50 ms), `setEagerInitialization`(기동 경로 안에서 연결한다), 레디니스에 Redis, 알림에 `for` | [ADR-069](adr/ADR-069-redis-connect-budget-is-not-the-command-budget.md) |
+| 070 | **tracking 의 쓰기는 라우트 행을 먼저 잡는다 · 편차는 라우트 행에 한 번 적는다** — 스캔(stop 순)과 개정 반영(주문 id 순)이 배송을 다른 순서로 잡아 교착했다(근거: 관측(재현됨) — `ScanRevisionRaceIT`, `normal-day` 의 500) · 쓰기 계층 라우트 행 → `shipments`, 모든 쓰기 경로가 지킨다 · 편차는 `route_revisions.deviation_seconds`, ETA 는 planned + 편차로 읽는 자리에서(`eta_at` 제거, V5) — 30-stop 라우트의 `shipments` 갱신 990(O(n²)) · 개정은 편차를 0 으로 · 재시도는 교착도(안전망) · B11 은 갱신 수 · 풀 대기로(HOT 은 `ix_ship_updated` 가 막는다) | 개정 반영을 stop 순으로(번호가 쓰기 도중에 바뀐다 · relocate 의 다른 라우트), 배송 행 전부를 먼저 잠근다, `SERIALIZABLE`, 재시도만, `eta_at` 을 남기고 쓰지 않는다(둘째 출처), BRIN 부터 | [ADR-070](adr/ADR-070-tracking-writes-lock-the-route-first.md) |
+| 071 | **배송의 사실은 주문의 행에 적는다 · stop 의 상태는 그 주문들에서 다시 센다** — stop 하나의 칸이 그 stop 의 어느 주문의 사건에도 전체를 덮었다(근거: 관측(재현됨) — `DeliveryFactPerOrderIT` 셋, ADR-047 ④ 는 추정이었다) · `route_stop_orders.status` · `actual_at`(V12) · 전이는 주문마다, 갈라진 사건은 각자의 자리에(ADR-047 결정 2 의 「하나를 택한다」가 사라진다) · stop 은 쓰기 때 다시 센다(ADR-061 의 모양) — `PLANNED` = 아무도 닿지 않았다, `ARRIVED` = 일부 · stop 단위 검사(재계획 · 재배정 · 취소)는 그대로 · 카운터는 사건 단위 · 취소는 적지 않는다(`dispatch_candidates` 하나) | 사건이 stop 의 주문을 전부 덮을 때만 옮긴다(일부 사실을 버린다), 읽을 때 모은다(네 조각이 집계가 된다), 두 stop 에 stop 단위로, 주문의 행에 취소도 | [ADR-071](adr/ADR-071-delivery-facts-live-on-the-order-row.md) |
+| 072 | **출발도 앵커다 · dispatch 가 `delivery.route-departed` 를 소비한다** — 7-4 의 `no-anchor` 29/32 · 24/28 은 구조였다: at-risk 는 출발 지연에서 첫 stop 전에 발화하고 그때 dispatch 에 닿은 stop 이 없다 · 출발 사실을 자기 DB 에(`routes.departed_at`, V13, 처음 온 값, 개정으로 거르지 않는다) · 앵커 = 닿은 stop, 없으면 `departed_at − planned_departure`, 둘 다 없을 때만 `no-anchor` · 페이로드 값은 대조값 · 남는 창(다른 토픽의 순서)은 B1 의 수가 답한다 | at-risk 의 `deviationSeconds` 를 앵커로(출처가 tracking), 부하를 낮춘 실행으로 먼저 가른다(구조라 부하와 무관), at-risk 에 출발 시각을 싣는다(같은 사실 두 토픽), 가짜 0번 stop | [ADR-072](adr/ADR-072-departure-is-an-anchor.md) |
 | 073 | **`routes.status` 를 지운다 · 라우트의 끝남은 stop 의 사실에서 나온다** — `'PLANNED'` 로 넣고 바꾸는 쪽이 없었다(7-4 의 775대 전부 `PLANNED`, 끝난 687대 포함 — 근거: 관측) · 끝남을 묻는 셋(보존 · 비활성화 409 · 받는 쪽 잠금)은 이미 `UNFINISHED_STOP` 조각으로 판정한다 · V14 로 칸을, `RouteView.status` · `RouteDetail.status` 를 계약에서 뺀다 · 사건 시점에 쓰지 않는다 — 둘째 출처이고 ADR-061 의 허용 조건(읽기 재계산이 비싸다)이 없다 | 사건 시점에 쓴다, 칸은 두고 API 에서만 뺀다, API 에 파생 값으로 남긴다(읽는 화면이 없다) | [ADR-073](adr/ADR-073-route-status-column-is-dropped.md) |
 | 052 | **위임 클라이언트는 커밋된 계약에서 만든다 — 채택 기준을 먼저 적는다** — 후보 하나(`spring` 생성기 · `spring-http-interface`), 기준 다섯(표준 템플릿 · 문서화된 옵션만 · 생성물 그대로 컴파일 · Jackson 3 왕복 · 새 런타임 의존 없음) — 하나라도 거짓이면 손으로 쓴 인터페이스 + YAML 대조 테스트 — **채택**(7.25.0, 다섯 기준 모두 참 · 왕복 32개) · 토큰은 스크립트가 찍고 ops-api 는 검증만 · 감사 행은 위임 **전에** `PENDING`, 응답을 못 받으면 `UNKNOWN` · 감사 id 를 상관 헤더로 · **후속**(2026-09-27): 위임 응답은 코어의 사유를 재진술하지 않고 「사유는 `<코어>.yaml` 의 `<operationId>`」로 가리킨다 — `OpenApiContractIT` 가 가리킴이 풀리는지 본다(§13 축 17) | 계약 없이 컨트롤러 소스에서, 살아 있는 `/v3/api-docs` 에서 생성(입력이 커밋에 남지 않는다), 생성물 커밋(서로를 비추는 목록이 하나 는다), 개발 전용 로그인 엔드포인트(프로필이 꺼져 있다는 조용한 전제), 위임 뒤 한 번만 기록(죽으면 기록이 사라진다) | [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) |
 | 051 | **읽기 모델의 행은 먼저 온 사실이 만든다 — 부재는 값이 아니다** — 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **다섯 번째 자리**이고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓴다**(`rm_orders` 에 여섯 — 2026-09-24 DDL 정정 뒤 일곱 · `rm_waves` 에 넷 · `rm_routes` 에 넷) — 그래서 「이 전이를 받는가」 앞에 **「그 행이 아직 있기는 한가」**가 하나 더 있다 · 핸들러는 전부 **upsert** 이고 「행을 만드는 핸들러」를 두지 않는다(늦게 온 `UPDATE` 는 0 행을 갱신하고 **예외 없이 성공**한다) · **자기 칸만 쓴다** — 모르는 칸에 `NULL`·`0`·`false` 를 넣지 않는다(`false` 는 「위험하지 않다」라는, 아직 아무도 하지 않은 주장이다) · 개수는 증감이 아니라 **집계**다([ADR-025](adr/ADR-025-wave-admission-share-lock.md) 의 「카운터 드리프트가 구조적으로 불가능」과 같은 형태 — `delivery.status` 가 `order.dispatched` 보다 먼저 오면 올릴 라우트가 없다) · 「아직 안 왔다」는 DLQ 도 `rejected` 도 아니다(§4.6) · 관측 근거는 **순서를 뒤섞는 IT** 이고 토픽을 **빼는 방식**으로 돈다([ADR-050](adr/ADR-050-route-departure-is-an-event.md) 이 방금 열한 번째를 더했다 — 열거였다면 그 토픽은 검사 밖이었다) · 근거는 **관측(재현됨)**(2026-09-24 — 기각한 반대안 셋을 임시로 넣자 셋 다 씨 1 에서 사실을 조용히 잃었다) | 정방향 전제 + 어긋나면 DLQ(정상 트래픽을 DLQ 로 보내고 화면의 정확성이 그날의 컨슈머 랙에 걸린다), 행이 없으면 재시도(그 6초가 다른 파티션의 지연과 아무 관계가 없다 — ADR-017 이 같은 제안을 같은 이유로 기각했다), 키별 재정렬 버퍼(**완료 조건이 없다** — 끝내 오지 않는 것이 정상인 토픽이 있고, 지연이 열한 소비자 랙의 최소가 아니라 최대가 된다), 전 토픽 단일 스레드 소비(직렬화는 순서가 아니다 — 아무것도 사지 않고 처리량만 판다), 골격 행에 기본값 채우기(**없는 사실을 지어내는 일** — `NULL` 은 「아직 모른다」라는 참인 말을 하지만 기본값은 거짓인 말을 한다), `rm_*` 없이 동기 조회(불변규칙 4 · ADR-012), ADR 없이 코드에만(이 규칙은 **하지 않는 일**들이라 코드에서 보이지 않는다 — 가장 먼저 「`SET (…) = EXCLUDED.(…)` 로 줄이자」가 들어온다) | [ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) |
@@ -3771,6 +3814,7 @@ Phase 0 마감에서 설계서 내부 모순 두 건도 ADR로 확정했다(원�
 | `peak-day` | 45,000 | 0.25 | 0.0 | 0.0 | 22:58–23:58 | 기준 | 피크 — 하루 15만의 30%, 실현 가능한 함대(아래) |
 | `overload-day` | 45,000 | 0.25 | 0.0 | 0.0 | 22:58–23:58 | 그대로 | 같은 물량, 함대 그대로(아래) |
 | `cold-heavy` | 9,000 | 0.40 | 0.0 | 0.0 | 22:58–23:58 | 그대로 | 평일 물량에 냉장 40% — 좌석 예약이 수요 쪽에서 눌린다 |
+| `peak-day-turbulent` | 45,000 | 0.25 | 0.15 | 0.03 | 22:58–23:58 | 기준 | 피크 + 흔들림 — 지연(구간 +30% · 출발 +15분)과 실패, DAWN 주문 2% 취소(절반 계획 전 · 절반 발행 뒤). 창 넷이 판정하지 못한 행(7-0 A18 · A20 · B5 …)의 데이터 |
 
 - **창은 하나다 — 하루가 아니라 컷오프 전 1시간** (2026-09-26 결정, 7-4a). §8.2 의 「컷오프 직전 1시간에 30% 집중」이 피크의 모양이고,
   `normal-day` 도 **같은 창**으로 돈다 — 비교 축이 같아야 표가 읽힌다. 하루 전체 정시율이 필요해지면 그것은 별도 시나리오다.
