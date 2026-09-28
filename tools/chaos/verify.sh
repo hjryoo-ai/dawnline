@@ -161,15 +161,22 @@ v7() {
   v7_detail=${v7_detail% · }
 }
 
-# --- V8 서비스 둘의 사실 — dispatch 의 PLANNED stop 에 있는데 tracking 에서 COMPLETED 인 주문 -----------------------------
+# --- V8 서비스 둘의 사실 — dispatch 에서 그 주문이 PLANNED 인데 tracking 에서 COMPLETED 인 주문 -----------------------------------
 # ADR-068 결정 5 — 서비스 둘의 사실을 대조하는 첫 행. 재계획이 옮긴 stop 에 그 순간 도착한 배송이 적힐 자리를 잃으면 tracking 은 끝났고
 # dispatch 는 다시 보내려 한다(두 번째 peak-day 의 20건). 주문마다 지금의 stop 은 가장 나중 stop id 다(findAssignedStop 과 같은 규칙).
+# 대조하는 것은 **주문의 행**이다(2026-09-28, ADR-071) — stop 의 칸은 그 주문들에서 다시 센 요약이라, 끝난 주문과 섞인 stop 은 ARRIVED 이고
+# 그 안의 PLANNED 주문은 stop 칸으로는 보이지 않는다.
+# 취소된 주문(후보가 CANCELLED)은 빼고 센다 — V8 이 묻는 것은 「dispatch 가 다시 보내려는가」이고 취소된 주문은 보내지 않는다. 취소된 주문이
+# 옛 개정의 기사에게 배송된 것은 다른 사건이다(`dawnline_scan_after_cancel_total` 두 자리 — B5).
 # 서비스 사이 JOIN 없이 id 집합을 뽑아 교집합한다(V1 과 같은 방법). 질의가 실패하면 「모름」이고, tracking 에 T0 이후 COMPLETED 가
 # 하나도 없으면 빈 집합끼리의 비교라 「관찰」이다(§13 축 10).
 v8() {
   v8_known=1
-  if ! sqlv dispatch "SELECT DISTINCT ON (o.order_id) o.order_id || '|' || s.status FROM route_stop_orders o
-                       JOIN route_stops s ON s.id = o.stop_id ORDER BY o.order_id, s.id DESC" > "$tmp/d_current"; then v8_known=0; fi
+  if ! sqlv dispatch "SELECT DISTINCT ON (o.order_id) o.order_id || '|' ||
+                              CASE WHEN c.status = 'CANCELLED' THEN 'CANCELLED' ELSE o.status END
+                         FROM route_stop_orders o JOIN route_stops s ON s.id = o.stop_id
+                         LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+                        ORDER BY o.order_id, s.id DESC" > "$tmp/d_current"; then v8_known=0; fi
   if ! sqlv tracking "SELECT order_id FROM shipments WHERE status = 'COMPLETED'" > "$tmp/t_completed_all"; then v8_known=0; fi
   awk -F'|' '$2 == "PLANNED" { print $1 }' "$tmp/d_current" | sort | comm -12 "$tmp/orders" - > "$tmp/d_planned"
   sort "$tmp/t_completed_all" | comm -12 "$tmp/orders" - > "$tmp/t_completed"

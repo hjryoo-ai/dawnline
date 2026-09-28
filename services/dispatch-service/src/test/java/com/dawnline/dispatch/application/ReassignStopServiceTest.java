@@ -142,7 +142,19 @@ class ReassignStopServiceTest {
         }
 
         @Override
-        public void markStopStatus(UUID stopId, RouteStopStatus status, java.time.Instant actualAt) {
+        public Optional<OrderAtStop> findOrderAtStop(UUID orderId) {
+            throw new UnsupportedOperationException(
+                    "이 페이크는 배송 상태를 모른다 — RecordDeliveryStatusServiceTest 를 보라");
+        }
+
+        @Override
+        public void markOrderStatus(UUID stopId, UUID orderId, RouteStopStatus status, java.time.Instant actualAt) {
+            throw new UnsupportedOperationException(
+                    "이 페이크는 배송 상태를 모른다 — RecordDeliveryStatusServiceTest 를 보라");
+        }
+
+        @Override
+        public RouteStopStatus recountStop(UUID stopId) {
             throw new UnsupportedOperationException(
                     "이 페이크는 배송 상태를 모른다 — RecordDeliveryStatusServiceTest 를 보라");
         }

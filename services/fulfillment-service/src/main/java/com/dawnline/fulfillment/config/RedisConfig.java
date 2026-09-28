@@ -13,7 +13,6 @@ import com.dawnline.fulfillment.application.port.out.WaveLock;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails;
-import org.springframework.boot.data.redis.autoconfigure.LettuceClientConfigurationBuilderCustomizer;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -31,26 +30,12 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  *   FcDistances    = RedisFcDistances(GEOSEARCH)      → HaversineFcDistances(DB + 메모리)
  * </pre>
  * 두 줄 모두 <strong>Redis 를 앞에, DB 를 뒤에</strong> 두고 데코레이터로 감싼다. Redis 가 없거나
- * 답이 불완전하면 뒤가 답한다(불변규칙 7). 기동은 Redis 에 묶이지 않는다 — Lettuce 는 연결을
- * 지연시키고, 어댑터는 실패를 폴백으로 바꾼다([ADR-016](docs/adr/ADR-016-readiness-excludes-kafka.md)
+ * 답이 불완전하면 뒤가 답한다(불변규칙 7). 기동은 Redis 에 묶이지 않는다 — 연결은 기동 뒤에 best-effort 로
+ * 미리 열고({@link RedisTimeoutConfig}, ADR-069), 어댑터는 실패를 폴백으로 바꾼다([ADR-016](docs/adr/ADR-016-readiness-excludes-kafka.md)
  * 후속 정정: GEO 적재는 레디니스 조건이 아니다).
  */
 @Configuration(proxyBeanMethods = false)
 public class RedisConfig {
-
-    /**
-     * 명령 타임아웃을 짧게 잡는다 (§7.2).
-     *
-     * <p>커스터마이저를 쓰는 이유는 order-service 와 같다 — 별도 연결 팩토리를 빈으로 올리면
-     * Boot 의 기본 팩토리가 {@code @ConditionalOnMissingBean} 때문에 조용히 사라진다.
-     *
-     * @param properties {@code dawnline.fulfillment.redis.*}
-     */
-    @Bean
-    public LettuceClientConfigurationBuilderCustomizer redisCommandTimeoutCustomizer(
-            FulfillmentProperties properties) {
-        return builder -> builder.commandTimeout(properties.redis().commandTimeout());
-    }
 
     /**
      * GEO 메트릭 (§9.1).

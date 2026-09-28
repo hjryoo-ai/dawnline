@@ -205,7 +205,7 @@ class TrackingRetentionIT extends TrackingIntegrationTestBase {
 
         stamps.advance(Duration.ofMinutes(5));
         Shipment departed = Shipment.restore(order, route, 1, ShipmentStatus.OUT_FOR_DELIVERY,
-                scheduled.plannedArrival(), scheduled.etaAt(), scheduled.promisedEnd(), null, 0);
+                scheduled.plannedArrival(), scheduled.promisedEnd(), null, 0);
         transactions.executeWithoutResult(status -> repository.update(departed));
         assertThat(updatedAt(order)).isEqualTo(now.plus(Duration.ofMinutes(10)));
     }
@@ -261,10 +261,10 @@ class TrackingRetentionIT extends TrackingIntegrationTestBase {
         UUID order = newOrder();
         Instant arrival = updatedAt.minus(Duration.ofHours(2));
         jdbc.update("""
-                INSERT INTO shipments (order_id, route_id, stop_seq, status, planned_arrival, eta_at, promised_end,
+                INSERT INTO shipments (order_id, route_id, stop_seq, status, planned_arrival, promised_end,
                                        delivered_at, updated_at)
-                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
-                """, order, route, status, utc(arrival), utc(arrival), utc(arrival.plus(Duration.ofHours(1))),
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+                """, order, route, status, utc(arrival), utc(arrival.plus(Duration.ofHours(1))),
                 "COMPLETED".equals(status) ? utc(updatedAt) : null, utc(updatedAt));
         return order;
     }

@@ -64,8 +64,12 @@ class RecordDeliveryStatusServiceTest {
         }
 
         @Override
-        public void markStopStatus(UUID stopId, RouteStopStatus status,
-                java.time.Instant actualAt) {
+        public Optional<OrderAtStop> findOrderAtStop(UUID orderId) {
+            return routes.findOrderAtStop(orderId);
+        }
+
+        @Override
+        public void markOrderStatus(UUID stopId, UUID orderId, RouteStopStatus status, java.time.Instant actualAt) {
             throw new IllegalStateException("적재 실패");
         }
 
@@ -77,6 +81,11 @@ class RecordDeliveryStatusServiceTest {
         @Override
         public java.util.Optional<java.time.Duration> departureDeviation(UUID routeId) {
             throw new UnsupportedOperationException("이 페이크는 출발을 모른다");
+        }
+
+        @Override
+        public RouteStopStatus recountStop(UUID stopId) {
+            throw new UnsupportedOperationException("적재가 먼저 실패한다");
         }
 
         @Override
@@ -298,10 +307,9 @@ class RecordDeliveryStatusServiceTest {
     }
 
     @Test
-    void 한_stop_의_주문이_갈라지면_이벤트의_라우트에_있는_쪽을_택한다() {
-        // 운영자 재배정은 stop 이 아니라 주문 하나를 옮긴다. 갈라졌으면 기사가 실제로 서 있던
-        // 자리를 택한다 — 덜 표시하면 기사가 한 번 더 가고, 더 표시하면 배송되지 않은 주문이
-        // 계획에서 사라진다.
+    void 한_사건의_주문이_갈라져_있으면_각자의_자리에_적힌다() {
+        // 운영자 재배정은 stop 이 아니라 주문 하나를 옮긴다. 처음에는 「이벤트의 라우트에 있는 쪽」 하나만 골랐다 — stop 하나의 칸에 적어야
+        // 했기 때문이다. 사실은 주문의 것이고 이제 주문의 행에 적으므로 고를 것이 없다(ADR-071 결정 1): 기사가 전한 주문은 어디에 있든 끝났다.
         Route route = route();
         Route 옮겨간_곳 = route();
         List<UUID> split = new ArrayList<>();
@@ -311,9 +319,25 @@ class RecordDeliveryStatusServiceTest {
         service.record(command(route.routeId(), 2, split, RouteStopStatus.COMPLETED));
 
         assertThat(routes.row(route.routeId(), 2).status).isEqualTo(RouteStopStatus.COMPLETED);
-        assertThat(routes.row(옮겨간_곳.routeId(), 1).status).isEqualTo(RouteStopStatus.PLANNED);
+        assertThat(routes.row(옮겨간_곳.routeId(), 1).status).isEqualTo(RouteStopStatus.COMPLETED);
         assertThat(staleCount()).isZero();
-        assertThat(relocateCount()).isZero();
+        assertThat(relocateCount()).as("적용한 주문 하나가 다른 라우트에 있었다 — 사건 하나").isEqualTo(1.0d);
+    }
+
+    @Test
+    void 한_stop_의_주문_하나만_끝나면_stop_은_진행_중이다() {
+        // 합쳐진 stop 의 두 주문 중 하나에만 완료가 왔다 — 다른 하나는 아직 배송되지 않았다(ADR-071, 정정 전에는 stop 전체가 COMPLETED).
+        Route route = route();
+
+        service.record(command(route.routeId(), 3, List.of(route.mergedOrderIds().getFirst()), RouteStopStatus.COMPLETED));
+
+        assertThat(routes.row(route.routeId(), 3).status).isEqualTo(RouteStopStatus.ARRIVED);
+        assertThat(routes.orderStatus).containsEntry(route.mergedOrderIds().getFirst(), RouteStopStatus.COMPLETED)
+                .doesNotContainKey(route.mergedOrderIds().getLast());
+
+        service.record(command(route.routeId(), 3, List.of(route.mergedOrderIds().getLast()), RouteStopStatus.FAILED));
+
+        assertThat(routes.row(route.routeId(), 3).status).as("전부 끝났고 실패가 있다").isEqualTo(RouteStopStatus.FAILED);
     }
 
     // ------------------------------------------------------------ 결정 2 — 개정으로 거르지 않는다
@@ -338,7 +362,11 @@ class RecordDeliveryStatusServiceTest {
     @Test
     void 취소된_stop_에_도착한_완료는_무시하고_따로_센다() {
         Route route = route();
-        routes.row(route.routeId(), 2).status = RouteStopStatus.CANCELLED;
+        // 취소의 출처는 후보다 — 실물의 취소 경로(CancelOrderService)가 후보를 취소하고 stop 을 다시 센다.
+        DispatchCandidate cancelled = candidates.findById(route.middleOrderId()).orElseThrow();
+        cancelled.cancel(NOW);
+        candidates.update(cancelled);
+        routes.cancelStopIfAllOrdersCancelled(routes.row(route.routeId(), 2).id);
 
         service.record(command(route.routeId(), 2, List.of(route.middleOrderId()),
                 RouteStopStatus.COMPLETED));
@@ -352,7 +380,7 @@ class RecordDeliveryStatusServiceTest {
     @Test
     void 역행_스캔은_철_지난_것으로_센다() {
         Route route = route();
-        routes.row(route.routeId(), 1).status = RouteStopStatus.COMPLETED;
+        service.record(command(route.routeId(), 1, List.of(route.firstOrderId()), RouteStopStatus.COMPLETED));
 
         service.record(command(route.routeId(), 1, List.of(route.firstOrderId()),
                 RouteStopStatus.ARRIVED));

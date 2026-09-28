@@ -8,7 +8,6 @@ import com.dawnline.order.application.port.out.RateLimiter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.data.redis.autoconfigure.LettuceClientConfigurationBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -19,32 +18,11 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  * <p>연결 팩토리와 {@link StringRedisTemplate} 은 Boot 가 자동설정한다. 여기서는 포트 구현과
  * <strong>지연 예산</strong>을 잇는다.
  *
- * <p>이 빈들이 생긴다고 해서 기동이 Redis 에 묶이지는 않는다 — Lettuce 는 연결을 지연시키고,
- * 어댑터들은 실패를 폴백으로 바꾼다. Redis 가 꺼져 있어도 주문 접수는 계속된다(불변규칙 7, §8.4).
+ * <p>이 빈들이 생긴다고 해서 기동이 Redis 에 묶이지는 않는다 — 연결은 기동 뒤에 best-effort 로 미리 열고
+ * ({@link RedisTimeoutConfig}), 어댑터들은 실패를 폴백으로 바꾼다. Redis 가 꺼져 있어도 주문 접수는 계속된다(불변규칙 7, §8.4).
  */
 @Configuration(proxyBeanMethods = false)
 public class RedisConfig {
-
-    /**
-     * 명령 타임아웃을 짧게 잡는다 (§7.2, §8.1).
-     *
-     * <h2>왜 별도 연결 팩토리를 만들지 않는가</h2>
-     * Boot 의 Lettuce 팩토리는 {@code @ConditionalOnMissingBean(RedisConnectionFactory.class)} 다.
-     * 타임아웃만 다른 두 번째 팩토리를 빈으로 올리면 <strong>Boot 의 기본 팩토리가 조용히 사라진다</strong>
-     * — 조건이 "그 타입의 빈이 이미 있는가" 만 보기 때문이다(바이트코드로 확인). 커스터마이저는
-     * Boot 가 제공하는 확장점이고, 속성 적용 <em>뒤에</em> 실행되므로 여기서 준 값이 이긴다.
-     *
-     * <h2>왜 두 경로에 같은 타임아웃인가</h2>
-     * order-service 의 Redis 사용은 멱등 캐시와 레이트 리밋 둘뿐이고, 둘 다 {@code POST /orders}
-     * 핫패스에 있으며 둘 다 실패해도 안전하다. 한쪽만 짧게 잡으면 나머지 한쪽이 같은 SLO 구멍으로
-     * 남는다 — 실제로 멱등 캐시가 그 상태였다.
-     *
-     * @param properties {@code dawnline.order.redis.*}
-     */
-    @Bean
-    public LettuceClientConfigurationBuilderCustomizer redisCommandTimeoutCustomizer(OrderProperties properties) {
-        return builder -> builder.commandTimeout(properties.redis().commandTimeout());
-    }
 
     /**
      * Redis 장애 차단기. 멱등 캐시와 레이트 리밋이 <strong>같은 인스턴스를 공유한다</strong> —

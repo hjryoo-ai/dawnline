@@ -52,8 +52,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <h2>겹침을 결정적으로 만드는 방법</h2>
  * 첫 {@code peak-day} 의 500 두 건은 동시성의 우연이었다 — 그대로 흉내 내면 이 테스트도 우연에 기댄다. 그래서 겹침이 일어나는
  * <strong>정확한 자리</strong>에 끼어든다: 스캔의 편차 전파가 라우트를 다시 읽는 순간({@link ShipmentRepository#findByRouteFrom}).
- * 그 직전에 <em>다른 연결</em>이 같은 라우트 행들의 {@code version} 을 올리고 커밋한다 — 개정 반영이나 같은 라우트의 다른 스캔이
- * 하는 일과 같다. 그러면 질의의 자동 flush 가 찍은 배송의 갱신을 {@code WHERE version = ?} 로 내보내다 0 행을 받는다: 운영과 같은
+ * 그 직전에 <em>다른 연결</em>이 같은 라우트 행들의 {@code version} 을 올리고 커밋한다 — 스캔이 배송을 <em>읽은 뒤</em> 라우트 행을
+ * 잡기까지 기다리는 사이에 개정 반영이 커밋한 것과 같은 모양이다(ADR-070 결정 1 — 라우트는 배송이 말하므로 읽기가 먼저다). 그러면 질의의 자동 flush 가 찍은 배송의 갱신을 {@code WHERE version = ?} 로 내보내다 0 행을 받는다: 운영과 같은
  * JPA 의 실패가 운영과 같은 자리에서 난다. 끼어드는 횟수가 시나리오다 — 1 이면 두 번째 시도가 이기고, 3 이면 셋 다 진다.
  *
  * <p>픽스처는 {@code route.assigned} 를 반영하는 유스케이스로 만들고, 만든 행을 {@code @AfterEach} 에서 지운다({@link ScanApiIT} 와 같다).

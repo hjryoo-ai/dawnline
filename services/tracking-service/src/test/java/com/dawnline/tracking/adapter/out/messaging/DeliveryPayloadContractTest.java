@@ -36,9 +36,10 @@ class DeliveryPayloadContractTest {
     private static final Instant RISKY_ETA = PROMISED_END.minus(Duration.ofMinutes(10));
     private static final Instant SAFE_ETA = PROMISED_END.minus(Duration.ofMinutes(40));
 
-    private static com.dawnline.tracking.domain.Shipment remaining(int seq, Instant eta) {
+    /** 계획 도착이 {@code planned} 인 남은 배송 — ETA 는 페이로드가 planned + 편차로 계산한다(ADR-070). */
+    private static com.dawnline.tracking.domain.Shipment remaining(int seq, Instant planned) {
         return com.dawnline.tracking.domain.Shipment.restore(Ids.newId(), Ids.newId(), seq,
-                com.dawnline.tracking.domain.ShipmentStatus.OUT_FOR_DELIVERY, eta, eta,
+                com.dawnline.tracking.domain.ShipmentStatus.OUT_FOR_DELIVERY, planned,
                 PROMISED_END, null, 0L);
     }
 
@@ -120,12 +121,14 @@ class DeliveryPayloadContractTest {
 
     @Test
     void 편차는_음수도_싣는다() {
-        // 위험은 누적된 ETA 로 판정하지만 이 값은 마지막 한 걸음이다 — 앞서 가는 중에도
-        // 이미 벌어져 있던 지연 때문에 위험할 수 있다.
+        // 일찍 가는 중에도 계획 자체가 약속 끝에 붙어 있으면 위험할 수 있다 — 부호를 지우지 않는다.
         DeliveryAtRiskPayload payload = DeliveryAtRiskPayload.of(Ids.newId(), Ids.newId(), NOW,
                 Duration.ofMinutes(-4), List.of(remaining(1, RISKY_ETA)), MARGIN);
 
         assertThat(payload.deviationSeconds()).isNegative();
+        assertThat(payload.remainingStops().getFirst().etaAt())
+                .as("ETA 는 계획 + 편차다 — 저장된 값이 아니다(ADR-070)")
+                .isEqualTo(RISKY_ETA.minus(Duration.ofMinutes(4)).toString());
         CONTRACTS.validatePayload(DeliveryAtRiskPayload.EVENT_TYPE,
                 DeliveryAtRiskPayload.SCHEMA_VERSION, CONTRACTS.json().toTree(payload));
     }

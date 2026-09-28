@@ -128,6 +128,8 @@ class RateLimitApiIT extends OrderIntegrationTestBase {
         // 통과시켜 429 대신 201 이 온다 — 실제로 CI 에서 그렇게 깨졌다. 테스트가 검사하려던 것이
         // 사라진 채 실패하는 형태이므로, 예산이 아니라 의미를 보도록 늘린다.
         // 예산 자체가 지켜지는지는 k6 실측(docs/benchmarks/phase1-orders-k6.md)이 본다.
+        // 그때의 50 ms 는 연결 수립의 예산이기도 했다 — 첫 요청의 핸드셰이크가 그 예산에 걸렸을 수 있다(근거: 추정,
+        // ADR-069 가 연결을 2초로 가른 뒤로 이 줄 없이 다시 재지 않았다).
         registry.add("dawnline.order.redis.command-timeout-ms", () -> 2000);
     }
 
