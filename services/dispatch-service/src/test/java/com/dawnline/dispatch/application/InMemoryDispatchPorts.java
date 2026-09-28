@@ -32,7 +32,9 @@ import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -357,15 +359,74 @@ final class InMemoryDispatchPorts {
                     .findFirst();
         }
 
+        /** 주문의 사실 — 실물의 {@code route_stop_orders.status} · {@code actual_at}(ADR-071). 주문을 열쇠로 두면 옮겨도 따라간다(실물의 행처럼). */
+        final Map<UUID, RouteStopStatus> orderStatus = new HashMap<>();
+        final Map<UUID, Instant> orderActualAt = new HashMap<>();
+
         @Override
-        public void markStopStatus(UUID stopId, RouteStopStatus status, Instant actualAt) {
+        public Optional<OrderAtStop> findOrderAtStop(UUID orderId) {
+            return rows.entrySet().stream()
+                    .flatMap(entry -> entry.getValue().stream()
+                            .filter(row -> row.orderIds.contains(orderId))
+                            .map(row -> new OrderAtStop(orderId, entry.getKey(), row.id, row.seq,
+                                    live(orderId) ? orderStatus.getOrDefault(orderId, RouteStopStatus.PLANNED)
+                                            : RouteStopStatus.CANCELLED)))
+                    .findFirst();
+        }
+
+        @Override
+        public void markOrderStatus(UUID stopId, UUID orderId, RouteStopStatus status, Instant actualAt) {
+            orderStatus.put(orderId, status);
+            // 실물의 COALESCE 와 같다 — 처음 닿은 시각만 남는다 (ADR-048 결정 1).
+            orderActualAt.putIfAbsent(orderId, actualAt);
+        }
+
+        @Override
+        public RouteStopStatus recountStop(UUID stopId) {
+            // 실물의 한 문장과 같은 규칙이다(ADR-071 결정 2).
             StopRow row = rows.values().stream().flatMap(List::stream)
                     .filter(stop -> stop.id.equals(stopId)).findFirst().orElseThrow();
-            row.status = status;
-            // 실물의 COALESCE 와 같다 — 처음 닿은 시각만 남는다 (ADR-048 결정 1).
-            if (row.actualAt == null) {
-                row.actualAt = actualAt;
+            List<RouteStopStatus> alive = row.orderIds.stream().filter(this::live)
+                    .map(orderId -> orderStatus.getOrDefault(orderId, RouteStopStatus.PLANNED)).toList();
+            if (alive.isEmpty()) {
+                row.status = RouteStopStatus.CANCELLED;
+            } else if (alive.stream().allMatch(status -> status == RouteStopStatus.PLANNED)) {
+                row.status = RouteStopStatus.PLANNED;
+            } else if (alive.stream().allMatch(RouteStopStatus::isTerminal)) {
+                row.status = alive.contains(RouteStopStatus.FAILED) ? RouteStopStatus.FAILED : RouteStopStatus.COMPLETED;
+            } else {
+                row.status = RouteStopStatus.ARRIVED;
             }
+            row.actualAt = row.orderIds.stream().map(orderActualAt::get).filter(Objects::nonNull)
+                    .min(java.util.Comparator.naturalOrder()).orElse(null);
+            return row.status;
+        }
+
+        /** 후보가 취소되지 않았다 — 후보가 없으면 산 것이다(실물과 같다, ADR-059 결정 3). */
+        private boolean live(UUID orderId) {
+            return candidates.findById(orderId).map(candidate -> candidate.status() != CandidateStatus.CANCELLED)
+                    .orElse(true);
+        }
+
+        /** 라우트의 계획 출발 · 떠난 시각 — 실물의 {@code routes.planned_departure} · {@code departed_at}(ADR-072). */
+        final Map<UUID, Instant> plannedDeparture = new HashMap<>();
+        final Map<UUID, Instant> departedAt = new HashMap<>();
+
+        @Override
+        public boolean markDeparted(UUID routeId, Instant at) {
+            if (!rows.containsKey(routeId)) {
+                return false;
+            }
+            departedAt.putIfAbsent(routeId, at);    // 실물의 COALESCE 와 같다
+            return true;
+        }
+
+        @Override
+        public Optional<java.time.Duration> departureDeviation(UUID routeId) {
+            Instant planned = plannedDeparture.get(routeId);
+            Instant departed = departedAt.get(routeId);
+            return planned == null || departed == null ? Optional.empty()
+                    : Optional.of(java.time.Duration.between(planned, departed));
         }
 
         @Override

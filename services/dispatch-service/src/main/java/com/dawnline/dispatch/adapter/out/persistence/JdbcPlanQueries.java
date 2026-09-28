@@ -91,7 +91,7 @@ public class JdbcPlanQueries implements PlanQueries {
     @SuppressWarnings("unchecked")
     public Optional<RouteView> findRoute(UUID routeId) {
         List<Object[]> rows = entityManager.createNativeQuery("""
-                SELECT r.id, r.plan_id, r.vehicle_id, r.driver_id, r.status, r.revision,
+                SELECT r.id, r.plan_id, r.vehicle_id, r.driver_id, r.revision,
                        r.distance_m, r.duration_s, r.cost_krw
                   FROM routes r WHERE r.id = ?
                 """).setParameter(1, routeId).getResultList();
@@ -100,8 +100,8 @@ public class JdbcPlanQueries implements PlanQueries {
         }
         Object[] row = rows.getFirst();
         return Optional.of(new RouteView((UUID) row[0], (UUID) row[1], (UUID) row[2], (UUID) row[3],
-                (String) row[4], ((Number) row[5]).intValue(), ((Number) row[6]).intValue(),
-                ((Number) row[7]).intValue(), ((Number) row[8]).longValue(), stops(routeId)));
+                ((Number) row[4]).intValue(), ((Number) row[5]).intValue(),
+                ((Number) row[6]).intValue(), ((Number) row[7]).longValue(), stops(routeId)));
     }
 
     @SuppressWarnings("unchecked")

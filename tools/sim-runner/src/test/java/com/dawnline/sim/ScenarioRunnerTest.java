@@ -38,13 +38,13 @@ import org.junit.jupiter.api.Test;
 class ScenarioRunnerTest {
 
     private static final SimProperties.Scenario SMOKE = new SimProperties.Scenario(
-            5, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1), null, null, null);
+            5, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1), null, null, null, null);
 
     /** 기사까지 도는 시나리오. 기다릴 라우트는 0 이라 대기 없이 끝난다. */
     private static final SimProperties.Scenario WITH_DRIVER = new SimProperties.Scenario(
             3, 1000, 20260904L, 10, 0.25, Map.of("DAWN", 1),
             new SimProperties.Scenario.Driver(1, 0.0, 1, 0, "http://localhost:8084",
-                    0.0, 0.0, 0.0, 0), null, null);
+                    0.0, 0.0, 0.0, 0), null, null, null);
 
     private static final LongSupplier FROZEN_CLOCK = () -> 1_000_000_000L;
 
@@ -52,7 +52,7 @@ class ScenarioRunnerTest {
     private static final Clock AT_2240_KST = Clock.fixed(Instant.parse("2026-09-27T13:40:00Z"), ZoneOffset.UTC);
 
     private static SimProperties.Scenario windowAt(String startAt) {
-        return new SimProperties.Scenario(5, 1000, 20260927L, 10, 0.25, Map.of("DAWN", 1), null, startAt, null);
+        return new SimProperties.Scenario(5, 1000, 20260927L, 10, 0.25, Map.of("DAWN", 1), null, startAt, null, null);
     }
 
     private static SimProperties properties(String selected) {
@@ -65,16 +65,21 @@ class ScenarioRunnerTest {
                 Map.of("smoke", SMOKE, "with-driver", WITH_DRIVER,
                         "window-ahead", windowAt("22:58"), "window-missed", windowAt("22:30"),
                         "peak", fleetAt(SimProperties.Scenario.Fleet.FEASIBLE),
-                        "overload", fleetAt(SimProperties.Scenario.Fleet.AS_IS)),
+                        "overload", fleetAt(SimProperties.Scenario.Fleet.AS_IS),
+                        "turbulent", new SimProperties.Scenario(6, 1000, 20260928L, 10, 0.25, Map.of("DAWN", 1), null, "22:58",
+                                SimProperties.Scenario.Fleet.FEASIBLE, new SimProperties.Scenario.Cancel(1.0, 0.5, 1000))),
                 new SimProperties.Ops("http://localhost:8085", token, 60_000, 60, 20, 5));
     }
 
     private static SimProperties.Scenario fleetAt(SimProperties.Scenario.Fleet fleet) {
-        return new SimProperties.Scenario(5, 1000, 20260928L, 10, 0.25, Map.of("DAWN", 1), null, "22:58", fleet);
+        return new SimProperties.Scenario(5, 1000, 20260928L, 10, 0.25, Map.of("DAWN", 1), null, "22:58", fleet, null);
     }
 
     /** 이 테스트의 ops-api — 테스트마다 새로. */
     private FakeOpsClient ops = new FakeOpsClient();
+
+    /** 취소 호출 — 「그때 ops 커맨드가 몇 개였나」와 함께 적는다. 순서를 보는 자리다. */
+    private final List<String> cancelCalls = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
     /** 켜졌는지를 기억하는 피드. 순서를 보는 테스트가 쓴다. */
     private static final class RecordingFeed implements RouteFeed {
@@ -112,7 +117,41 @@ class ScenarioRunnerTest {
                 seed -> RandomGeneratorFactory.of("L64X128MixRandom").create(seed),
                 () -> "run-fixed", new WindowStart(AT_2240_KST, nanos -> { }),
                 new PeakFleet(ops, AT_2240_KST, nanos -> { }, Duration.ofSeconds(5), Duration.ofSeconds(60),
-                        Duration.ofSeconds(20), () -> "T3ST01"));
+                        Duration.ofSeconds(20), () -> "T3ST01"),
+                (cancel, random) -> new com.dawnline.sim.order.OrderCancellations(
+                        new com.dawnline.sim.order.CancelPlan(cancel, random), orderId -> {
+                            boolean published = ops.commands.contains("CLOSE_WAVE");
+                            cancelCalls.add(published ? "after-close" : "before-close");
+                            return published ? OrderClient.Response.of(409, "illegal-state-transition")
+                                    : OrderClient.Response.of(200, null);
+                        }, nanos -> { }, FROZEN_CLOCK, cancel.ratePerSecond()));
+    }
+
+    @Test
+    void 계획_전_취소는_접수_직후에_발행_뒤_취소는_계획이_끝난_뒤에_보낸다() throws InterruptedException {
+        // 7-4 turbulent — 계획 전은 창 안(웨이브가 닫히기 전), 발행 뒤는 계획이 끝난 뒤다. 발행 뒤의 409 는 실패가 아니라 측정이다(A18 의 창).
+        ops.waveAnswers.add(List.of(FakeOpsClient.wave(CUTOFF, "OPEN", null, null)));
+        ops.waveAnswers.add(List.of(FakeOpsClient.wave(CUTOFF, "PLANNED", 3, CUTOFF.plusSeconds(90))));
+        ops.feasibility = waveId -> FakeOpsClient.assessment(
+                FakeOpsClient.line("일반", "SHORTFALL", 1, FakeOpsClient.van("seed", true)));
+        ops.threeRoutes();
+        ScenarioRunner runner = runner(properties("turbulent", "jwt"),
+                (order, key) -> OrderClient.Response.accepted(java.util.UUID.randomUUID()));
+
+        runner.run();
+
+        com.dawnline.sim.order.CancelReport report = runner.lastCancelReport();
+        assertThat(report).isNotNull();
+        assertThat(report.beforePlanDecided() + report.afterPublishDecided())
+                .as("비율 1.0 — DAWN 주문 전부가 둘 중 하나로 뽑혔다").isEqualTo(6);
+        assertThat(report.beforePlanDecided()).as("전제 — 두 때가 다 있다").isPositive();
+        assertThat(report.afterPublishDecided()).as("전제 — 두 때가 다 있다").isPositive();
+        assertThat(cancelCalls.subList(0, report.beforePlanDecided())).as("계획 전 취소는 마감 전에 나갔다")
+                .containsOnly("before-close");
+        assertThat(cancelCalls.subList(report.beforePlanDecided(), cancelCalls.size())).as("발행 뒤 취소는 계획이 끝난 뒤에 나갔다")
+                .hasSize(report.afterPublishDecided()).containsOnly("after-close");
+        assertThat(report.afterPublish()).containsEntry("409 illegal-state-transition", report.afterPublishDecided());
+        assertThat(report.notSent()).isZero();
     }
 
     // --- 함대 단계 (ADR-067) ---------------------------------------------------------------------------------

@@ -175,15 +175,14 @@ public sealed interface CoreReply {
      *
      * @param routeId   라우트
      * @param planId    계획
-     * @param vehicleId 차량
-     * @param status    라우트 상태
+     * @param vehicleId 차량 — 라우트의 상태 칸은 없다: 끝남은 stop 이 말한다(ADR-073). 화면의 라우트 상태는 읽기 모델의 것이다
      * @param revision  지금 revision — 재배정이 올린다
      * @param distanceM 거리
      * @param durationS 소요 시간
      * @param costKrw   비용 (불변규칙 9)
      * @param stops     순서대로
      */
-    record RouteDetail(UUID routeId, UUID planId, UUID vehicleId, String status, int revision, int distanceM,
+    record RouteDetail(UUID routeId, UUID planId, UUID vehicleId, int revision, int distanceM,
             int durationS, long costKrw, List<RouteStop> stops) implements Applied.Body {
         public RouteDetail {
             stops = List.copyOf(stops);

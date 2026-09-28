@@ -109,11 +109,11 @@ class SimPropertiesTest {
     @Test
     void 함대_단계는_창이_있어야_하고_계획이_낼_수는_함대_단계가_있어야_한다() {
         assertThatThrownBy(() -> new SimProperties.Scenario(1, 1, 1L, 1, 0.0, Map.of("DAWN", 1), null, null,
-                SimProperties.Scenario.Fleet.AS_IS)).hasMessageContaining("fleet");
+                SimProperties.Scenario.Fleet.AS_IS, null)).hasMessageContaining("fleet");
         SimProperties.Scenario.Driver planDecided = new SimProperties.Scenario.Driver(null, 600, 60, 30,
                 "http://localhost:8084", 0.0, 0.0, 0.0, 0);
         assertThatThrownBy(() -> new SimProperties.Scenario(1, 1, 1L, 1, 0.0, Map.of("DAWN", 1), planDecided, "22:58",
-                null)).hasMessageContaining("driver.routes");
+                null, null)).hasMessageContaining("driver.routes");
     }
 
     @Test
@@ -157,17 +157,17 @@ class SimPropertiesTest {
 
     @Test
     void 잘못된_시나리오_값은_만들어지는_순간_거부된다() {
-        assertThatThrownBy(() -> new SimProperties.Scenario(0, 20, 1L, 10, 0.25, Map.of("DAWN", 1), null, null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(0, 20, 1L, 10, 0.25, Map.of("DAWN", 1), null, null, null, null))
                 .hasMessageContaining("orders");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 0, 1L, 10, 0.25, Map.of("DAWN", 1), null, null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 0, 1L, 10, 0.25, Map.of("DAWN", 1), null, null, null, null))
                 .hasMessageContaining("rate-per-second");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 0, 0.25, Map.of("DAWN", 1), null, null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 0, 0.25, Map.of("DAWN", 1), null, null, null, null))
                 .hasMessageContaining("customers");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 1.5, Map.of("DAWN", 1), null, null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 1.5, Map.of("DAWN", 1), null, null, null, null))
                 .hasMessageContaining("cold-ratio");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of(), null, null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of(), null, null, null, null))
                 .hasMessageContaining("tier-weights");
-        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of("DAWN", 0), null, null, null))
+        assertThatThrownBy(() -> new SimProperties.Scenario(10, 20, 1L, 10, 0.25, Map.of("DAWN", 0), null, null, null, null))
                 .hasMessageContaining("합이 0");
     }
 

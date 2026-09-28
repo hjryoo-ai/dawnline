@@ -46,10 +46,10 @@ public class JdbcPlannedRouteRepository implements PlannedRouteRepository {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final String INSERT_ROUTE = """
-            INSERT INTO routes (id, plan_id, vehicle_id, seq_no, status, revision,
+            INSERT INTO routes (id, plan_id, vehicle_id, seq_no, revision,
                                 stop_count, distance_m, duration_s, cost_krw,
                                 planned_departure, version)
-            VALUES (?, ?, ?, ?, 'PLANNED', 1, ?, ?, ?, ?, ?, 0)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 0)
             """;
 
     private static final String INSERT_STOP = """

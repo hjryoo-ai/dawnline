@@ -32,7 +32,7 @@ public class JdbcDispatchRetention implements DispatchRetention {
      *
      * <p>세 호출자가 이 한 조각을 쓴다: 보존({@link #SETTLED}), 차량 비활성화의 409({@code JdbcReferenceAdmin}, ADR-067 결정 5),
      * 재계획의 대상 라우트({@code JdbcRouteMutations}, ADR-068 후속 A). 「끝났다」를 따로 적으면 갈라진다 — 보존은 지우고 409 는
-     * 풀어 준 라우트에 재계획이 stop 을 넣는다. 그리고 {@code routes.status} 는 쓰는 쪽이 없어 이 뜻을 말하지 못한다(7-0 A31).
+     * 풀어 준 라우트에 재계획이 stop 을 넣는다. 라우트의 끝남은 이 조각에서만 나온다 — {@code routes.status} 는 쓰는 쪽이 없어 지웠다(ADR-073).
      */
     public static final String UNFINISHED_STOP = "s.status NOT IN ('CANCELLED', 'COMPLETED', 'FAILED')";
 

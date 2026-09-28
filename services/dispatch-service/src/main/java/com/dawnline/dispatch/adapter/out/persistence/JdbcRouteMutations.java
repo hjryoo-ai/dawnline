@@ -396,18 +396,66 @@ public class JdbcRouteMutations implements RouteMutations {
     }
 
     @Override
-    public void markStopStatus(UUID stopId, RouteStopStatus status, Instant actualAt) {
-        // COALESCE 가 「처음 닿은 시각」을 지킨다 (ADR-048 결정 1). 값이 이미 있으면 그대로 두고,
-        // 없을 때만 쓴다 — 덮으면 이 컬럼은 도착이 아니라 완료를 재게 되고, 그 변화는 값을
-        // 보아서는 알 수 없다. 규칙이 한 줄의 SQL 인 이유는 읽고-판단하고-쓰는 세 걸음이
-        // 같은 것을 하면서 경합 창만 만들기 때문이다.
+    @SuppressWarnings("unchecked")
+    public Optional<OrderAtStop> findOrderAtStop(UUID orderId) {
+        // findAssignedStop 과 같은 자리(가장 나중에 만들어진 stop — UUIDv7)를 찾고, stop 이 아니라 주문의 사실을 읽는다(ADR-071).
+        // 취소는 후보가 말한다 — 주문의 행에는 적지 않는다. 후보가 없는 주문은 취소가 아니다(ADR-059 결정 3).
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT s.route_id, s.id, s.seq,
+                       CASE WHEN c.status = 'CANCELLED' THEN 'CANCELLED' ELSE o.status END
+                  FROM route_stop_orders o
+                  JOIN route_stops s ON s.id = o.stop_id
+                  LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+                 WHERE o.order_id = ?
+                 ORDER BY s.id DESC
+                 LIMIT 1
+                """).setParameter(1, orderId).getResultList();
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        Object[] row = rows.getFirst();
+        return Optional.of(new OrderAtStop(orderId, (UUID) row[0], (UUID) row[1], ((Number) row[2]).intValue(),
+                RouteStopStatus.valueOf((String) row[3])));
+    }
+
+    @Override
+    public void markOrderStatus(UUID stopId, UUID orderId, RouteStopStatus status, Instant actualAt) {
+        // COALESCE 가 「처음 닿은 시각」을 지킨다 (ADR-048 결정 1 — 이제 주문마다, ADR-071). 규칙이 한 줄의 SQL 인 이유는
+        // 읽고-판단하고-쓰는 세 걸음이 같은 것을 하면서 경합 창만 만들기 때문이다.
         entityManager.createNativeQuery("""
-                UPDATE route_stops SET status = ?, actual_at = COALESCE(actual_at, ?) WHERE id = ?
+                UPDATE route_stop_orders SET status = ?, actual_at = COALESCE(actual_at, ?)
+                 WHERE stop_id = ? AND order_id = ?
                 """)
                 .setParameter(1, status.name())
                 .setParameter(2, actualAt)
                 .setParameter(3, stopId)
+                .setParameter(4, orderId)
                 .executeUpdate();
+    }
+
+    @Override
+    public RouteStopStatus recountStop(UUID stopId) {
+        // 규칙은 이 한 문장에 있다(ADR-071 결정 2). 살아 있는 주문 = 후보가 취소되지 않은 주문(후보가 없으면 산 것 — ADR-059 결정 3).
+        // 읽고 세고 쓰면 그 사이에 다른 주문의 사실이 들어오는 창이 생긴다 — 한 문장이면 이 stop 행의 잠금 아래에서 센다.
+        Object recounted = entityManager.createNativeQuery("""
+                UPDATE route_stops s
+                   SET status = d.status, actual_at = d.first_touch
+                  FROM (SELECT CASE
+                                 WHEN count(*) FILTER (WHERE live) = 0 THEN 'CANCELLED'
+                                 WHEN bool_and(NOT live OR status = 'PLANNED') THEN 'PLANNED'
+                                 WHEN bool_and(NOT live OR status IN ('COMPLETED', 'FAILED')) THEN
+                                      CASE WHEN bool_or(live AND status = 'FAILED') THEN 'FAILED' ELSE 'COMPLETED' END
+                                 ELSE 'ARRIVED'
+                               END AS status,
+                               min(actual_at) AS first_touch
+                          FROM (SELECT o.status, o.actual_at, (c.order_id IS NULL OR c.status <> 'CANCELLED') AS live
+                                  FROM route_stop_orders o
+                                  LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+                                 WHERE o.stop_id = ?) orders) d
+                 WHERE s.id = ?
+                RETURNING s.status
+                """).setParameter(1, stopId).setParameter(2, stopId).getSingleResult();
+        return RouteStopStatus.valueOf((String) recounted);
     }
 
     @Override
@@ -443,6 +491,25 @@ public class JdbcRouteMutations implements RouteMutations {
         Object[] row = rows.getFirst();
         return Optional.of(new SettledStop(((Number) row[0]).intValue(), (Instant) row[1],
                 (Instant) row[2]));
+    }
+
+    @Override
+    public boolean markDeparted(UUID routeId, Instant departedAt) {
+        // 처음 온 값만 — actual_at 과 같은 규칙이다(ADR-048 결정 1 · ADR-072). 라우트 행 하나만 잡는다: 교착의 고리에 들지 않는다(ADR-068 결정 2).
+        return entityManager.createNativeQuery("""
+                UPDATE routes SET departed_at = COALESCE(departed_at, ?) WHERE id = ?
+                """).setParameter(1, departedAt).setParameter(2, routeId).executeUpdate() == 1;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Optional<Duration> departureDeviation(UUID routeId) {
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                SELECT planned_departure, departed_at FROM routes
+                 WHERE id = ? AND planned_departure IS NOT NULL AND departed_at IS NOT NULL
+                """).setParameter(1, routeId).getResultList();
+        return rows.isEmpty() ? Optional.empty()
+                : Optional.of(Duration.between((Instant) rows.getFirst()[0], (Instant) rows.getFirst()[1]));
     }
 
     @Override

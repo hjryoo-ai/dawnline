@@ -59,6 +59,9 @@ public class DispatchMetrics {
     /** {@code dawnline_event_stale_total} 의 {@code eventType} 태그. */
     public static final String DELIVERY_STATUS_EVENT_TYPE = "delivery.status";
 
+    /** {@code dawnline_event_stale_total} 의 {@code eventType} 태그 — 없는 라우트의 출발(ADR-072). */
+    public static final String ROUTE_DEPARTED_EVENT_TYPE = "delivery.route-departed";
+
     /** {@code dawnline_event_rejected_total} 의 {@code reason} 태그 — 모르는 상태값. */
     public static final String DELIVERY_STATUS_UNKNOWN_REASON = "unknown-delivery-status";
 
@@ -191,6 +194,18 @@ public class DispatchMetrics {
                 MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER,
                 MessagingMetrics.TAG_EVENT_TYPE, DELIVERY_STATUS_EVENT_TYPE)
                 .increment(count);
+    }
+
+    /**
+     * dispatch 에 없는 라우트의 출발을 무시했다 — 보존이 지운 뒤의 재생이다(ADR-072 결정 2).
+     *
+     * <p><strong>커밋 뒤에 부른다</strong> — {@link #deliveryStatusStale(int)} 와 같은 시점 규칙이다.
+     */
+    public void routeDepartedStale() {
+        DawnlineMeters.counter(registry, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, ROUTE_DEPARTED_EVENT_TYPE)
+                .increment();
     }
 
     /**

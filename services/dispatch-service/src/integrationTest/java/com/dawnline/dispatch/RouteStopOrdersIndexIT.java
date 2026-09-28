@@ -65,6 +65,18 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
              LIMIT 1
             """;
 
+    /** {@code JdbcRouteMutations.findOrderAtStop} 의 질의 그대로 — {@code delivery.status} 가 주문마다 부른다(ADR-071). */
+    private static final String LOOKUP_FACT = """
+            SELECT s.route_id, s.id, s.seq,
+                   CASE WHEN c.status = 'CANCELLED' THEN 'CANCELLED' ELSE o.status END
+              FROM route_stop_orders o
+              JOIN route_stops s ON s.id = o.stop_id
+              LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id
+             WHERE o.order_id = '%s'
+             ORDER BY s.id DESC
+             LIMIT 1
+            """;
+
     @Autowired
     private EntityManager entityManager;
 
@@ -122,6 +134,19 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
     }
 
     @Test
+    void 주문의_사실을_찾는_질의도_ix_rso_order_를_탄다() {
+        // ADR-071 — 사건의 주문마다 한 번이다. 새 인덱스 없이 같은 인덱스를 탄다(불변규칙 11).
+        seed();
+        analyze();
+        assertThat(reltuples("route_stop_orders")).as("통계가 있다").isGreaterThan(0.0d);
+
+        String plan = explain(LOOKUP_FACT, probeOrderId());
+
+        assertThat(plan).contains("ix_rso_order");
+        assertThat(plan).doesNotContain("Seq Scan on route_stop_orders");
+    }
+
+    @Test
     void 마지막으로_닿은_stop_을_찾는_질의는_새_인덱스가_필요하지_않다() {
         // 불변규칙 11 은 «넣지 않기로 한 판단도 행 수와 함께» 기록하라고 한다. 이 클래스에
         // 두는 이유는 seed 를 함께 쓰기 때문이다 — 같은 크기에서 두 질의를 나란히 본다.
@@ -156,10 +181,10 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
                     """).setParameter(1, planId).setParameter(2, UUID.randomUUID())
                     .setParameter(3, UUID.randomUUID()).executeUpdate();
             entityManager.createNativeQuery("""
-                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, status, revision,
+                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, revision,
                                         stop_count, distance_m, duration_s, cost_krw)
                     SELECT gen_random_uuid(), ?, (SELECT id FROM vehicles LIMIT 1),
-                           g, 'DISPATCHED', 1, ?, 0, 0, 0
+                           g, 1, ?, 0, 0, 0
                       FROM generate_series(1, ?) g
                     """).setParameter(1, planId).setParameter(2, STOPS_PER_ROUTE)
                     .setParameter(3, ROUTES).executeUpdate();
@@ -214,8 +239,13 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
 
     @SuppressWarnings("unchecked")
     private String explain(UUID orderId) {
+        return explain(LOOKUP, orderId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String explain(String query, UUID orderId) {
         List<String> lines = tx().execute(status -> entityManager
-                .createNativeQuery("EXPLAIN " + LOOKUP.formatted(orderId)).getResultList());
+                .createNativeQuery("EXPLAIN " + query.formatted(orderId)).getResultList());
         return String.join("\n", lines);
     }
 

@@ -20,7 +20,10 @@ import com.dawnline.sim.driver.SeededJitter;
 import com.dawnline.sim.fleet.HttpOpsClient;
 import com.dawnline.sim.fleet.OpsClient;
 import com.dawnline.sim.fleet.PeakFleet;
+import com.dawnline.sim.order.CancelPlan;
 import com.dawnline.sim.order.HttpOrderClient;
+import com.dawnline.sim.order.OrderCancelClient;
+import com.dawnline.sim.order.OrderCancellations;
 import com.dawnline.sim.order.OrderClient;
 import com.dawnline.sim.order.Sleeper;
 import com.dawnline.sim.order.SmokeScenario;
@@ -84,7 +87,7 @@ public class SimRunnerConfig {
      * @param properties 설정
      */
     @Bean
-    public OrderClient orderClient(SimProperties properties) {
+    public HttpOrderClient orderClient(SimProperties properties) {
         HttpClient http = HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
                 .build();
@@ -101,6 +104,18 @@ public class SimRunnerConfig {
     public SmokeScenario smokeScenario(OrderClient client) {
         LongSupplier nanoTime = System::nanoTime;
         return new SmokeScenario(client, Sleeper.REAL, nanoTime);
+    }
+
+    /**
+     * 취소 — 시나리오에 {@code cancel} 이 있을 때 실행이 만든다(7-4 turbulent). 클라이언트는 접수와 같은 것이다(같은 주소 · 타임아웃).
+     *
+     * @param client 취소 클라이언트
+     */
+    @Bean
+    public ScenarioRunner.CancellationsFactory cancellationsFactory(OrderCancelClient client) {
+        LongSupplier nanoTime = System::nanoTime;
+        return (cancel, random) -> new OrderCancellations(new CancelPlan(cancel, random), client, Sleeper.REAL, nanoTime,
+                cancel.ratePerSecond());
     }
 
     /**

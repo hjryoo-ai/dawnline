@@ -59,13 +59,18 @@ public record OrderProperties(
      * 레이트 리밋은 허용) 둘 다 {@code POST /orders} 핫패스에 있다. 그래서 명령 타임아웃을 하나로
      * 짧게 잡는다 — 기본값(60초)을 두면 Redis 가 <em>멈췄을 때</em> 폴백이 아니라 SLO 파괴가 된다.
      *
-     * @param commandTimeoutMs Redis 명령 타임아웃(ms). Lettuce 클라이언트 설정에 적용된다
+     * <p>연결은 다른 예산을 쓴다(ADR-069) — 명령은 「핫패스가 얼마까지 기다리는가」(ms), 연결은 「서버에 닿는가」(초)다.
+     * 하나로 두면 Lettuce 가 핸드셰이크를 명령 예산으로 기다려, 콜드 경로의 첫 연결이 50 ms 에 끊긴다.
+     *
+     * @param commandTimeoutMs Redis 명령 타임아웃(ms). Lettuce 의 {@code TimeoutOptions} 로 명령마다 건다
      * @param outageBypassMs   한 번 실패한 뒤 Redis 호출 자체를 건너뛰는 시간(ms).
      *                         타임아웃만으로는 부족하다 — 500 rps 에서 초당 500번씩 그 시간을 버린다
+     * @param connectTimeoutMs 연결 수립(TCP + 핸드셰이크)의 예산(ms). Lettuce 의 {@code RedisURI.timeout} 이다
      */
     public record Redis(
             @DefaultValue("50") long commandTimeoutMs,
-            @DefaultValue("10000") long outageBypassMs) {
+            @DefaultValue("10000") long outageBypassMs,
+            @DefaultValue("2000") long connectTimeoutMs) {
 
         public Redis {
             if (commandTimeoutMs < 1) {
@@ -76,11 +81,21 @@ public record OrderProperties(
                 throw new IllegalArgumentException(
                         "dawnline.order.redis.outage-bypass-ms 는 1 이상이어야 합니다");
             }
+            if (connectTimeoutMs < commandTimeoutMs) {
+                // 연결이 명령보다 짧으면 정정 전과 같은 결함이다 — 핸드셰이크가 명령 하나보다 먼저 끊긴다.
+                throw new IllegalArgumentException(
+                        "dawnline.order.redis.connect-timeout-ms 는 command-timeout-ms 이상이어야 합니다");
+            }
         }
 
         /** 명령 타임아웃. */
         public Duration commandTimeout() {
             return Duration.ofMillis(commandTimeoutMs);
+        }
+
+        /** 연결 수립의 예산. */
+        public Duration connectTimeout() {
+            return Duration.ofMillis(connectTimeoutMs);
         }
 
         /** 장애 시 건너뛰는 창. */
