@@ -92,6 +92,14 @@
 | SAME_DAY | 10:00, 14:00 | 컷오프 + 6시간 이내 | 2 |
 | NEXT_DAY | 24:00 | 익일 08:00–22:00 | 1 |
 
+**약속창의 시작은 하한이다** (2026-09-28, [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md)). 약속창 시작 전에는 배송하지 않는다 — 먼저 도착한 차는
+창 시작까지 기다리고, 그 시간은 라우트의 시간(근무창 판정 · 시간비)에 들어간다. 지각의 정의와 페널티는 그대로다. 처음 판은 「조기 배송
+허용 · 지각만 벌한다」였고, 그 모델에서 23:58 에 출발한 야간조가 08:00 창의 stop 을 00:20 에 「배송」하는 계획이 정상이었다 — 같은 차가
+DAWN 라우트를 도는 동안이었다(7-4, 다섯 실행 13–43쌍, 근거: 관측).
+
+**웨이브 하나에 약속창은 하나다.** 웨이브는 (캠프, 티어, 컷오프)이고 창은 컷오프에서 유도된다(`TierSchedule.windowFor`). 위 표의
+「웨이브 개수/일」이 둘인 티어(SAME_DAY)는 **하루에** 창이 둘이지 웨이브 하나에 둘이 아니다. 개정된 주문도 다음 웨이브의 창을 받는다(ADR-020 결정 3).
+
 ### 2.3 엔드투엔드 흐름
 
 ```
@@ -1870,6 +1878,11 @@ record PlannedRoute(VehicleId vehicle, List<PlannedStop> stops, int distanceM, i
 stop 마다의 룰이 가른다. 룰은 이른 도착을 막지 않으므로 근무 끝은 술어에 들지 않는다(처음 판의 「겹침」은 내일 약속창의 웨이브를 조기
 마감한 데모에서 쓸 차량을 0대로 만들었다 — ADR-039 후속).
 
+> **정정 (2026-09-28, [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md) 결정 5) —** 술어는 **겹침**으로 돌아간다: `available_from < 약속창 끝 ∧ 근무 끝 > 약속창 시작`.
+> 느슨하게 했던 두 이유가 모두 사라졌다 — 이른 도착은 기다림이 되었고(§2.2), 데모의 0대는 근무를 **계획 시각** 기준으로 해석해서
+> 생긴 것이었다. 근무는 이제 **약속창에 닿는 근무**이고(14:03 에 닫은 내일의 NEXT_DAY 는 내일의 주간조를 받는다), 근무 시작은
+> `available_from` — 그 차량의 끝나지 않은 발행 라우트 중 가장 늦은 계획 복귀와의 최댓값이다. 둘은 한 자리에서 함께 계산한다.
+
 `DistanceProvider`는 `(GeoPoint a, GeoPoint b) → (meters, seconds)`를 반환. 기본 구현 `HaversineDistance`(도로계수 1.3, 평균 속도 25 km/h, 캠프 설정값). 선택 구현 `OsrmDistance`(테이블 API, 캐시). 문제 생성 시 거리 행렬은 **stop 통합 후** 계산해 `O(n²)` 규모를 줄인다(§6.7).
 
 ### 6.3 룰 엔진
@@ -1999,6 +2012,8 @@ bonus(stop) = bonusKrw × priority × halfLifeMinutes ÷ (halfLifeMinutes + t)
 > 도착해 상수가 되기» 때문이지 그 정의가 틀려서가 아니다. [ADR-023](adr/ADR-023-fulfillment-retention.md)
 > 의 보존 기간이 ADR-020 의 24시간에 매여 있는 것과 같은 종류의 결합이며, 마찬가지로 **자동으로
 > 강제되지 않는다.**
+>
+> **→ 켜졌다 (2026-09-28, [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md)).** §2.2 가 약속창 시작을 하한으로 고쳤다. 재검토는 그 재기준 표 위에서 한다.
 
 **룰 정의 예시 (`dispatch_rules.params`)**
 
@@ -2087,6 +2102,12 @@ plan(problem, budget):
 대기를 진짜 비용으로 만들려면 먼저 라우트 모델이 그것을 표현해야 한다(도착을 창 시작으로 미루고 그
 시간을 근무창 판정에 넣는 것). 그건 **조기 배송을 금지하겠다는 정책 결정**이라 §2.2 를 먼저 고쳐야
 하고, 최적화 안에서 조용히 할 일이 아니다.
+
+> **정정 (2026-09-28, [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md)) —** 그 정책 결정을 했다: §2.2 가 약속창 시작을 하한으로 고쳤고, `RouteState` 의
+> 도착은 `max(이동 도착, 약속창 시작)` 이다. 대기는 **따로** 값을 매기지 않는다 — 기다린 시간이 라우트 시간에 들어가 시간비와 근무창
+> 판정이 이미 본다. 이 문단이 잰 반대 측정은 구현 전의 그림자에서 **그대로 돌아왔다**(비용 약 두 배 · `peak` 미배정 1 → 525) — 벤치마크
+> 웨이브에 약속창이 **셋** 섞여 있었기 때문이다(근거: 추정, 도구 정정 뒤의 측정이 확인한다). 창 셋은 §2.2 의 어느 웨이브와도 맞지 않아
+> 기본 데이터셋은 웨이브당 창 하나로 고쳤고(§6.9), 창 셋은 `mixed-windows` 로 남겨 이 문단의 경고를 계속 잰다.
 
 **3단계에서 미배정을 고르는 규칙 — 「비싼 것부터 자리를 준다」** (2026-09-05 결정 · 2026-09-09 구현,
 [ADR-028](adr/ADR-028-unassigned-policy.md)). 원래 문장은 "그래도 없으면 미배정" 이었고 **어느
@@ -2581,6 +2602,11 @@ stop 행이다** — `route_id` 를 대상으로 바꾸고 순번은 다시 쓰�
 ### 6.9 벤치마크 방법
 
 - 데이터셋: `tools/benchmark/datasets/` — `small`(500 주문/5 차량), `medium`(2,000/20), `large`(5,000/40), `peak`(15,000/**88**), `overload`(15,000/60), 각각 seed 고정 생성. 좌표는 서울 근사 격자(캠프 중심 반경 8 km, 밀도 불균일).
+- **웨이브 하나에 약속창은 하나다** (2026-09-28, [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md) 결정 1). 벤치마크 웨이브는 `SAME_DAY` 이고 계획 시작이 컷오프라
+  창은 `TierSchedule.windowFor` 의 `[계획 시작, +6시간)` 하나다. 처음 판은 창 셋(+2h · +4h · +6h, 각 4시간)이었고 §2.2 의 어느 웨이브와도
+  맞지 않았다 — 기다림(§2.2)을 넣자 그 레짐에서 비용이 두 배가 됐다. 기준은 `DatasetFeasibilityTest` 가 빼는 방식으로 강제한다.
+  **`mixed-windows`**(2,000/20 — `medium` 과 주문 · 좌표 · 화물 · 차량 · seed 가 같고 창만 셋)는 그 기준을 **일부러 어긴다**: 「시간 룰이
+  갈리는가」와 시각을 보지 않는 줄 세우기의 약점을 보는 **스트레스 레짐**이다. 회귀 게이트 밖이고, 비교표에서 `overload` 처럼 따로 적는다.
 - **실현 가능성 기준과 `overload`** (2026-09-12). 수요가 용량을 넘으면 어떤 알고리즘도 미배정을 없앨 수 없고, 그 표는 라우팅 품질이 아니라 용량 부족을 잰다. 기준은 `DatasetFeasibilityTest` 가 강제하며 축은 다섯이다 — 총 중량·부피 70%, 냉장 70%, **제약 조합 80%**([ADR-033](adr/ADR-033-constraint-classes.md)), **통합 후 stop 수 ≤ 0.8 × max-stops × 차량 수**, 유효 stop 슬롯 ≥ stop 수 × 1.2.
 
   stop 축의 80%는 2026-09-12 에 옮겨 왔다. 그 축만 여유가 0%(「차량 수 × 120 이하」)였는데 그것은 *완벽한 패킹*을 요구하는 수이고, 같은 이유로 중량·부피에는 이미 여유를 두고 있었다 — 축 하나만 기준이 달랐다. 그리고 **`peak` 이 그 검사의 대상이 아니었다**: stop 8,411 개가 슬롯 7,200 개를 넘는 것을 아무도 보지 못했고, 총비용의 88%가 미배정 페널티인 표를 「피크 성능」으로 읽을 뻔했다([측정](benchmarks/phase4-peak-gate.md)). 검사 목록은 이제 **빼는 방식**(`EXCLUDE`)으로 적는다 — 데이터셋이 새로 생기면 자동으로 대상이 된다.
@@ -3425,7 +3451,7 @@ dawnline/
 | 계약 | 이벤트 스키마 검증, 예시 역직렬화 | JSON Schema validator | 발행자·소비자 양쪽 |
 | 시스템 | Compose 전체 기동 후 주문 → 배송 완료 시나리오 | sim-runner `smoke` 시나리오 | CI에서 실행 |
 | 성능 | 주문 API 부하, 계획 시간 | k6, benchmark 도구 | §8.1 목표 대비 리포트 |
-| 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료, DB 장애 | `make chaos-db` · `chaos-kafka` · `chaos-redis` · `chaos-kill`(`tools/chaos`, Compose `stop/start` · 계정 `NOLOGIN` · `SIGKILL`) — 끝에 같은 검증 표 V1–V10(`verify.sh`, 7-4 peak-day 도 같은 표), 알림은 실제 Prometheus 에 묻는다. PR 게이트가 아니라 수동 워크플로(`.github/workflows/chaos.yml`, 넷을 한 스택에서 차례로 · 보고를 아티팩트로) | 데이터 유실 0(V1 — 배차 불가는 **사유별**로 기대와 견준다) · 중복 0(V2 · V3) · DLQ 0(V5) · outbox 미발행 · 격리 0(V7) · 서비스 둘의 사실 — dispatch 의 `PLANNED` stop 중 tracking 에서 `COMPLETED` 인 주문 0(V8, [ADR-068](adr/ADR-068-replan-write-locks-and-moves-rows.md) 결정 5) · 계획 시작 전에 취소됐는데 tracking 에서 `COMPLETED` 인 주문 0(V9, [ADR-074](adr/ADR-074-cancel-before-candidate-leaves-a-row.md) — 계획 시작 뒤의 취소는 관찰) · 한 차량의 라우트 둘이 계획 시각에서 겹치는 쌍 0(V10, ADR-075) |
+| 카오스 | Kafka/Redis 중단·복구, 인스턴스 강제 종료, DB 장애 | `make chaos-db` · `chaos-kafka` · `chaos-redis` · `chaos-kill`(`tools/chaos`, Compose `stop/start` · 계정 `NOLOGIN` · `SIGKILL`) — 끝에 같은 검증 표 V1–V10(`verify.sh`, 7-4 peak-day 도 같은 표), 알림은 실제 Prometheus 에 묻는다. PR 게이트가 아니라 수동 워크플로(`.github/workflows/chaos.yml`, 넷을 한 스택에서 차례로 · 보고를 아티팩트로) | 데이터 유실 0(V1 — 배차 불가는 **사유별**로 기대와 견준다) · 중복 0(V2 · V3) · DLQ 0(V5) · outbox 미발행 · 격리 0(V7) · 서비스 둘의 사실 — dispatch 의 `PLANNED` stop 중 tracking 에서 `COMPLETED` 인 주문 0(V8, [ADR-068](adr/ADR-068-replan-write-locks-and-moves-rows.md) 결정 5) · 계획 시작 전에 취소됐는데 tracking 에서 `COMPLETED` 인 주문 0(V9, [ADR-074](adr/ADR-074-cancel-before-candidate-leaves-a-row.md) — 계획 시작 뒤의 취소는 관찰) · 한 차량의 라우트 둘이 계획 시각에서 겹치는 쌍 0(V10, [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md)) |
 
 **ArchUnit 규칙 목록**: (1) `domain`은 `org.springframework`, `jakarta.persistence` 의존 금지 (2) `application`은 `adapter` 의존 금지 (3) `com.dawnline.<svc>`는 다른 `<svc>` 패키지 참조 금지 (4) Kafka 리스너 클래스는 `adapter.in.messaging`에만 존재 (5) `@Transactional`은 `application` 계층에만 (6) `domain`·`application`은 `org.springframework.kafka` 의존 금지 — 발행은 Outbox 를 거친다(불변규칙 1) (7) 서비스 코드는 시스템 시계를 직접 읽지 않는다 — `Instant.now()`·`Clock.systemUTC()`·`Clock.systemDefaultZone()`·`now(ZoneId)`·`System.currentTimeMillis()` 금지(불변규칙 12) (8) `adapter.in.web` 의 매핑 경로에 리터럴 API 버전(`/api/v1/...`) 금지 — 버전은 `{version}` 자리표시자와 `ApiVersionConfigurer` 로 해석한다([ADR-009](adr/ADR-009-url-path-api-versioning.md) 결정 2) (9) `@ControllerAdvice` 계열 클래스는 `libs/web` 의 `ProblemDetailsAdviceSupport` 를 상속한다 — 오류 응답의 모양은 한 곳에서 정해진다([ADR-049](adr/ADR-049-spring-aware-shared-code-lives-in-its-own-lib.md) 결정 4) (10) `libs/common` 의 **main** 은 `org.springframework`·`jakarta.persistence` 의존 금지 — Spring 을 아는 공유 코드는 `libs/web` 에 산다(ADR-049 결정 2) (11) 미터는 `libs/observability` 의 `DawnlineMeters` 로만 등록한다 — 그 밖에서 Micrometer 의 `*.builder` · `MeterRegistry.counter/timer/gauge/summary/…` 를 부르지 않는다. 대상은 다섯 서비스와 `libs/messaging` · `libs/web` 이다([ADR-060](adr/ADR-060-metrics-come-from-the-table.md) 결정 2 — 헬퍼가 등록 때 §9.1 의 카탈로그와 타입 · 라벨 키 · 닫힌 값을 대조하고 게이지를 강한 참조로 잡는다. 우회하면 그 셋이 전부 풀린다). (12) 코어 넷(order · fulfillment · dispatch · tracking)은 HTTP 클라이언트(`org.springframework.web.client` · `…web.reactive.function.client` · `…web.service.invoker` · `java.net.http` · `HttpURLConnection`)에 의존하지 않는다 — 동기 호출은 ops-api → 코어 방향뿐이다(불변규칙 4). ops-api 는 **빼는 방식**으로 빠지고 그 이유를 테스트가 말한다(위임 클라이언트가 그 일이다, ADR-052). 이 규칙이 ADR-015 경계표의 「HTTP — 해당 없음」 행을 지킨다 — 코어 리스너에는 외부 호출이 없어서 그 행이 비어 있다.
 
@@ -3746,6 +3772,7 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 072 | **출발도 앵커다 · dispatch 가 `delivery.route-departed` 를 소비한다** — 7-4 의 `no-anchor` 29/32 · 24/28 은 구조였다: at-risk 는 출발 지연에서 첫 stop 전에 발화하고 그때 dispatch 에 닿은 stop 이 없다 · 출발 사실을 자기 DB 에(`routes.departed_at`, V13, 처음 온 값, 개정으로 거르지 않는다) · 앵커 = 닿은 stop, 없으면 `departed_at − planned_departure`, 둘 다 없을 때만 `no-anchor` · 페이로드 값은 대조값 · 남는 창(다른 토픽의 순서)은 B1 의 수가 답한다 | at-risk 의 `deviationSeconds` 를 앵커로(출처가 tracking), 부하를 낮춘 실행으로 먼저 가른다(구조라 부하와 무관), at-risk 에 출발 시각을 싣는다(같은 사실 두 토픽), 가짜 0번 stop | [ADR-072](adr/ADR-072-departure-is-an-anchor.md) |
 | 073 | **`routes.status` 를 지운다 · 라우트의 끝남은 stop 의 사실에서 나온다** — `'PLANNED'` 로 넣고 바꾸는 쪽이 없었다(7-4 의 775대 전부 `PLANNED`, 끝난 687대 포함 — 근거: 관측) · 끝남을 묻는 셋(보존 · 비활성화 409 · 받는 쪽 잠금)은 이미 `UNFINISHED_STOP` 조각으로 판정한다 · V14 로 칸을, `RouteView.status` · `RouteDetail.status` 를 계약에서 뺀다 · 사건 시점에 쓰지 않는다 — 둘째 출처이고 ADR-061 의 허용 조건(읽기 재계산이 비싸다)이 없다 | 사건 시점에 쓴다, 칸은 두고 API 에서만 뺀다, API 에 파생 값으로 남긴다(읽는 화면이 없다) | [ADR-073](adr/ADR-073-route-status-column-is-dropped.md) |
 | 074 | **후보보다 먼저 온 취소는 행을 남긴다 · 뒤에 온 `fulfillment.planned` 는 그 행을 되살리지 않는다** — 계획 전 취소 234건 중 12건이 배송됐다(turbulent, 근거: 관측 — dispatch 가 후보 없는 취소를 `NOT_A_CANDIDATE` 로 넘겼고, 그 자리의 주석이 순서 역전을 알고 넘겼다) · 먼저 온 취소가 `CANCELLED` · 웨이브 없는 표식 행을 만든다(축 규칙의 여섯 번째 자리, ADR-051 의 모양 · ADR-022 와 같은 형태) · 뒤에 온 적재는 `ON CONFLICT DO NOTHING` 이 넣지 못한 행이 표식이면 거부(`cancelled_before_candidate`) · V15 — 스냅샷 칸 열넷의 `NOT NULL` · 기본값을 풀고 CHECK 로 두 모양(전부 있다 · 표식)을 닫는다 · 엔티티는 스냅샷 행만 든다 · V9 — order `CANCELLED` ∧ tracking `COMPLETED`, 계획 시작 전 취소는 0 · §13 축 18 | fulfillment 가 취소된 주문의 `fulfillment.planned` 를 막는다(이미 떠난 이벤트라 경합을 막지 못한다), 표식을 별도 표에, order-service 에 되묻기(불변규칙 4), 스냅샷 칸에 기본값(부재는 값이 아니다), 도메인이 표식을 든다(모든 읽는 자리가 `@Nullable`) | [ADR-074](adr/ADR-074-cancel-before-candidate-leaves-a-row.md) |
+| 075 | **약속창의 시작은 하한이다 · 차량의 시간은 먼저 발행한 계획의 것이다 · 벤치마크 웨이브의 약속창은 하나다** — 같은 차량의 DAWN · NEXT_DAY 라우트가 계획 시각에서 겹쳤다(다섯 실행 13–43쌍, 근거: 관측 — 계획이 앞선 계획이 잡은 차량 시간을 모르고, 모델에 기다림이 없다) · 기다림의 그림자가 벤치마크 비용을 두 배로 만들었다 — §6.5 의 반대 측정이 돌아왔고, 벤치마크 웨이브에 창이 셋이었다(§2.2 의 어느 웨이브와도 맞지 않는다) · 도구 먼저: 웨이브당 창 하나(`TierSchedule.windowFor`), 창 셋은 `mixed-windows` 로 게이트 밖(ADR-033 의 두 질문 — 둘째 답이 「아니오」라 지우지 않는다) · 도착 = max(이동 도착, 약속창 시작) · `available_from = max(근무 시작, 끝나지 않은 발행 라우트의 가장 늦은 계획 복귀)` — `wave.closed` 키 = 캠프라 차례로 계획된다(의존 경고) · 운영자 재실행은 파티션을 지나지 않는다 — 발행이 차량을 `FOR NO KEY UPDATE` 로 잡고 점유를 다시 읽어 겹치면 미배정(`VEHICLE_OCCUPIED`) · 근무는 약속창에 닿는 것 · 차량 집합의 술어는 겹침으로 · ADR-040 의 의존 경고가 켜졌다 | 시각을 보는 줄 세우기를 먼저(존재하지 않는 레짐에 맞춘다 — 조건부 원장 행), 창 셋을 지운다(약점이 데이터 뒤로 숨는다), 이른 도착 하드 룰(첫 stop 이 전부 실행 불가), 점유만(창 전 도착이 남는다), 캠프 advisory lock(필요한 것은 순서가 아니라 읽기), 발행 안에서 다시 풀기(ADR-064), 근무 해석 유지(데모가 반례) | [ADR-075](adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md) |
 | 052 | **위임 클라이언트는 커밋된 계약에서 만든다 — 채택 기준을 먼저 적는다** — 후보 하나(`spring` 생성기 · `spring-http-interface`), 기준 다섯(표준 템플릿 · 문서화된 옵션만 · 생성물 그대로 컴파일 · Jackson 3 왕복 · 새 런타임 의존 없음) — 하나라도 거짓이면 손으로 쓴 인터페이스 + YAML 대조 테스트 — **채택**(7.25.0, 다섯 기준 모두 참 · 왕복 32개) · 토큰은 스크립트가 찍고 ops-api 는 검증만 · 감사 행은 위임 **전에** `PENDING`, 응답을 못 받으면 `UNKNOWN` · 감사 id 를 상관 헤더로 · **후속**(2026-09-27): 위임 응답은 코어의 사유를 재진술하지 않고 「사유는 `<코어>.yaml` 의 `<operationId>`」로 가리킨다 — `OpenApiContractIT` 가 가리킴이 풀리는지 본다(§13 축 17) | 계약 없이 컨트롤러 소스에서, 살아 있는 `/v3/api-docs` 에서 생성(입력이 커밋에 남지 않는다), 생성물 커밋(서로를 비추는 목록이 하나 는다), 개발 전용 로그인 엔드포인트(프로필이 꺼져 있다는 조용한 전제), 위임 뒤 한 번만 기록(죽으면 기록이 사라진다) | [ADR-052](adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md) |
 | 051 | **읽기 모델의 행은 먼저 온 사실이 만든다 — 부재는 값이 아니다** — 축 규칙([ADR-017](adr/ADR-017-order-state-machine-absorbs-out-of-order-events.md))의 **다섯 번째 자리**이고, 앞의 넷과 달리 **행 하나에 여러 토픽이 쓴다**(`rm_orders` 에 여섯 — 2026-09-24 DDL 정정 뒤 일곱 · `rm_waves` 에 넷 · `rm_routes` 에 넷) — 그래서 「이 전이를 받는가」 앞에 **「그 행이 아직 있기는 한가」**가 하나 더 있다 · 핸들러는 전부 **upsert** 이고 「행을 만드는 핸들러」를 두지 않는다(늦게 온 `UPDATE` 는 0 행을 갱신하고 **예외 없이 성공**한다) · **자기 칸만 쓴다** — 모르는 칸에 `NULL`·`0`·`false` 를 넣지 않는다(`false` 는 「위험하지 않다」라는, 아직 아무도 하지 않은 주장이다) · 개수는 증감이 아니라 **집계**다([ADR-025](adr/ADR-025-wave-admission-share-lock.md) 의 「카운터 드리프트가 구조적으로 불가능」과 같은 형태 — `delivery.status` 가 `order.dispatched` 보다 먼저 오면 올릴 라우트가 없다) · 「아직 안 왔다」는 DLQ 도 `rejected` 도 아니다(§4.6) · 관측 근거는 **순서를 뒤섞는 IT** 이고 토픽을 **빼는 방식**으로 돈다([ADR-050](adr/ADR-050-route-departure-is-an-event.md) 이 방금 열한 번째를 더했다 — 열거였다면 그 토픽은 검사 밖이었다) · 근거는 **관측(재현됨)**(2026-09-24 — 기각한 반대안 셋을 임시로 넣자 셋 다 씨 1 에서 사실을 조용히 잃었다) | 정방향 전제 + 어긋나면 DLQ(정상 트래픽을 DLQ 로 보내고 화면의 정확성이 그날의 컨슈머 랙에 걸린다), 행이 없으면 재시도(그 6초가 다른 파티션의 지연과 아무 관계가 없다 — ADR-017 이 같은 제안을 같은 이유로 기각했다), 키별 재정렬 버퍼(**완료 조건이 없다** — 끝내 오지 않는 것이 정상인 토픽이 있고, 지연이 열한 소비자 랙의 최소가 아니라 최대가 된다), 전 토픽 단일 스레드 소비(직렬화는 순서가 아니다 — 아무것도 사지 않고 처리량만 판다), 골격 행에 기본값 채우기(**없는 사실을 지어내는 일** — `NULL` 은 「아직 모른다」라는 참인 말을 하지만 기본값은 거짓인 말을 한다), `rm_*` 없이 동기 조회(불변규칙 4 · ADR-012), ADR 없이 코드에만(이 규칙은 **하지 않는 일**들이라 코드에서 보이지 않는다 — 가장 먼저 「`SET (…) = EXCLUDED.(…)` 로 줄이자」가 들어온다) | [ADR-051](adr/ADR-051-first-fact-creates-the-row-absence-is-not-a-value.md) |
 | 050 | **라우트 출발은 이벤트다 — 출발이 첫 편차의 출처이기 때문이다** — `dawnline.delivery.route-departed.v1`(키 `routeId`, 소비자 **ops 뿐**) · 근거는 화면이 아니라 **사실의 가시성**이다: 지금 출발을 아는 것은 tracking 뿐이라(`ScanType.isPublished()` 가 `DEPARTED_CAMP` 를 뺀다) ops 는 첫 `ARRIVED` 가 올 때까지 「출발 안 함」과 「출발했는데 아직 도착 없음」을 구별하지 못하고, **그 구간이 운영자가 개입할 수 있는 마지막 창이다**(아직 안 나간 차는 다시 짤 수 있다) · **라우트 하나에 이벤트 하나** — 반복하지 않는다는 이유가 말하지 않을 이유였던 적은 없다([ADR-024](adr/ADR-024-plan-completed-event.md) 의 거울상: 사실의 단위와 토픽의 단위를 맞춘다) · 페이로드 여섯 칸(`routeId`·`campId`·`revision`·`plannedDeparture`·`departedAt`·`stopCount` — 2026-09-24 `stopCount` 를 빼 다섯: 부재를 다른 출처로 메우지 않는다)은 **마이그레이션 없이** 나온다 · `revision` 을 싣는 이유는 「어느 개정본의 계획에 대해 늦었나」를 말해야 하기 때문 · 스키마·예시·토픽·발행은 **소비자가 먼저**(묶음 B, ops 의 `rm_routes`) | 정의하지 않는다(더 단순하지만 그 대가가 **마지막 개입 창을 숨기는 것**이다 — `rm_routes` 는 없는 사실을 만들어 내지 못한다), `delivery.status` 의 `status` 에 `DEPARTED_CAMP` 추가(한 사실이 stop 수만큼 반복된다 — 5-1b 가 발행하지 않기로 한 그 이유), `route.assigned` 에 `departedAt` 을 나중에 채우기(계획 이벤트를 사실로 갱신하면 개정으로 거르는 소비자가 사실을 함께 버린다), ops-api 가 tracking 에 동기 조회(출발은 사건이지 조회 대상이 아니다 — 해상도가 폴링 주기가 된다), 페이로드를 `{routeId, departedAt}` 둘로(편차의 기준선 `plannedDeparture` 가 개정마다 다르다) | [ADR-050](adr/ADR-050-route-departure-is-an-event.md) |
