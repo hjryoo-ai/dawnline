@@ -126,4 +126,62 @@ class PlanPrunerTest {
         assertThat(pruned.metrics().planDurationMs())
                 .as("계획에 걸린 시간은 바뀌지 않는다").isEqualTo(1_234);
     }
+
+    // ------------------------------------------------------------ 비활성 차량 (ADR-067 후속 — 7-0 A33)
+
+    /** 미배정 페널티가 있는 룰셋 — 기본 30,000 원(우선도 0). */
+    private static final RuleSet PENALTY = com.dawnline.dispatch.domain.optimizer.rule.DispatchRules.ruleSet(List.of(
+            new com.dawnline.dispatch.domain.optimizer.rule.RuleDefinition("unassigned_penalty",
+                    com.dawnline.dispatch.domain.optimizer.rule.RuleType.UNASSIGNED_PENALTY,
+                    com.dawnline.dispatch.domain.optimizer.rule.RuleType.UNASSIGNED_PENALTY.severity(), 10,
+                    java.util.Map.of("baseKrw", 30_000, "perPriorityKrw", 20_000))), 1);
+
+    @Test
+    void 비활성_차량이_없으면_그대로_돌려준다() {
+        PlanResult result = resultOf(List.of(routeOf(List.of(stopOf(OrderId.of(Ids.newId()))))), List.of());
+
+        assertThat(PlanPruner.withoutVehicles(result, Set.of(), PENALTY)).isSameAs(result);
+    }
+
+    @Test
+    void 비활성_차량의_라우트는_빠지고_그_주문은_미배정이_된다() {
+        OrderId moved = OrderId.of(Ids.newId());
+        OrderId kept = OrderId.of(Ids.newId());
+        PlannedRoute gone = routeOf(List.of(stopOf(moved)));
+        PlannedRoute alive = routeOf(List.of(stopOf(kept)));
+        PlanResult result = new PlanResult(List.of(gone, alive), List.of(), Money.krw(100_000),
+                new PlanMetrics(2, 2, 0, 2, 2_000, 1_200, 0, 0, 1_234),
+                List.of(Explanation.assigned(moved, gone.vehicle(), 50_000),
+                        Explanation.assigned(kept, alive.vehicle(), 50_000)), false);
+
+        PlanResult pruned = PlanPruner.withoutVehicles(result, Set.of(gone.vehicle()), PENALTY);
+
+        assertThat(pruned.routes()).containsExactly(alive);
+        assertThat(pruned.unassigned()).singleElement().satisfies(entry -> {
+            assertThat(entry.orderId()).isEqualTo(moved);
+            assertThat(entry.ruleName()).isEqualTo(PlanPruner.VEHICLE_DEACTIVATED);
+        });
+        assertThat(pruned.explanations()).filteredOn(entry -> entry.orderId().equals(moved)).singleElement()
+                .satisfies(entry -> {
+                    assertThat(entry.outcome()).as("배정 설명이 미배정 설명으로 바뀐다 — 둘 다 남으면 설명이 거짓이다")
+                            .isEqualTo(Explanation.Outcome.UNASSIGNED);
+                    assertThat(entry.ruleName()).isEqualTo(PlanPruner.VEHICLE_DEACTIVATED);
+                    assertThat(entry.detail()).containsEntry("vehicleId", gone.vehicle().value().toString());
+                });
+        assertThat(pruned.metrics().routeCount()).isEqualTo(1);
+        assertThat(pruned.metrics().assignedOrders()).isEqualTo(1);
+        assertThat(pruned.metrics().unassignedOrders()).isEqualTo(1);
+    }
+
+    @Test
+    void 빠진_주문은_미배정_페널티를_물린다_차를_잃은_계획이_더_싸_보이지_않는다() {
+        // 취소와 다르다 — 이 주문은 여전히 배송해야 한다. 라우트 비용만 빼면 차 한 대를 잃은 계획이 더 싸 보인다.
+        PlannedRoute gone = routeOf(List.of(stopOf(OrderId.of(Ids.newId()))));
+        PlannedRoute alive = routeOf(List.of(stopOf(OrderId.of(Ids.newId()))));
+        PlanResult result = resultOf(List.of(gone, alive), List.of());
+
+        PlanResult pruned = PlanPruner.withoutVehicles(result, Set.of(gone.vehicle()), PENALTY);
+
+        assertThat(pruned.totalCost()).isEqualTo(Money.krw(100_000 - 50_000 + 30_000));
+    }
 }

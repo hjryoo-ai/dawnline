@@ -184,6 +184,49 @@ class PlanDeactivationRaceIT extends DispatchIntegrationTestBase {
         assertThat(candidateStatuses(warmOrders)).containsOnly("PLANNED");
     }
 
+    @Test
+    void 발행이_차량을_먼저_잠그면_비활성화는_커밋을_기다렸다가_409_다() throws Exception {
+        // 직렬화의 반대쪽 순서 — FOR SHARE 가 비활성화의 FOR UPDATE 를 세운다. 발행이 커밋되면 그 차에는 끝나지 않은 stop 이 있고,
+        // 비활성화는 기다린 뒤의 새 문장으로 그것을 본다(ADR-067 결정 5 그대로). 계획은 routes 의 INSERT 에서 세운다 — 차량을 다시
+        // 읽고 잠근 뒤다.
+        UUID cold = fixtureVehicle(true);
+        fixtureVehicle(false);
+        UUID waveId = Ids.newId();
+        seedCandidates(waveId, 3, true);
+        seedCandidates(waveId, 3, false);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<Throwable> deactivation;
+            try (Connection locker = dataSource.getConnection()) {
+                locker.setAutoCommit(false);
+                try (Statement s = locker.createStatement()) {
+                    s.execute("LOCK TABLE routes IN ACCESS EXCLUSIVE MODE");
+                }
+                producer.send(new ProducerRecord<>(WAVE_CLOSED, campId.toString(), waveClosed(Ids.newId(), waveId))).get();
+                await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200))
+                        .until(() -> blocked("insert into routes%"), Optional::isPresent);
+
+                deactivation = pool.submit(() -> org.assertj.core.api.Assertions.catchThrowable(
+                        () -> resources.deactivateVehicle(cold)));
+                // 전제 — 비활성화가 발행의 공유 잠금에 막혀 있다. 이것이 없으면 아래 409 는 발행이 끝난 뒤의 평범한 409 다.
+                await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(100))
+                        .until(() -> blocked("select % from vehicles where id = % for update"), Optional::isPresent);
+
+                locker.commit();
+            }
+            Throwable refused = deactivation.get(60, java.util.concurrent.TimeUnit.SECONDS);
+
+            assertThat(refused).as("발행이 커밋된 뒤에는 그 차에 끝나지 않은 stop 이 있다")
+                    .isInstanceOf(com.dawnline.common.error.DomainException.class)
+                    .hasMessageContaining("끝나지 않은 stop");
+            assertThat(count("""
+                    SELECT count(*) FROM routes r JOIN route_plans p ON p.id = r.plan_id
+                     WHERE p.wave_id = ? AND r.vehicle_id = ?""", waveId, cold)).as("활성인 채로 발행됐다").isOne();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private UUID fixtureVehicle(boolean isCold) throws SQLException {
         UUID id = Ids.newId();
         try (Connection c = dataSource.getConnection(); PreparedStatement s = c.prepareStatement("""
