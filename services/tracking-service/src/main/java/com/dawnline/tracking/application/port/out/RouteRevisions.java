@@ -1,6 +1,8 @@
 package com.dawnline.tracking.application.port.out;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,9 +36,32 @@ public interface RouteRevisions {
      *                  재계획은 출발 시각도 다시 정한다
      * @param appliedAt 적용 시각 — 주입된 시계에서 온 값이다 (불변규칙 12)
      * @return 선점했으면 {@code true}. {@code false} 면 이 이벤트는 지난 개정이다
+     *
+     * <p><strong>개정 반영의 첫 문장이다</strong> — tracking 의 쓰기 계층은 라우트 행 → {@code shipments} 다
+     * ([ADR-070](docs/adr/ADR-070-tracking-writes-lock-the-route-first.md) 결정 1). 선점에 실패해도(지난 개정) 행은 잠긴다.
+     * 선점하면 라우트의 편차를 0 으로 되돌린다 — 새 계획이 그때까지의 사정을 담는다(결정 2).
      */
     boolean claim(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
             Instant appliedAt);
+
+    /**
+     * 쓰기 계층의 부모 행들을 잡는다 — 라우트 id 순으로, 배송을 고치기 <strong>전에</strong>
+     * ([ADR-070](docs/adr/ADR-070-tracking-writes-lock-the-route-first.md) 결정 1).
+     *
+     * <p>같은 라우트의 쓰기(스캔 · 개정 반영)가 여기서 줄을 선다. 그러면 배송을 어떤 순서로 잡든 교착하지 않는다 — 스캔은 stop 순,
+     * 개정은 주문 id 순으로 잡아서 교착했다. 행이 없는 라우트는 건너뛴다(배송이 있으면 행이 있다 — 같은 트랜잭션이 만든다).
+     *
+     * @param routeIds 잡을 라우트들. 순서는 여기서 정한다
+     */
+    void lockForWrite(Collection<UUID> routeIds);
+
+    /**
+     * 라우트의 편차를 적는다 (§5.4 ETA 재계산, ADR-070 결정 2). 값이 같으면 쓰지 않는다.
+     *
+     * @param routeId   라우트 id — {@link #lockForWrite} 로 이미 잡은 행이다
+     * @param deviation 편차. 초 단위로 적는다(음수면 이르다)
+     */
+    void recordDeviation(UUID routeId, Duration deviation);
 
     /**
      * 라우트의 계획값 — 스캔 경로가 읽는다.

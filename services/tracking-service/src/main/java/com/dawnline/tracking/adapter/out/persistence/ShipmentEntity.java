@@ -47,9 +47,6 @@ public class ShipmentEntity {
     @Column(name = "planned_arrival", nullable = false)
     private Instant plannedArrival;
 
-    @Column(name = "eta_at", nullable = false)
-    private Instant etaAt;
-
     @Column(name = "promised_end", nullable = false)
     private Instant promisedEnd;
 
@@ -88,7 +85,7 @@ public class ShipmentEntity {
      */
     public Shipment toDomain() {
         return Shipment.restore(orderId, routeId, stopSeq, status,
-                plannedArrival, etaAt, promisedEnd, deliveredAt, version);
+                plannedArrival, promisedEnd, deliveredAt, version);
     }
 
     /**
@@ -117,7 +114,6 @@ public class ShipmentEntity {
                 && stopSeq == (short) shipment.stopSeq()
                 && status == shipment.status()
                 && plannedArrival.equals(shipment.plannedArrival())
-                && etaAt.equals(shipment.etaAt())
                 && promisedEnd.equals(shipment.promisedEnd())
                 && Objects.equals(deliveredAt, shipment.deliveredAt());
     }
@@ -127,7 +123,6 @@ public class ShipmentEntity {
         this.stopSeq = (short) shipment.stopSeq();
         this.status = shipment.status();
         this.plannedArrival = shipment.plannedArrival();
-        this.etaAt = shipment.etaAt();
         this.promisedEnd = shipment.promisedEnd();
         this.deliveredAt = shipment.deliveredAt();
     }
