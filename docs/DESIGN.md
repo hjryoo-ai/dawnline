@@ -1886,7 +1886,7 @@ stop 마다의 룰이 가른다. 룰은 이른 도착을 막지 않으므로 근
 > 생긴 것이었다. 근무는 이제 **약속창에 닿는 근무**이고(14:03 에 닫은 내일의 NEXT_DAY 는 내일의 주간조를 받는다), 근무 시작은
 > `available_from` — 그 차량의 끝나지 않은 발행 라우트 중 가장 늦은 계획 복귀와의 최댓값이다. 둘은 한 자리에서 함께 계산한다.
 
-`DistanceProvider`는 `(GeoPoint a, GeoPoint b) → (meters, seconds)`를 반환. 기본 구현 `HaversineDistance`(도로계수 1.3, 평균 속도 25 km/h, 캠프 설정값). 선택 구현 `OsrmDistance`(테이블 API, 캐시). 문제 생성 시 거리 행렬은 **stop 통합 후** 계산해 `O(n²)` 규모를 줄인다(§6.7).
+`DistanceProvider`는 `(GeoPoint a, GeoPoint b) → (meters, seconds)`를 반환. 구현은 `HaversineDistance`(도로계수 1.3, 평균 속도 25 km/h — **서비스 설정**이다, 캠프 표에 칸이 없다). 선택 구현 `OsrmDistance`(테이블 API, 캐시)는 **만들지 않았다**([ADR-010](adr/ADR-010-haversine-with-road-factor-no-osrm.md) — 다시 여는 조건과 함께). 문제 생성 시 거리 행렬은 **stop 통합 후** 계산해 `O(n²)` 규모를 줄인다(§6.7).
 
 ### 6.3 룰 엔진
 
@@ -2874,7 +2874,7 @@ tracking 이 그 이벤트를 내는 Phase 5 에 리스너와 상태 전이가 �
 | `rl:customer:{id}` | HASH(Lua 토큰버킷) | order | 60s | **허용**(fail-open) + `bypassed` 메트릭·알림 |
 | `geo:fc`, `geo:camp` | GEO | fulfillment | 없음(기동 시 재적재) | DB 전체 조회 후 메모리 하버사인 |
 | `zone:geohash5:{p}` | STRING(`zoneId:campId`) | fulfillment | 10m | DB 조회 |
-| `lock:wave:{id}` | STRING NX | fulfillment | 60s | 단일 인스턴스 가정 하 DB 낙관적 락으로 중복 방지 유지 |
+| `lock:wave:{id}` | STRING NX | fulfillment | 60s | **진행한다**(fail-open, `servedByFallback`) — 중복은 `FOR UPDATE` + `OPEN` 상태 확인(+ `@Version`)이 막는다. 인스턴스 수와 무관하다(2026-09-28 정정, [ADR-005](adr/ADR-005-redis-lock-coordinates-the-row-guarantees.md)) |
 | `rules:camp:{id}:v{n}` | STRING(JSON) | dispatch | 1h | DB 조회 |
 | `dist:{gh7a}:{gh7b}` | STRING | dispatch(OSRM 시) | 1d | 하버사인 |
 | `driver:{id}:pos` | GEO | tracking | 1h | 없음(시각화용). **아직 아무도 쓰지 않는다**(2026-09-19, Phase 5-2) — 쓰는 코드도 읽는 코드도 없고 tracking 은 `route.assigned` 의 `driverId` 를 읽지도 않는다(`RouteAssignedPayload`). 채우는 시점은 **첫 소비자가 나타날 때**, 즉 Phase 6 의 ops-web 지도다 — dispatch OpenAPI 산출물·`delivery.route-departed` 와 같은 원칙이다(「부재는 첫 소비자가 나타나는 시점에 채운다」). 그때까지 기사 시뮬레이터는 스캔마다 `lat`·`lng` 를 실어 보내 데이터가 비어 있지 않게만 한다 |
@@ -3007,7 +3007,7 @@ fulfillment `dawnline.fulfillment.redis.connect-timeout`. Spring 은 `commandTim
 | dispatch 계획 중 크래시 | 계획 트랜잭션 롤백 — 그 웨이브의 `route_plans` 행이 없다(`PLANNING` 은 커밋되지 않는다, ADR-024 후속 정정) | 재기동 즉시 `wave.closed` 재전달로 다시 계획 | RB-04 §1: 재기동 · 소비 확인 |
 | 독약 메시지 (소비 측) | 소비자 반복 실패 | 결정적 실패만 3회 후 DLQ, 역직렬화 · 스키마 불일치는 즉시(§4.6 「경계」) | RB-05: 원인 수정 후 replay |
 | 독약 행 (발행 측) | 릴레이가 봉투 조립 실패 반복 | 결정적 실패로 분류해 격리(`failed_at`), 뒤 행은 계속 발행 (§4.6, ADR-015) | RB-05: 원인 수정 후 `failed_at = NULL` 로 재큐 |
-| 컷오프 스케줄러 이중 실행 | 없음 | Redis 락 + 낙관적 락 | — |
+| 컷오프 스케줄러 이중 실행 | 없음 | Redis 락(조정 — fail-open) + 웨이브 행 `FOR UPDATE` · 상태 확인([ADR-005](adr/ADR-005-redis-lock-coordinates-the-row-guarantees.md)) | — |
 | 시뮬레이터 폭주 | 429 증가 | 레이트 리밋 | — |
 
 ### 8.5 멱등성 지점 목록
@@ -3733,14 +3733,14 @@ Phase 3까지가 **최소 데모 가능 버전(MVP)** 이며, 이력서·면접�
 | 002 | DB-per-service + 폴링 Outbox 릴레이 | Debezium CDC(운영 복잡도), 2PC(불가) | [ADR-002](adr/ADR-002-db-per-service-polling-outbox.md) |
 | 003 | JSON + JSON Schema 이벤트 계약 | Avro/Protobuf + Schema Registry(로컬 복잡도, 확장 경로만 기술) | [ADR-003](adr/ADR-003-json-schema-event-contracts.md) |
 | 004 | **비교 대상은 다른 솔버가 아니라 불가능의 경계다** — 자체 휴리스틱(`sweep-greedy-nn+ls`) 기본, `timefold` 는 등록하지 않는다. 대신 고정비 하한 열(상시) · 그림자 원장 여덟 줄 · 구성 계열이 다른 두 전략 비교. **다시 여는 조건 셋을 미리 적는다** | OR-Tools(JNI·배포 부담), Timefold 단독(블랙박스로는 알고리즘 역량 증명 약함), Phase 4 안에서 비교 강행(번역 검증 비용 > 비교의 값 — 모델의 차이를 재게 된다), 조건 없이 Phase 7 stretch 로 이월(기억에 맡기는 일) | [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md) |
-| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | PostgreSQL advisory lock(**서비스 <em>간</em> 락에 한한 기각 사유다** — 2026-09-05 각주), Redisson | — (Phase 2 예정) |
+| 005 | **Redis 락은 조정하고, 보장은 DB 행이 한다** — Redis 락은 fail-open 조정자(`lock:wave` · 멱등 · at-risk 쿨다운), 정확성은 `FOR UPDATE` + 상태 확인 · PK · `@Version` · fail-open 이 틀린 락은 Redis 에 두지 않는다(릴레이 리더 → advisory lock) | PostgreSQL advisory lock(**서비스 <em>간</em> 락에 한한 기각 사유다** — 2026-09-05 각주), Redisson(조정자에 펜싱은 과하다), fail-closed(Redis 장애가 컷오프 장애가 된다) | [ADR-005](adr/ADR-005-redis-lock-coordinates-the-row-guarantees.md) |
 | 006 | at-least-once + 멱등 소비자 | Kafka 트랜잭션/EOS(DB 쓰기와 원자성 불가) | [ADR-006](adr/ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제 | 계층형(경계 침식) | [ADR-007](adr/ADR-007-hexagonal-architecture-archunit.md) |
-| 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | 전부 플랫폼 스레드 | — (Phase 4 예정) |
+| 008 | **가상 스레드도 계획 안의 ForkJoin 도 켜지 않는다 · 병렬의 단위는 캠프(파티션)다** — 게이트(잘림의 대가 ≥ 1%)가 +0.83%, 7-4 의 계획 전부 FULL | 클러스터 단위 병렬(독립이 아니다), 라우트 쌍 병렬(게이트 아래), 서비스 전체 가상 스레드(병목이 풀이다) | [ADR-008](adr/ADR-008-no-virtual-threads-no-intra-plan-parallelism.md) |
 | 009 | URL 경로 API 버저닝(v1), 매핑은 `{version}` 자리표시자 | 헤더 버저닝(URL·로그·데모에서 안 보임), 미디어 타입 파라미터(캐시·프록시 복잡), 리터럴 `v1` + 버저닝 끄기(지원하지 않는 버전이 404 가 됨) | [ADR-009](adr/ADR-009-url-path-api-versioning.md) |
-| 010 | 하버사인 × 도로계수 기본, OSRM 어댑터 선택 | 상용 지도 API(비용·키 관리) | — (Phase 3 예정) |
-| 011 | 롤링 배포 시 소비자 static membership | 기본 리밸런스 | — (Phase 7 예정) |
-| 012 | CQRS 읽기 모델을 ops-api에 집중 | 각 서비스에 조회 API 노출(서비스 간 동기 호출 증가) | — (Phase 6 예정) |
+| 010 | **하버사인 × 도로계수 1.3 · 25 km/h, 서비스 설정** — OSRM 어댑터는 만들지 않았다(상대 비교가 바뀌지 않는다 · 거리 캐시는 6–7배 느렸다) | 상용 지도 API(비용·키 관리), OSRM + 캐시, 캠프별 도로계수(근거 실측 없음) | [ADR-010](adr/ADR-010-haversine-with-road-factor-no-osrm.md) |
+| 011 | **롤링 배포의 static membership 은 문서로만** — 파드마다 고정 `group.instance.id` · 세션 만료 > 파드 교체 시간 · 종료는 커밋 뒤 | 기본 리밸런스(파드마다 두 번 정지), 협조적 리밸런스만, k8s + kind 스모크(범위 밖) | [ADR-011](adr/ADR-011-static-membership-documented-not-deployed.md) |
+| 012 | **읽기 모델은 ops-api 에 모은다** — 토픽 열한 개 · `rm_*` · KPI 뷰 · 예외는 이름 붙인 동기 위임 셋(stop 좌표 · 함대 판정 · 차량) | 각 서비스에 조회 API 노출(서비스 간 동기 호출 증가), 읽기 복제본 JOIN, `rm_*` 없이 전부 위임 | [ADR-012](adr/ADR-012-read-models-live-in-ops-api.md) |
 | 013 | 컨테이너 이미지 = Spring Boot Buildpacks(`bootBuildImage`) | Jib(플러그인 추가·Boot 4 검증 부담), 수동 Dockerfile(5배 유지보수) | [ADR-013](adr/ADR-013-container-image-buildpacks.md) |
 | 014 | JDK 25 툴체인 자동 프로비저닝(foojay-resolver) | 로컬 JDK 수동 설치 전제(환경별 재현성 저하) | [ADR-014](adr/ADR-014-jdk25-toolchain-auto-provisioning.md) |
 | 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | 무한 재시도 유지(진행 보장 없음), DLQ 토픽 우회 발행(실패 원인과 순환), N회 후 자동 폐기(이벤트 소실) | [ADR-015](adr/ADR-015-outbox-publish-side-quarantine.md) |
