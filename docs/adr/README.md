@@ -28,14 +28,14 @@
 | 002 | DB-per-service + 폴링 Outbox 릴레이 | ✅ Accepted (2026-08-29) | [ADR-002](ADR-002-db-per-service-polling-outbox.md) |
 | 003 | JSON + JSON Schema 이벤트 계약 | ✅ Accepted (2026-08-29) | [ADR-003](ADR-003-json-schema-event-contracts.md) |
 | 004 | **비교 대상은 다른 솔버가 아니라 불가능의 경계다** — `timefold` 는 등록하지 않고, 다시 여는 조건 셋을 적는다 | ✅ Accepted (2026-09-18) | [ADR-004](ADR-004-compare-against-the-boundary-not-another-solver.md) |
-| 005 | Redis `SET NX` 락 + DB 낙관적 락 이중화 | ⏳ Phase 2 예정 | — (advisory lock 기각 사유에 [ADR-027 후속 정정](ADR-027-outbox-relay-leader-lock.md)의 각주가 붙었다 — **서비스 <em>간</em> 락에만 해당한다**) |
+| 005 | **Redis 락은 조정하고, 보장은 DB 행이 한다** — 락 셋(`lock:wave` · 멱등 · at-risk 쿨다운)은 fail-open, 정확성은 `FOR UPDATE` · PK · `@Version` · fail-open 이 틀린 락(릴레이 리더)은 Redis 를 떠났다(ADR-027) | ✅ Accepted (2026-09-28) | [ADR-005](ADR-005-redis-lock-coordinates-the-row-guarantees.md) |
 | 006 | at-least-once + 멱등 소비자 (Kafka EOS 미사용) | ✅ Accepted (2026-08-29) | [ADR-006](ADR-006-at-least-once-idempotent-consumer.md) |
 | 007 | 헥사고날 + ArchUnit 강제, 도메인/JPA 엔티티 분리 | ✅ Accepted (2026-08-29) | [ADR-007](ADR-007-hexagonal-architecture-archunit.md) |
-| 008 | 가상 스레드(I/O) + ForkJoin(CPU) 분리 | ⏳ Phase 4 예정 | — |
+| 008 | **가상 스레드도 계획 안의 ForkJoin 도 켜지 않는다 · 병렬의 단위는 캠프다** — ADR-035 게이트 +0.83% < 1% · 7-4 의 80 계획 전부 FULL(최장 16.6초) · 병목은 스레드가 아니라 풀 | ✅ Accepted (2026-09-28) | [ADR-008](ADR-008-no-virtual-threads-no-intra-plan-parallelism.md) |
 | 009 | URL 경로 API 버저닝(v1) | ✅ Accepted (2026-09-03) | [ADR-009](ADR-009-url-path-api-versioning.md) |
-| 010 | 하버사인 × 도로계수 기본, OSRM 어댑터는 선택 | ⏳ Phase 3 예정 | — |
-| 011 | 롤링 배포 시 소비자 static membership | ⏳ Phase 7 예정 | — |
-| 012 | CQRS 읽기 모델을 ops-api에 집중 | ⏳ Phase 6 예정 | — |
+| 010 | **거리는 하버사인 × 도로계수다 · OSRM 어댑터는 만들지 않았다** — 서비스 설정(캠프 설정 아님) · 거리 캐시는 6–7배 느려 지웠다 · 절대 시각이 약속이 될 때 다시 연다 | ✅ Accepted (2026-09-28) | [ADR-010](ADR-010-haversine-with-road-factor-no-osrm.md) |
+| 011 | **롤링 배포의 static membership 은 문서로만** — 파드마다 `group.instance.id` · `session.timeout.ms` > 교체 시간 · k8s 는 만들지 않는다 | ✅ Accepted (2026-09-28) | [ADR-011](ADR-011-static-membership-documented-not-deployed.md) |
+| 012 | **읽기 모델은 ops-api 에 모은다 · 예외는 이름 붙인 동기 위임 셋** — 토픽 열한 개 구독(`ProjectionTopicsTest`) · stop 좌표 · 함대 판정 · 차량은 위임 | ✅ Accepted (2026-09-28) | [ADR-012](ADR-012-read-models-live-in-ops-api.md) |
 | 013 | 컨테이너 이미지 = Spring Boot Buildpacks(`bootBuildImage`) | ✅ Accepted (2026-08-29) | [ADR-013](ADR-013-container-image-buildpacks.md) |
 | 014 | JDK 25 툴체인 자동 프로비저닝 (foojay-resolver) | ✅ Accepted (2026-08-29) | [ADR-014](ADR-014-jdk25-toolchain-auto-provisioning.md) |
 | 015 | Outbox 발행 실패를 결정적/일시적으로 나누고 결정적 실패만 격리 | ✅ Accepted (2026-09-01) + **후속 정정 둘** — 재큐 엔드포인트(2026-09-24) · **소비 측 경계표**(2026-09-25 — 일시적은 끝없이 재시도, 결정적만 DLQ) | [ADR-015](ADR-015-outbox-publish-side-quarantine.md) |
