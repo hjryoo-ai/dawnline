@@ -81,6 +81,7 @@ public record SimProperties(
      *                      (부록 A 「창은 하나다」, ADR-066). 없으면 곧바로 보낸다
      * @param fleet         함대 단계 — {@code feasible}(80% 기준이 낸 만큼 증차) · {@code as-is}(재고 리포트하되 더하지 않는다).
      *                      없으면 함대 단계가 없다. 창({@code start-at})이 있어야 한다 — 증차는 창의 DAWN 웨이브에 한다(ADR-067)
+     * @param cancel        주문 취소 — 없으면 취소하지 않는다. 함대 단계가 있어야 한다: 「발행 뒤」가 그 단계의 순서 위에 있다
      */
     public record Scenario(
             @DefaultValue("200") int orders,
@@ -91,7 +92,8 @@ public record SimProperties(
             @DefaultValue Map<String, Integer> tierWeights,
             @Nullable Driver driver,
             @Nullable String startAt,
-            @Nullable Fleet fleet) {
+            @Nullable Fleet fleet,
+            @Nullable Cancel cancel) {
 
         public Scenario {
             if (orders < 1) {
@@ -113,6 +115,9 @@ public record SimProperties(
             if (driver != null && driver.routes() == null && fleet == null) {
                 throw new IllegalArgumentException(
                         "driver.routes 가 없으면 계획이 수를 낸다 — 그 수를 읽는 함대 단계(fleet)가 있어야 한다");
+            }
+            if (cancel != null && fleet == null) {
+                throw new IllegalArgumentException("cancel 은 함대 단계(fleet)가 있는 시나리오에만 둔다 — 「발행 뒤」가 그 단계의 순서다");
             }
             if (customers < 1) {
                 throw new IllegalArgumentException("customers 는 1 이상이어야 합니다");
@@ -139,6 +144,35 @@ public record SimProperties(
             FEASIBLE,
             /** 재고 리포트하되 더하지 않는다 — 「증차 없음」, {@code overload-day} 와 평일 셋. */
             AS_IS
+        }
+
+        /**
+         * 주문 취소 — 실제 고객처럼 order-service 의 {@code POST /api/v1/orders/{orderId}/cancel} 로 (7-4 turbulent, 2026-09-28).
+         *
+         * <p>대상은 <strong>DAWN 주문</strong>이다 — 창 시나리오가 재는 범위다(리포트 §1). 어느 주문을 언제 취소하는지는 seed 가 정한다
+         * ({@code CancelPlan}). 두 때:
+         * <ul>
+         *   <li><strong>계획 전</strong> — 접수 직후, 창 안에서. 웨이브가 닫히기 전이라 후보에서 빠진다(§6.10 첫 분기).</li>
+         *   <li><strong>발행 뒤</strong> — 기사의 출발을 놓은 직후. order-service 는 {@code DISPATCHED} 뒤의 취소를 409 로 막으므로 대부분
+         *       거기서 끝나고, {@code order.dispatched} 가 반영되기 전의 창에 든 것만 dispatch 에 닿는다 — 그 비율이 7-0 A18 의 창의 폭이다.</li>
+         * </ul>
+         *
+         * @param ratio      DAWN 주문 가운데 취소할 비율 (0.0 ~ 1.0)
+         * @param beforePlan 그중 계획 전에 취소할 몫 (0.0 ~ 1.0). 나머지는 발행 뒤다
+         * @param ratePerSecond 발행 뒤 취소를 보내는 속도 — 한 번에 몰아 보내면 기사가 출발하기 전에 끝난다
+         */
+        public record Cancel(
+                @DefaultValue("0.02") double ratio,
+                @DefaultValue("0.5") double beforePlan,
+                @DefaultValue("20") double ratePerSecond) {
+
+            public Cancel {
+                Driver.requireRatio(ratio, "cancel.ratio");
+                Driver.requireRatio(beforePlan, "cancel.before-plan");
+                if (!(ratePerSecond > 0.0)) {
+                    throw new IllegalArgumentException("cancel.rate-per-second 는 0 보다 커야 합니다");
+                }
+            }
         }
 
         /** @return 창의 시작(KST), 없으면 {@code null} */
@@ -201,7 +235,7 @@ public record SimProperties(
                 scanBaseUrl = Objects.requireNonNull(scanBaseUrl, "driver.scan-base-url");
             }
 
-            private static void requireRatio(double value, String name) {
+            static void requireRatio(double value, String name) {
                 if (!(value >= 0.0 && value <= 1.0)) {
                     throw new IllegalArgumentException("%s 는 0.0 ~ 1.0 이어야 합니다: %s".formatted(name, value));
                 }

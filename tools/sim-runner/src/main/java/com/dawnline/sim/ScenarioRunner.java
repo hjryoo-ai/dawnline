@@ -7,6 +7,8 @@ import com.dawnline.sim.driver.DriverScenario;
 import com.dawnline.sim.fleet.FleetFailure;
 import com.dawnline.sim.fleet.FleetReport;
 import com.dawnline.sim.fleet.PeakFleet;
+import com.dawnline.sim.order.CancelReport;
+import com.dawnline.sim.order.OrderCancellations;
 import com.dawnline.sim.order.OrderGenerator;
 import com.dawnline.sim.order.ScenarioReport;
 import com.dawnline.sim.order.SmokeScenario;
@@ -44,11 +46,13 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
     private final RunIds runIds;
     private final WindowStart windowStart;
     private final PeakFleet peakFleet;
+    private final CancellationsFactory cancellationsFactory;
 
     private int exitCode;
     private @Nullable ScenarioReport lastReport;
     private @Nullable DriverReport lastDriverReport;
     private @Nullable FleetReport lastFleetReport;
+    private @Nullable CancelReport lastCancelReport;
 
     /**
      * @param properties     설정
@@ -58,9 +62,11 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
      * @param runIds         실행 식별자 생성기. 멱등 키 접두어가 되므로 실행마다 달라야 한다
      * @param windowStart    창의 시작까지 기다림 — 시나리오에 {@code start-at} 이 있을 때만 쓴다
      * @param peakFleet      함대 단계 — 시나리오에 {@code fleet} 이 있을 때만 쓴다(ADR-067)
+     * @param cancellationsFactory 취소 — 시나리오에 {@code cancel} 이 있을 때만 쓴다(7-4 turbulent)
      */
     public ScenarioRunner(SimProperties properties, SmokeScenario smoke, DriverScenario driverScenario,
-            RandomGeneratorFactory randomFactory, RunIds runIds, WindowStart windowStart, PeakFleet peakFleet) {
+            RandomGeneratorFactory randomFactory, RunIds runIds, WindowStart windowStart, PeakFleet peakFleet,
+            CancellationsFactory cancellationsFactory) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.smoke = Objects.requireNonNull(smoke, "smoke");
         this.driverScenario = Objects.requireNonNull(driverScenario, "driverScenario");
@@ -68,6 +74,7 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
         this.runIds = Objects.requireNonNull(runIds, "runIds");
         this.windowStart = Objects.requireNonNull(windowStart, "windowStart");
         this.peakFleet = Objects.requireNonNull(peakFleet, "peakFleet");
+        this.cancellationsFactory = Objects.requireNonNull(cancellationsFactory, "cancellationsFactory");
     }
 
     @Override
@@ -120,8 +127,11 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
         }
 
         OrderGenerator generator = new OrderGenerator(scenario, randomFactory.create(scenario.seed()));
+        // 취소는 자기 난수원을 쓴다 — 주문 생성기와 나누면 취소를 켜는 것이 주문 내용을 바꾼다.
+        @Nullable OrderCancellations cancellations = scenario.cancel() == null ? null
+                : cancellationsFactory.create(scenario.cancel(), randomFactory.create(scenario.seed() ^ CANCEL_SALT));
         ScenarioReport report =
-                smoke.run(properties.scenario(), scenario, generator, runIds.next());
+                smoke.run(properties.scenario(), scenario, generator, runIds.next(), cancellations);
         this.lastReport = report;
         this.exitCode = report.isSuccess() ? 0 : FAILURE_EXIT_CODE;
 
@@ -135,7 +145,8 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
         }
 
         if (fleet != null) {
-            runFleet(fleet, dawnCutoffAfter(Objects.requireNonNull(opened, "fleet 은 창이 있다")), withDriver);
+            runFleet(fleet, dawnCutoffAfter(Objects.requireNonNull(opened, "fleet 은 창이 있다")), withDriver,
+                    cancellations);
             return;
         }
         if (!withDriver) {
@@ -158,10 +169,23 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
      * 종료 코드에 그대로 남는다. 기사는 계획이 끝났을 때만 돈다(기다릴 수를 계획이 낸다) — 그리고 tracking 이 창의 라우트를
      * 반영한 뒤에 출발한다: 반영과 스캔은 운영에서 겹치지 않는다(ADR-067 후속). 그 기다림이 상한을 넘으면 실행의 실패다.
      */
-    private void runFleet(PeakFleet.Session fleet, Instant cutoff, boolean withDriver) throws InterruptedException {
+    private void runFleet(PeakFleet.Session fleet, Instant cutoff, boolean withDriver,
+            @Nullable OrderCancellations cancellations) throws InterruptedException {
+        @Nullable Thread afterPublish = null;
         try {
             fleet.provision(cutoff);
             fleet.awaitPlans();
+            if (fleet.planned() && cancellations != null) {
+                // 발행 뒤 취소는 계획이 끝난 직후부터 — order.dispatched 가 order-service 에 반영되기 전의 창을 두드린다. 재배정 · 출발과
+                // 나란히 돈다: 창의 한 끝(409)부터 기사가 이미 닿은 끝(cancel_too_late)까지 흩어지게 한다(7-0 A18 · B5).
+                afterPublish = Thread.ofVirtual().name("cancel-after-publish").start(() -> {
+                    try {
+                        cancellations.sendAfterPublish();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
             if (fleet.planned()) {
                 fleet.reassign();
             }
@@ -177,6 +201,14 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
             if (!driverReport.isSuccess() || !departure.inTime()) {
                 this.exitCode = FAILURE_EXIT_CODE;
             }
+        }
+        if (cancellations != null) {
+            if (afterPublish != null) {
+                afterPublish.join();
+            }
+            CancelReport cancelReport = cancellations.report();
+            this.lastCancelReport = cancelReport;
+            log.info("취소 — 때와 응답별 (7-4 turbulent)\n{}", cancelReport.toMarkdown());
         }
         if (fleet.addedCount() > 0) {
             try {
@@ -219,9 +251,28 @@ public class ScenarioRunner implements CommandLineRunner, ExitCodeGenerator {
         return lastFleetReport;
     }
 
+    /** 마지막 취소 결과. 취소가 없는 시나리오면 {@code null}. */
+    public @Nullable CancelReport lastCancelReport() {
+        return lastCancelReport;
+    }
+
     /** 마지막 기사 시뮬레이션 결과. 기사를 쓰지 않는 시나리오면 {@code null}. */
     public @Nullable DriverReport lastDriverReport() {
         return lastDriverReport;
+    }
+
+    /** 취소의 난수원을 주문 생성기의 것과 가르는 값 — 같은 seed 에서 다른 흐름을 뽑는다. */
+    static final long CANCEL_SALT = 0x43414E43454CL;
+
+    /** 취소를 만든다 — 클라이언트 · 페이싱은 배선이 준다. */
+    @FunctionalInterface
+    public interface CancellationsFactory {
+
+        /**
+         * @param cancel 비율 · 몫 · 속도
+         * @param random 취소만의 난수원
+         */
+        OrderCancellations create(SimProperties.Scenario.Cancel cancel, RandomGenerator random);
     }
 
     /** seed 로 난수원을 만든다. */
