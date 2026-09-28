@@ -83,6 +83,29 @@ class HttpOrderClientTest {
     }
 
     @Test
+    void 접수_본문의_orderId_를_꺼낸다_취소가_그것으로_부른다() throws IOException {
+        UUID orderId = UUID.fromString("01a0e4eb-6754-7332-9111-358107f34830");
+        OrderClient client = clientFor(serve(201, "{\"orderId\":\"" + orderId + "\",\"status\":\"PLACED\"}"));
+
+        assertThat(client.place(ORDER, "key-5").orderId()).isEqualTo(orderId);
+    }
+
+    @Test
+    void 취소는_고객_경로로_나가고_409_의_code_를_센다() throws IOException {
+        // 발행 뒤 취소의 대부분이 이 모양이다 — order-service 가 DISPATCHED 를 먼저 알았다(7-4 turbulent, A18 의 창).
+        UUID orderId = UUID.fromString("01a0e4eb-6754-7332-9111-358107f34831");
+        HttpOrderClient client = (HttpOrderClient) clientFor(serve(409,
+                "{\"status\":409,\"code\":\"illegal-state-transition\"}"));
+
+        OrderClient.Response response = client.cancel(orderId);
+
+        assertThat(response.status()).isEqualTo(409);
+        assertThat(response.problemCode()).isEqualTo("illegal-state-transition");
+        assertThat(received.getFirst().path()).isEqualTo("/api/v1/orders/" + orderId + "/cancel");
+        assertThat(received.getFirst().body()).contains("reason");
+    }
+
+    @Test
     void 오류_본문에서_Problem_Details_의_code_를_꺼낸다() throws IOException {
         OrderClient client = clientFor(serve(422,
                 "{\"type\":\"https://dawnline.internal/problems/tier-not-serviceable\","

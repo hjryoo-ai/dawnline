@@ -89,7 +89,10 @@ public final class SeededJitter implements Jitter {
     @Override
     public long departureDelaySeconds(UUID routeId, int revision) {
         // seq 0 은 stop 이 아니다 — 계약의 seq 는 1부터라 이 자리는 캠프만의 것이다.
-        return Math.round(draw(routeId, revision, 0).delaySize() * maxDepartureDelaySeconds);
+        // 출발도 구간과 같은 확률을 따른다(2026-09-28, 7-4 turbulent) — 처음에는 모든 라우트가 0 ~ 상한에서 균등하게 늦었고, 「지연 15%」가
+        // 출발에는 닿지 않았다. 확률 1.0(late-injection)과 상한 0(창 시나리오)에서는 값이 그대로다: 뽑는 순서와 개수가 같다.
+        Draws draws = draw(routeId, revision, 0);
+        return draws.delayRoll() < delayProbability ? Math.round(draws.delaySize() * maxDepartureDelaySeconds) : 0L;
     }
 
     @Override

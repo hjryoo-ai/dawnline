@@ -1,5 +1,6 @@
 package com.dawnline.sim.order;
 
+import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -26,17 +27,23 @@ public interface OrderClient {
      * @param status      HTTP 상태. 연결 자체가 실패하면 {@code 0}
      * @param problemCode Problem Details 의 {@code code}. 없으면 {@code null}
      * @param failure     전송 실패 사유. 성공하면 {@code null}
+     * @param orderId     접수된 주문의 id(201 본문의 {@code orderId}). 취소가 이것으로 부른다 — 없으면 {@code null}
      */
-    record Response(int status, @Nullable String problemCode, @Nullable String failure) {
+    record Response(int status, @Nullable String problemCode, @Nullable String failure, @Nullable UUID orderId) {
 
         /** 응답을 받았다. */
         public static Response of(int status, @Nullable String problemCode) {
-            return new Response(status, problemCode, null);
+            return new Response(status, problemCode, null, null);
+        }
+
+        /** 주문이 접수됐다 — 그 id 와 함께. */
+        public static Response accepted(UUID orderId) {
+            return new Response(201, null, null, java.util.Objects.requireNonNull(orderId, "orderId"));
         }
 
         /** 응답을 받지 못했다 (연결 거부·타임아웃). */
         public static Response transportFailure(String reason) {
-            return new Response(0, null, reason);
+            return new Response(0, null, reason, null);
         }
 
         /** 주문이 새로 접수되었는가. */

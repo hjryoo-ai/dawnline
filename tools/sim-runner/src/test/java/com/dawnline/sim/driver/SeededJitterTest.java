@@ -4,6 +4,7 @@ import static com.dawnline.sim.driver.DriverFixtures.ROUTE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.function.LongFunction;
 import java.util.random.RandomGenerator;
@@ -86,6 +87,26 @@ class SeededJitterTest {
         assertThat(IntStream.rangeClosed(1, 50)).allSatisfy(revision -> assertThat(
                 jitter.departureDelaySeconds(UUID.nameUUIDFromBytes(("r" + revision).getBytes()), 1))
                 .isBetween(0L, 1800L));
+    }
+
+    @Test
+    void 출발_지연도_지연_확률을_따른다() {
+        // 확률 0.15 면 라우트의 약 15% 만 늦게 떠난다 — 나머지는 정시다(7-0 A20 이 출발 정시율을 재려면 둘이 섞여야 한다).
+        SeededJitter some = jitter(13L, 0.15, 0.0);
+        SeededJitter all = jitter(13L, 1.0, 0.0);
+        List<UUID> routes = IntStream.rangeClosed(1, 2000).mapToObj(i -> UUID.nameUUIDFromBytes(("route" + i).getBytes())).toList();
+
+        long late = routes.stream().filter(route -> some.departureDelaySeconds(route, 1) > 0).count();
+
+        assertThat(late).as("약 15%").isBetween(240L, 360L);
+        assertThat(routes).as("늦게 떠나는 라우트의 지연은 확률 1.0 일 때와 같다 — 뽑는 수가 같다")
+                .allSatisfy(route -> {
+                    long delay = some.departureDelaySeconds(route, 1);
+                    if (delay > 0) {
+                        assertThat(delay).isEqualTo(all.departureDelaySeconds(route, 1));
+                    }
+                });
+        assertThat(jitter(13L, 0.0, 0.0).departureDelaySeconds(routes.getFirst(), 1)).isZero();
     }
 
     @Test

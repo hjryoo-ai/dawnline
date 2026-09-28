@@ -157,6 +157,41 @@ dawnline:
           scan-retry-seconds: 60
           scan-base-url: ${DAWNLINE_SIM_SCAN_BASE_URL:http://localhost:8084}
 
+      # 피크 + 흔들림 — peak-day 에 취소와 지연 · 실패를 더한다(7-4 turbulent, 2026-09-28 결정). 창 시나리오 넷이 판정하지 못한 행
+      # (7-0 A18 cancel_too_late · A20 출발 정시율 · B5 scan_after_cancel …)의 데이터가 여기서 나온다. 물량 · seed · 함대는 peak-day 그대로다.
+      #
+      # 지연 — 구간의 15% 가 최대 30% 더 걸리고, 같은 15% 의 라우트가 최대 15분 늦게 떠난다(출발도 같은 확률을 따른다 — SeededJitter).
+      #   15분은 at-risk 문턱(약속창 끝 − 15분)과 같은 크기다: 2차 peak-day 에서 07:29 에 끝난 냉장 트럭은 위험으로 잡히고 02:19 에 끝난 밴은
+      #   잡히지 않는다 — 두 갈래가 다 나오는 값이다. 0.6 · 1800 초(late-injection)는 15% 에 걸기엔 「전부 위험」이라 판정이 갈리지 않는다.
+      # 실패 — 전달의 3%.
+      # 취소 — DAWN 주문의 2%, 절반은 계획 전(접수 직후 — 창 안) · 절반은 발행 뒤(계획이 끝난 직후부터 초당 20건). 발행 뒤 취소의 대부분은
+      #   order-service 의 409(이미 DISPATCHED)이고, 그 비율이 order.dispatched 반영 전의 창의 폭이다(A18).
+      peak-day-turbulent:
+        orders: 45000
+        rate-per-second: 12.5
+        seed: 20260928
+        customers: 22500
+        cold-ratio: 0.25
+        start-at: "22:58"
+        fleet: feasible
+        tier-weights:
+          DAWN: 5
+          SAME_DAY: 3
+          NEXT_DAY: 2
+        cancel:
+          ratio: 0.02
+          before-plan: 0.5
+          rate-per-second: 20
+        driver:
+          speed: 600
+          timeout-seconds: 1800
+          scan-retry-seconds: 60
+          scan-base-url: ${DAWNLINE_SIM_SCAN_BASE_URL:http://localhost:8084}
+          delay-probability: 0.15
+          delay-magnitude: 0.3
+          failure-probability: 0.03
+          departure-delay-seconds: 900
+
       # 과부하 — 같은 물량(같은 seed), 함대 그대로(「증차 없음」 — 재기는 하므로 리포트의 계산 부족분이 「얼마나 과부하였나」다).
       # 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터다.
       overload-day:
