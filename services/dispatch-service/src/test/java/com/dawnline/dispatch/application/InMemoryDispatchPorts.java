@@ -32,6 +32,7 @@ import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.List;
@@ -405,6 +406,27 @@ final class InMemoryDispatchPorts {
         private boolean live(UUID orderId) {
             return candidates.findById(orderId).map(candidate -> candidate.status() != CandidateStatus.CANCELLED)
                     .orElse(true);
+        }
+
+        /** 라우트의 계획 출발 · 떠난 시각 — 실물의 {@code routes.planned_departure} · {@code departed_at}(ADR-072). */
+        final Map<UUID, Instant> plannedDeparture = new HashMap<>();
+        final Map<UUID, Instant> departedAt = new HashMap<>();
+
+        @Override
+        public boolean markDeparted(UUID routeId, Instant at) {
+            if (!rows.containsKey(routeId)) {
+                return false;
+            }
+            departedAt.putIfAbsent(routeId, at);    // 실물의 COALESCE 와 같다
+            return true;
+        }
+
+        @Override
+        public Optional<java.time.Duration> departureDeviation(UUID routeId) {
+            Instant planned = plannedDeparture.get(routeId);
+            Instant departed = departedAt.get(routeId);
+            return planned == null || departed == null ? Optional.empty()
+                    : Optional.of(java.time.Duration.between(planned, departed));
         }
 
         @Override

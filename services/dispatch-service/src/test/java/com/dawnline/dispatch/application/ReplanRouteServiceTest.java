@@ -98,6 +98,34 @@ class ReplanRouteServiceTest {
     }
 
     @Test
+    void 닿은_stop_이_없어도_출발이_있으면_출발의_편차로_푼다() {
+        // at-risk 는 설계상 출발 지연에서 첫 stop 전에 발화한다(§5.4). 출발이 앵커가 아니던 때는 그 자리가 전부 no-anchor 였다 —
+        // 7-4 의 29/32(ADR-072).
+        Fixture fixture = fixture();
+        routes.row(fixture.atRisk(), 1).status = RouteStopStatus.PLANNED;
+        routes.row(fixture.atRisk(), 1).actualAt = null;
+        Instant planned = routes.row(fixture.atRisk(), 1).arrival.minus(Duration.ofMinutes(20));
+        routes.plannedDeparture.put(fixture.atRisk(), planned);
+        routes.markDeparted(fixture.atRisk(), planned.plus(LATE));
+
+        assertThat(service.replan(command(fixture, LATE))).isEqualTo(Outcome.APPLIED);
+        assertThat(mismatchCount()).as("앵커 = 출발의 편차 = 페이로드의 편차").isZero();
+    }
+
+    @Test
+    void 닿은_stop_이_있으면_출발보다_그것이_앵커다() {
+        // 닿은 stop 이 더 최근의 사실이다 — 출발 뒤에 벌어진(또는 따라잡은) 만큼이 거기 있다.
+        Fixture fixture = fixture();
+        Instant planned = routes.row(fixture.atRisk(), 1).arrival.minus(Duration.ofMinutes(20));
+        routes.plannedDeparture.put(fixture.atRisk(), planned);
+        routes.markDeparted(fixture.atRisk(), planned);       // 정시 출발 — 편차 0
+
+        service.replan(command(fixture, LATE));
+
+        assertThat(mismatchCount()).as("앵커가 출발(0)이었다면 페이로드(LATE)와 갈렸다").isZero();
+    }
+
+    @Test
     void 페이로드의_편차와_갈리면_센다() {
         // 버리지도 않고 입력으로 쓰지도 않는다 — 견준다. 갈린다는 것은 tracking 과 dispatch 가
         // 같은 라우트를 다르게 보고 있다는 뜻이고, 그 사실이 먼저 필요하다.

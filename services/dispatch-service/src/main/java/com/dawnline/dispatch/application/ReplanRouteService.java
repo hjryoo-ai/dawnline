@@ -206,20 +206,23 @@ public class ReplanRouteService implements ReplanRouteUseCase {
                 () -> new ConflictException("캠프 좌표가 없는 계획은 다시 풀 수 없습니다",
                         Map.of("planId", plan.id().toString()))));
 
-        SettledStop anchor = routes.lastSettledStop(command.routeId()).orElse(null);
-        if (anchor == null) {
-            // 편차를 «모른다». 0 으로 두고 돌리면 출발 지연 라우트가 「이득 없음」으로 조용히
-            // 닫힌다 — 모름은 0 이 아니다(ADR-048 결정 1, 기각 (8)). 첫 ARRIVED 가 stop 하나를
-            // 닿게 하고 tracking 의 쿨다운이 다시 발화하므로 구멍은 stop 하나 뒤에 닫힌다.
-            log.debug("닿은 stop 이 없어 편차를 모른다. routeId={}", command.routeId());
+        // 앵커는 닿은 stop 이 먼저(더 최근의 사실), 없으면 출발이다(ADR-072). at-risk 는 설계상 출발 지연에서 첫 stop 전에 발화한다 —
+        // 출발이 앵커가 아니던 때는 그 자리가 전부 no-anchor 였다(7-4 의 29/32).
+        Duration deviation = routes.lastSettledStop(command.routeId()).map(SettledStop::deviation)
+                .or(() -> routes.departureDeviation(command.routeId()))
+                .orElse(null);
+        if (deviation == null) {
+            // 편차를 «모른다». 0 으로 두고 돌리면 출발 지연 라우트가 「이득 없음」으로 조용히 닫힌다 — 모름은 0 이 아니다(ADR-048 결정 1,
+            // 기각 (8)). 남는 것은 at-risk 가 출발보다 먼저 소비된 창이다(다른 토픽 — ADR-072 결정 4).
+            log.debug("닿은 stop 도 출발도 없어 편차를 모른다. routeId={}", command.routeId());
             return Snapshot.early(Outcome.NO_ANCHOR, false);
         }
-        boolean mismatch = diverged(command, anchor.deviation());
+        boolean mismatch = diverged(command, deviation);
 
         Map<UUID, VehicleSpec> fleet = fleetOf(plan.campId(), startAt);
         RuleSet ruleSet = rules.forCamp(plan.campId());
         RelocateSearch.RouteInput source = inputOf(header, fleet, depot, startAt,
-                anchor.deviation());
+                deviation);
         if (source.stops().size() == source.frozen()) {
             log.debug("남은 stop 이 없다. routeId={}", command.routeId());
             return Snapshot.early(Outcome.NO_CANDIDATE, mismatch);
@@ -231,7 +234,7 @@ public class ReplanRouteService implements ReplanRouteUseCase {
             return Snapshot.early(Outcome.NO_CANDIDATE, mismatch);
         }
         return new Snapshot(null, mismatch, new Search(plan, fleet, depot, startAt, ruleSet, source,
-                candidates, routes.revisionsOfPlan(plan.id()), anchor.deviation()));
+                candidates, routes.revisionsOfPlan(plan.id()), deviation));
     }
 
     /**

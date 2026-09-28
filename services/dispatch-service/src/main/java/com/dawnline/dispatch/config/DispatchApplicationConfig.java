@@ -3,10 +3,13 @@ package com.dawnline.dispatch.config;
 import com.dawnline.dispatch.adapter.in.messaging.FulfillmentPlannedListener;
 import com.dawnline.dispatch.adapter.in.messaging.AtRiskListener;
 import com.dawnline.dispatch.adapter.in.messaging.DeliveryStatusListener;
+import com.dawnline.dispatch.adapter.in.messaging.RouteDepartedListener;
 import com.dawnline.dispatch.adapter.in.messaging.OrderCancelledListener;
 import com.dawnline.dispatch.application.RecordDeliveryStatusService;
+import com.dawnline.dispatch.application.RecordRouteDepartureService;
 import com.dawnline.dispatch.application.ReplanRouteService;
 import com.dawnline.dispatch.application.port.in.RecordDeliveryStatusUseCase;
+import com.dawnline.dispatch.application.port.in.RecordRouteDepartureUseCase;
 import com.dawnline.dispatch.application.port.in.ReplanRouteUseCase;
 import com.dawnline.dispatch.adapter.in.messaging.WaveClosedListener;
 import com.dawnline.dispatch.adapter.out.messaging.OutboxDispatchEvents;
@@ -322,6 +325,28 @@ public class DispatchApplicationConfig {
     public DeliveryStatusListener deliveryStatusListener(IdempotentConsumer consumer,
             RecordDeliveryStatusUseCase recordStatus, EventJson json, DispatchMetrics metrics) {
         return new DeliveryStatusListener(consumer, recordStatus, json, metrics);
+    }
+
+    /**
+     * 출발을 자기 DB 에 — 재계획의 앵커 (ADR-072).
+     *
+     * @param routes 라우트 조작
+     */
+    @Bean
+    public RecordRouteDepartureUseCase recordRouteDepartureUseCase(RouteMutations routes) {
+        return new RecordRouteDepartureService(routes);
+    }
+
+    /**
+     * @param consumer        멱등 게이트
+     * @param recordDeparture 출발 유스케이스
+     * @param json            봉투 역직렬화
+     * @param metrics         §9.1 메트릭
+     */
+    @Bean
+    public RouteDepartedListener routeDepartedListener(IdempotentConsumer consumer,
+            RecordRouteDepartureUseCase recordDeparture, EventJson json, DispatchMetrics metrics) {
+        return new RouteDepartedListener(consumer, recordDeparture, json, metrics);
     }
 
     /**

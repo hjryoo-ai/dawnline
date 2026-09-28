@@ -2065,7 +2065,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 
 | # | 항목 | 출처 | 판정 데이터 | 비고 |
 |---|---|---|---|---|
-| B1 | `no-anchor` 빈도 — 「메운 뒤 얼마나 줄었나」 | ADR-048 ① · ADR-050 ② | `dawnline_replan_total{outcome="no-anchor"}` | 잦으면 dispatch 가 `route-departed` 의 소비자가 된다 → **7-4 판정(2026-09-28)**: 켜졌다 — 조건부(no-anchor 29/32 · 24/28, 도구 부하 위의 at-risk — 결정 항목) — [리포트](benchmarks/phase7-window-scenarios.md) §2 |
+| B1 | `no-anchor` 빈도 — 「메운 뒤 얼마나 줄었나」 | ADR-048 ① · ADR-050 ② | `dawnline_replan_total{outcome="no-anchor"}` | 잦으면 dispatch 가 `route-departed` 의 소비자가 된다 → **7-4 판정(2026-09-28)**: 켜졌다 — 조건부(no-anchor 29/32 · 24/28, 도구 부하 위의 at-risk — 결정 항목) — [리포트](benchmarks/phase7-window-scenarios.md) §2 → **처방(2026-09-28)**: dispatch 가 `delivery.route-departed` 를 소비하고 앵커 = 닿은 stop, 없으면 출발 — [ADR-072](adr/ADR-072-departure-is-an-anchor.md). 남는 창(다른 토픽의 순서)은 turbulent 실행의 수가 답한다 |
 | B2 | 편차 대조 허용 오차 60초 | ADR-048 ② | `dawnline_at_risk_deviation_mismatch_total` | 늘 0 이면 넓고, 늘 오르면 값이 뜻을 잃는다 → **7-4 판정(2026-09-28)**: 닫는다 — 60초 그대로 — [리포트](benchmarks/phase7-window-scenarios.md) §2 |
 | B4 | relocate 탐색 상한에 닿는가 | ADR-048 ⑤ | `dawnline_replan_total{outcome="truncated"}` + 설명 행의 `searchTruncated`(D4 — 7-4a 에서 만든다) | 「이득이 없다」와 「다 못 봤다」가 `no-gain` 한 라벨에 접혀 있었다 → **7-4 판정(2026-09-28)**: 닫는다 — truncated 0 — [리포트](benchmarks/phase7-window-scenarios.md) §2 |
 | B5 | `scan_after_cancel` 두 자리가 같은 비율로 오르는가 | ADR-047 ③ | `dawnline_scan_after_cancel_total` | 같으면 라벨이 아니라 이름을 가른다 → **7-4 판정(2026-09-28)**: 판정하지 못한다 — 취소가 없다 — [리포트](benchmarks/phase7-window-scenarios.md) §2 |

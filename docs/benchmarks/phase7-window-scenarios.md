@@ -141,6 +141,7 @@
    → **결정(2026-09-28)**: 재시도는 안전망으로 넣고, 교착은 쓰기 계층으로 없앤다 — 라우트 행 → `shipments`. 짝은 ETA 전파가 아니라 개정 반영이었다(스캔은 stop 순 · 개정은 주문 id 순, `ScanRevisionRaceIT` 로 재현) — [ADR-070](../adr/ADR-070-tracking-writes-lock-the-route-first.md).
 3. **`routes.status`(A31)** — 사건 시점에 쓰거나 칸을 지운다.
 4. **`no-anchor`(B1)** — dispatch 가 `route-departed` 의 소비자가 되는가, 아니면 도구 부하를 낮춘 실행(B14 와 같은 조건)으로 먼저 가르는가.
+   → **결정(2026-09-28)**: 소비한다 — 29/32 는 구조다(at-risk 는 출발 지연에서 첫 stop 전에 발화한다). 앵커 = 닿은 stop, 없으면 출발 — [ADR-072](../adr/ADR-072-departure-is-an-anchor.md).
 5. **HOT 손실(B11)** — BRIN 재측정, 또는 ETA 를 미는 갱신의 모양부터.
    → **결정(2026-09-28)**: 모양부터 — 편차를 라우트 행에 한 번(`deviation_seconds`), ETA 는 planned + 편차로 계산. 판정은 갱신 수 · 풀 대기로(HOT 은 `ix_ship_updated` 가 막는다). BRIN 은 그 뒤에도 남을 때만 — [ADR-070](../adr/ADR-070-tracking-writes-lock-the-route-first.md).
 6. **합쳐진 stop 을 가르는 동안의 배송(ADR-068 후속 C)** — ADR-047 의 「이벤트의 라우트에 있는 쪽 하나」를 두 stop 에 적도록 바꿀지.
