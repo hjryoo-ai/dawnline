@@ -2036,7 +2036,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A10 | `late-injection` → at-risk → 재계획 → revision 의 compose 전 구간(◐) · 5-4 의 두 서비스 잇기(◐) | Phase 5 대조표 · DoD | — (빈칸) | 로그·DB | 7-4 |
 | A11 | `rules:camp` 룰셋 캐시(⬜) | Phase 3 대조표 · `adapter/out/redis/package-info.java` | 부분 재계획이 룰을 라우트마다 읽어 룰 조회가 **보일 때** | 계획당 룰 조회 수·시간 | 7-4 |
 | A12 | ADR-008 확정 · 4-3 병렬화 이월 · ADR-035 게이트 | Phase 4 대조표 3·7 · ADR-035 | `peak` 에서 예산이 물리고 잘림의 대가 ≥ 1% | peak-day 의 계획 시간·열화 사유 | 데이터 7-4 · 문서 7-6 → **7-4 판정(2026-09-28)**: 닫는다 — 켜지지 않았다(80 계획 전부 FULL, 최장 16.6초) — [리포트](benchmarks/phase7-window-scenarios.md) §2 → **✅ 문서 7-6 (2026-09-28)**: [ADR-008](adr/ADR-008-no-virtual-threads-no-intra-plan-parallelism.md) — 가상 스레드도 계획 안의 병렬도 켜지 않는다, 이월을 수치와 함께(게이트 +0.83% · 7-4 전부 FULL) |
-| A13 | ADR-004 한정 실행(`timefold` · `medium` 한 개, 선택) | ADR-004 결정 4 | 7-6 에 여유가 있을 때 · 공정성 셋 | 벤치마크 | 7-6 |
+| A13 | ADR-004 한정 실행(`timefold` · `medium` 한 개, 선택) | ADR-004 결정 4 | 7-6 에 여유가 있을 때 · 공정성 셋 | 벤치마크 | 7-6 → **닫는다 (2026-09-28, 7-6 — 사용자 결정)**: 하지 않는다 — [ADR-004](adr/ADR-004-compare-against-the-boundary-not-another-solver.md) 그대로(다시 여는 조건 셋) |
 | A14 | 쓰이지 않은 ADR 넷 — 005(Phase 2 예정) · 010(Phase 3 예정) · 011(Phase 7 예정) · 012(Phase 6 예정) | `docs/adr/README.md` · §16 | — (「001–012 확정」) | — | 7-6 → **✅ 7-6 (2026-09-28)**: 넷 다 썼다 — [ADR-005](adr/ADR-005-redis-lock-coordinates-the-row-guarantees.md) · [ADR-010](adr/ADR-010-haversine-with-road-factor-no-osrm.md) · [ADR-011](adr/ADR-011-static-membership-documented-not-deployed.md)(문서만) · [ADR-012](adr/ADR-012-read-models-live-in-ops-api.md), 그리고 이월된 [ADR-008](adr/ADR-008-no-virtual-threads-no-intra-plan-parallelism.md). 계획의 문장이 아니라 구현된 사실에서 썼고, 설계서의 낡은 문장 셋을 고쳤다(§7.2 `lock:wave` 폴백 · §8.4 · §6.2 「캠프 설정값」) |
 | A15 | 카오스 셋 + 검증 SQL · ADR-027 의 `chaos-redis` 기준(**발행이 멈추지 않고 지연도 오르지 않는다** — 후속 정정의 기준) | 7-3 · ADR-027 재검토 지점 | — | 검증 SQL 세 줄 · `outbox_lag` | 7-3 — **7-3① 부분** (2026-09-26): 검증 표 V1–V7(`tools/chaos/verify.sh` — 세 줄에 셋을 더했다) · DB 장애 카오스(`make chaos-db`). `chaos-kafka` · `chaos-redis`(이 행의 기준) · `chaos-kill` 은 7-3②. **✅ 7-3②** (2026-09-26) `e84827e` — 넷 다 검증 표 ✅. `chaos-redis` 는 기준을 재기 전에 적었고(RB-03 §3) outbox 지연 최대 0.110초 ≤ 5초 · 장애 중에 검증 표 ✅(RB-03 §4). 검증 SQL 세 줄은 표의 V1(사유별) · V2 · V3 이 됐다 |
 | A16 | 리더 합이 **항상 1** — 인스턴스 둘 이상 · 열린 카운터 알림의 `unless … offset w` 가 인스턴스 라벨마다 판정한다(새로 뜬 인스턴스도 「새 시계열」) | ADR-027 · ADR-060 재검토 지점 | 인스턴스를 실제로 둘 이상 올릴 때 | `dawnline_outbox_leader` 의 인스턴스 합 · 인스턴스가 뜬 직후 첫 사건에서 열린 카운터 알림이 한 번 울리는가 | 7-4 |
@@ -2047,7 +2047,7 @@ Phase 0–3 = MVP(면접 데모 가능). Phase 4, 7 = Staff 레벨 차별화. Ph
 | A21 | 한 traceId 로 네 서비스 span · Tempo `metrics_generator`(서비스 그래프) | 7-2 · `deploy/compose/README.md` | — | 스크린샷 | 7-2 — **트레이스 ✅** `2c0e144` · `a3e59b6` · `afa521c` · `f981e0c` · `257af58` · `970acd5` · `ff86cfb` · `e6a9737`: outbox 를 지나는 한 줄(쓰기 · 발행 · 소비)이 처음으로 살았다 — 제공자는 `NONE` 하나뿐이었고 릴레이는 헤더를 자기 폴링의 트레이스로 덮었다(ADR-062, §13 축 13). 「한 traceId」는 이벤트 흐름상 성립하지 않아(계획은 웨이브가 시작한다) **`dawnline.wave_id` 속성의 TraceQL 한 줄**로 정정했고 Compose 스모크가 그 질의의 `service.name` 합집합에 코어 넷을 본다. **서비스 그래프 ✅** `e8a28a9` · `21a183d` · `9ea3095`: Tempo `service-graphs` → Prometheus remote-write → Grafana `serviceMap`. Compose 스모크가 코어 사이 간선(Kafka 의 발행 · 소비 쌍 — Tempo 2.9 가 `messaging_system` 간선을 만든다)이 긁히는지 본다(「양 끝이 코어 넷」으로 조였다가 #72 의 CI 에서 흔들려 되돌렸다 — §9.2) — TraceQL 과 독립된 둘째 증거이고, 템플릿 관측을 끈 음성 표본에서 트레이스는 이어진 채 이쪽만 빨갛다. 발견 하나는 §13 축 14(`a5458e4`). 스크린샷은 A24(7-6) |
 | A22 | 런북 — **계획서의 「RB-01~06」은 낡았다**: RB-05 는 있고(Phase 6) RB-07 이 §9.5 에 있다 | 7-5 · §9.5 | — | — | 7-5 ✅ `caa6043` · `6400ebf` — RB-01~04 · 06 · 07 과 **알림 14 × 대응 표**(`docs/runbooks/README.md`) · 알림 밖 절차 셋. 대조 검사 `RunbooksConsistencyTest`(표 ↔ 규칙 파일 ↔ §9.5, 첫 줄은 메트릭 · 로그 · SQL). 쓰며 드러난 셋: 보존 알림이 서비스를 접었다(`d27103c`) · 코어는 커맨드의 성공만 로그한다(§9.5 정정) · §8.4 의 `pause` 는 구현되지 않았다(RB-02 §3, 결정 필요) |
 | A23 | 포스트모템(가상 장애, 실제 측정치 기반) | 7-5 | 7-4 의 수치 | 7-4 리포트 | 7-5 — **7-4 뒤로** (2026-09-25): 런북은 7-3 · 7-4 보다 먼저 썼고 포스트모템은 「실제 측정치 기반」이라 peak-day 의 수치가 입력이다. 여는 조건 그대로 |
-| A24 | README — 그림 · 데모 GIF · Tempo 스크린샷 · 피크 SLO 표 · 카오스 결과 · 정시율 리포트 | README 「측정해서 채울 자리」 넷 | — | 7-2 · 7-3 · 7-4 | 7-6 |
+| A24 | README — 그림 · 데모 GIF · Tempo 스크린샷 · 피크 SLO 표 · 카오스 결과 · 정시율 리포트 | README 「측정해서 채울 자리」 넷 | — | 7-2 · 7-3 · 7-4 | 7-6 → **✅ 7-6 (2026-09-28)**: README 를 다시 썼다 — 10분 재현(`make up && make demo` 3분 24초 · CI Compose 스모크 8–9분) · 아키텍처 그림(Mermaid) · 벤치마크 표 + 알려진 레짐 · 창 시나리오 여섯 열 · 트레이스 스크린샷(다섯 서비스 한 트레이스) · 측정하는 방법 한 문단 · 범위 밖 표. 데모 GIF 는 만들지 않았다 — 스크린샷 하나와 `make demo` 의 출력이 그 자리다 |
 | A25 | release.yml(GHCR · SBOM) · CI 의 「컨테이너 이미지 빌드 (Phase 7)」 job · **ops-web 의 nginx 이미지는 따로**(ADR-057) · **sim-runner 이미지**(A27 에서 옮겼다 — 아래) | 7-7 · `ci.yml` · ADR-057 | — | — | 7-7 — sim-runner 이미지는 2026-09-27 에 A27 에서 왔다: **호스트 실행이 측정 경로**다(`make peak` → `tools/sim/peak.sh` 가 호스트에서 `bootRun`, 오프셋은 `build/sim-offset`). 이미지의 쓸모는 릴리스 · k8s 이고 7-4 의 측정에는 없다 |
 | A26 | (선택) `deploy/k8s` + kind 스모크 · ADR-011 static membership | 7-7 · ADR-011 | — | — | 7-7 |
 | A27 | **peak-day 의 전제** — 시나리오가 없다(`scenarios.yml` 은 smoke · tiny · ops-demo · late-injection), sim-runner 이미지는 꺼져 있다(「Phase 7 피크에서 다시 켠다」), `make peak` 은 자리표시다. 그리고 **부록 A 의 목록과 `scenarios.yml` 이 어긋난다** — `tiny`·`ops-demo` 는 목록에 없고, `late-injection` 은 목록이 「지연 15% · 실패 3%」, 파일이 `delay-probability: 1.0` · `failure-probability: 0.05` 다 | `tools/sim-runner` · `Makefile` · 부록 A | — | — | 7-4a — **sim-runner 이미지만 7-7 로**(A25, 2026-09-27 사용자 결정): 호스트 실행이 측정 경로라 이 경로에 이미지가 필요 없다 |
@@ -2127,8 +2127,8 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 | 파일 | 줄 | 행 |
 |---|---|---|
 | `.github/workflows/ci.yml` | 4 | A25 |
-| `README.md` | 8 | A4 · A22 · A23 · A24 · A27 |
-| `docs/DESIGN.md` | 11 | A1 · A2 · A8 · A13 · A14 · A26 · D2 · D7 |
+| `README.md` | 1 | A24 (2026-09-28 — README 를 다시 썼다. 남은 한 줄은 마감 대조표를 가리킨다) |
+| `docs/DESIGN.md` | 10 | A1 · A2 · A8 · A13 · A26 · D2 · D7 (A14 의 한 줄은 ADR-011 을 쓰며 사라졌다) |
 | `docs/IMPLEMENTATION_PLAN.md` | 20 | A1 · A2 · A3 · A4 · A5 · A9 · A10 · A11 · A12 · A13 · C · D5 · D7 |
 | `docs/adr/ADR-004-compare-against-the-boundary-not-another-solver.md` | 5 | A4 · A13 · C |
 | `docs/adr/ADR-020-cutoff-ownership-wave-grace-promise-revision.md` | 3 | A3 |
@@ -2139,7 +2139,7 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 | `docs/adr/ADR-033-constraint-classes.md` | 2 | C |
 | `docs/adr/ADR-052-delegation-client-is-generated-from-the-committed-contract.md` | 1 | A19 |
 | `docs/adr/ADR-057-map-draws-without-tiles-ops-web-is-an-nginx-image.md` | 1 | A25 |
-| `docs/adr/README.md` | 3 | A13 · A14 |
+| `docs/adr/README.md` | 2 | A13 (A14 의 한 줄은 ADR-011 을 쓰며 사라졌다) |
 | `docs/benchmarks/phase1-orders-k6.md` | 6 | A1 · A2 · C |
 | `docs/benchmarks/phase4-strategies.md` | 2 | A4 |
 | `services/dispatch-service/src/main/java/com/dawnline/dispatch/adapter/out/redis/package-info.java` | 1 | A11 |
