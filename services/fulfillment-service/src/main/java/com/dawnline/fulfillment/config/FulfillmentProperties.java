@@ -32,16 +32,26 @@ public record FulfillmentProperties(
      *                           <em>매번</em> 첫 시도가 실패하고, 재시도가 있어 동작은 하지만
      *                           그 실패 로그가 진짜 장애를 가리기 시작한다
      * @param zoneCacheTtl       {@code zone:geohash5:{p}} TTL (§7.2 기본 10분)
+     * @param connectTimeout     핫패스 연결의 <strong>연결 수립</strong>(TCP + 핸드셰이크) 예산 — Lettuce 의 {@code RedisURI.timeout}.
+     *                           명령 예산과 다른 질문이다(ADR-069): 하나로 두면 핸드셰이크를 50 ms 로 기다려 콜드 경로의 첫
+     *                           연결이 끊긴다(7-4 overload-day 의 {@code geo:fc} 폴백)
      */
     public record Redis(
             @DefaultValue("50ms") java.time.Duration commandTimeout,
             @DefaultValue("2s") java.time.Duration loadCommandTimeout,
-            @DefaultValue("10m") java.time.Duration zoneCacheTtl) {
+            @DefaultValue("10m") java.time.Duration zoneCacheTtl,
+            @DefaultValue("2s") java.time.Duration connectTimeout) {
 
         public Redis {
             requirePositive(commandTimeout, "dawnline.fulfillment.redis.command-timeout");
             requirePositive(loadCommandTimeout, "dawnline.fulfillment.redis.load-command-timeout");
             requirePositive(zoneCacheTtl, "dawnline.fulfillment.redis.zone-cache-ttl");
+            requirePositive(connectTimeout, "dawnline.fulfillment.redis.connect-timeout");
+            if (connectTimeout.compareTo(commandTimeout) < 0) {
+                // 연결이 명령보다 짧으면 정정 전과 같은 결함이다 — 핸드셰이크가 명령 하나보다 먼저 끊긴다.
+                throw new IllegalArgumentException(
+                        "dawnline.fulfillment.redis.connect-timeout 은 command-timeout 이상이어야 합니다");
+            }
         }
     }
 
