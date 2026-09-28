@@ -15,6 +15,8 @@ import com.dawnline.dispatch.domain.optimizer.RuleSet;
 import com.dawnline.dispatch.domain.optimizer.Stop;
 import com.dawnline.dispatch.domain.optimizer.StopMerger;
 import com.dawnline.dispatch.domain.optimizer.VehicleSpec;
+import com.dawnline.dispatch.domain.optimizer.rule.ShiftWindowRule;
+import com.dawnline.dispatch.domain.optimizer.rule.TimeWindowLimitRule;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -57,6 +59,12 @@ import org.junit.jupiter.params.provider.EnumSource;
  *       맞지 않았고, 기다림을 넣자 그 레짐에서 비용이 두 배가 됐다
  *       ([ADR-075](../../../../../docs/adr/ADR-075-promise-start-is-a-floor-vehicle-time-belongs-to-the-earlier-plan.md) 결정 1 —
  *       이 기준은 수치를 보기 전에 적었다).</li>
+ *   <li><strong>시간 축</strong> — 서비스 시간 합 + stop 당 이동 추정이 차량마다의 시간 슬롯 합의 <strong>80% 이하</strong>.
+ *       차량의 시간 슬롯은 {@code 약속창 끝 + 지각 한도 − 출발 − 캠프 왕복}이고, 이동 추정과 캠프 왕복은 시드 룰
+ *       {@code shift-window} 의 {@code legSeconds} · {@code depotLegsSeconds}, 지각 한도는 {@code late-hard-limit} 의 값이다 —
+ *       알고리즘에 기대지 않는 추정이고, 같은 값이 룰의 stop 상한도 낸다. 창이 셋이던 때는 약속창이 계획 시작 +10시간까지 퍼져
+ *       이 축이 물지 않았고, 그래서 기준에 없었다. 창이 하나(6시간)가 되자 무는 축이 됐다 — 두 번째 열의 미배정이 전부
+ *       {@code late-hard-limit} 였다(ADR-075 결정 1).</li>
  * </ul>
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
@@ -216,6 +224,54 @@ class DatasetFeasibilityTest {
                                 + "아니라 차량 부족에서 나온다",
                         dataset.cliName(), effective, stops.size(), averageWeight)
                 .isGreaterThanOrEqualTo(1.2d);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Dataset.class, mode = EnumSource.Mode.EXCLUDE, names = "OVERLOAD")
+    void 시간_축_수요가_약속창_안의_차량_시간의_80퍼센트를_넘지_않는다(Dataset dataset) {
+        TimeAxis axis = timeAxis(problem(dataset));
+
+        assertThat(axis.ratio())
+                .as("%s 시간 수요 %,d 초 / 80%% 시간 슬롯 %,d 초 — 넘으면 미배정이 알고리즘이 아니라 시간 부족에서 나온다"
+                        + "(late-hard-limit)", dataset.cliName(), axis.demandSeconds(), axis.slotSeconds())
+                .isLessThanOrEqualTo(1.0d);
+    }
+
+    /**
+     * 시간 축의 수요와 80% 슬롯.
+     *
+     * @param demandSeconds 서비스 시간 합 + stop 수 × {@code legSeconds}
+     * @param slotSeconds   차량마다 {@code (약속창 끝 + 지각 한도 − 출발 − depotLegsSeconds)} 의 합 × 0.8
+     */
+    record TimeAxis(long demandSeconds, long slotSeconds) {
+        double ratio() {
+            return (double) demandSeconds / slotSeconds;
+        }
+    }
+
+    /** 시드 룰에서 이동 추정 · 캠프 왕복 · 지각 한도를 읽어 시간 축을 잰다. 출발은 {@code max(계획 시작, 근무 시작)} 이다. */
+    static TimeAxis timeAxis(PlanningProblem problem) {
+        RuleSet seed = RuleSeed.load(RuleSeed.locate(), 1);
+        ShiftWindowRule.StopTime stopTime = seed.hardRules().stream()
+                .filter(ShiftWindowRule.class::isInstance).map(ShiftWindowRule.class::cast)
+                .map(ShiftWindowRule::stopTime).filter(java.util.Objects::nonNull).findFirst()
+                .orElseThrow(() -> new IllegalStateException("시드 룰에 shift-window 의 이동 추정이 없다"));
+        int hardLimitMinutes = seed.hardRules().stream()
+                .filter(TimeWindowLimitRule.class::isInstance).map(TimeWindowLimitRule.class::cast)
+                .mapToInt(TimeWindowLimitRule::hardLimitMinutes).findFirst()
+                .orElseThrow(() -> new IllegalStateException("시드 룰에 late-hard-limit 이 없다"));
+
+        List<Stop> stops = StopMerger.merge(problem.candidates());
+        long demand = stops.stream().mapToLong(Stop::serviceSeconds).sum() + (long) stops.size() * stopTime.legSeconds();
+        Instant end = problem.candidates().stream().map(c -> c.promised().end()).max(java.util.Comparator.naturalOrder())
+                .orElseThrow().plus(Duration.ofMinutes(hardLimitMinutes));
+        long slots = 0;
+        for (VehicleSpec vehicle : problem.vehicles()) {
+            Instant departure = vehicle.shift().start().isAfter(problem.startedAt())
+                    ? vehicle.shift().start() : problem.startedAt();
+            slots += Math.max(0L, Duration.between(departure, end).toSeconds() - stopTime.depotLegsSeconds());
+        }
+        return new TimeAxis(demand, Math.round(slots * STOP_HEADROOM));
     }
 
     // 창 기준은 MIXED_WINDOWS 를 빼는 방식으로 적는다 — 그 데이터셋의 «일부러 어긴다» 는
