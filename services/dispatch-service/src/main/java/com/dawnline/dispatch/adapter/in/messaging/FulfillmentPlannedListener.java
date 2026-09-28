@@ -2,6 +2,7 @@ package com.dawnline.dispatch.adapter.in.messaging;
 
 import com.dawnline.dispatch.application.port.in.LoadCandidateUseCase;
 import com.dawnline.messaging.EventEnvelope;
+import com.dawnline.messaging.idempotency.EventRejectedException;
 import com.dawnline.messaging.idempotency.IdempotentConsumer;
 import com.dawnline.messaging.json.EventJson;
 import com.dawnline.observability.MdcScope;
@@ -24,6 +25,12 @@ import tools.jackson.databind.JsonNode;
  * (§5.2 6단계, Phase 2-5-1). dispatch 에게는 <strong>계획할 것이 없다</strong>는 뜻이므로
  * 거부 카운터를 올리지 않는다 — 그 값은 "이벤트를 처리하지 못했다" 를 세는 것이지
  * "배차할 것이 없었다" 를 세는 것이 아니다.
+ *
+ * <h2>취소가 먼저 온 주문은 거부한다</h2>
+ * 유스케이스가 {@code CANCELLED_FIRST} 를 돌려주면 {@link EventRejectedException} 으로 번역한다 — 멱등 게이트가
+ * {@code dawnline_event_rejected_total{reason="cancelled_before_candidate"}} 로 세고 트랜잭션을 커밋한다(DLQ 아님, §4.6).
+ * 유스케이스는 아무것도 쓰지 않았으므로(넣기는 {@code ON CONFLICT DO NOTHING}, 확인은 읽기) 예외의 계약을 지킨다.
+ * fulfillment 의 {@code cancelled_before_placed} 와 짝이다(ADR-022 · ADR-074 결정 2).
  */
 public class FulfillmentPlannedListener {
 
@@ -32,6 +39,9 @@ public class FulfillmentPlannedListener {
 
     /** {@code processed_events.consumer} 값 (§8.5). 인스턴스마다 달라지면 멱등이 깨진다. */
     static final String CONSUMER = "dispatch-service";
+
+    /** 취소가 먼저 와 표식을 남긴 주문의 적재 거부 사유 (ADR-074). */
+    static final String CANCELLED_BEFORE_CANDIDATE = "cancelled_before_candidate";
 
     private static final Logger log = LoggerFactory.getLogger(FulfillmentPlannedListener.class);
 
@@ -72,8 +82,13 @@ public class FulfillmentPlannedListener {
                 .eventId(envelope.eventId())
                 .orderId(textOf(payload, "orderId"))
                 .waveId(textOf(payload, "waveId"))
-                .run(() -> consumer.runOnce(envelope, CONSUMER,
-                        () -> loadCandidate.load(FulfillmentPlannedPayload.toSnapshot(payload))));
+                .run(() -> consumer.runOnce(envelope, CONSUMER, () -> {
+                    LoadCandidateUseCase.Outcome outcome = loadCandidate.load(FulfillmentPlannedPayload.toSnapshot(payload));
+                    if (outcome == LoadCandidateUseCase.Outcome.CANCELLED_FIRST) {
+                        throw new EventRejectedException(CANCELLED_BEFORE_CANDIDATE,
+                                "취소가 먼저 온 주문입니다. orderId=" + textOf(payload, "orderId"));
+                    }
+                }));
     }
 
     /** 스냅샷을 만들기 전(멱등 판정 앞)이라 해석하지 않고 글자 그대로 싣는다 — 없으면 MDC · 스팬에 넣지 않는다. */

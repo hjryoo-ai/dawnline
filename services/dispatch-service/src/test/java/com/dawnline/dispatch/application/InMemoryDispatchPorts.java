@@ -155,9 +155,28 @@ final class InMemoryDispatchPorts {
 
         private final Map<UUID, DispatchCandidate> rows = new LinkedHashMap<>();
 
+        /** 취소 선착 표식 — 스냅샷이 없어 {@link #rows} 에 들지 않는다. PK 는 둘이 함께 쓴다(ADR-074). */
+        private final Map<UUID, Instant> cancelledFirst = new LinkedHashMap<>();
+
         @Override
         public boolean insertIfAbsent(DispatchCandidate candidate) {
+            if (cancelledFirst.containsKey(candidate.orderId())) {
+                return false;
+            }
             return rows.putIfAbsent(candidate.orderId(), candidate) == null;
+        }
+
+        @Override
+        public boolean insertCancelledFirst(UUID orderId, Instant cancelledAt) {
+            if (rows.containsKey(orderId)) {
+                return false;
+            }
+            return cancelledFirst.putIfAbsent(orderId, cancelledAt) == null;
+        }
+
+        /** 표식이 있는가 — 테스트가 행의 모양을 본다. */
+        boolean isCancelledFirst(UUID orderId) {
+            return cancelledFirst.containsKey(orderId);
         }
 
         @Override

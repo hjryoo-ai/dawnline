@@ -62,6 +62,15 @@ public class DispatchMetrics {
     /** {@code dawnline_event_stale_total} 의 {@code eventType} 태그 — 없는 라우트의 출발(ADR-072). */
     public static final String ROUTE_DEPARTED_EVENT_TYPE = "delivery.route-departed";
 
+    /**
+     * {@code dawnline_event_stale_total} 의 {@code consumer} 태그 — 취소 선착(ADR-074). 리스너의 {@code processed_events}
+     * 소비자 이름과 같다: 같은 경합의 뒤쪽({@code fulfillment.planned} 거부)을 멱등 게이트가 이 이름으로 세므로 둘이 한 질의에 든다.
+     */
+    public static final String CANCEL_CONSUMER = "dispatch-service";
+
+    /** {@code dawnline_event_stale_total} 의 {@code eventType} 태그 — 후보보다 먼저 온 취소(ADR-074). */
+    public static final String ORDER_CANCELLED_EVENT_TYPE = "order.cancelled";
+
     /** {@code dawnline_event_rejected_total} 의 {@code reason} 태그 — 모르는 상태값. */
     public static final String DELIVERY_STATUS_UNKNOWN_REASON = "unknown-delivery-status";
 
@@ -205,6 +214,18 @@ public class DispatchMetrics {
         DawnlineMeters.counter(registry, DawnlineMetrics.EVENT_STALE,
                 MessagingMetrics.TAG_CONSUMER, DELIVERY_STATUS_CONSUMER,
                 MessagingMetrics.TAG_EVENT_TYPE, ROUTE_DEPARTED_EVENT_TYPE)
+                .increment();
+    }
+
+    /**
+     * 후보보다 먼저 온 취소를 표식으로 흡수했다 (ADR-074 결정 2 — fulfillment 의 짝과 같은 배치, ADR-022).
+     *
+     * <p><strong>커밋 뒤에 부른다</strong> — {@link #deliveryStatusStale(int)} 와 같은 시점 규칙이다.
+     */
+    public void cancelledFirst() {
+        DawnlineMeters.counter(registry, DawnlineMetrics.EVENT_STALE,
+                MessagingMetrics.TAG_CONSUMER, CANCEL_CONSUMER,
+                MessagingMetrics.TAG_EVENT_TYPE, ORDER_CANCELLED_EVENT_TYPE)
                 .increment();
     }
 

@@ -36,9 +36,23 @@ class LoadCandidateServiceTest {
 
         private final Map<UUID, DispatchCandidate> rows = new LinkedHashMap<>();
 
+        /** 취소 선착 표식 — 스냅샷이 없어 {@link #rows} 에 들지 않는다(ADR-074). */
+        private final Map<UUID, Instant> cancelledFirst = new LinkedHashMap<>();
+
         @Override
         public boolean insertIfAbsent(DispatchCandidate candidate) {
+            if (cancelledFirst.containsKey(candidate.orderId())) {
+                return false;
+            }
             return rows.putIfAbsent(candidate.orderId(), candidate) == null;
+        }
+
+        @Override
+        public boolean insertCancelledFirst(UUID orderId, Instant cancelledAt) {
+            if (rows.containsKey(orderId)) {
+                return false;
+            }
+            return cancelledFirst.putIfAbsent(orderId, cancelledAt) == null;
         }
 
         @Override
@@ -139,6 +153,17 @@ class LoadCandidateServiceTest {
 
         assertThat(service.load(snapshot)).isEqualTo(LoadCandidateUseCase.Outcome.DUPLICATE);
         assertThat(repository.findPlannableInWave(snapshot.waveId())).hasSize(1);
+    }
+
+    @Test
+    void 취소가_먼저_온_주문은_적재하지_않는다() {
+        // ADR-074 결정 2 — 표식이 있으면 ON CONFLICT DO NOTHING 이 넣지 못하고, 그것은 재전달이 아니다.
+        PlannedOrderSnapshot snapshot = snapshot(Ids.newId());
+        repository.insertCancelledFirst(snapshot.orderId(), NOW);
+
+        assertThat(service.load(snapshot)).isEqualTo(LoadCandidateUseCase.Outcome.CANCELLED_FIRST);
+        assertThat(repository.findById(snapshot.orderId())).as("후보가 되지 않는다").isEmpty();
+        assertThat(repository.findPlannableInWave(snapshot.waveId())).isEmpty();
     }
 
     @Test
