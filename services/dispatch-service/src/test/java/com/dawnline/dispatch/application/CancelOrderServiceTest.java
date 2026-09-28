@@ -31,11 +31,11 @@ import org.junit.jupiter.api.Test;
 /**
  * 취소 처리 (DESIGN.md §6.10, ADR-026).
  *
- * <p>§6.10 의 표가 네 행이므로 여기에도 네 분기가 있어야 한다. 표를 코드로 옮겨 놓고 그중 셋만
+ * <p>§6.10 의 표가 다섯 행이므로 여기에도 다섯 분기가 있어야 한다(첫 행은 ADR-074 가 더했다). 표를 코드로 옮겨 놓고 그중 셋만
  * 시험하면 남은 하나는 "적혀 있지만 돌지 않는 분기" 가 된다.
  */
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
-@DisplayName("CancelOrderServiceTest — §6.10 네 분기")
+@DisplayName("CancelOrderServiceTest — §6.10 다섯 분기")
 class CancelOrderServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-09-06T01:00:00Z");
@@ -65,12 +65,86 @@ class CancelOrderServiceTest {
     // ------------------------------------------------------------ 표에 없는 입력
 
     @Test
-    void 후보가_아닌_주문의_취소는_아무것도_바꾸지_않는다() {
-        // fulfillment 가 배차 불가로 끝냈거나 아직 fulfillment.planned 가 오지 않았다.
-        CancelOrderUseCase.Outcome outcome = service.cancel(Ids.newId(), CANCELLED_AT);
+    void 후보보다_먼저_온_취소는_표식을_남긴다() {
+        // §6.10 첫 행, ADR-074 — 뒤에 온 fulfillment.planned 가 이 주문을 후보로 만들지 못하게 한다.
+        UUID orderId = Ids.newId();
 
-        assertThat(outcome).isEqualTo(CancelOrderUseCase.Outcome.NOT_A_CANDIDATE);
+        CancelOrderUseCase.Outcome outcome = service.cancel(orderId, CANCELLED_AT);
+
+        assertThat(outcome).isEqualTo(CancelOrderUseCase.Outcome.CANCELLED_FIRST);
+        assertThat(candidates.isCancelledFirst(orderId)).isTrue();
+        assertThat(candidates.findById(orderId)).as("표식은 후보가 아니다").isEmpty();
         assertThat(events.revised).isEmpty();
+    }
+
+    @Test
+    void 표식이_있는_주문의_취소는_이미_취소된_것이다() {
+        UUID orderId = Ids.newId();
+        service.cancel(orderId, CANCELLED_AT);
+
+        assertThat(service.cancel(orderId, CANCELLED_AT.plusSeconds(1)))
+                .isEqualTo(CancelOrderUseCase.Outcome.ALREADY_CANCELLED);
+    }
+
+    @Test
+    void 표식을_넣지_못하면_다시_읽어_그_사이_들어온_후보를_취소한다() {
+        // ADR-074 결정 4 — 두 리스너가 동시에 오면 PK 가 심판한다. 취소가 처음 읽을 때는 없던 후보가, 표식을 넣으려는
+        // 순간에는 커밋돼 있다. 넣지 못한 취소가 그대로 끝나면 그 후보는 PENDING 으로 남아 배송된다.
+        UUID orderId = Ids.newId();
+        DispatchCandidate racing = DispatchCandidate.load(orderId, Ids.newId(), CAMP_ID, null, NEAR,
+                10_000, 20_000, false, false, WINDOW, 60, false, 0, NOW);
+        CancelOrderService raced = new CancelOrderService(new LoadsWhileMarking(racing), routes, plans,
+                fleet, InMemoryDispatchPorts.rules(RuleSet.empty()),
+                events, new HaversineDistance(1.3d, 25.0d), metrics);
+
+        CancelOrderUseCase.Outcome outcome = raced.cancel(orderId, CANCELLED_AT);
+
+        assertThat(outcome).isEqualTo(CancelOrderUseCase.Outcome.CANDIDATE_CANCELLED);
+        assertThat(candidates.findById(orderId)).hasValueSatisfying(candidate ->
+                assertThat(candidate.status()).isEqualTo(CandidateStatus.CANCELLED));
+        assertThat(candidates.isCancelledFirst(orderId)).isFalse();
+    }
+
+    /** 표식을 넣으려는 순간 다른 리스너의 적재가 먼저 커밋된다 — 나머지는 {@link #candidates} 에 그대로 맡긴다. */
+    private final class LoadsWhileMarking
+            implements com.dawnline.dispatch.application.port.out.DispatchCandidateRepository {
+
+        private final DispatchCandidate racing;
+
+        private LoadsWhileMarking(DispatchCandidate racing) {
+            this.racing = racing;
+        }
+
+        @Override
+        public boolean insertCancelledFirst(UUID orderId, Instant cancelledAt) {
+            candidates.insertIfAbsent(racing);
+            return candidates.insertCancelledFirst(orderId, cancelledAt);
+        }
+
+        @Override
+        public boolean insertIfAbsent(DispatchCandidate candidate) {
+            return candidates.insertIfAbsent(candidate);
+        }
+
+        @Override
+        public java.util.Optional<DispatchCandidate> findById(UUID orderId) {
+            return candidates.findById(orderId);
+        }
+
+        @Override
+        public List<DispatchCandidate> findPlannableInWave(UUID waveId) {
+            return candidates.findPlannableInWave(waveId);
+        }
+
+        @Override
+        public void update(DispatchCandidate candidate) {
+            candidates.update(candidate);
+        }
+
+        @Override
+        public int recordPlanResult(java.util.Collection<UUID> orderIds, CandidateStatus target, Instant at) {
+            return candidates.recordPlanResult(orderIds, target, at);
+        }
     }
 
     @Test

@@ -303,6 +303,28 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
         assertThat(rows(stuck)).containsEntry("dispatch_candidates", 1L);
     }
 
+    @Test
+    void 취소_선착_표식은_웨이브가_없어_상한_줄이_지운다() {
+        // ADR-074 결정 5 — 웨이브 단위 삭제(wave_id = ?)는 표식을 고르지 못한다. 상한 줄의
+        // NOT EXISTS (… p.wave_id = c.wave_id) 가 NULL 에서 참이라는 해석이 표식을 지우는 유일한 자리다 —
+        // 문장을 고쳐 그 해석이 빠지면 표식은 영원히 남는다. 표식은 운영 경로(insertCancelledFirst)로 넣는다.
+        UUID old = Ids.newId();
+        UUID young = Ids.newId();
+        tx().executeWithoutResult(status -> {
+            candidates.insertCancelledFirst(old, NOW.minus(Duration.ofDays(366)));
+            candidates.insertCancelledFirst(young, NOW.minus(Duration.ofDays(364)));
+        });
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM dispatch_candidates WHERE order_id IN (?, ?) AND wave_id IS NULL", Long.class, old, young))
+                .as("전제 — 둘 다 웨이브 없는 표식이다").isEqualTo(2L);
+
+        DispatchRetentionCleaner.Deleted deleted = cleaner().deleteExpired();
+
+        assertThat(deleted.orphanCandidates()).isEqualTo(1);
+        assertThat(candidateExists(old)).isFalse();
+        assertThat(candidateExists(young)).as("늦은 fulfillment.planned 를 막는 동안은 남는다").isTrue();
+    }
+
     // ------------------------------------------------------------------ 계획 — 기존 인덱스
 
     @Test
@@ -498,9 +520,9 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
     private void insertCandidate(UUID orderId, UUID waveId, Instant at) {
         jdbc.update("""
                 INSERT INTO dispatch_candidates (order_id, wave_id, camp_id, lat, lng, geohash7, weight_g, volume_cm3,
-                                                 promised_start, promised_end, service_seconds, priority, status,
-                                                 created_at, updated_at)
-                VALUES (?, ?, ?, 37.64, 127.03, 'wydm9qw', 1, 1, ?, ?, 60, 0, 'PLANNED', ?, ?)
+                                                 requires_cold, hazmat, promised_start, promised_end, service_seconds,
+                                                 promise_revised, priority, status, created_at, updated_at)
+                VALUES (?, ?, ?, 37.64, 127.03, 'wydm9qw', 1, 1, false, false, ?, ?, 60, false, 0, 'PLANNED', ?, ?)
                 """, orderId, waveId, CAMP_ID, Timestamp.from(at), Timestamp.from(at.plus(Duration.ofHours(4))),
                 Timestamp.from(at), Timestamp.from(at));
     }
@@ -563,10 +585,11 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
                     """);
             jdbc.update("""
                     INSERT INTO dispatch_candidates (order_id, wave_id, camp_id, lat, lng, geohash7, weight_g,
-                                                     volume_cm3, promised_start, promised_end, service_seconds,
-                                                     priority, status, created_at, updated_at)
-                    SELECT gen_random_uuid(), p.wave_id, p.camp_id, 37.64, 127.03, 'wydm9qw', 1, 1, p.started_at,
-                           p.started_at, 60, 0, 'PLANNED', p.started_at, p.finished_at
+                                                     volume_cm3, requires_cold, hazmat, promised_start, promised_end,
+                                                     service_seconds, promise_revised, priority, status, created_at,
+                                                     updated_at)
+                    SELECT gen_random_uuid(), p.wave_id, p.camp_id, 37.64, 127.03, 'wydm9qw', 1, 1, false, false,
+                           p.started_at, p.started_at, 60, false, 0, 'PLANNED', p.started_at, p.finished_at
                       FROM route_plans p, generate_series(1, 20) k
                     """);
             jdbc.update("""

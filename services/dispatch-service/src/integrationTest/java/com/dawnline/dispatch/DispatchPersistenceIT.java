@@ -1,6 +1,7 @@
 package com.dawnline.dispatch;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.dawnline.common.GeoPoint;
 import com.dawnline.common.Ids;
@@ -13,6 +14,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -117,6 +120,152 @@ class DispatchPersistenceIT extends DispatchIntegrationTestBase {
         assertThat(loaded.serviceSeconds()).isEqualTo(120);
         assertThat(loaded.priority()).isEqualTo(2);
         assertThat(loaded.status()).isEqualTo(CandidateStatus.PENDING);
+    }
+
+    @Test
+    void 취소_선착_표식은_스냅샷_없이_들어가고_후보로_보이지_않는다() {
+        // ADR-074 결정 1 · 3 — 먼저 온 취소가 행을 만들고, 뒤에 온 적재는 그 행을 되살리지 않는다.
+        DispatchCandidate late = candidate(Ids.newId());
+        UUID orderId = late.orderId();
+
+        boolean marked = tx().execute(status -> candidates.insertCancelledFirst(orderId, NOW));
+        boolean again = tx().execute(status -> candidates.insertCancelledFirst(orderId, NOW));
+        boolean loaded = tx().execute(status -> candidates.insertIfAbsent(late));
+
+        assertThat(marked).isTrue();
+        assertThat(again).as("표식은 한 번").isFalse();
+        assertThat(loaded).as("뒤에 온 적재는 넣지 못한다 — 같은 PK").isFalse();
+        Optional<DispatchCandidate> found = tx().execute(status -> candidates.findById(orderId));
+        Object shape = tx().execute(status -> entityManager.createNativeQuery(
+                        "SELECT status || '|' || (wave_id IS NULL) FROM dispatch_candidates WHERE order_id = ?")
+                .setParameter(1, orderId).getSingleResult());
+        assertThat(found).as("스냅샷이 없는 행은 후보로 되살리지 않는다").isEmpty();
+        assertThat(shape).isEqualTo("CANCELLED|true");
+    }
+
+    @Test
+    void 후보가_먼저_있으면_표식을_넣지_않는다() {
+        // 결정 4 — 두 리스너의 경합을 PK 가 심판한다. 표식을 넣지 못한 취소는 다시 읽어 후보를 취소한다.
+        DispatchCandidate saved = candidate(Ids.newId());
+        tx().executeWithoutResult(status -> candidates.insertIfAbsent(saved));
+
+        boolean marked = tx().execute(status -> candidates.insertCancelledFirst(saved.orderId(), NOW));
+
+        assertThat(marked).isFalse();
+        Optional<DispatchCandidate> found = tx().execute(status -> candidates.findById(saved.orderId()));
+        assertThat(found).hasValueSatisfying(candidate ->
+                assertThat(candidate.status()).isEqualTo(CandidateStatus.PENDING));
+    }
+
+    /**
+     * 행의 모양은 둘뿐이다 — 스냅샷 칸이 전부 있거나, {@code CANCELLED} 이고 전부 없다(V15 CHECK, ADR-074 결정 3).
+     *
+     * <p>스냅샷 칸을 <strong>열거하지 않는다</strong> — 표의 칸 전부에서 {@link #NOT_SNAPSHOT} 을 뺀다. 칸이 늘면 이 테스트가
+     * 그 칸의 값을 몰라 실패하고({@link #SAMPLE}), CHECK 에 넣지 않았으면 그 칸만 비운 행이 들어가 실패한다(재검토 지점 1).
+     */
+    @Test
+    void 행의_모양은_스냅샷_전부와_취소_선착_표식_둘뿐이다() {
+        List<String> snapshot = snapshotColumns();
+        assertThat(insertRaw("PENDING", full(snapshot))).as("전제 — 온전한 스냅샷 행은 들어간다").isNull();
+        assertThat(insertRaw("CANCELLED", empty(snapshot))).as("전제 — 표식은 들어간다").isNull();
+
+        for (String column : snapshot) {
+            Map<String, String> missing = full(snapshot);
+            missing.put(column, "NULL");
+            assertThat(insertRaw("PENDING", missing)).as("스냅샷 행에서 %s 하나만 비웠다", column)
+                    .hasStackTraceContaining(SHAPE_CHECK);
+            Map<String, String> filled = empty(snapshot);
+            filled.put(column, SAMPLE.get(column));
+            assertThat(insertRaw("CANCELLED", filled)).as("표식에 %s 하나만 채웠다", column)
+                    .hasStackTraceContaining(SHAPE_CHECK);
+        }
+        Map<String, String> zoned = empty(snapshot);
+        zoned.put("zone_id", "'" + Ids.newId() + "'");
+        assertThat(insertRaw("CANCELLED", zoned)).as("표식의 권역도 모른다").hasStackTraceContaining(SHAPE_CHECK);
+        assertThat(insertRaw("PENDING", empty(snapshot))).as("스냅샷 없는 행은 취소 선착뿐이다")
+                .hasStackTraceContaining(SHAPE_CHECK);
+    }
+
+    @Test
+    void 스냅샷에서_뺀_칸은_NOT_NULL_이거나_zone_id_다() {
+        // 위 테스트가 뺀 칸이 왜 빠졌는지 — 행의 신원 · 상태 · 시각은 두 모양 모두 가지므로 NOT NULL 이 지키고,
+        // zone_id 는 스냅샷 행에서도 NULL 일 수 있어(지오코딩 실패) 표식 쪽 CHECK 에서만 본다(위 테스트의 「표식의 권역」).
+        Map<String, String> nullable = new java.util.TreeMap<>();
+        List<?> rows = tx().execute(status -> entityManager.createNativeQuery("""
+                        SELECT column_name || '|' || is_nullable FROM information_schema.columns
+                         WHERE table_name = 'dispatch_candidates'""").getResultList());
+        for (Object row : java.util.Objects.requireNonNull(rows, "rows")) {
+            String[] parts = ((String) row).split("\\|");
+            nullable.put(parts[0], parts[1]);
+        }
+        assertThat(nullable).containsKeys(NOT_SNAPSHOT.toArray(String[]::new));
+        NOT_SNAPSHOT.stream().filter(column -> !column.equals("zone_id")).forEach(column ->
+                assertThat(nullable.get(column)).as("%s 는 두 모양 모두 가진다", column).isEqualTo("NO"));
+        assertThat(nullable.get("zone_id")).isEqualTo("YES");
+    }
+
+    private static final String SHAPE_CHECK = "ck_cand_snapshot_or_cancelled_first";
+
+    /** 스냅샷이 아닌 칸 — 까닭은 {@code 스냅샷에서_뺀_칸은_NOT_NULL_이거나_zone_id_다} 가 본다. */
+    private static final List<String> NOT_SNAPSHOT =
+            List.of("order_id", "status", "version", "created_at", "updated_at", "zone_id");
+
+    /** 스냅샷 칸의 표본 값(SQL 리터럴). DB 왕복만 하는 픽스처라 시각 리터럴이어도 된다(CLAUDE.md). */
+    private static final Map<String, String> SAMPLE = Map.ofEntries(
+            Map.entry("wave_id", "'" + Ids.newId() + "'"),
+            Map.entry("camp_id", "'" + Ids.newId() + "'"),
+            Map.entry("lat", "37.500000"),
+            Map.entry("lng", "127.000000"),
+            Map.entry("geohash7", "'wydm9qy'"),
+            Map.entry("weight_g", "1"),
+            Map.entry("volume_cm3", "1"),
+            Map.entry("requires_cold", "false"),
+            Map.entry("hazmat", "false"),
+            Map.entry("promised_start", "'2026-09-06T01:00:00Z'"),
+            Map.entry("promised_end", "'2026-09-06T05:00:00Z'"),
+            Map.entry("service_seconds", "60"),
+            Map.entry("promise_revised", "false"),
+            Map.entry("priority", "0"));
+
+    private List<String> snapshotColumns() {
+        List<?> columns = tx().execute(status -> entityManager.createNativeQuery("""
+                        SELECT column_name FROM information_schema.columns
+                         WHERE table_name = 'dispatch_candidates' ORDER BY ordinal_position""").getResultList());
+        List<String> snapshot = java.util.Objects.requireNonNull(columns, "columns").stream().map(String.class::cast)
+                .filter(column -> !NOT_SNAPSHOT.contains(column)).toList();
+        assertThat(snapshot).as("전제 — 스냅샷 칸이 있다").isNotEmpty();
+        return snapshot;
+    }
+
+    private static Map<String, String> full(List<String> snapshot) {
+        Map<String, String> values = new java.util.LinkedHashMap<>();
+        for (String column : snapshot) {
+            assertThat(SAMPLE).as("스냅샷 칸 %s 의 표본 값을 이 테스트가 모른다 — CHECK 와 SAMPLE 에 함께 더한다", column)
+                    .containsKey(column);
+            values.put(column, SAMPLE.get(column));
+        }
+        return values;
+    }
+
+    private static Map<String, String> empty(List<String> snapshot) {
+        Map<String, String> values = new java.util.LinkedHashMap<>();
+        snapshot.forEach(column -> values.put(column, "NULL"));
+        return values;
+    }
+
+    /** 한 행을 제 트랜잭션에서 넣는다 — 거절되면 그 예외, 들어가면 {@code null}. */
+    private @Nullable Throwable insertRaw(String status, Map<String, String> snapshot) {
+        Map<String, String> row = new java.util.LinkedHashMap<>();
+        row.put("order_id", "'" + Ids.newId() + "'");
+        row.put("status", "'" + status + "'");
+        row.put("version", "0");
+        row.put("created_at", "'" + NOW + "'");
+        row.put("updated_at", "'" + NOW + "'");
+        row.putAll(snapshot);
+        String sql = "INSERT INTO dispatch_candidates (" + String.join(", ", row.keySet()) + ") VALUES ("
+                + String.join(", ", row.values()) + ")";
+        return catchThrowable(() -> tx().executeWithoutResult(transaction ->
+                entityManager.createNativeQuery(sql).executeUpdate()));
     }
 
     @Test
@@ -253,10 +402,11 @@ class DispatchPersistenceIT extends DispatchIntegrationTestBase {
         tx().executeWithoutResult(status -> entityManager.createNativeQuery("""
                 INSERT INTO dispatch_candidates
                        (order_id, wave_id, camp_id, lat, lng, geohash7, weight_g, volume_cm3,
-                        promised_start, promised_end, service_seconds, status, created_at, updated_at)
+                        requires_cold, hazmat, promised_start, promised_end, service_seconds,
+                        promise_revised, priority, status, created_at, updated_at)
                 SELECT gen_random_uuid(), coalesce(cast(:waveId as uuid), gen_random_uuid()),
                        gen_random_uuid(), 37.497900, 127.027600, 'wydm9qy', 1234, 5678,
-                       :now, :promisedEnd, 120, 'PENDING', :now, :now
+                       false, false, :now, :promisedEnd, 120, false, 0, 'PENDING', :now, :now
                   FROM generate_series(1, :count)
                 """)
                 .setParameter("waveId", waveId == null ? null : waveId.toString())
