@@ -2295,6 +2295,9 @@ Phase 3 의 §6.10 넷째 분기). ⬜(미구현)는 대상이 아니다 — 대
 4. 피크 시나리오 `peak-day` 실행·측정: 주문 API p99, outbox 지연, 소비자 랙, 계획 시간, FAST 전환 횟수 → `docs/benchmarks/<date>-peak.md`.
    **→ 네 시나리오 각 한 번 ✅ (2026-09-27–28) — [7-4 리포트](benchmarks/phase7-window-scenarios.md)**(`peak-day` 3차 · `overload-day` · `normal-day` · `cold-heavy`, A · B 행 판정은 그 §2).
    **다섯째 `peak-day-turbulent`(취소 · 지연 · 실패) ✅ (2026-09-28)** — 여섯 행의 판정과 처방의 수는 그 §2.1.
+   **✅ 7-4 마감 (2026-09-28)** — 실행을 더 만들지 않았다(결정 항목 9): 여는 실행이 없던 셋을 IT 와 그림자로 판정했다 —
+   A33 재현 IT + 수정(ADR-067 후속) · B5 IT(두 자리는 한 스캔을 나눠 센다) · B10 그림자(FAST 두 번째 재삽입 0 stop, [측정](benchmarks/phase7-fast-second-repair.md)).
+   이 실행들이 연 결함 둘은 따로 닫는다 — 후보보다 먼저 온 취소(A37, ADR-074 · V9)와 한 차량의 이중 배정(결정 항목 8 — 대기 · 차량 점유, 재기준과 함께).
    **같은 물량을 `overload-day` 로 한 번 더**(D2) — 열화 사다리 · 미배정 정책 · 계획 시간 상한의 판정 데이터. **`normal-day`
    열을 옆에 둔다.** 측정 헤더에 한 줄: **콜드 스택에서 시작했다**, 첫 계획·첫 소비 처리량은 정상 상태와 갈라 적는다(D1).
    증차 뒤의 운영자 커맨드(D3)로 감사 행(`ADD_VEHICLE` · `CLOSE_WAVE` · `REASSIGN_STOP` · `DEACTIVATE_VEHICLE`)이 0 이 아니고,
