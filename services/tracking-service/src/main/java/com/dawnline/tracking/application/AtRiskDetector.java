@@ -73,7 +73,7 @@ public class AtRiskDetector {
         Objects.requireNonNull(propagation, "propagation");
 
         List<Shipment> remaining = propagation.remaining();
-        if (remaining.stream().noneMatch(shipment -> shipment.isAtRisk(margin))) {
+        if (remaining.stream().noneMatch(shipment -> shipment.isAtRisk(margin, propagation.deviation()))) {
             // 위험이 없거나, 방금 사라졌다. 어느 쪽이든 이벤트는 나가지 않는다 — 위 비대칭.
             return false;
         }

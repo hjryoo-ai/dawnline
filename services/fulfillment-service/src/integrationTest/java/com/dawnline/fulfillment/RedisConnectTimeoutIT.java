@@ -8,6 +8,10 @@ import com.dawnline.fulfillment.adapter.out.redis.RedisConnectionWarmup;
 import com.dawnline.fulfillment.config.FulfillmentProperties;
 import com.dawnline.fulfillment.config.RedisTimeoutConfig;
 import com.redis.testcontainers.RedisContainer;
+import java.io.IOException;
+import java.net.Socket;
+import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -114,7 +118,8 @@ class RedisConnectTimeoutIT {
     @Test
     void Redis_가_없으면_선연결은_실패를_말하고_던지지_않는다() {
         runner().run(context -> {
-            proxy.close();
+            proxy.refuseConnections();
+            assertThat(answers(proxy)).as("전제 — 프록시가 연결을 받자마자 끊는다(포트는 쥐고 있다)").isFalse();
 
             assertThat(context.getBean(RedisConnectionWarmup.class).connect())
                     .as("레디니스 조건이 아니다 — 기동을 막지 않는다(ADR-016)").isFalse();
@@ -134,5 +139,16 @@ class RedisConnectTimeoutIT {
             assertThat(afterWarmup).as("전제 — 선연결이 연결을 열었다").isEqualTo(1);
             assertThat(proxy.acceptedConnections()).as("명령이 새 연결을 열지 않았다").isEqualTo(afterWarmup);
         });
+    }
+
+    /** 연결해서 한 줄을 보내고, 무엇이든 돌아오면 참이다 — 받자마자 끊는 프록시는 EOF 를 준다. */
+    private static boolean answers(DelayingTcpProxy proxy) throws IOException {
+        try (Socket socket = new Socket(proxy.host(), proxy.port())) {
+            socket.setSoTimeout(2_000);
+            socket.getOutputStream().write("PING\r\n".getBytes(StandardCharsets.US_ASCII));
+            return socket.getInputStream().read() >= 0;
+        } catch (SocketException reset) {
+            return false;
+        }
     }
 }

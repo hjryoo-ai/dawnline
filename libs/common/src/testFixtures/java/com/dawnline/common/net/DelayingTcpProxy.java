@@ -23,6 +23,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@link #delayReplies} 는 모든 응답(명령)을 늦춘다. 앞의 것이 「콜드 경로의 느린 연결 수립, 그 뒤의 명령은 정상」을 흉내 낸다. 새 라이브러리(Toxiproxy)를 들이지 않는 이유는 필요한 것이 이 한 가지뿐이기 때문이다(CLAUDE.md 「새 라이브러리 최소화」).
  *
  * <p>받은 연결 수를 센다 — 「선연결한 연결을 명령이 그대로 쓴다」를 보는 자리다.
+ *
+ * <p>「서버가 없다」는 {@link #refuseConnections} 로 만든다 — 프록시를 닫지 않는다. 닫으면 포트가 풀리고, 병렬로 도는 다른 테스트
+ * JVM 이 같은 루프백 포트를 다시 잡을 수 있다 — 그러면 「없는 서버」에 무언가가 대답한다.
  */
 public final class DelayingTcpProxy implements AutoCloseable {
 
@@ -33,6 +36,7 @@ public final class DelayingTcpProxy implements AutoCloseable {
     private final List<Socket> sockets = new CopyOnWriteArrayList<>();
     private volatile Duration replyDelay = Duration.ZERO;
     private volatile Duration firstReplyDelay = Duration.ZERO;
+    private volatile boolean refusing;
 
     private DelayingTcpProxy(String upstreamHost, int upstreamPort) throws IOException {
         this.upstreamHost = Objects.requireNonNull(upstreamHost, "upstreamHost");
@@ -84,6 +88,14 @@ public final class DelayingTcpProxy implements AutoCloseable {
         this.firstReplyDelay = Objects.requireNonNull(delay, "delay");
     }
 
+    /**
+     * 포트는 쥔 채 서버를 없앤다 — 열린 연결을 끊고, 이후의 연결은 받자마자 끊는다.
+     */
+    public void refuseConnections() {
+        this.refusing = true;
+        closeSockets();
+    }
+
     /** @return 지금까지 받은 클라이언트 연결 수 */
     public int acceptedConnections() {
         return accepted.get();
@@ -96,6 +108,10 @@ public final class DelayingTcpProxy implements AutoCloseable {
         } catch (IOException ignored) {
             // 닫는 중이다.
         }
+        closeSockets();
+    }
+
+    private void closeSockets() {
         for (Socket socket : sockets) {
             try {
                 socket.close();
@@ -110,6 +126,10 @@ public final class DelayingTcpProxy implements AutoCloseable {
             try {
                 Socket client = server.accept();
                 accepted.incrementAndGet();
+                if (refusing) {
+                    client.close();
+                    continue;
+                }
                 Socket upstream = new Socket();
                 upstream.connect(new InetSocketAddress(upstreamHost, upstreamPort), 5_000);
                 client.setTcpNoDelay(true);
