@@ -136,6 +136,27 @@ class OrderTest {
     }
 
     @Test
+    void 취소된_주문은_종결이라_갱신_시각이_취소_시각에_머문다() {
+        // tools/chaos/verify.sh 의 V9 가 orders.updated_at 을 취소 시각으로 읽는다(ADR-074). 종결 뒤의 어떤 변경도
+        // 그 칸을 움직이면 V9 는 늦은 이벤트의 시각을 취소 시각으로 잘못 가른다.
+        Order order = placed();
+        Instant cancelledAt = PLACED_AT.plusSeconds(10);
+        order.cancel(cancelledAt);
+        Instant later = cancelledAt.plusSeconds(3600);
+
+        List<Runnable> attempts = List.of(
+                () -> order.markPlanned(later), () -> order.markDispatched(later), () -> order.markDelivered(later),
+                () -> order.markFailed(later), () -> order.markUnserviceable("NO_ZONE_MATCH", later),
+                () -> order.cancel(later),
+                () -> order.revisePromise(PromisedWindow.of(later, later.plus(Duration.ofHours(4)), ServiceTier.DAWN),
+                        later));
+        for (Runnable attempt : attempts) {
+            assertThatThrownBy(attempt::run).isInstanceOf(IllegalStateTransitionException.class);
+        }
+        assertThat(order.updatedAt()).isEqualTo(cancelledAt);
+    }
+
+    @Test
     void DISPATCHED_이후에는_취소가_거부된다() {
         Order order = placed();
         order.markPlanned(PLACED_AT.plusSeconds(60));
