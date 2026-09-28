@@ -144,3 +144,4 @@
 5. **HOT 손실(B11)** — BRIN 재측정, 또는 ETA 를 미는 갱신의 모양부터.
    → **결정(2026-09-28)**: 모양부터 — 편차를 라우트 행에 한 번(`deviation_seconds`), ETA 는 planned + 편차로 계산. 판정은 갱신 수 · 풀 대기로(HOT 은 `ix_ship_updated` 가 막는다). BRIN 은 그 뒤에도 남을 때만 — [ADR-070](../adr/ADR-070-tracking-writes-lock-the-route-first.md).
 6. **합쳐진 stop 을 가르는 동안의 배송(ADR-068 후속 C)** — ADR-047 의 「이벤트의 라우트에 있는 쪽 하나」를 두 stop 에 적도록 바꿀지.
+   → **결정(2026-09-28)**: ADR-047 의 원칙은 그대로 — 확인해 보니 stop 단위 상태가 그 stop 의 어느 주문에도 전체를 덮는 둘째 출처였다(재현됨). 사실을 주문의 행에 적고 stop 은 그 주문들에서 다시 센다 — [ADR-071](../adr/ADR-071-delivery-facts-live-on-the-order-row.md).

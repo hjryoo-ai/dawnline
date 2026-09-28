@@ -405,7 +405,11 @@ class DispatchAdminIT extends DispatchIntegrationTestBase {
         TwoRoutes routes = twoRoutes();
         UUID stopId = tx().execute(status -> mutations.findStopOf(routes.fromRouteId(), routes.orderId()))
                 .orElseThrow();
-        tx().executeWithoutResult(status -> mutations.markStopStatus(stopId, current, PlanningClock.PLAN_AT));
+        // stop 의 상태를 그 자리에 둔다 — 보는 것은 재배정의 가드가 읽는 stop 의 상태다(쓰기 경로는 DeliveryFactPerOrderIT 가 본다).
+        tx().executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE route_stops SET status = ?, actual_at = ? WHERE id = ?")
+                .setParameter(1, current.name()).setParameter(2, PlanningClock.PLAN_AT).setParameter(3, stopId)
+                .executeUpdate());
 
         assertThatThrownBy(() -> reassign.reassign(routes.fromRouteId(), routes.orderId(), routes.toRouteId()))
                 .isInstanceOfSatisfying(DomainException.class, e -> {
