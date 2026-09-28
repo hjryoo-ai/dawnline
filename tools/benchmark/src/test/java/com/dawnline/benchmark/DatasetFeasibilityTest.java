@@ -91,14 +91,14 @@ class DatasetFeasibilityTest {
      */
     private static final double STOP_HEADROOM = FleetFeasibility.HEADROOM_PERCENT / 100.0d;
 
-    /** {@code overload} 의 선언 — 무는 축(stop)의 수요가 80% 슬롯의 몇 배인가 (ADR-075 결정 1). */
-    private static final double OVERLOAD_STOP_RATIO = 1.5d;
+    /** {@code overload} 의 선언 — 무는 축(시간)의 수요가 80% 슬롯의 몇 배인가 (ADR-075 결정 1). */
+    private static final double OVERLOAD_RATIO = 1.5d;
 
     // 실현 가능성 기준은 OVERLOAD 를 <strong>빼는 방식</strong>으로 적는다(EXCLUDE), 드는
     // 방식이 아니라 — 데이터셋이 새로 생기면 자동으로 검사 대상이 되어야 한다. 드는 방식이던
     // 2026-09-12 까지 `peak` 이 목록에 없었고, 그래서 stop 8,411 개가 슬롯 7,200 개를 넘는다는
     // 사실을 아무도 보지 못했다(창이 셋이던 때의 수 — ADR-075 뒤로 stop 은 5,811 이다). OVERLOAD 의 «일부러 어긴다» 는
-    // overload_는_stop_기준을_일부러_어긴다() 가 따로 말한다.
+    // overload_는_시간_기준을_일부러_어긴다() 가 따로 말한다.
 
     /** 아무 능력도 요구하지 않는 조합 — 그 stop 축이 전체 stop 수 대 전체 슬롯이다. */
     private static final FleetFeasibility.Combination GENERAL = new FleetFeasibility.Combination(false, false, false);
@@ -291,7 +291,7 @@ class DatasetFeasibilityTest {
     /**
      * {@code mixed-windows} 는 <strong>창 기준을 어기는 것이 목적</strong>이다 — 그 사실을 테스트가 스스로 말한다.
      *
-     * <p>{@link #overload_는_stop_기준을_일부러_어긴다} 와 같은 이유다: 말하지 않으면 다음 사람이 결함으로 보고 «고치거나»(창을
+     * <p>{@link #overload_는_시간_기준을_일부러_어긴다} 와 같은 이유다: 말하지 않으면 다음 사람이 결함으로 보고 «고치거나»(창을
      * 하나로 — 시각을 보지 않는 줄 세우기의 약점을 보는 자리가 사라진다), 기본 레짐으로 읽어 비교표의 같은 절에 싣는다.
      */
     @org.junit.jupiter.api.Test
@@ -314,47 +314,58 @@ class DatasetFeasibilityTest {
      * (차량을 늘린다) — 그러면 과부하 거동을 재는 자리가 사라진다. ② 반대로 누군가 이것을
      * 정상 데이터셋으로 읽고 §6.9 비교표에 같은 절로 싣는다 — 그러면 표가 재는 것이 라우팅
      * 품질이 아니라 용량이 된다.
+     *
+     * <p>어기는 축은 <strong>시간</strong>이다(2026-09-28, ADR-075 결정 1). 창이 셋이던 때는 stop 이었다.
      */
     @org.junit.jupiter.api.Test
-    void overload_는_stop_기준을_일부러_어긴다() {
-        Line general = assess(problem(Dataset.OVERLOAD)).line(GENERAL).orElseThrow();
+    void overload_는_시간_기준을_일부러_어긴다() {
+        PlanningProblem overload = problem(Dataset.OVERLOAD);
+        TimeAxis axis = timeAxis(overload);
 
-        assertThat((double) general.demand().stops() / general.capacity().stops())
-                .as("overload stop %,d / 슬롯 %,d — 이 데이터셋의 존재 이유가 «다 못 싣는다» 다. "
-                                + "이 어설션이 깨졌다면 차량을 늘린 것이고, 그건 도구를 없앤 것이다",
-                        general.demand().stops(), general.capacity().stops())
-                .isGreaterThan(STOP_HEADROOM);
-        assertThat(general.status()).as("같은 판정을 증차의 계산이 «부족» 으로 읽는다")
-                .isNotEqualTo(FleetFeasibility.Status.FEASIBLE);
-        assertThat(problem(Dataset.OVERLOAD).candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
+        assertThat(axis.ratio())
+                .as("overload 시간 수요 %,d / 80%% 슬롯 %,d 초 — 이 데이터셋의 존재 이유가 «다 못 싣는다» 다. "
+                        + "이 어설션이 깨졌다면 차량을 늘린 것이고, 그건 도구를 없앤 것이다", axis.demandSeconds(), axis.slotSeconds())
+                .isGreaterThan(1.0d);
+        assertThat(overload.candidates()).as("peak 과 같은 주문 수 — 차이는 대수뿐이다")
                 .hasSameSizeAs(problem(Dataset.PEAK).candidates());
     }
 
     /**
-     * {@code overload} 의 대수는 <strong>선언한 비율</strong>에서 나온다 — 무는 축(stop)의 수요가 80% 슬롯의 1.5배
-     * (ADR-075 결정 1). 정수 대수로는 그 비율을 넘지 않는 최소 대수이고, 한 대 적으면 넘는다. 처음 판의 60대는 비율이 아니라
-     * 결과(옛 통합 위의 146%)였고, 통합이 바뀌자 그 결과가 101% 로 조용히 변했다.
+     * <strong>운영의 증차 계산은 시간 축을 보지 않는다</strong> — 알려진 공백을 테스트가 고정한다(원장 A40).
      *
-     * <p>그리고 중량도 원래 용량을 넘는다 — 「다 못 싣는다」가 한 축에서 겨우가 아니라 두 축에서 참이다.
+     * <p>{@link FleetFeasibility}(ADR-067 — 성수기 증차의 대수)는 제약 조합 × (stop · 중량 · 부피)만 본다. 시간으로 못 싣는
+     * {@code overload} 를 그 계산은 «충분» 으로 읽는다. 공백을 구현하지 않기로 했으므로(포트폴리오 범위 밖 — 다시 여는 조건은 원장),
+     * 그 사실이 조용히 바뀌지 않게 여기 적는다: 누군가 시간 축을 넣으면 이 테스트가 빨개지고, 그때 원장 행을 닫는다.
+     */
+    @org.junit.jupiter.api.Test
+    void 운영의_증차_계산은_시간으로_못_싣는_웨이브를_충분으로_읽는다() {
+        PlanningProblem overload = problem(Dataset.OVERLOAD);
+
+        assertThat(timeAxis(overload).ratio()).as("전제: 시간으로는 못 싣는다").isGreaterThan(1.0d);
+        assertThat(assess(overload).line(GENERAL).orElseThrow().status())
+                .as("FleetFeasibility 에는 시간 축이 없다 — 원장 A40")
+                .isEqualTo(FleetFeasibility.Status.FEASIBLE);
+    }
+
+    /**
+     * {@code overload} 의 대수는 <strong>선언한 비율</strong>에서 나온다 — 무는 축의 수요가 80% 슬롯의 1.5배
+     * (ADR-075 결정 1). 무는 축은 시간이다. 정수 대수로는 그 비율을 넘지 않는 최소 대수이고, 한 대 적으면 넘는다.
+     * 처음 판의 60대는 비율이 아니라 결과(옛 통합 위에서 stop 146%)였고, 통합이 바뀌자 그 결과가 조용히 변했다.
      */
     @org.junit.jupiter.api.Test
     void overload_의_대수는_무는_축의_수요가_80퍼센트_슬롯의_1_5배가_되는_최소_대수다() {
         PlanningProblem problem = problem(Dataset.OVERLOAD);
+        TimeAxis axis = timeAxis(problem);
         int vehicles = problem.vehicles().size();
-        long stops = assess(problem).line(GENERAL).orElseThrow().demand().stops();
-        double slotsPerVehicle = STOP_HEADROOM * MAX_STOPS;
+        double perVehicle = (double) axis.slotSeconds() / vehicles;
 
-        assertThat(stops / (slotsPerVehicle * vehicles))
-                .as("overload stop %,d / 80%% 슬롯 %,.0f (차량 %d) — 선언은 1.5배다", stops, slotsPerVehicle * vehicles, vehicles)
-                .isLessThanOrEqualTo(OVERLOAD_STOP_RATIO);
-        assertThat(stops / (slotsPerVehicle * (vehicles - 1)))
+        assertThat(axis.ratio())
+                .as("overload 시간 수요 %,d / 80%% 슬롯 %,d 초 (차량 %d) — 선언은 1.5배다", axis.demandSeconds(),
+                        axis.slotSeconds(), vehicles)
+                .isLessThanOrEqualTo(OVERLOAD_RATIO);
+        assertThat(axis.demandSeconds() / (perVehicle * (vehicles - 1)))
                 .as("한 대 적으면 1.5배를 넘어야 최소다 — 넘지 않으면 대수가 선언보다 적다")
-                .isGreaterThan(OVERLOAD_STOP_RATIO);
-
-        long weight = sum(problem.candidates(), candidate -> candidate.parcel().weightG());
-        long capacity = sumVehicles(problem.vehicles(), vehicle -> vehicle.capacity().maxWeightG());
-        assertThat(weight).as("overload 중량 %,d / 원래 용량 %,d g — 무는 축이 아닌 중량에서도 다 못 싣는다", weight, capacity)
-                .isGreaterThan(capacity);
+                .isGreaterThan(OVERLOAD_RATIO);
     }
 
     private static long sum(List<Candidate> candidates, java.util.function.ToLongFunction<Candidate> field) {
