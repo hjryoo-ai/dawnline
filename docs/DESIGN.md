@@ -925,6 +925,11 @@ REQUESTED ──▶ PLANNING ──▶ PLANNED ──▶ PUBLISHED (route.assign
   끝까지 돌고, `PUBLISHED` 직전 재검증(§6.5 6단계)이 후보 상태를 다시 읽어 취소된 것을 stop 에서
   뺀다 — 그래야 이 경합 창이 `revision` 하나를 쓰지 않고 닫힌다
   ([ADR-026](adr/ADR-026-dispatch-cancellation-window.md), §6.10).
+- **`PLANNING` 중의 차량 비활성화도 같은 자리가 닫는다** (2026-09-28, [ADR-067 후속](adr/ADR-067-peak-fleet-is-an-operator-command.md),
+  7-0 A33). 계획은 시작할 때 차량을 읽으므로 그 사이의 비활성화는 409 가 막지 못한다 — 그 차량에는 아직 stop 이 없다(근거: 관측(재현됨),
+  `PlanDeactivationRaceIT`). 재검증이 취소를 뺀 뒤 남은 라우트의 차량을 **`FOR SHARE`** 로 다시 읽고, 비활성이면 그 라우트를 발행하지
+  않고 주문을 미배정(`VEHICLE_DEACTIVATED`)으로 돌린다. `FOR SHARE` 가 비활성화의 `FOR UPDATE` 와 직렬화한다 — 발행이 먼저면 비활성화가
+  커밋을 기다렸다가 끝나지 않은 stop 을 보고 409, 비활성화가 먼저면 발행이 비활성을 본다. 라우트가 전부 빠지면 `plan.failed{NO_VEHICLE}`.
 
 **API**
 
