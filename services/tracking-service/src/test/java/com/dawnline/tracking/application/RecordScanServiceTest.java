@@ -74,6 +74,8 @@ class RecordScanServiceTest {
     private static final Instant PROMISED_END = NOW.plus(Duration.ofHours(2));
 
     private InMemoryShipments shipments;
+    /** 저장소 둘이 함께 적는 호출 순서 — 쓰기 계층을 본다(ADR-070). */
+    private final List<String> calls = new ArrayList<>();
     private FixedRevisions revisions;
     private RecordingDelivery delivery;
     private OpenCooldown cooldown;
@@ -83,10 +85,10 @@ class RecordScanServiceTest {
 
     @BeforeEach
     void setUp() {
-        shipments = new InMemoryShipments();
+        shipments = new InMemoryShipments(calls);
         events = new RecordingEvents();
         meters = new SimpleMeterRegistry();
-        revisions = new FixedRevisions();
+        revisions = new FixedRevisions(calls);
         delivery = new RecordingDelivery();
         TrackingMetrics metrics = new TrackingMetrics(meters);
         cooldown = new OpenCooldown();
@@ -401,14 +403,15 @@ class RecordScanServiceTest {
     }
 
     @Test
-    void 늦은_출발은_뒤따르는_stop_의_ETA_를_민다() {
-        // 늦은 출발은 가장 흔한 지연 원인이고 첫 도착 스캔 전에 이미 알 수 있다 (§5.4).
+    void 늦은_출발은_라우트의_편차가_된다() {
+        // 늦은 출발은 가장 흔한 지연 원인이고 첫 도착 스캔 전에 이미 알 수 있다 (§5.4). 편차는 라우트 행에 한 번 산다(ADR-070).
         shipments.put(scheduled(ORDER));
         Duration late = Duration.ofMinutes(12);
 
         service.record(departure(DEPARTURE.plus(late)));
 
-        assertThat(shipments.stored.get(ORDER).etaAt()).isEqualTo(ARRIVAL.plus(late));
+        assertThat(revisions.deviations).containsEntry(ROUTE, late);
+        assertThat(shipments.stored.get(ORDER).etaWith(late)).contains(ARRIVAL.plus(late));
     }
 
     @Test
@@ -421,11 +424,22 @@ class RecordScanServiceTest {
         service.record(new ScanCommand(ROUTE, SEQ, List.of(ORDER), ScanType.ARRIVED,
                 ARRIVAL.plus(late), null, null, null));
 
-        assertThat(shipments.stored.get(SIBLING).etaAt())
-                .isEqualTo(ARRIVAL.plus(Duration.ofMinutes(10)).plus(late));
-        assertThat(shipments.stored.get(ORDER).etaAt())
-                .as("스캔이 난 stop 자신은 옮기지 않는다")
-                .isEqualTo(ARRIVAL);
+        assertThat(revisions.deviations).containsEntry(ROUTE, late);
+        assertThat(shipments.updated)
+                .as("찍은 배송의 상태 전이 하나 — 뒤 stop 은 다시 쓰지 않는다(ADR-070, 라우트당 O(n²) 였다)")
+                .containsExactly(ORDER);
+    }
+
+    @Test
+    void 라우트_행을_잡은_뒤에_배송을_고친다() {
+        // tracking 의 쓰기 계층은 라우트 행 → shipments 다(ADR-070 결정 1). 스캔이 배송을 먼저 잡으면 같은 라우트의 개정 반영(claim 이
+        // 먼저다)과 반대 순서가 되어 교착했다(ScanRevisionRaceIT).
+        shipments.put(scheduled(ORDER));
+
+        service.record(new ScanCommand(ROUTE, SEQ, List.of(ORDER), ScanType.ARRIVED, ARRIVAL, null, null, null));
+
+        assertThat(calls).containsSubsequence("lock " + ROUTE, "update " + ORDER);
+        assertThat(calls.indexOf("lock " + ROUTE)).as("첫 쓰기보다 앞").isLessThan(calls.indexOf("update " + ORDER));
     }
 
     // --- 번호는 확인용이다 (ADR-047 결정 1) ------------------------------------
@@ -594,12 +608,28 @@ class RecordScanServiceTest {
         }
     }
 
-    /** 라우트당 계획값. 이 테스트에서 바뀌지 않는다 — 보는 것은 편차 계산이지 저장이 아니다. */
+    /** 라우트당 계획값. 계획은 바뀌지 않는다 — 잠금과 편차는 기억한다. */
     private static final class FixedRevisions
             implements com.dawnline.tracking.application.port.out.RouteRevisions {
 
         private Instant plannedDeparture = DEPARTURE;
         private int revision = 2;
+        private final Map<UUID, Duration> deviations = new LinkedHashMap<>();
+        private final List<String> calls;
+
+        FixedRevisions(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public void lockForWrite(Collection<UUID> routeIds) {
+            routeIds.forEach(routeId -> calls.add("lock " + routeId));
+        }
+
+        @Override
+        public void recordDeviation(UUID routeId, Duration deviation) {
+            deviations.put(routeId, deviation);
+        }
 
         @Override
         public boolean claim(UUID routeId, int revision, UUID campId, Instant departure,
@@ -631,6 +661,11 @@ class RecordScanServiceTest {
 
         private final Map<UUID, Shipment> stored = new LinkedHashMap<>();
         private final List<UUID> updated = new ArrayList<>();
+        private final List<String> calls;
+
+        InMemoryShipments(List<String> calls) {
+            this.calls = calls;
+        }
 
         void put(Shipment shipment) {
             stored.put(shipment.orderId(), shipment);
@@ -658,6 +693,7 @@ class RecordScanServiceTest {
 
         @Override
         public void update(Shipment shipment) {
+            calls.add("update " + shipment.orderId());
             updated.add(shipment.orderId());
             put(shipment);
         }

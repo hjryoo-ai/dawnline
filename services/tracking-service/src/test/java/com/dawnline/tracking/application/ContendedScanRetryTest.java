@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.OptimisticLockingFailureException;
 
 /**
@@ -65,6 +66,21 @@ class ContendedScanRetryTest {
                             .isInstanceOf(OptimisticLockingFailureException.class);
                 });
         assertThat(calls).hasValue(ContendedScanRetry.ATTEMPTS);
+    }
+
+    @Test
+    void 교착의_패자도_다시_한다() {
+        // PostgreSQL 40P01 은 CannotAcquireLockException 으로 온다(normal-day 의 500 — 관측). 안전망이다: 교착을 없애는 것은
+        // 쓰기 계층(라우트 행 → shipments, ADR-070)이고, 재시도는 순서를 어긴 새 경로가 생긴 날의 사용자 쪽 피해를 막는다.
+        RecordScanUseCase deadlockOnce = command -> {
+            if (calls.incrementAndGet() == 1) {
+                throw new CannotAcquireLockException("ERROR: deadlock detected");
+            }
+            return RESULT;
+        };
+
+        assertThat(new ContendedScanRetry(deadlockOnce).record(COMMAND)).isSameAs(RESULT);
+        assertThat(calls).hasValue(2);
     }
 
     @Test

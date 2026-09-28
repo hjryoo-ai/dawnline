@@ -51,14 +51,17 @@ class ApplyRouteAssignmentServiceTest {
     private static final UUID ORDER = UUID.randomUUID();
     private static final UUID OTHER_ORDER = UUID.randomUUID();
 
+    /** 두 가짜가 함께 적는 호출 순서 — 잠금 계층을 본다. */
+    private final List<String> order = new ArrayList<>();
+
     private InMemoryShipments shipments;
     private RecordingRevisions revisions;
     private ApplyRouteAssignmentService service;
 
     @BeforeEach
     void setUp() {
-        shipments = new InMemoryShipments();
-        revisions = new RecordingRevisions();
+        shipments = new InMemoryShipments(order);
+        revisions = new RecordingRevisions(order);
         service = new ApplyRouteAssignmentService(shipments, revisions, CLOCK);
     }
 
@@ -76,6 +79,18 @@ class ApplyRouteAssignmentServiceTest {
                 .isEmpty();
         assertThat(shipments.inserted).isEmpty();
         assertThat(shipments.updated).isEmpty();
+    }
+
+    @Test
+    void 라우트_행을_먼저_잡고_배송은_그_뒤다() {
+        // tracking 의 쓰기 계층은 라우트 행 → shipments 다(ADR-070 결정 1). 선점(claim)이 그 행을 잡는 첫 문장이다 — 배송을 먼저 읽거나
+        // 쓰면 같은 라우트의 스캔과 반대 순서로 잡게 된다.
+        shipments.put(restored(ShipmentStatus.SCHEDULED));
+
+        service.apply(assignment(4, stop(1, List.of(ORDER, OTHER_ORDER), Set.of())));
+
+        assertThat(order).startsWith("claim").contains("findAll");
+        assertThat(order.indexOf("claim")).isLessThan(order.indexOf("findAll"));
     }
 
     @Test
@@ -100,8 +115,8 @@ class ApplyRouteAssignmentServiceTest {
         assertThat(created.routeId()).isEqualTo(ROUTE);
         assertThat(created.stopSeq()).isEqualTo(2);
         assertThat(created.plannedArrival()).isEqualTo(ARRIVAL);
-        assertThat(created.etaAt()).as("§5.4 — eta_at 의 초기값은 planned_arrival 이다")
-                .isEqualTo(ARRIVAL);
+        assertThat(created.etaWith(Duration.ZERO)).as("§5.4 — 편차 0 의 ETA 는 planned_arrival 이다(claim 이 편차를 0 으로)")
+                .contains(ARRIVAL);
         assertThat(created.promisedEnd()).isEqualTo(PROMISED_END);
     }
 
@@ -237,7 +252,7 @@ class ApplyRouteAssignmentServiceTest {
 
     private static Shipment restored(ShipmentStatus status) {
         Instant deliveredAt = status == ShipmentStatus.COMPLETED ? NOW : null;
-        return Shipment.restore(ORDER, ROUTE, 1, status, ARRIVAL, ARRIVAL, PROMISED_END,
+        return Shipment.restore(ORDER, ROUTE, 1, status, ARRIVAL, PROMISED_END,
                 deliveredAt, 3L);
     }
 
@@ -249,13 +264,30 @@ class ApplyRouteAssignmentServiceTest {
     private static final class RecordingRevisions implements RouteRevisions {
 
         private final List<Claim> calls = new ArrayList<>();
+        private final List<String> order;
         private boolean grant = true;
+
+        RecordingRevisions(List<String> order) {
+            this.order = order;
+        }
 
         @Override
         public boolean claim(UUID routeId, int revision, UUID campId, Instant plannedDeparture,
                 Instant appliedAt) {
+            order.add("claim");
             calls.add(new Claim(routeId, revision, campId, plannedDeparture, appliedAt));
             return grant;
+        }
+
+        @Override
+        public void lockForWrite(Collection<UUID> routeIds) {
+            // 개정 반영은 claim 이 그 행을 잡는다 — 따로 잠그지 않는다.
+            throw new UnsupportedOperationException("개정 반영은 claim 으로 라우트 행을 잡습니다");
+        }
+
+        @Override
+        public void recordDeviation(UUID routeId, Duration deviation) {
+            throw new UnsupportedOperationException("개정 반영은 편차를 적지 않습니다 — claim 이 0 으로 되돌립니다");
         }
 
         @Override
@@ -271,6 +303,11 @@ class ApplyRouteAssignmentServiceTest {
         private final List<Set<UUID>> findAllCalls = new ArrayList<>();
         private final List<UUID> inserted = new ArrayList<>();
         private final List<UUID> updated = new ArrayList<>();
+        private final List<String> order;
+
+        InMemoryShipments(List<String> order) {
+            this.order = order;
+        }
 
         void put(Shipment shipment) {
             stored.put(shipment.orderId(), shipment);
@@ -278,6 +315,7 @@ class ApplyRouteAssignmentServiceTest {
 
         @Override
         public List<Shipment> findAll(Collection<UUID> orderIds) {
+            order.add("findAll");
             findAllCalls.add(Set.copyOf(orderIds));
             return orderIds.stream().map(stored::get).filter(Objects::nonNull).toList();
         }

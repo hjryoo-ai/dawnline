@@ -4,6 +4,7 @@ import com.dawnline.common.error.IllegalStateTransitionException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
@@ -24,13 +25,12 @@ public final class Shipment {
     private int stopSeq;
     private ShipmentStatus status;
     private Instant plannedArrival;
-    private Instant etaAt;
     private Instant promisedEnd;
     private @Nullable Instant deliveredAt;
     private final long version;
 
     private Shipment(UUID orderId, UUID routeId, int stopSeq, ShipmentStatus status,
-            Instant plannedArrival, Instant etaAt, Instant promisedEnd,
+            Instant plannedArrival, Instant promisedEnd,
             @Nullable Instant deliveredAt, long version) {
 
         this.orderId = Objects.requireNonNull(orderId, "orderId");
@@ -38,15 +38,13 @@ public final class Shipment {
         this.stopSeq = requireValidSeq(stopSeq);
         this.status = Objects.requireNonNull(status, "status");
         this.plannedArrival = Objects.requireNonNull(plannedArrival, "plannedArrival");
-        this.etaAt = Objects.requireNonNull(etaAt, "etaAt");
         this.promisedEnd = Objects.requireNonNull(promisedEnd, "promisedEnd");
         this.deliveredAt = deliveredAt;
         this.version = version;
     }
 
     /**
-     * {@code route.assigned} 를 받아 새로 만든다 (§5.4 — status {@code SCHEDULED},
-     * {@code eta_at = planned_arrival}).
+     * {@code route.assigned} 를 받아 새로 만든다 (§5.4 — status {@code SCHEDULED}).
      *
      * <p>{@code promisedEnd} 는 이벤트의 {@code promisedWindow.end} 다. 그 필드가 계약에서
      * {@code required} 이므로 여기에 널이 올 경로가 없다(Phase 5-1a 계약,
@@ -62,7 +60,7 @@ public final class Shipment {
     public static Shipment scheduled(UUID orderId, UUID routeId, int stopSeq,
             Instant plannedArrival, Instant promisedEnd) {
         return new Shipment(orderId, routeId, stopSeq, ShipmentStatus.SCHEDULED,
-                plannedArrival, plannedArrival, promisedEnd, null, 0L);
+                plannedArrival, promisedEnd, null, 0L);
     }
 
     /**
@@ -73,17 +71,16 @@ public final class Shipment {
      * @param stopSeq        stop 순번
      * @param status         상태
      * @param plannedArrival 계획 도착 시각
-     * @param etaAt          현재 ETA
      * @param promisedEnd    약속창의 끝
      * @param deliveredAt    완료 시각. 미완료면 {@code null}
      * @param version        낙관적 락 버전
      * @return 되살린 배송
      */
     public static Shipment restore(UUID orderId, UUID routeId, int stopSeq, ShipmentStatus status,
-            Instant plannedArrival, Instant etaAt, Instant promisedEnd,
+            Instant plannedArrival, Instant promisedEnd,
             @Nullable Instant deliveredAt, long version) {
         return new Shipment(orderId, routeId, stopSeq, status,
-                plannedArrival, etaAt, promisedEnd, deliveredAt, version);
+                plannedArrival, promisedEnd, deliveredAt, version);
     }
 
     /**
@@ -133,8 +130,8 @@ public final class Shipment {
      * <p>{@code CANCELLED} 도 여기서는 종결로 본다. 되돌릴 것이 있어서가 아니라 <em>갱신할 것이
      * 없기 때문</em>이다 — 취소된 배송의 계획 도착 시각을 옮기는 일은 아무 질문에도 답하지 않는다.
      *
-     * <p>ETA 는 계획값으로 되돌아간다. 개정은 새 계획이고, 그 계획 이전의 편차는 그 계획에 이미
-     * 반영돼 있다. 편차 전파는 다음 스캔부터 다시 쌓인다(§5.4 ETA 재계산, Phase 5-1b).
+     * <p>ETA 는 계획값으로 되돌아간다 — 라우트의 편차를 개정 반영의 claim 이 0 으로 되돌린다(ADR-070). 개정은 새 계획이고, 그 계획
+     * 이전의 편차는 그 계획에 이미 반영돼 있다. 편차는 다음 스캔부터 다시 쌓인다(§5.4 ETA 재계산).
      *
      * @param routeId        새 라우트 id. 재계획이 stop 을 옮겼을 수 있다(§6.8 {@code relocate})
      * @param stopSeq        새 stop 순번
@@ -155,50 +152,39 @@ public final class Shipment {
         this.routeId = routeId;
         this.stopSeq = stopSeq;
         this.plannedArrival = plannedArrival;
-        this.etaAt = plannedArrival;
         this.promisedEnd = promisedEnd;
         return true;
     }
 
     /**
-     * ETA 를 옮긴다 — 앞선 stop 의 편차 전파 (§5.4 ETA 재계산, Phase 5-1b).
+     * 라우트의 편차를 받은 ETA — {@code planned_arrival + d} (§5.4 ETA 재계산,
+     * [ADR-070](docs/adr/ADR-070-tracking-writes-lock-the-route-first.md) 결정 2).
      *
-     * <p><strong>얼마나 옮기는지는 이 애그리거트가 정하지 않는다.</strong> 편차는 라우트의
-     * 성질이고(어느 stop 에서 얼마가 벌어졌나), 그것이 <em>누구에게</em> 전파되는지는
-     * 방문 순서를 아는 쪽만 안다. 여기서 절반만 계산하면 「어디서 움직이는가」의 답이 둘이
-     * 된다 — 그래서 받는 것은 결과값 하나다.
+     * <p><strong>얼마나 옮기는지는 이 애그리거트가 정하지 않는다.</strong> 편차는 라우트의 성질이고(어느 stop 에서 얼마가 벌어졌나)
+     * 라우트 행에 한 번 적힌다. 여기서 저장하면 같은 사실이 배송마다 한 번씩, n 곳에 있게 되고 — 그 n 곳을 맞추는 쓰기가 라우트당
+     * O(n²) 였다. 그래서 받는 것은 편차 하나이고 돌려주는 것은 계산한 값이다.
      *
-     * <p>종결 상태는 옮기지 않는다. 배송이 끝난 stop 의 도착 예정 시각을 미루는 일은 아무
-     * 물음에도 답하지 않는다 — {@link #applyRevision} 이 종결을 그대로 두는 것과 같은 이유다.
-     *
-     * @param eta 새 ETA
-     * @return 옮겼으면 {@code true}, 종결 상태라 그대로 두었으면 {@code false}
+     * @param deviation 라우트의 편차. 음수면 계획보다 이르다
+     * @return ETA. 종결 상태면 비어 있다 — 끝난 배송의 도착 예정 시각은 아무 물음에도 답하지 않는다
      */
-    public boolean projectEta(Instant eta) {
-        Objects.requireNonNull(eta, "eta");
-        if (status.isTerminal()) {
-            return false;
-        }
-        if (eta.equals(etaAt)) {
-            // 편차가 0 이거나 이미 같은 값이다. 쓰지 않으면 낙관적 락 충돌도 UPDATE 도 없다.
-            return false;
-        }
-        this.etaAt = eta;
-        return true;
+    public Optional<Instant> etaWith(Duration deviation) {
+        Objects.requireNonNull(deviation, "deviation");
+        return status.isTerminal() ? Optional.empty() : Optional.of(plannedArrival.plus(deviation));
     }
 
     /**
      * 약속을 지키지 못할 위험인가 — {@code eta > promised_end − margin} (§5.4).
      *
-     * <p>판정이 애그리거트에 있는 이유: 비교하는 두 값이 <strong>둘 다 이 배송의 것</strong>
-     * 이다. 여유(margin)만 밖에서 온다 — 그것은 정책이고 §5.4 가 15분으로 정했다.
+     * <p>판정이 애그리거트에 있는 이유: 비교하는 두 값이 이 배송의 계획과 약속이다. 여유(margin)는 정책이고(§5.4 15분), 편차는
+     * 라우트의 것이라 둘 다 밖에서 온다.
      *
-     * @param margin 약속 끝에서 앞당겨 보는 여유
+     * @param margin    약속 끝에서 앞당겨 보는 여유
+     * @param deviation 라우트의 편차
      * @return 위험하면 {@code true}. 종결 상태는 언제나 {@code false} 다 — 이미 끝났다
      */
-    public boolean isAtRisk(Duration margin) {
+    public boolean isAtRisk(Duration margin, Duration deviation) {
         Objects.requireNonNull(margin, "margin");
-        return !status.isTerminal() && etaAt.isAfter(promisedEnd.minus(margin));
+        return etaWith(deviation).map(eta -> eta.isAfter(promisedEnd.minus(margin))).orElse(false);
     }
 
     /**
@@ -235,9 +221,7 @@ public final class Shipment {
             throw new IllegalStateTransitionException("Shipment", status, next);
         }
         this.status = next;
-        // ETA 는 여기서 건드리지 않는다. 편차 전파는 이 stop 하나가 아니라 뒤따르는 stop 들의
-        // 문제이고(§5.4 ETA 재계산), 그것을 애그리거트 안에서 절반만 하면 "어디서 움직이는가" 의
-        // 답이 둘이 된다. Phase 5-1b 가 라우트 단위로 옮긴다.
+        // ETA 는 여기서 건드리지 않는다. 편차는 라우트 행의 것이고(ADR-070) 이 배송은 계획만 들고 있다.
     }
 
     private static int requireValidSeq(int stopSeq) {
@@ -270,11 +254,6 @@ public final class Shipment {
     /** 계획 도착 시각. */
     public Instant plannedArrival() {
         return plannedArrival;
-    }
-
-    /** 현재 ETA. */
-    public Instant etaAt() {
-        return etaAt;
     }
 
     /** 약속창의 끝. */
