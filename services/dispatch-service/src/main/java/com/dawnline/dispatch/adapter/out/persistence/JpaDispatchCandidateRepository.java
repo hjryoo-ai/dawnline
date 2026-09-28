@@ -47,6 +47,22 @@ public class JpaDispatchCandidateRepository implements DispatchCandidateReposito
             """;
 
     /**
+     * 취소 선착 표식 — 스냅샷 칸을 적지 않는다(ADR-074 결정 3). 그 칸에는 기본값이 없어(V15) {@code NULL} 이 들어가고,
+     * CHECK {@code ck_cand_snapshot_or_cancelled_first} 가 이 모양을 {@code CANCELLED} 로만 허락한다.
+     */
+    private static final String INSERT_CANCELLED_FIRST_SQL = """
+            INSERT INTO dispatch_candidates (order_id, status, version, created_at, updated_at)
+            VALUES (?, 'CANCELLED', 0, ?, ?)
+            ON CONFLICT (order_id) DO NOTHING
+            """;
+
+    /** 스냅샷이 있는 행만 — 표식은 엔티티의 원시 칸에 담기지 않는다(ADR-074 결정 3). */
+    private static final String FIND_SNAPSHOT_JPQL = """
+            SELECT c FROM DispatchCandidateEntity c
+             WHERE c.orderId = :orderId AND c.waveId IS NOT NULL
+            """;
+
+    /**
      * 술어를 <strong>리터럴로</strong> 적는다. 바인드 파라미터로 넣으면 플래너가 일반 계획에서
      * 술어를 증명하지 못해 {@code ix_cand_wave (wave_id, status)} 의 뒤 컬럼을 못 쓴다
      * (CLAUDE.md 코딩 컨벤션). 이 계획이 인덱스를 타는지는 {@code DispatchPersistenceIT} 가
@@ -115,8 +131,22 @@ public class JpaDispatchCandidateRepository implements DispatchCandidateReposito
     }
 
     @Override
+    public boolean insertCancelledFirst(UUID orderId, Instant cancelledAt) {
+        Objects.requireNonNull(orderId, "orderId");
+        Objects.requireNonNull(cancelledAt, "cancelledAt");
+        return entityManager.createNativeQuery(INSERT_CANCELLED_FIRST_SQL)
+                .setParameter(1, orderId)
+                .setParameter(2, cancelledAt)
+                .setParameter(3, cancelledAt)
+                .executeUpdate() > 0;
+    }
+
+    @Override
     public Optional<DispatchCandidate> findById(UUID orderId) {
-        return Optional.ofNullable(entityManager.find(DispatchCandidateEntity.class, orderId))
+        return entityManager.createQuery(FIND_SNAPSHOT_JPQL, DispatchCandidateEntity.class)
+                .setParameter("orderId", orderId)
+                .getResultStream()
+                .findFirst()
                 .map(DispatchCandidateEntity::toDomain);
     }
 

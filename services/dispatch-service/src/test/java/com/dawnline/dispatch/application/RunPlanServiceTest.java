@@ -586,6 +586,11 @@ class RunPlanServiceTest {
         }
 
         @Override
+        public boolean insertCancelledFirst(UUID orderId, java.time.Instant cancelledAt) {
+            return candidates.insertCancelledFirst(orderId, cancelledAt);
+        }
+
+        @Override
         public java.util.Optional<DispatchCandidate> findById(UUID orderId) {
             return candidates.findById(orderId);
         }

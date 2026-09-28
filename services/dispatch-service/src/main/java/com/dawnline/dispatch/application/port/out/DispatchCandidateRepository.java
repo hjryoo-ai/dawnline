@@ -22,6 +22,23 @@ public interface DispatchCandidateRepository {
     boolean insertIfAbsent(DispatchCandidate candidate);
 
     /**
+     * 후보보다 먼저 온 취소의 <strong>표식</strong>을 넣는다 — {@code CANCELLED}, 스냅샷 칸 없음, 웨이브 없음
+     * ([ADR-074](docs/adr/ADR-074-cancel-before-candidate-leaves-a-row.md) 결정 1).
+     *
+     * <p>이미 행이 있으면(후보든 표식이든) 아무것도 하지 않는다. {@link #insertIfAbsent} 와 같은 PK 가 두 리스너의 경합을
+     * 심판한다(결정 4) — 거짓이면 그 사이 후보가 들어왔거나 표식이 이미 있다.
+     *
+     * @param orderId     취소된 주문
+     * @param cancelledAt 취소 시각 — 표식의 {@code created_at} · {@code updated_at}. 보존의 상한 줄이 이 값으로 잰다
+     * @return 실제로 넣었으면 참
+     */
+    boolean insertCancelledFirst(UUID orderId, Instant cancelledAt);
+
+    /**
+     * <strong>스냅샷이 있는 후보만</strong> 돌려준다 — 취소 선착 표식은 비어 있다(ADR-074 결정 3). 그래서
+     * {@link #insertIfAbsent} 가 거짓인데 이것이 비었으면 그 행은 표식이다. 표식은 도메인으로 되살리지 않는다:
+     * 스냅샷 칸이 {@code NULL} 이고, {@link DispatchCandidate} 의 칸은 계획 · 재배정 · 취소가 전부 읽는다.
+     *
      * @param orderId 주문 id
      */
     Optional<DispatchCandidate> findById(UUID orderId);

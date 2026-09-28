@@ -36,9 +36,23 @@ class LoadCandidateServiceTest {
 
         private final Map<UUID, DispatchCandidate> rows = new LinkedHashMap<>();
 
+        /** 취소 선착 표식 — 스냅샷이 없어 {@link #rows} 에 들지 않는다(ADR-074). */
+        private final Map<UUID, Instant> cancelledFirst = new LinkedHashMap<>();
+
         @Override
         public boolean insertIfAbsent(DispatchCandidate candidate) {
+            if (cancelledFirst.containsKey(candidate.orderId())) {
+                return false;
+            }
             return rows.putIfAbsent(candidate.orderId(), candidate) == null;
+        }
+
+        @Override
+        public boolean insertCancelledFirst(UUID orderId, Instant cancelledAt) {
+            if (rows.containsKey(orderId)) {
+                return false;
+            }
+            return cancelledFirst.putIfAbsent(orderId, cancelledAt) == null;
         }
 
         @Override

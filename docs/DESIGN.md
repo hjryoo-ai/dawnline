@@ -956,7 +956,7 @@ CREATE TABLE dispatch_candidates (order_id UUID PK, wave_id UUID, camp_id UUID, 
   -- 결과만 두면 "왜 이 우선도인가" 에 답할 수 없다.
   promise_revised BOOLEAN, priority SMALLINT, status VARCHAR(16) NOT NULL, version BIGINT NOT NULL DEFAULT 0,
   -- 행의 모양은 둘이다 (V15, ADR-074): 스냅샷 칸(zone_id 밖의 열넷)이 전부 있거나, 후보보다 먼저 온 취소가 만든
-  -- 표식 — status = 'CANCELLED' 이고 스냅샷 칸이 전부 NULL(웨이브 없음). 모르는 칸에 false · 0 을 쓰지 않는다(ADR-051 결정 2) —
+  -- 표식 — status = 'CANCELLED' 이고 스냅샷 칸이 zone_id 까지 전부 NULL(웨이브 없음). 모르는 칸에 false · 0 을 쓰지 않는다(ADR-051 결정 2) —
   -- 그래서 기본값도 없다. 뒤에 온 fulfillment.planned 는 표식을 되살리지 않는다(§6.10 첫 행).
   CONSTRAINT ck_cand_snapshot_or_cancelled_first CHECK (<스냅샷 칸 전부 NOT NULL> OR (status = 'CANCELLED' AND <전부 NULL>)));
 CREATE INDEX ix_cand_wave ON dispatch_candidates (wave_id, status);
