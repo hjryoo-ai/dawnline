@@ -75,12 +75,12 @@ class DeliveryStatusFanoutTest {
     private static final Path DOCUMENT =
             REPO_ROOT.resolve("docs/benchmarks/phase5-delivery-status-throughput.md");
 
-    /** {@code | `small` | 500 | 470 | 1.0638 | 940 | 1.8800 |} */
+    /** {@code | `small` | 500 | 432 | 1.1574 | 864 | 1.7280 |} — 이름에 하이픈이 든다({@code mixed-windows}). */
     private static final Pattern ROW = Pattern.compile(
-            "^\\|\\s*`([a-z]+)`\\s*\\|\\s*([\\d,]+)\\s*\\|\\s*([\\d,]+)\\s*\\|\\s*([\\d.]+)"
+            "^\\|\\s*`([a-z-]+)`\\s*\\|\\s*([\\d,]+)\\s*\\|\\s*([\\d,]+)\\s*\\|\\s*([\\d.]+)"
                     + "\\s*\\|\\s*([\\d,]+)\\s*\\|\\s*([\\d.]+)\\s*\\|\\s*$");
 
-    /** {@code > **600 rps × 1.1215 = 673 건/초.**} */
+    /** {@code > **600 rps × 0.7748 = 465 건/초.**} */
     private static final Pattern CONCLUSION = Pattern.compile(
             "([\\d,]+)\\s*rps\\s*×\\s*([\\d.]+)\\s*=\\s*([\\d,]+)\\s*건/초");
 
