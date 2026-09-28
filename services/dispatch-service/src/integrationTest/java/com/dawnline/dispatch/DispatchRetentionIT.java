@@ -463,9 +463,9 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
         } else {
             UUID routeId = Ids.newId();
             jdbc.update("""
-                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, status, revision, stop_count, distance_m,
+                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, revision, stop_count, distance_m,
                                         duration_s, cost_krw)
-                    VALUES (?, ?, ?, 1, 'PLANNED', 1, ?, 1, 1, 1)
+                    VALUES (?, ?, ?, 1, 1, ?, 1, 1, 1)
                     """, routeId, planId, VEHICLE_ID, stopStatuses.length);
             for (int seq = 1; seq <= stopStatuses.length; seq++) {
                 UUID stopId = Ids.newId();
@@ -547,9 +547,9 @@ class DispatchRetentionIT extends DispatchIntegrationTestBase {
                       FROM generate_series(1, 2000) n
                     """, CAMP_ID, Timestamp.from(NOW), Timestamp.from(NOW));
             jdbc.update("""
-                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, status, revision, stop_count, distance_m,
+                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, revision, stop_count, distance_m,
                                         duration_s, cost_krw)
-                    SELECT gen_random_uuid(), p.id, ?, k, 'PLANNED', 1, 20, 1, 1, 1
+                    SELECT gen_random_uuid(), p.id, ?, k, 1, 20, 1, 1, 1
                       FROM route_plans p, generate_series(1, 3) k
                     """, VEHICLE_ID);
             jdbc.update("""

@@ -181,10 +181,10 @@ class RouteStopOrdersIndexIT extends DispatchIntegrationTestBase {
                     """).setParameter(1, planId).setParameter(2, UUID.randomUUID())
                     .setParameter(3, UUID.randomUUID()).executeUpdate();
             entityManager.createNativeQuery("""
-                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, status, revision,
+                    INSERT INTO routes (id, plan_id, vehicle_id, seq_no, revision,
                                         stop_count, distance_m, duration_s, cost_krw)
                     SELECT gen_random_uuid(), ?, (SELECT id FROM vehicles LIMIT 1),
-                           g, 'DISPATCHED', 1, ?, 0, 0, 0
+                           g, 1, ?, 0, 0, 0
                       FROM generate_series(1, ?) g
                     """).setParameter(1, planId).setParameter(2, STOPS_PER_ROUTE)
                     .setParameter(3, ROUTES).executeUpdate();

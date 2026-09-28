@@ -128,7 +128,7 @@ class DispatchApiTest {
     void 라우트_상세는_stop_을_순서대로_준다() throws Exception {
         UUID routeId = Ids.newId();
         when(queries.findRoute(routeId)).thenReturn(Optional.of(new RouteView(routeId, Ids.newId(),
-                Ids.newId(), Ids.newId(), "PLANNED", 1, 8_420, 2_340, 21_500,
+                Ids.newId(), Ids.newId(), 1, 8_420, 2_340, 21_500,
                 List.of(new RouteView.StopView(Ids.newId(), 1, 37.4979, 127.0276,
                         Instant.parse("2026-09-06T02:00:00Z"),
                         Instant.parse("2026-09-06T02:01:30Z"), 90, "PLANNED",
@@ -138,7 +138,8 @@ class DispatchApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.revision").value(1))
                 .andExpect(jsonPath("$.stops[0].seq").value(1))
-                .andExpect(jsonPath("$.stops[0].status").value("PLANNED"));
+                .andExpect(jsonPath("$.stops[0].status").value("PLANNED"))
+                .andExpect(jsonPath("$.status").doesNotExist());   // 라우트의 끝남은 stop 이 말한다(ADR-073)
     }
 
     @Test

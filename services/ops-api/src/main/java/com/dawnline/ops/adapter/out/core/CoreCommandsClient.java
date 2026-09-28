@@ -212,7 +212,7 @@ public class CoreCommandsClient implements CoreCommands, CoreQueries {
     private static CoreReply.RouteDetail routeDetail(ResponseEntity<RouteView> response) {
         RouteView body = required(response.getBody());
         return new CoreReply.RouteDetail(required(body.getRouteId()), required(body.getPlanId()),
-                required(body.getVehicleId()), required(body.getStatus()), required(body.getRevision()),
+                required(body.getVehicleId()), required(body.getRevision()),
                 required(body.getDistanceM()), required(body.getDurationS()), required(body.getCostKrw()),
                 required(body.getStops()).stream().map(CoreCommandsClient::routeStop).toList());
     }

@@ -140,6 +140,7 @@
 2. **tracking 의 교착 패자(§3.2)** — `ContendedScanRetry` 가 교착의 패자도 겹침으로 다시 한다(§5.4 의 「무엇을 다시 하는가」 를 넓힌다).
    → **결정(2026-09-28)**: 재시도는 안전망으로 넣고, 교착은 쓰기 계층으로 없앤다 — 라우트 행 → `shipments`. 짝은 ETA 전파가 아니라 개정 반영이었다(스캔은 stop 순 · 개정은 주문 id 순, `ScanRevisionRaceIT` 로 재현) — [ADR-070](../adr/ADR-070-tracking-writes-lock-the-route-first.md).
 3. **`routes.status`(A31)** — 사건 시점에 쓰거나 칸을 지운다.
+   → **결정(2026-09-28)**: 지운다 — 읽는 쪽 셋이 이미 조각으로 판정하고 그것이 싸다 — [ADR-073](../adr/ADR-073-route-status-column-is-dropped.md).
 4. **`no-anchor`(B1)** — dispatch 가 `route-departed` 의 소비자가 되는가, 아니면 도구 부하를 낮춘 실행(B14 와 같은 조건)으로 먼저 가르는가.
    → **결정(2026-09-28)**: 소비한다 — 29/32 는 구조다(at-risk 는 출발 지연에서 첫 stop 전에 발화한다). 앵커 = 닿은 stop, 없으면 출발 — [ADR-072](../adr/ADR-072-departure-is-an-anchor.md).
 5. **HOT 손실(B11)** — BRIN 재측정, 또는 ETA 를 미는 갱신의 모양부터.

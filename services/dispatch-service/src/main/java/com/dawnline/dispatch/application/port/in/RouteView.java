@@ -12,7 +12,6 @@ import org.jspecify.annotations.Nullable;
  * @param planId    계획 id
  * @param vehicleId 차량 id
  * @param driverId  기사 id
- * @param status    라우트 상태
  * @param revision  개정 번호 (§6.8 4단계)
  * @param distanceM 총 이동 거리(m)
  * @param durationS 총 소요 시간(초)
@@ -20,7 +19,7 @@ import org.jspecify.annotations.Nullable;
  * @param stops     방문 순서대로의 stop 들
  */
 public record RouteView(UUID routeId, UUID planId, UUID vehicleId, @Nullable UUID driverId,
-        String status, int revision, int distanceM, int durationS, long costKrw,
+        int revision, int distanceM, int durationS, long costKrw,
         List<StopView> stops) {
 
     /**

@@ -52,7 +52,7 @@ export const routes: Schemas['WaveRoutes'] = {
 };
 
 export const routeDetail: Schemas['RouteDetail'] = {
-  routeId: ROUTE, planId: 'plan-1', vehicleId: 'v1', status: 'ASSIGNED', revision: 1, distanceM: 8000, durationS: 2400, costKrw: 600000,
+  routeId: ROUTE, planId: 'plan-1', vehicleId: 'v1', revision: 1, distanceM: 8000, durationS: 2400, costKrw: 600000,
   stops: [
     { seq: 1, lat: 37.65, lng: 127.04, plannedArrival: '2026-09-24T16:10:00Z', status: 'PLANNED', orderIds: [ORDER] },
     { seq: 2, lat: 37.66, lng: 127.05, plannedArrival: '2026-09-24T16:30:00Z', status: 'COMPLETED', orderIds: ['0199c000-0000-7000-8000-0000000000c2'] },

@@ -1729,8 +1729,6 @@ components:
         vehicleId:
           type: string
           format: uuid
-        status:
-          type: string
         revision:
           type: integer
           format: int32
@@ -1754,7 +1752,6 @@ components:
       - planId
       - revision
       - routeId
-      - status
       - stops
       - vehicleId
     RouteStop:
