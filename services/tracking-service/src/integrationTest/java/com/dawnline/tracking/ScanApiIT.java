@@ -272,6 +272,27 @@ class ScanApiIT extends TrackingIntegrationTestBase {
         assertThat(scanAfterCancelCount() - before).isEqualTo(1.0);
     }
 
+    @Test
+    void 센_스캔은_delivery_status_에_실리지_않는다_두_자리는_한_스캔을_나눠_센다() throws Exception {
+        // 7-0 B5 · ADR-047 재검토 지점 ③ — dawnline_scan_after_cancel_total 의 두 자리(tracking · dispatch)가 같은 스캔을 두 번 세는가.
+        // dispatch 의 자리는 delivery.status 를 받아야 센다. 여기서 센 주문이 그 이벤트에 실리지 않으면 두 자리는 겹치지 않는다 —
+        // 한 스캔은 개정이 tracking 에 먼저 닿았으면 여기서, 아니면(여기서는 적용되고 이벤트가 나가) dispatch 에서 센다.
+        UUID route = newRoute();
+        UUID cancelled = newOrder();
+        UUID alive = newOrder();
+        assign(route, 1, stop(1, List.of(cancelled, alive), Set.of(cancelled)));
+        double before = scanAfterCancelCount();
+
+        mockMvc.perform(scan(route, 1, completedBody(cancelled, alive))).andExpect(status().isOk());
+
+        assertThat(scanAfterCancelCount() - before).as("전제 — 이 자리가 셌다").isEqualTo(1.0);
+        List<String> carried = jdbc.queryForList("""
+                SELECT o.value FROM outbox_events e, jsonb_array_elements_text(e.payload -> 'orderIds') o(value)
+                 WHERE e.event_type = 'delivery.status' AND e.payload ->> 'routeId' = ?""", String.class, route.toString());
+        assertThat(carried).as("전제 — 살아 있는 주문은 실려 나간다(릴레이가 꺼져 있어 행이 남는다)").contains(alive.toString());
+        assertThat(carried).as("센 주문이 실려 나가면 dispatch 가 같은 스캔을 한 번 더 센다").doesNotContain(cancelled.toString());
+    }
+
     // --- 열쇠는 주문이다 (ADR-047 결정 1) ---------------------------------------
 
     @Test
