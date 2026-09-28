@@ -58,6 +58,12 @@ public class LoadCandidateService implements LoadCandidateUseCase {
                 clock.instant());
 
         if (!candidates.insertIfAbsent(candidate)) {
+            if (candidates.findById(snapshot.orderId()).isEmpty()) {
+                // 넣지 못했는데 스냅샷 행이 없다 — 취소가 먼저 와 남긴 표식이다(ADR-074 결정 2, 저장소 포트의 findById).
+                // 되살리지 않는다: 이 주문은 고객이 취소했고, 후보가 되면 다음 계획이 집고 기사가 배송한다.
+                log.info("취소가 먼저 온 주문의 적재를 거부합니다: orderId={}", snapshot.orderId());
+                return Outcome.CANCELLED_FIRST;
+            }
             // 재전달이다. 스냅샷을 덮어쓰지 않는다 — 첫 번째가 계획의 근거였고, 두 번째가 같은
             // 내용이라는 보장이 없다(at-least-once 는 중복을 막지 다름을 막지 않는다, ADR-020).
             log.debug("이미 적재된 후보입니다: orderId={}", snapshot.orderId());

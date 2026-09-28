@@ -133,9 +133,18 @@ class JpaDispatchCandidateRepositoryTest {
                 .createQuery(anyString(), eq(DispatchCandidateEntity.class));
     }
 
+    @SuppressWarnings("unchecked")
+    private TypedQuery<DispatchCandidateEntity> snapshotQuery(List<DispatchCandidateEntity> rows) {
+        TypedQuery<DispatchCandidateEntity> query = mock(TypedQuery.class);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.getResultStream()).thenReturn(rows.stream());
+        when(entityManager.createQuery(anyString(), eq(DispatchCandidateEntity.class))).thenReturn(query);
+        return query;
+    }
+
     @Test
     void 없는_후보는_빈_값이다() {
-        when(entityManager.find(eq(DispatchCandidateEntity.class), any())).thenReturn(null);
+        snapshotQuery(List.of());
 
         assertThat(repository.findById(Ids.newId())).isEmpty();
     }
@@ -143,12 +152,41 @@ class JpaDispatchCandidateRepositoryTest {
     @Test
     void 찾은_후보를_도메인으로_돌려준다() {
         DispatchCandidate candidate = candidate();
-        when(entityManager.find(eq(DispatchCandidateEntity.class), any()))
-                .thenReturn(DispatchCandidateEntity.from(candidate));
+        snapshotQuery(List.of(DispatchCandidateEntity.from(candidate)));
 
         assertThat(repository.findById(candidate.orderId()))
                 .hasValueSatisfying(found -> assertThat(found.orderId())
                         .isEqualTo(candidate.orderId()));
+    }
+
+    @Test
+    void 단건_조회는_스냅샷_행만_고른다() {
+        // ADR-074 결정 3 — 취소 선착 표식은 스냅샷 칸이 NULL 이라 엔티티의 원시 칸에 담기지 않는다. find(PK) 로 읽으면
+        // 표식에서 터진다. 표식을 거르는 것은 이 술어 하나다.
+        snapshotQuery(List.of());
+
+        repository.findById(Ids.newId());
+
+        org.mockito.Mockito.verify(entityManager).createQuery(sql.capture(), eq(DispatchCandidateEntity.class));
+        assertThat(sql.getValue()).contains("c.waveId IS NOT NULL");
+        org.mockito.Mockito.verify(entityManager, org.mockito.Mockito.never()).find(any(), any());
+    }
+
+    @Test
+    void 표식은_CANCELLED_로만_ON_CONFLICT_DO_NOTHING_으로_넣는다() {
+        // 두 리스너의 경합을 PK 가 심판한다(결정 4) — 조회 후 저장이면 둘 다 「없다」를 본다.
+        when(nativeQuery.executeUpdate()).thenReturn(1);
+
+        assertThat(repository.insertCancelledFirst(Ids.newId(), NOW)).isTrue();
+
+        org.mockito.Mockito.verify(entityManager).createNativeQuery(sql.capture());
+        assertThat(sql.getValue())
+                .contains("'CANCELLED'")
+                .contains("ON CONFLICT (order_id) DO NOTHING")
+                .doesNotContain("wave_id");
+        long placeholders = sql.getValue().chars().filter(ch -> ch == '?').count();
+        org.mockito.Mockito.verify(nativeQuery, org.mockito.Mockito.times((int) placeholders))
+                .setParameter(anyInt(), any());
     }
 
     @Test

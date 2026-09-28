@@ -23,15 +23,18 @@ public interface CancelOrderUseCase {
     Outcome cancel(UUID orderId, Instant cancelledAt);
 
     /**
-     * 무엇을 했는가. 분기가 넷이라는 사실 자체가 §6.10 의 표이고, 그 표를 코드가 이름으로
+     * 무엇을 했는가. 분기가 다섯이라는 사실 자체가 §6.10 의 표이고, 그 표를 코드가 이름으로
      * 말하게 둔다 — 로그의 문자열로만 남기면 테스트가 "무엇이 일어났는지" 를 어설션할 수 없다.
      */
     enum Outcome {
 
-        /** 이 서비스의 후보가 아니다. 다른 캠프의 주문이거나 배차 불가로 끝난 주문이다. */
-        NOT_A_CANDIDATE,
+        /**
+         * 후보가 아직 없어 취소 선착 표식을 남겼다 (§6.10 첫 행, ADR-074). {@code fulfillment.planned} 보다 먼저 왔거나,
+         * 그 이벤트가 끝내 오지 않는 주문이다(fulfillment 도 취소 선착 · 배차 불가). 뒤에 온 적재는 이 행을 되살리지 않는다.
+         */
+        CANCELLED_FIRST,
 
-        /** 이미 취소돼 있었다. at-least-once 재전달의 정상 결과다 (불변규칙 2 와 두 겹). */
+        /** 이미 취소돼 있었다 — 후보든 표식이든. at-least-once 재전달의 정상 결과다 (불변규칙 2 와 두 겹). */
         ALREADY_CANCELLED,
 
         /**

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 검증 표 V1–V8 — 카오스 넷과 7-4 peak-day 가 같은 표를 낸다 (DESIGN.md §13 「카오스」, IMPLEMENTATION_PLAN 7-3)
+# 검증 표 V1–V9 — 카오스 넷과 7-4 peak-day 가 같은 표를 낸다 (DESIGN.md §13 「카오스」, IMPLEMENTATION_PLAN 7-3)
 #
 #   verify.sh baseline <상태파일>                         기준을 남긴다 — 시각 T0 · DLQ 끝 오프셋
 #   verify.sh check <상태파일> [--kind 이름] [--wait 초] [--expect-orders N] [--expect-dlq N]
@@ -77,7 +77,8 @@ v1() {
   # 하류의 행은 T0 주문 집합과 교집합한다 — 자기 시각(created_at)만으로 거르면 T0 **전**에 들어와 T0 **뒤**에 처리된 주문(앞 시나리오가
   # 남긴 밀림)이 끼어든다. 2026-09-26 첫 chaos 워크플로에서 chaos-db 가 중간에 끝나 남긴 주문이 chaos-kafka 의 T0 직후 처리되어
   # OUT_OF_STOCK 집합 비교가 1 ↔ 2 로 빨갰다(근거: 관측(재현됨) — 그 실행의 보고). created_at >= T0 은 상위집합이라 미리 거르는 데만 쓴다.
-  sqlv dispatch    "SELECT order_id FROM dispatch_candidates WHERE created_at >= '$t0' ORDER BY 1" > "$tmp/cand_t0"
+  # 후보는 스냅샷이 있는 행이다 — 후보보다 먼저 온 취소의 표식(wave_id NULL, ADR-074)은 「계획 전에 취소됐다」 쪽에서 센다.
+  sqlv dispatch    "SELECT order_id FROM dispatch_candidates WHERE created_at >= '$t0' AND wave_id IS NOT NULL ORDER BY 1" > "$tmp/cand_t0"
   comm -12 "$tmp/orders" "$tmp/cand_t0" > "$tmp/cand"
   sqlv order       "SELECT id FROM orders WHERE placed_at >= '$t0' AND status = 'CANCELLED' ORDER BY 1" > "$tmp/cancel_all"
   sqlv fulfillment "SELECT order_id FROM fulfillment_orders WHERE created_at >= '$t0' AND status = 'UNSERVICEABLE' ORDER BY 1" > "$tmp/unsv_t0"
@@ -195,6 +196,39 @@ while :; do
 done
 waited=$((SECONDS - start))
 
+# --- V9 서비스 둘의 사실 — order 에서 CANCELLED 인데 tracking 에서 COMPLETED — 취소된 주문이 배송됐다 (ADR-074) ---------
+# 취소 시각과 그 주문의 계획 시작(route_plans.started_at)으로 가른다. 취소 시각은 orders.updated_at 이다 — CANCELLED 는 종결이라
+# 그 뒤로 바뀌지 않는다(OrderTest.취소된_주문은_종결이라_갱신_시각이_취소_시각에_머문다).
+#   계획 시작 전 — 기대 0. 후보보다 먼저 온 취소를 dispatch 가 버리던 결함의 자리다(turbulent 12건, ADR-074).
+#   계획 시작 뒤 — 관찰. §6.10 넷째 분기(TOO_LATE)와 scan_after_cancel 의 경합 창이다 — 결함이 아니라 창의 폭이다.
+#   계획을 찾지 못함 — tracking 이 끝낸 주문이 dispatch 의 어느 라우트에도 없다. 모름이고 ✗ 다.
+# 서비스 사이 JOIN 없이 id 집합을 뽑아 교집합한다(V1 · V8 과 같은 방법). 취소가 없거나 tracking COMPLETED 가 없으면 빈 집합끼리의
+# 비교라 「관찰」이다(§13 축 10).
+v9() {
+  v9_known=1
+  if ! sqlv order "SELECT id || '|' || extract(epoch FROM updated_at) FROM orders
+                    WHERE placed_at >= '$t0' AND status = 'CANCELLED' ORDER BY 1" > "$tmp/o_cancelled"; then v9_known=0; fi
+  cut -d'|' -f1 "$tmp/o_cancelled" | comm -12 - "$tmp/t_completed" > "$tmp/v9_orders"
+  : > "$tmp/v9_plans"
+  if [[ -s "$tmp/v9_orders" ]]; then
+    local ids
+    ids=$(awk '{ printf "%s'"'"'%s'"'"'", (NR > 1 ? "," : ""), $1 }' "$tmp/v9_orders")
+    if ! sqlv dispatch "SELECT DISTINCT ON (o.order_id) o.order_id || '|' || extract(epoch FROM p.started_at)
+                          FROM route_stop_orders o JOIN route_stops s ON s.id = o.stop_id JOIN routes r ON r.id = s.route_id
+                          JOIN route_plans p ON p.id = r.plan_id
+                         WHERE o.order_id IN ($ids) ORDER BY o.order_id, s.id" > "$tmp/v9_plans"; then v9_known=0; fi
+  fi
+  awk -F'|' -v out="$tmp/v9_before" '
+    FILENAME == ARGV[1] { cancelled[$1] = $2; next }
+    FILENAME == ARGV[2] { started[$1] = $2; next }
+    { if (!($1 in started)) unknown++; else if (cancelled[$1] + 0 < started[$1] + 0) { before++; print $1 > out } else after++ }
+    END { printf "%d %d %d\n", before, after, unknown }' "$tmp/o_cancelled" "$tmp/v9_plans" "$tmp/v9_orders" > "$tmp/v9_counts"
+  [[ -f "$tmp/v9_before" ]] || : > "$tmp/v9_before"
+  read -r n_v9_before n_v9_after n_v9_unknown < "$tmp/v9_counts"
+  n_o_cancelled=$(wc -l < "$tmp/o_cancelled" | tr -d ' ')
+}
+v9
+
 # --- V2 라우트 stop 주문 중복 -------------------------------------------------------------------------------
 # 주문 하나는 한 웨이브에, 웨이브 하나는 계획 하나에 — 주문은 route_stop_orders 에 한 번만 있어야 한다(재배정은 옮긴다).
 v2=$(sqlv dispatch "SELECT count(*) FROM (SELECT order_id FROM route_stop_orders GROUP BY order_id HAVING count(*) > 1) d")
@@ -246,6 +280,11 @@ if [[ "$v8_known" != 1 ]]; then r8=bad; v8_value="모름"
 elif [[ "$n_v8" != 0 ]]; then r8=bad; v8_value="**${n_v8}** (dispatch PLANNED ${n_d_planned} · tracking COMPLETED ${n_t_completed})"
 elif [[ "$n_t_completed" == 0 ]]; then r8=obs; v8_value="0 — tracking COMPLETED 0, 비교할 사실이 없다"
 else r8=ok; v8_value="0 (dispatch PLANNED ${n_d_planned} · tracking COMPLETED ${n_t_completed})"; fi
+v9_counts="계획 시작 전 **${n_v9_before}** · 시작 뒤 ${n_v9_after}(관찰) · 계획 없음 ${n_v9_unknown} (order CANCELLED ${n_o_cancelled} · tracking COMPLETED ${n_t_completed})"
+if [[ "$v9_known" != 1 ]]; then r9=bad; v9_value="모름"
+elif [[ "$n_v9_before" != 0 || "$n_v9_unknown" != 0 ]]; then r9=bad; v9_value="$v9_counts"
+elif [[ "$n_o_cancelled" == 0 || "$n_t_completed" == 0 ]]; then r9=obs; v9_value="0 — 취소 ${n_o_cancelled} · tracking COMPLETED ${n_t_completed}, 비교할 사실이 없다"
+else r9=ok; v9_value="$v9_counts"; fi
 reason_table=""; r1_reasons=ok
 while IFS='|' read -r r k n e v; do
   [[ "$v" == ok ]] || r1_reasons=bad
@@ -268,10 +307,11 @@ ${reason_table%$'\n'}
 | V6 | \`rm_orders\` 걸린 행 (보존 90일을 넘긴 비종결) | ${v6:-모름} | 관찰 — 추세 | $(mark "$r6") |
 | V7 | outbox 미발행 / 격리 | ${v7_detail} | 전부 0/0 | $(mark "$r7") |
 | V8 | 서비스 둘의 사실 — dispatch 의 \`PLANNED\` stop 중 tracking 에서 \`COMPLETED\` 인 주문 (T0 이후) | ${v8_value} | 0 | $(mark "$r8") |
+| V9 | 서비스 둘의 사실 — order 에서 \`CANCELLED\` 인데 tracking 에서 \`COMPLETED\` 인 주문, 취소 시각 대 그 계획의 시작 (T0 이후) | ${v9_value} | 계획 시작 전 0 · 계획 없음 0 | $(mark "$r9") |
 TABLE
 )
 fail=0
-for r in "$r1" "$r1_reasons" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7" "$r8"; do [[ "$r" == bad ]] && fail=1; done
+for r in "$r1" "$r1_reasons" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7" "$r8" "$r9"; do [[ "$r" == bad ]] && fail=1; done
 echo "$table"
 [[ -n "$out" ]] && { echo "$table" >> "$out"; echo >> "$out"; }
 if [[ "$n_missing" != 0 && -s "$tmp/missing" ]]; then
@@ -279,5 +319,8 @@ if [[ "$n_missing" != 0 && -s "$tmp/missing" ]]; then
 fi
 if [[ "$n_v8" != 0 && -s "$tmp/v8_orders" ]]; then
   echo; echo "두 서비스가 갈린 주문(앞 10) — dispatch PLANNED · tracking COMPLETED:"; head -10 "$tmp/v8_orders"
+fi
+if [[ "$n_v9_before" != 0 && -s "$tmp/v9_before" ]]; then
+  echo; echo "계획 전에 취소됐는데 배송된 주문(앞 10) — order CANCELLED · tracking COMPLETED:"; head -10 "$tmp/v9_before"
 fi
 exit $fail

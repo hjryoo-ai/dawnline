@@ -91,11 +91,18 @@ public class CancelOrderService implements CancelOrderUseCase {
 
         Optional<DispatchCandidate> found = candidates.findById(orderId);
         if (found.isEmpty()) {
-            // 우리 후보가 아니다. fulfillment 가 배차 불가로 끝냈거나 아직 fulfillment.planned 가
-            // 오지 않았다. 후자라면 그 이벤트가 왔을 때 이미 취소된 주문을 적재하게 되는데,
-            // 그것은 §6.10 이 아니라 순서 역전의 문제라 여기서 만들어 두지 않는다.
-            log.debug("후보가 아닌 주문의 취소입니다: orderId={}", orderId);
-            return Outcome.NOT_A_CANDIDATE;
+            // 후보가 아직 없다 — fulfillment.planned 보다 먼저 왔다(§6.10 첫 행). 표식을 남겨 뒤에 온 적재가 이 주문을
+            // 되살리지 않게 한다: ADR-074, 재현은 CandidateLoadingIT.취소가_먼저_오면_뒤에_온_fulfillment_planned_는_후보를_되살리지_않는다.
+            if (candidates.insertCancelledFirst(orderId, cancelledAt)) {
+                log.info("후보보다 먼저 온 취소입니다 — 표식을 남깁니다: orderId={}", orderId);
+                return Outcome.CANCELLED_FIRST;
+            }
+            // 넣지 못했다 — 그 사이 후보가 들어왔거나(두 리스너의 경합, PK 가 심판한다 — ADR-074 결정 4) 표식이 이미 있다.
+            // 새 문장은 커밋된 행을 본다(READ COMMITTED).
+            found = candidates.findById(orderId);
+            if (found.isEmpty()) {
+                return Outcome.ALREADY_CANCELLED;
+            }
         }
         DispatchCandidate candidate = found.get();
 

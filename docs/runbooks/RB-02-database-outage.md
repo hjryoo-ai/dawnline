@@ -84,7 +84,7 @@ Prometheus(`/api/v1/alerts`)에서 본 것이다. 복구 30초 안에 둘 다 �
 - `hikaricp_connections_pending` 이 0.
 - `dawnline_event_retry_age_seconds` 가 0 으로 돌아왔다 · 그룹의 랙이 풀렸다(`kafka-consumer-groups --describe`, RB-01 §2.1).
 - DLQ 가 늘지 않았다 — 늘었다면 그것은 결정적 실패다(RB-05).
-- **검증 표** — `make chaos-verify STATE=<기준 파일>` 이 카오스와 같은 표(V1–V8)를 낸다. 장애 전에 `tools/chaos/verify.sh baseline <파일>` 로
+- **검증 표** — `make chaos-verify STATE=<기준 파일>` 이 카오스와 같은 표(V1–V9)를 낸다. 장애 전에 `tools/chaos/verify.sh baseline <파일>` 로
   기준을 남겨 두었다면 복구 뒤 그 파일로 잰다.
 
 ## 참조

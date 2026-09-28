@@ -24,6 +24,10 @@ import org.jspecify.annotations.Nullable;
  * <p>좌표를 {@code NUMERIC(9,6)} 으로 저장하므로 {@link BigDecimal} 로 왕복한다(불변규칙 9).
  * {@code geohash7} 은 좌표에서 파생되지만 컬럼으로 둔다 — stop 통합 키라 질의로 묶을 수 있어야
  * 하고, 파생값을 매번 계산하면 인덱스를 걸 수 없다.
+ *
+ * <p><strong>스냅샷 행만 든다.</strong> 후보보다 먼저 온 취소의 표식은 스냅샷 칸이 {@code NULL} 이라(V15) 원시 칸에
+ * 담기지 않는다 — 표식은 저장소의 네이티브 문장 둘로만 지난다(ADR-074 결정 3). 칸의 {@code nullable = false} 는
+ * 스냅샷 행의 모양이고, 두 모양은 DB 의 CHECK 가 닫는다.
  */
 @Entity
 @Table(name = "dispatch_candidates")

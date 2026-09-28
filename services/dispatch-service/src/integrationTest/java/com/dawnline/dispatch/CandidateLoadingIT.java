@@ -8,10 +8,13 @@ import com.dawnline.dispatch.application.port.out.DispatchCandidateRepository;
 import com.dawnline.dispatch.domain.CandidateStatus;
 import com.dawnline.dispatch.domain.DispatchCandidate;
 import com.dawnline.messaging.contract.EventContracts;
+import com.dawnline.messaging.json.EventJson;
 import jakarta.persistence.EntityManager;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -63,12 +66,13 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
     }
 
     private static final String TOPIC = "dawnline.fulfillment.planned.v1";
+    private static final String CANCELLED_TOPIC = "dawnline.order.cancelled.v1";
     private static final EventContracts CONTRACTS = EventContracts.load();
 
     private static KafkaProducer<String, String> producer;
 
     static {
-        createTopics(TOPIC);
+        createTopics(TOPIC, CANCELLED_TOPIC);
     }
 
     @Autowired
@@ -76,6 +80,9 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private EventJson json;
 
     @Autowired
     private PlatformTransactionManager transactionManager;
@@ -168,6 +175,62 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
                 });
     }
 
+    @Test
+    void 취소가_먼저_오면_뒤에_온_fulfillment_planned_는_후보를_되살리지_않는다() {
+        // ADR-074 — turbulent 의 12건. 후보는 fulfillment.planned 가, 취소는 order.cancelled 가 가져오고 두 토픽 사이의 순서는
+        // 보장되지 않는다(§4.5). 취소를 먼저 처리시킨 뒤에 적재를 보내 그 순서를 고정한다.
+        UUID orderId = Ids.newId();
+        String cancel = cancelled(orderId);
+        String load = planned(orderId, "PLANNED");
+
+        publish(CANCELLED_TOPIC, orderId, cancel);
+        awaitProcessed(cancel);
+        assertThat(statusOf(orderId)).as("전제 — 적재를 보내기 전이다. 취소만 처리했다").isNotEqualTo(Optional.of("PENDING"));
+        publish(TOPIC, orderId, load);
+        awaitProcessed(load);
+
+        assertThat(statusOf(orderId))
+                .as("취소된 주문은 후보가 되지 않는다 — PENDING 이면 다음 계획이 집고 기사가 배송한다")
+                .contains("CANCELLED");
+    }
+
+    @Test
+    void 적재가_먼저_와도_결과는_같다() {
+        // 위의 역순 — §6.10 의 「후보, 계획 전」 행이다. 두 순서의 끝이 같아야 순서가 결과를 정하지 않는다.
+        UUID orderId = Ids.newId();
+        String load = planned(orderId, "PLANNED");
+        String cancel = cancelled(orderId);
+
+        publish(TOPIC, orderId, load);
+        awaitProcessed(load);
+        publish(CANCELLED_TOPIC, orderId, cancel);
+        awaitProcessed(cancel);
+
+        assertThat(statusOf(orderId)).contains("CANCELLED");
+    }
+
+    private void awaitProcessed(String event) {
+        UUID eventId = json.readEnvelope(event).eventId();
+        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200))
+                .untilAsserted(() -> assertThat(processedCount(eventId))
+                        .as("dispatch 가 %s 를 처리했다", eventId).isEqualTo(1L));
+    }
+
+    private long processedCount(UUID eventId) {
+        Long count = tx().execute(status -> ((Number) entityManager
+                .createNativeQuery("SELECT count(*) FROM processed_events WHERE event_id = ?")
+                .setParameter(1, eventId).getSingleResult()).longValue());
+        return Objects.requireNonNull(count, "count");
+    }
+
+    /** 행의 상태를 그대로 — 저장소를 거치지 않는다(표식은 스냅샷이 없어 도메인으로 되살리지 않는다, ADR-074 결정 3). */
+    private Optional<String> statusOf(UUID orderId) {
+        List<?> rows = tx().execute(status -> entityManager
+                .createNativeQuery("SELECT status FROM dispatch_candidates WHERE order_id = ?")
+                .setParameter(1, orderId).getResultList());
+        return Objects.requireNonNull(rows, "rows").stream().map(String.class::cast).findFirst();
+    }
+
     private void awaitCandidate(UUID orderId) {
         await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> assertThat(findById(orderId)).isPresent());
@@ -183,8 +246,22 @@ class CandidateLoadingIT extends DispatchIntegrationTestBase {
     }
 
     private void publish(UUID orderId, String value) {
-        producer.send(new ProducerRecord<>(TOPIC, orderId.toString(), value));
+        publish(TOPIC, orderId, value);
+    }
+
+    private void publish(String topic, UUID orderId, String value) {
+        producer.send(new ProducerRecord<>(topic, orderId.toString(), value));
         producer.flush();
+    }
+
+    /** 계약 예시에서 orderId 와 eventId 만 바꾼다. */
+    private static String cancelled(UUID orderId) {
+        var envelope = (tools.jackson.databind.node.ObjectNode) CONTRACTS.readTree(CONTRACTS.contractsDirectory()
+                .resolve(java.nio.file.Path.of("examples", "order.cancelled.v1.example.json")));
+        ((tools.jackson.databind.node.ObjectNode) envelope.get("payload")).put("orderId", orderId.toString());
+        envelope.put("eventId", Ids.newId().toString());
+        envelope.put("partitionKey", orderId.toString());
+        return envelope.toString();
     }
 
     private static String planned(UUID orderId, String outcome) {

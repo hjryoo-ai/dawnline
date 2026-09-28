@@ -175,6 +175,10 @@ order-service · fulfillment 는 234건 모두 `CANCELLED` 다. 순서(한 주�
 「순서 역전의 문제라 여기서 만들어 두지 않는다」. 접수 직후의 취소(이 도구의 계획 전 취소)에서 5%다. V1 은 그것을 「취소로 끝난 주문」으로 세어
 통과했다(order 의 상태가 끝이다) — 두 서비스의 사실이 갈린 것은 V 표가 보지 않는 방향이다.
 
+**V9 의 첫 판정** (2026-09-28 — 이 실행의 DB 에 V9 를 더한 `verify.sh` 를 뒤늦게 돌렸다, [ADR-074](../adr/ADR-074-cancel-before-candidate-leaves-a-row.md)):
+계획 시작 전 **12** · 시작 뒤 0(관찰) · 계획 없음 0 (order `CANCELLED` 234 · tracking `COMPLETED` 21,839) — ✗. 목록의 첫 주문이 위의 그 주문(취소 13:59:55.459,
+계획 시작 14:58:10)이다. 같은 실행에서 V1–V8 은 그대로 ✅ 다.
+
 ### 3.6 확인된 처방 — 결정 여섯의 수
 
 | 결정 | 이 실행의 수 |
@@ -190,6 +194,7 @@ order-service · fulfillment 는 234건 모두 `CANCELLED` 다. 순서(한 주�
 7. **후보보다 먼저 온 취소(§3.5)** — dispatch 가 취소를 기억했다가 후보를 만들 때 적용할지(ADR-051 「먼저 온 사실이 행을 만든다」의 모양 — 취소가 후보 행을
    `CANCELLED` 로 만들고 뒤의 `fulfillment.planned` 는 그 행을 되살리지 않는다), 아니면 fulfillment 가 취소된 주문의 `fulfillment.planned` 를 막을지.
    V 표에 「order 에서 `CANCELLED` 인데 tracking 에서 `COMPLETED`」 행을 더할지도.
+   → **결정(2026-09-28)**: 앞의 것 — dispatch 가 취소를 기억한다([ADR-074](../adr/ADR-074-cancel-before-candidate-leaves-a-row.md)). (b) 는 이 경합을 막지 못한다 — 12건 모두 fulfillment 가 `order.placed` 를 먼저 처리해 `fulfillment.planned` 가 이미 떠난 뒤였다. V 표에는 V9 를 더했다. 원장 7-0 A37.
 8. **이른 도착(A34 · §2.1)** — 약속창의 시작이 하한인가. 하한이면 기다림(또는 이른 도착 하드 룰)이 모델에 들고, 차량 집합의 술어도 겹침으로 돌아간다(ADR-039 후속).
 9. **A33 · B5 · B10 을 여는 실행** → **결정(2026-09-28)**: 실행을 더 만들지 않는다 — A33 은 락으로 시점을 고정한 IT 와 수정,
    B5 는 IT, B10 은 벤치마크 그림자로 판정했다(원장 7-0 각 행). 원래 물음: — 계획 중 비활성화 · 운영자 경로의 발행 뒤 취소 · FAST 전환(예산을 줄인 계획)은 이 도구의 창 시나리오에 없다. 7-4 를 이
