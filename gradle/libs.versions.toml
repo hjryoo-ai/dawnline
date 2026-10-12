@@ -16,12 +16,12 @@ java = "25"
 spring-boot = "4.1.1"
 
 # --- BOM 이 관리하지 않는 것만 고정 ---
-archunit = "1.5.0"
-json-schema-validator = "3.0.7"   # 계약 테스트 (contracts/events/*.schema.json)
+archunit = "1.5.1"
+json-schema-validator = "3.0.8"   # 계약 테스트 (contracts/events/*.schema.json)
 springdoc = "3.1.1"               # Spring Boot 4 라인 (parent: spring-boot-starter-parent 4.1.0)
 resilience4j = "2.4.0"            # Boot 4 전용 모듈: resilience4j-spring-boot4
 jacoco = "0.8.15"
-openapi-generator = "7.25.0"   # ops-api 위임 클라이언트 — 커밋된 contracts/openapi/*.yaml 에서 생성 (ADR-052)
+openapi-generator = "7.26.0"   # ops-api 위임 클라이언트 — 커밋된 contracts/openapi/*.yaml 에서 생성 (ADR-052)
 
 [libraries]
 # --- 플랫폼 (BOM) ---
